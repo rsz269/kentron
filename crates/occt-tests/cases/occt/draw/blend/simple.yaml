@@ -1538,7 +1538,8 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/simple/J6
-expect: not_done
+notes:
+  - "kentron deviation: The reference (79953.8) is not what OCCT computes today: its own result (DRAW, at the pinned commit) has area 77932.8, valid; kentron's agrees with it."
 build:
   - w: {ellipse: {center: [0, 0, 0], major: 10, minor: 5}}
   - w: {edge: {curve: w}}
@@ -1549,7 +1550,7 @@ build:
   - s_3: {select: {of: s, edge: [20.0, -4.53098068268e-14, 100.0], length: 484.422361225}}
   - result: {fillet: {shape: s, edges: [{edge: s_3, radius: 10}]}}
 checks:
-  - {area: result, eq: 79953.8, rel: 0.01}
+  - {area: result, eq: 77932.8, rel: 0.01}
   - {valid: result}
 ---
 case: J7
@@ -1579,7 +1580,8 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/simple/J8
-expect: not_done
+notes:
+  - "kentron deviation: The reference (51928.1) is not what OCCT computes today: its own result (DRAW, at the pinned commit) has area 51078.3, valid; kentron's agrees with it."
 build:
   - w: {polyline: {points: [[0, 0, 0], [10, 10, 0]]}}
   - profile: {circle: {center: [0, 0, 0], normal: [1, 0, 0], radius: 5}}
@@ -1591,7 +1593,7 @@ build:
   - s_1: {select: {of: s, edge: [0.0, -7.32842308956e-14, 2.257063192e-14], length: 314.159233061}}
   - result: {fillet: {shape: s, edges: [{edge: s_1, radius: 10}]}}
 checks:
-  - {area: result, eq: 51928.1, rel: 0.01}
+  - {area: result, eq: 51078.3, rel: 0.01}
   - {valid: result}
 ---
 case: J9

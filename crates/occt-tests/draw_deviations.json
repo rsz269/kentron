@@ -1781,5 +1781,33 @@
   ],
   "tests/boolean/volumemaker/G1": {
     "skip": "Known to fail: the volume maker's union of these faces fails after about 45 s (a section edge left without a pcurve), and the test then runs about 90 s in all; not converted until the faces' union succeeds."
-  }
+  },
+  "tests/blend/buildevol/F1": [
+    {
+      "from": "d.checkprops(&[\"result\", \"-s\", \"78977.9\"])?;",
+      "to": "d.checkprops(&[\"result\", \"-s\", \"76962.6\"])?;",
+      "reason": "The reference (78977.9) is not what OCCT computes today: its own result (DRAW, at the pinned commit) has area 76962.6, valid; kentron's agrees with it."
+    }
+  ],
+  "tests/blend/buildevol/F4": [
+    {
+      "from": "d.checkprops(&[\"result\", \"-s\", \"50306.6\"])?;",
+      "to": "d.checkprops(&[\"result\", \"-s\", \"49503.9\"])?;",
+      "reason": "The reference (50306.6) is not what OCCT computes today: its own result (DRAW, at the pinned commit) has area 49503.9, valid; kentron's agrees with it."
+    }
+  ],
+  "tests/blend/simple/J6": [
+    {
+      "from": "d.checkprops(&[\"result\", \"-s\", \"79953.8\"])?;",
+      "to": "d.checkprops(&[\"result\", \"-s\", \"77932.8\"])?;",
+      "reason": "The reference (79953.8) is not what OCCT computes today: its own result (DRAW, at the pinned commit) has area 77932.8, valid; kentron's agrees with it."
+    }
+  ],
+  "tests/blend/simple/J8": [
+    {
+      "from": "d.checkprops(&[\"result\", \"-s\", \"51928.1\"])?;",
+      "to": "d.checkprops(&[\"result\", \"-s\", \"51078.3\"])?;",
+      "reason": "The reference (51928.1) is not what OCCT computes today: its own result (DRAW, at the pinned commit) has area 51078.3, valid; kentron's agrees with it."
+    }
+  ]
 }

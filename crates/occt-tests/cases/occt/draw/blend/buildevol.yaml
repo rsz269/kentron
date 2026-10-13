@@ -762,7 +762,8 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/buildevol/F1
-expect: not_done
+notes:
+  - "kentron deviation: The reference (78977.9) is not what OCCT computes today: its own result (DRAW, at the pinned commit) has area 76962.6, valid; kentron's agrees with it."
 build:
   - w: {ellipse: {center: [0, 0, 0], major: 10, minor: 5}}
   - w: {edge: {curve: w}}
@@ -773,7 +774,7 @@ build:
   - s_3: {select: {of: s, edge: [20.0, -4.53098068268e-14, 100.0], length: 484.422361225}}
   - result: {fillet: {shape: s, edges: [{edge: s_3, law: [[0, 10], [1, 20], [2, 10]]}]}}
 checks:
-  - {area: result, eq: 78977.9, rel: 0.01}
+  - {area: result, eq: 76962.6, rel: 0.01}
   - {valid: result}
 ---
 case: F2
@@ -824,7 +825,8 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/buildevol/F4
-expect: not_done
+notes:
+  - "kentron deviation: The reference (50306.6) is not what OCCT computes today: its own result (DRAW, at the pinned commit) has area 49503.9, valid; kentron's agrees with it."
 build:
   - w: {polyline: {points: [[0, 0, 0], [10, 10, 0]]}}
   - profile: {circle: {center: [0, 0, 0], normal: [1, 0, 0], radius: 5}}
@@ -836,7 +838,7 @@ build:
   - s_1: {select: {of: s, edge: [0.0, -7.32842308956e-14, 2.257063192e-14], length: 314.159233061}}
   - result: {fillet: {shape: s, edges: [{edge: s_1, law: [[0, 20], [1, 10], [2, 20]]}]}}
 checks:
-  - {area: result, eq: 50306.6, rel: 0.01}
+  - {area: result, eq: 49503.9, rel: 0.01}
   - {valid: result}
 ---
 case: F5
@@ -1201,7 +1203,6 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/buildevol/H9
-expect: not_done
 build:
   - s: {load: {brep: "CFI_6_a12fgr.rle"}}
   - s: {scale: {shape: s, center: [0, 0, 0], factor: 1}}
@@ -1247,7 +1248,6 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/buildevol/I3
-expect: not_done
 build:
   - s: {load: {brep: "CFI_6_b12fgt.rle"}}
   - s: {scale: {shape: s, center: [0, 0, 0], factor: 1}}
@@ -1338,7 +1338,6 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/buildevol/I9
-expect: not_done
 build:
   - s: {load: {brep: "CFI_6_d12fgx.rle"}}
   - s: {scale: {shape: s, center: [0, 0, 0], factor: 1}}
@@ -1384,7 +1383,6 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/buildevol/J3
-expect: not_done
 build:
   - s: {load: {brep: "CFI_6_e12fgz.rle"}}
   - s: {scale: {shape: s, center: [0, 0, 0], factor: 1}}
@@ -1430,7 +1428,6 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/buildevol/J6
-expect: not_done
 build:
   - s: {load: {brep: "CFI_6_f12fhb.rle"}}
   - s: {scale: {shape: s, center: [0, 0, 0], factor: 1}}
@@ -1476,7 +1473,6 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/buildevol/J9
-expect: not_done
 build:
   - s: {load: {brep: "CFI_6_g12fhd.rle"}}
   - s: {scale: {shape: s, center: [0, 0, 0], factor: 1}}
@@ -1524,7 +1520,6 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/buildevol/K3
-expect: not_done
 build:
   - s: {load: {brep: "CFI_6_h12fhf.rle"}}
   - s: {scale: {shape: s, center: [0, 0, 0], factor: 1}}
@@ -1601,7 +1596,6 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/buildevol/K8
-expect: not_done
 build:
   - s: {load: {brep: "CFI_6_i56fhi.rle"}}
   - s: {scale: {shape: s, center: [0, 0, 0], factor: 1}}

@@ -615,7 +615,8 @@ fn merge_arcs(mut corners: Vec<(Corner, f64)>) -> Vec<(Corner, f64)> {
 /// `shape` with edges rounded by a ball whose radius varies along each: through the given
 /// `(u, r)` pairs, `u` the position along the edge (rescaled so that the first and last pairs
 /// are at its ends, by length), with a cubic spline flat at both ends (one pair gives a
-/// constant radius).
+/// constant radius). On a closed edge the spline is periodic and, as in OCCT, the last pair
+/// takes the first's radius (it lies where the edge closes).
 #[doc(alias = "BRepFilletAPI_MakeFillet::Add")]
 #[doc(alias = "BRepFilletAPI_MakeFillet::SetRadius")]
 pub fn fillet_evolving(model: &mut Model, shape: Shape, edges: &[(Shape, Vec<(f64, f64)>)]) -> Result<Shape> {
@@ -633,7 +634,13 @@ fn fillet_solid_evolving(model: &mut Model, shape: Shape, edges: &[(Shape, Vec<(
         todo!("rolling-ball fillets of edges placed apart from their shape");
     }
     let unscale = 1.0 / placement.scale_factor().abs();
-    let laws: Vec<RadiusLaw> = edges.iter().map(|(_, law)| RadiusLaw::new(law)).collect::<Result<_>>()?;
+    let laws: Vec<RadiusLaw> = edges
+        .iter()
+        .map(|(edge, law)| {
+            let (a, b) = model.edge_vertices(*edge);
+            RadiusLaw::new(law, a.node == b.node)
+        })
+        .collect::<Result<_>>()?;
     let radii: Vec<Box<dyn Fn(f64) -> f64 + '_>> = laws.iter().map(|law| Box::new(move |s: f64| law.at(s) * unscale) as Box<dyn Fn(f64) -> f64>).collect();
     // Edges meeting at their ends, in groups, rounded together (as `fillet_edges` does).
     let ends_of = |model: &Model, edge: Shape| -> Vec<Point> {
@@ -685,29 +692,68 @@ fn fillet_solid_evolving(model: &mut Model, shape: Shape, edges: &[(Shape, Vec<(
 }
 
 /// A radius along an edge: the cubic spline through `(s, r)` pairs (`s` from 0 to 1) with
-/// zero slope at both ends (OCCT's `Law_Interpol` with null end derivatives).
+/// zero slope at both ends (OCCT's `Law_Interpol` with null end derivatives), or, along a
+/// closed edge, the periodic one (OCCT's periodic `Law_Interpol`).
 #[doc(alias = "Law_Interpol")]
 struct RadiusLaw {
     s: Vec<f64>,
     r: Vec<f64>,
     /// Second derivatives at the pairs.
     m: Vec<f64>,
+    periodic: bool,
 }
 
 impl RadiusLaw {
-    fn new(pairs: &[(f64, f64)]) -> Result<RadiusLaw> {
+    fn new(pairs: &[(f64, f64)], closed: bool) -> Result<RadiusLaw> {
         let (first, last) = match pairs {
             [] => return Err(Error::InvalidInput("a radius law needs at least one value".into())),
-            [(_, r)] => return Ok(RadiusLaw { s: vec![0.0, 1.0], r: vec![*r, *r], m: vec![0.0, 0.0] }),
+            [(_, r)] => return Ok(RadiusLaw { s: vec![0.0, 1.0], r: vec![*r, *r], m: vec![0.0, 0.0], periodic: false }),
             [f, .., l] => (f.0, l.0),
         };
         if !(last > first) {
             return Err(Error::InvalidInput("radius law parameters must increase".into()));
         }
         let s: Vec<f64> = pairs.iter().map(|p| (p.0 - first) / (last - first)).collect();
-        let r: Vec<f64> = pairs.iter().map(|p| p.1).collect();
+        let mut r: Vec<f64> = pairs.iter().map(|p| p.1).collect();
         if s.windows(2).any(|w| !(w[0] < w[1])) || r.iter().any(|&r| !(r > 0.0)) {
             return Err(Error::InvalidInput("radius law parameters must increase and radii be positive".into()));
+        }
+        if closed {
+            // The last pair is where the edge closes: OCCT gives it the first's radius
+            // (ChFiDS_FilSpine::ComputeLaw), and the spline goes on smoothly round the seam.
+            let n = s.len() - 1;
+            r[n] = r[0];
+            let h: Vec<f64> = s.windows(2).map(|w| w[1] - w[0]).collect();
+            // Second derivatives m[0..n] (m[n] = m[0]): a cyclic tridiagonal system, small
+            // enough to solve densely.
+            let mut a = vec![vec![0.0; n + 1]; n];
+            for i in 0..n {
+                let prev = (i + n - 1) % n;
+                let hp = h[prev];
+                let rp = if i == 0 { r[n - 1] } else { r[i - 1] };
+                a[i][prev] += hp / 6.0;
+                a[i][i] += (hp + h[i]) / 3.0;
+                a[i][(i + 1) % n] += h[i] / 6.0;
+                a[i][n] = (r[i + 1] - r[i]) / h[i] - (r[i] - rp) / hp;
+            }
+            // Gaussian elimination with partial pivoting.
+            for c in 0..n {
+                let p = (c..n).max_by(|&x, &y| a[x][c].abs().total_cmp(&a[y][c].abs())).expect("a row");
+                a.swap(c, p);
+                for row in c + 1..n {
+                    let f = a[row][c] / a[c][c];
+                    for k in c..=n {
+                        a[row][k] -= f * a[c][k];
+                    }
+                }
+            }
+            let mut m = vec![0.0; n + 1];
+            for i in (0..n).rev() {
+                let tail: f64 = (i + 1..n).map(|k| a[i][k] * m[k]).sum();
+                m[i] = (a[i][n] - tail) / a[i][i];
+            }
+            m[n] = m[0];
+            return Ok(RadiusLaw { s, r, m, periodic: true });
         }
         // The clamped cubic spline (slopes 0 at both ends): a tridiagonal system for the
         // second derivatives.
@@ -740,11 +786,11 @@ impl RadiusLaw {
         for i in (0..n - 1).rev() {
             m[i] = (rhs[i] - upper[i] * m[i + 1]) / diag[i];
         }
-        Ok(RadiusLaw { s, r, m })
+        Ok(RadiusLaw { s, r, m, periodic: false })
     }
 
     fn at(&self, x: f64) -> f64 {
-        let x = x.clamp(0.0, 1.0);
+        let x = if self.periodic { x.rem_euclid(1.0) } else { x.clamp(0.0, 1.0) };
         let k = self.s.windows(2).position(|w| x <= w[1]).unwrap_or(self.s.len() - 2);
         let (a, b) = (self.s[k], self.s[k + 1]);
         let h = b - a;
@@ -1570,5 +1616,34 @@ mod tests {
             })
             .unwrap();
         check_ball(&mut model, l, edge, 0.25, 3.0 + 0.25 * 0.25 * (1.0 - PI / 4.0));
+    }
+}
+
+#[cfg(test)]
+mod radius_law_tests {
+    use super::RadiusLaw;
+
+    #[test]
+    fn periodic_law_on_a_closed_edge_closes_smoothly_with_the_first_radius() {
+        let law = RadiusLaw::new(&[(0.0, 1.0), (1.0, 4.0), (2.0, 3.0)], true).unwrap();
+        // Through the pairs, the last one taking the first's radius (OCCT).
+        assert!((law.at(0.0) - 1.0).abs() < 1e-12 && (law.at(0.5) - 4.0).abs() < 1e-12 && (law.at(1.0) - 1.0).abs() < 1e-12);
+        // Smooth across the seam: the slope just before 1 is the slope just after 0.
+        let h = 1e-6;
+        let (before, after) = ((law.at(1.0) - law.at(1.0 - h)) / h, (law.at(h) - law.at(0.0)) / h);
+        assert!((before - after).abs() < 1e-3, "slopes {before} and {after}");
+        // Symmetric here (two equal spans): r(x) = r(1 - x).
+        assert!((law.at(0.2) - law.at(0.8)).abs() < 1e-12);
+        // A constant law stays constant.
+        let flat = RadiusLaw::new(&[(0.0, 2.0)], true).unwrap();
+        assert_eq!(flat.at(0.3), 2.0);
+    }
+
+    #[test]
+    fn open_law_is_flat_at_both_ends() {
+        let law = RadiusLaw::new(&[(0.0, 1.0), (1.0, 4.0), (2.0, 3.0)], false).unwrap();
+        assert!((law.at(1.0) - 3.0).abs() < 1e-12);
+        let h = 1e-6;
+        assert!(((law.at(h) - law.at(0.0)) / h).abs() < 1e-3 && ((law.at(1.0) - law.at(1.0 - h)) / h).abs() < 1e-3);
     }
 }
