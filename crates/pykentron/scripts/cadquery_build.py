@@ -30,7 +30,7 @@ ap.add_argument("--oracle", action="store_true", help="run on the real CadQuery 
 ap.add_argument("--call", default="build", help="the function to run (dotted: m20.m14.build)")
 args = ap.parse_args()
 if not args.oracle:
-    sys.path[:0] = [str(PYTHON / "cadquery_shim"), str(PYTHON)]
+    sys.path[:0] = [str(PYTHON / "pykentron" / "cadquery_shim"), str(PYTHON)]
 
 sys.path.insert(0, str(Path(args.project).expanduser().resolve()))
 start = time.time()

@@ -3,30 +3,48 @@
 Python bindings for kentron, with a CadQuery-compatible API, so that CadQuery scripts run
 on kentron unchanged.
 
-## Building
+## Installing
 
 ```
-python3 crates/pykentron/build.py             # optimized (LTO, AVX2/FMA) into python/pykentron/_kentron.abi3.so
-python3 crates/pykentron/build.py --portable  # for any x86-64 CPU
-python3 crates/pykentron/build.py --debug     # unoptimized
+pip install pykentron              # the kernel and pykentron's own CadQuery-like API
+pip install "pykentron[cadquery]"  # also what CadQuery's own layers need, to run CadQuery scripts
 ```
 
-The extension is abi3 (Python 3.9 and later); the build installs it by renaming, so
-interpreters that have it loaded keep running.
+Python 3.10 or later. The wheels on PyPI are built for any x86-64 Linux machine.
 
 ## Using it
 
-Put `crates/pykentron/python` on `sys.path` and `import pykentron as cq`. To run a CadQuery
-script without editing it, also put `crates/pykentron/python/cadquery_shim` first on the
-path. Its `cadquery` package is CadQuery's own pure-Python layers (`Workplane`, `Sketch`,
-selectors, `cqgi`, free functions, assemblies: copied unchanged from CadQuery v2.8.0 by
-`scripts/vendor_cadquery.py`, Apache-2.0, see `cadquery_shim/cadquery/VENDORED.txt`) on
-CadQuery's `occ_impl` layer taken from pykentron (`pykentron.occ_impl`, `pykentron.shapes`,
-`pykentron.geom`). Names pykentron does not have yet, and the `OCP` names scripts and tests
-use directly (beyond `Bnd_Box`, `BRepBndLib.AddOptimal_s`, `BRepTools.Clean_s`), import but
-raise `NotImplementedError` when used. The layers need `pyparsing`, `multimethod`,
-`runtype`, `typing_extensions` and `numpy` (and `nlopt`, `casadi` for constraints), as
-CadQuery does.
+```python
+import pykentron as cq
+box = cq.Workplane("XY").box(10, 20, 30).faces(">Z").workplane().hole(5)
+print(box.val().Volume())
+```
+
+To run CadQuery scripts unchanged, import `pykentron.shim` first: `import cadquery` then gives
+CadQuery's own pure-Python layers (`Workplane`, `Sketch`, selectors, `cqgi`, free functions,
+assemblies: copied unchanged from CadQuery v2.8.0, Apache-2.0, see
+`pykentron/cadquery_shim/cadquery/VENDORED.txt`) on pykentron's shapes. Or run a script as it
+is with `pykentron-run script.py`. Nothing named `cadquery` is installed, so a real CadQuery
+beside pykentron is unaffected unless the shim is activated (the two cannot share one
+process).
+
+Names pykentron does not have yet, and the OCP names scripts use directly (beyond `Bnd_Box`,
+`BRepBndLib.AddOptimal_s`, `BRepTools.Clean_s`), import but raise `NotImplementedError` when
+used.
+
+## Building from source
+
+```
+pip install ./crates/pykentron                 # with maturin, as the PyPI wheels are built
+python3 crates/pykentron/build.py              # in place, optimized (LTO, AVX2/FMA), into python/pykentron/_kentron.abi3.so
+python3 crates/pykentron/build.py --portable   # in place, for any x86-64 CPU
+python3 crates/pykentron/build.py --quick      # in place, the tests' release profile
+```
+
+The in-place build installs the extension by renaming, so interpreters that have it loaded
+keep running; put `crates/pykentron/python` on `sys.path` to use it. The CadQuery layers need
+`pyparsing`, `multimethod`, `runtype`, `typing_extensions` and `numpy` (and `nlopt`, `casadi`
+for constraints), as CadQuery does: the `cadquery` extra.
 
 ## Memory and speed
 

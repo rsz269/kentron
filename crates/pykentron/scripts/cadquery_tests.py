@@ -103,7 +103,7 @@ def main() -> int:
     junit = cache / "junit.xml"
     junit.unlink(missing_ok=True)
     env = dict(os.environ)
-    env["PYTHONPATH"] = os.pathsep.join([str(PYKENTRON / "python" / "cadquery_shim"), str(PYKENTRON / "python")])
+    env["PYTHONPATH"] = os.pathsep.join([str(PYKENTRON / "python" / "pykentron" / "cadquery_shim"), str(PYKENTRON / "python")])
     cmd = [str(python), "-m", "pytest", "tests", "-q", "-p", "no:cacheprovider", "--continue-on-collection-errors", f"--timeout={args.timeout}", f"--junitxml={junit}", "-o", "junit_family=xunit1", *pytest_args]
     print("+", " ".join(cmd), file=sys.stderr)
     subprocess.run(cmd, cwd=suite, env=env)

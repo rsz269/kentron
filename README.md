@@ -111,6 +111,7 @@ kentron and pykentron are dual-licensed under the [MIT](LICENSE-MIT) and
 code they come from:
 - `crates/occt-tests`, translated from OCCT's and BRL-CAD's tests: LGPL-2.1 (OCCT's with the
   Open CASCADE exception). Nothing else depends on it.
-- The CadQuery code copied into pykentron (`crates/pykentron/python/cadquery_shim/cadquery`
-  and `crates/pykentron/python/pykentron/occ_impl/exporters`, each with its
+- The CadQuery code copied into pykentron
+  (`crates/pykentron/python/pykentron/cadquery_shim/cadquery` and
+  `crates/pykentron/python/pykentron/occ_impl/exporters`, each with its
   `LICENSE.CadQuery` and a list of the files copied in `VENDORED.txt`): Apache-2.0.

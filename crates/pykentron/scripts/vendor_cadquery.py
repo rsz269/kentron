@@ -17,7 +17,7 @@ import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-SHIM = HERE.parent / "python" / "cadquery_shim" / "cadquery"
+SHIM = HERE.parent / "python" / "pykentron" / "cadquery_shim" / "cadquery"
 EXPORTERS = HERE.parent / "python" / "pykentron" / "occ_impl" / "exporters"
 REPOSITORY = "https://github.com/CadQuery/cadquery.git"
 RELEASE = "v2.8.0"

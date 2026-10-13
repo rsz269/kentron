@@ -1,0 +1,77 @@
+name: Release
+
+# Builds pykentron's wheels and source distribution and publishes them to PyPI (trusted
+# publishing: the PyPI project trusts this workflow, no token is stored). Runs for a version
+# tag, or by hand.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  wheels:
+    name: Wheels (Linux x86-64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build for any x86-64 CPU
+        # (The workspace builds for x86-64-v3, which wheels for all x86-64 machines cannot assume.)
+        run: rm .cargo/config.toml
+      - uses: PyO3/maturin-action@v1
+        with:
+          target: x86_64
+          manylinux: auto
+          args: --release --out dist -m crates/pykentron/Cargo.toml
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-linux-x86_64
+          path: dist
+
+  sdist:
+    name: Source distribution
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: PyO3/maturin-action@v1
+        with:
+          command: sdist
+          args: --out dist -m crates/pykentron/Cargo.toml
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: dist
+
+  check:
+    name: Check the wheel
+    needs: wheels
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          name: wheels-linux-x86_64
+          path: dist
+      - name: Install it and run a CadQuery script on it
+        run: |
+          python -m pip install --quiet "$(ls dist/*.whl)[cadquery]"
+          cd /tmp
+          python -c "import pykentron as cq; assert abs(cq.Workplane().box(1, 2, 3).val().Volume() - 6) < 1e-9"
+          printf 'import cadquery as cq\nr = cq.Workplane("XY").box(2, 3, 4).faces(">Z").workplane().hole(1)\nprint(round(r.val().Volume(), 4))\n' > script.py
+          test "$(pykentron-run script.py)" = "20.8584"
+
+  publish:
+    name: Publish to PyPI
+    needs: [wheels, sdist, check]
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: pypa/gh-action-pypi-publish@release/v1

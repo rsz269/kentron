@@ -7,7 +7,7 @@ Optimized builds use the `dist` profile (link-time optimization across crates) a
 `release` profile the tests use (reusing their build of kentron: for checking changes, not
 for shipping). The package is then
 importable with crates/pykentron/python on PYTHONPATH (and the
-`cadquery` shim with crates/pykentron/python/cadquery_shim too).
+`cadquery` shim with crates/pykentron/python/pykentron/cadquery_shim too).
 """
 
 import argparse

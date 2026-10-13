@@ -1,0 +1,55 @@
+[build-system]
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "pykentron"
+description = "kentron, a B-rep CAD kernel in Rust, from Python, with a CadQuery-compatible API: CadQuery scripts run on it unchanged."
+readme = "README.md"
+requires-python = ">=3.10"
+# (pykentron's own code is MIT or Apache-2.0; the CadQuery code it includes is Apache-2.0.)
+license = "(MIT OR Apache-2.0) AND Apache-2.0"
+license-files = [
+    "LICENSE-MIT",
+    "LICENSE-APACHE",
+    "python/pykentron/cadquery_shim/cadquery/LICENSE.CadQuery",
+    "python/pykentron/occ_impl/exporters/LICENSE.CadQuery",
+]
+keywords = ["cad", "brep", "cadquery", "solid-modeling", "geometry"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Manufacturing",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Rust",
+    "Topic :: Multimedia :: Graphics :: 3D Modeling",
+    "Topic :: Scientific/Engineering",
+]
+dependencies = ["numpy"]
+dynamic = ["version"]
+
+[project.optional-dependencies]
+# What CadQuery's own layers need (pykentron.shim), with CadQuery 2.8's constraints.
+cadquery = [
+    "pyparsing>=3.0.0",
+    "multimethod>=1.11,<2.0",
+    "runtype",
+    "typing_extensions",
+    "nlopt>=2.9.0,<3.0",
+    "casadi",
+    "ezdxf>=1.3.0",
+]
+dxf = ["ezdxf>=1.3.0"]
+
+[project.scripts]
+pykentron-run = "pykentron.shim:main"
+
+[project.urls]
+Homepage = "https://github.com/rsz269/kentron"
+Repository = "https://github.com/rsz269/kentron"
+Issues = "https://github.com/rsz269/kentron/issues"
+
+[tool.maturin]
+python-source = "python"
+module-name = "pykentron._kentron"
