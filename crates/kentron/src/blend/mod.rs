@@ -465,10 +465,35 @@ fn fillet_in_turn(model: &mut Model, shape: Shape, edges: &[(Shape, &dyn Fn(f64)
         let (curve, first, last) = model.edge_curve(Shape { orientation: Orientation::Forward, ..edge }).ok_or_else(|| Error::InvalidInput("a degenerate edge has no fillet".into()))?;
         wanted.push((curve, first, last, radius));
     }
+    // In the order given, else in reverse (the later fillet may be the one that has to roll
+    // over onto the earlier).
+    let mut failure = None;
+    for order in [false, true] {
+        let mut sequence: Vec<_> = wanted.iter().collect();
+        if order {
+            sequence.reverse();
+        }
+        match in_order(model, shape, &sequence) {
+            Ok(rounded) => return Ok(rounded),
+            Err(e) => failure = Some(e),
+        }
+    }
+    Err(failure.expect("a failure"))
+}
+
+/// [`fillet_in_turn`] in the given order: each edge's ball rolling on its faces, or rolling
+/// on over the faces beyond them (a constant radius).
+fn in_order(model: &mut Model, shape: Shape, sequence: &[&(Curve, f64, f64, &dyn Fn(f64) -> f64)]) -> Result<Shape> {
     let mut shape = shape;
-    for (curve, first, last, radius) in wanted {
-        let edge = find_edge(model, shape, &curve, first, last).ok_or_else(|| Error::Failed("a filleted edge was lost by another fillet".into()))?;
-        shape = ball::rolling_ball(model, shape, edge, radius)?;
+    for &(curve, first, last, radius) in sequence {
+        let edge = find_edge(model, shape, curve, *first, *last).ok_or_else(|| Error::Failed("a filleted edge was lost by another fillet".into()))?;
+        let r0 = radius(0.0);
+        let constant = [0.25, 0.5, 0.75, 1.0].iter().all(|&s| (radius(s) - r0).abs() <= tolerance::LINEAR);
+        shape = match ball::rolling_ball(model, shape, edge, *radius) {
+            Ok(rounded) => rounded,
+            Err(e) if constant => runover::fillet(model, shape, edge, r0).map_err(|_| e)?,
+            Err(e) => return Err(e),
+        };
     }
     Ok(shape)
 }

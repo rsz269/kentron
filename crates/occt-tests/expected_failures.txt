@@ -87,7 +87,6 @@ tests/blend/simple/V2
 tests/blend/simple/V4
 tests/blend/simple/V6
 tests/blend/simple/V7
-tests/blend/simple/W3
 tests/blend/simple/W5
 tests/blend/simple/W7
 tests/blend/simple/X1

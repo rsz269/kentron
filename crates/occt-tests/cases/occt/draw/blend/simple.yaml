@@ -3454,7 +3454,6 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/simple/W3
-expect: not_done
 build:
   - s: {load: {brep: "CCV_1_c12gsf.rle"}}
   - s_2: {select: {of: s, edge: [2.35763778973, 0.0, 0.36662193933], length: 1.55675406349}}
