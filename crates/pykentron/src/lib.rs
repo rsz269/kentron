@@ -933,22 +933,47 @@ fn read_step_assembly(py: Python<'_>, path: &str) -> PyResult<Vec<Py<PyAny>>> {
     roots.iter().map(|n| convert(py, n)).collect()
 }
 
-/// Writes one shape to a STEP file as a product named `name`.
+/// A STEP length unit by CadQuery's name for it ("MM", "CM", "M", "KM", "INCH", "FT", "MI",
+/// "UM", "NM").
+fn length_unit(name: &str) -> PyResult<kentron::io::step::LengthUnit> {
+    use kentron::io::step::LengthUnit::*;
+    Ok(match name.to_ascii_uppercase().as_str() {
+        "MM" => Millimetre,
+        "CM" => Centimetre,
+        "M" => Metre,
+        "KM" => Kilometre,
+        "UM" => Micrometre,
+        "NM" => Nanometre,
+        "INCH" | "IN" => Inch,
+        "FT" => Foot,
+        "MI" => Mile,
+        other => return Err(PyValueError::new_err(format!("unknown length unit {other}"))),
+    })
+}
+
+/// Writes one shape to a STEP file as a product named `name`, its lengths in `unit` (the
+/// file declaring it).
 #[pyfunction]
-#[pyo3(signature = (shape, path, name, color=None))]
-fn write_step(shape: Handle, path: &str, name: &str, color: Option<Xyz>) -> PyResult<()> {
+#[pyo3(signature = (shape, path, name, color=None, unit="MM"))]
+fn write_step(shape: Handle, path: &str, name: &str, color: Option<Xyz>, unit: &str) -> PyResult<()> {
+    let unit = length_unit(unit)?;
     let mut f = std::fs::File::create(path).map_err(|e| PyValueError::new_err(format!("{path}: {e}")))?;
     let color = color.map(|c| [c.0, c.1, c.2]);
     if is_binstep_path(path) {
+        if unit != kentron::io::step::LengthUnit::Millimetre {
+            return Err(PyNotImplementedError::new_err("binary STEP in units other than millimetres"));
+        }
         return with_model(|m| kentron::io::step::write_binstep(m, shape.shape, name, color, &mut f));
     }
-    with_model(|m| kentron::io::step::write(m, shape.shape, name, color, &mut f))
+    with_model(|m| kentron::io::step::write_in(m, shape.shape, name, color, unit, &mut f))
 }
 
 /// Writes products to a STEP file: nested `(name, shape or None, placement rows, rgb or
 /// None, children)` tuples, as `read_step_assembly` gives them.
 #[pyfunction]
-fn write_step_assembly(path: &str, roots: Vec<Bound<'_, PyAny>>) -> PyResult<()> {
+#[pyo3(signature = (path, roots, unit="MM"))]
+fn write_step_assembly(path: &str, roots: Vec<Bound<'_, PyAny>>, unit: &str) -> PyResult<()> {
+    let unit = length_unit(unit)?;
     fn convert(node: &Bound<'_, PyAny>) -> PyResult<kentron::io::step::Node> {
         let (name, shape, rows, color, children): (String, Option<Handle>, [[f64; 4]; 3], Option<Xyz>, Vec<Bound<'_, PyAny>>) = node.extract()?;
         let placement = Transform::from_rows(rows).ok_or_else(|| PyValueError::new_err("a singular placement"))?;
@@ -963,9 +988,12 @@ fn write_step_assembly(path: &str, roots: Vec<Bound<'_, PyAny>>) -> PyResult<()>
     let roots = roots.iter().map(convert).collect::<PyResult<Vec<_>>>()?;
     let mut f = std::fs::File::create(path).map_err(|e| PyValueError::new_err(format!("{path}: {e}")))?;
     if is_binstep_path(path) {
+        if unit != kentron::io::step::LengthUnit::Millimetre {
+            return Err(PyNotImplementedError::new_err("binary STEP in units other than millimetres"));
+        }
         return with_model(|m| kentron::io::step::write_assembly_binstep(m, &roots, &mut f));
     }
-    with_model(|m| kentron::io::step::write_assembly(m, &roots, &mut f))
+    with_model(|m| kentron::io::step::write_assembly_in(m, &roots, unit, &mut f))
 }
 
 #[pymodule]

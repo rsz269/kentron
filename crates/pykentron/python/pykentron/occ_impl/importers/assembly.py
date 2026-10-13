@@ -11,11 +11,23 @@ def importStep(assy, path: str, unit: str = "MM") -> None:
     """Fills `assy` with the product structure of a STEP file (as CadQuery's): the top-level
     assembly's name and placement on `assy`, sub-assemblies and parts below it, named, placed
     and coloured."""
-    if unit.upper() != "MM":
-        raise NotImplementedError("STEP units other than millimetres")
+    from ...exporters import _mm_per
+
     roots = native.read_step_assembly(str(path))
     if not roots:
         raise ValueError(f"Error reading STEP file: {path}")
+    # Read in millimetres: in `unit`, shapes and placements' translations scaled.
+    factor = 1.0 / _mm_per(unit)
+    if factor != 1.0:
+
+        def scaled(node):
+            name, handle, rows, rgb, children = node
+            if handle is not None:
+                handle = Shape.cast(handle).scale(factor).wrapped
+            rows = [list(r[:3]) + [r[3] * factor] for r in rows]
+            return (name, handle, rows, rgb, [scaled(c) for c in children])
+
+        roots = [scaled(r) for r in roots]
 
     def leaf(node, parent) -> None:
         name, handle, rows, rgb, children = node

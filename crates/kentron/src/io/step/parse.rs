@@ -268,19 +268,32 @@ impl Exchange {
 }
 
 /// A real in STEP's form: the shortest that reads back the same, with a point and `E` for
-/// an exponent (`1.`, `1.5E-07`).
+/// an exponent, as OCCT writes them: plain within [0.1, 1000) (`1.`, `2.5`), otherwise with
+/// a signed exponent of at least two digits (`5.E-03`, `1.5E+04`).
 pub(super) fn real(v: f64) -> String {
-    if !v.is_finite() {
+    if !v.is_finite() || v == 0.0 {
         return "0.".into();
     }
-    let s = format!("{v:?}");
+    let plain = (0.1..1000.0).contains(&v.abs());
+    let s = if plain { format!("{v:?}") } else { format!("{v:e}") };
     let (mantissa, exponent) = match s.split_once('e') {
         Some((m, e)) => (m.to_string(), Some(e.to_string())),
         None => (s, None),
     };
-    let mantissa = if mantissa.contains('.') { mantissa } else { format!("{mantissa}.") };
+    // (`1.` rather than `1.0`.)
+    let mantissa = match mantissa.strip_suffix(".0") {
+        Some(whole) => format!("{whole}."),
+        None if mantissa.contains('.') => mantissa,
+        None => format!("{mantissa}."),
+    };
     match exponent {
-        Some(e) => format!("{mantissa}E{e}"),
+        Some(e) => {
+            let (sign, digits) = match e.strip_prefix('-') {
+                Some(d) => ('-', d),
+                None => ('+', e.as_str()),
+            };
+            format!("{mantissa}E{sign}{digits:0>2}")
+        }
         None => mantissa,
     }
 }
@@ -712,5 +725,22 @@ mod tests {
     #[test]
     fn escaped_text() {
         assert_eq!(decode(b"caf\\X2\\00E9\\X0\\"), "caf\u{e9}");
+    }
+}
+
+#[cfg(test)]
+mod real_tests {
+    use super::real;
+
+    #[test]
+    fn reals_as_occt_writes_them() {
+        for (v, text) in [(1.0, "1."), (-5.0, "-5."), (2.5, "2.5"), (0.5, "0.5"), (-0.005, "-5.E-03"), (1e-7, "1.E-07"), (15000.0, "1.5E+04"), (0.0, "0.")] {
+            assert_eq!(real(v), text, "{v}");
+        }
+        // Every one reads back exactly.
+        for v in [0.1 + 0.2, 1.0 / 3.0, 123456.789, 3.0e-12, -987.654321] {
+            let t = real(v).replace("E", "e");
+            assert_eq!(t.parse::<f64>().unwrap(), v);
+        }
     }
 }

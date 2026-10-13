@@ -578,10 +578,10 @@ class Shape:
             return Shape.cast(s.wrapped)
         return Shape.cast(native.read_brep(str(f)))
 
-    def exportStep(self, fileName: str, **kwargs):
+    def exportStep(self, fileName: str, unit: str = "MM", outputUnit=None, **kwargs):
         from . import exporters
 
-        exporters.export(self, fileName, "STEP")
+        exporters.export(self, fileName, "STEP", unit=unit, outputUnit=outputUnit)
 
     def exportStl(self, fileName: str, tolerance: float = 1e-3, angularTolerance: float = 0.1, ascii: bool = False, **kwargs):
         from . import exporters

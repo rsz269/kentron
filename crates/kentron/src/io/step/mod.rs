@@ -11,7 +11,7 @@
 mod parse;
 mod write;
 
-pub use write::{write, write_assembly};
+pub use write::{write, write_assembly, write_assembly_in, write_in};
 
 use crate::hashing::FastMap as HashMap;
 use std::io::Read;
@@ -44,6 +44,61 @@ pub struct Node {
     /// Where the product sits in its parent.
     pub placement: Transform,
     pub children: Vec<Node>,
+}
+
+/// A length unit of a STEP file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LengthUnit {
+    Millimetre,
+    Centimetre,
+    Metre,
+    Kilometre,
+    Micrometre,
+    Nanometre,
+    Inch,
+    Foot,
+    Mile,
+}
+
+impl LengthUnit {
+    /// Millimetres per unit.
+    pub fn millimetres(self) -> f64 {
+        match self {
+            LengthUnit::Millimetre => 1.0,
+            LengthUnit::Centimetre => 10.0,
+            LengthUnit::Metre => 1e3,
+            LengthUnit::Kilometre => 1e6,
+            LengthUnit::Micrometre => 1e-3,
+            LengthUnit::Nanometre => 1e-6,
+            LengthUnit::Inch => 25.4,
+            LengthUnit::Foot => 304.8,
+            LengthUnit::Mile => 1_609_344.0,
+        }
+    }
+
+    /// The unit's name in a STEP conversion-based unit (for those not SI).
+    fn name(self) -> &'static str {
+        match self {
+            LengthUnit::Inch => "INCH",
+            LengthUnit::Foot => "FOOT",
+            LengthUnit::Mile => "MILE",
+            _ => "",
+        }
+    }
+
+    /// The SI prefix of a metric unit as written in `SI_UNIT` (`$` for the metre itself);
+    /// `None` for units defined by conversion.
+    fn si_prefix(self) -> Option<&'static str> {
+        match self {
+            LengthUnit::Millimetre => Some(".MILLI."),
+            LengthUnit::Centimetre => Some(".CENTI."),
+            LengthUnit::Metre => Some("$"),
+            LengthUnit::Kilometre => Some(".KILO."),
+            LengthUnit::Micrometre => Some(".MICRO."),
+            LengthUnit::Nanometre => Some(".NANO."),
+            _ => None,
+        }
+    }
 }
 
 /// Reads a STEP file's products as a tree: one node per root product. The file may be STEP

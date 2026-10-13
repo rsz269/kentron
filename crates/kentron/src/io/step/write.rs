@@ -18,20 +18,32 @@ use crate::geometry::ParametricCurve;
 use crate::math::{Direction, Frame, Point, Transform, Transformable, Vector};
 use crate::topology::{Model, NodeId, NodeKind, Orientation, Shape};
 
-use super::Node;
+use super::{LengthUnit, Node};
 
-/// Writes `shape` as one product named `name`, with an optional colour.
+/// Writes `shape` as one product named `name`, with an optional colour (in millimetres).
 #[doc(alias = "STEPControl_Writer")]
 pub fn write(model: &Model, shape: Shape, name: &str, color: Option<[f64; 3]>, out: &mut dyn Write) -> Result<()> {
+    write_in(model, shape, name, color, LengthUnit::Millimetre, out)
+}
+
+/// [`write`], the shape's lengths taken to be in `unit`: written as they are, the file
+/// declaring that unit.
+pub fn write_in(model: &Model, shape: Shape, name: &str, color: Option<[f64; 3]>, unit: LengthUnit, out: &mut dyn Write) -> Result<()> {
     let root = Node { name: name.to_string(), shape: Some(shape), color, placement: Transform::IDENTITY, children: Vec::new() };
-    write_assembly(model, &[root], out)
+    write_assembly_in(model, &[root], unit, out)
 }
 
 /// Writes products: each node a product (an assembly of its children, with its own shape if
-/// any), placed in its parent.
+/// any), placed in its parent (in millimetres).
 #[doc(alias = "STEPCAFControl_Writer")]
 pub fn write_assembly(model: &Model, roots: &[Node], out: &mut dyn Write) -> Result<()> {
+    write_assembly_in(model, roots, LengthUnit::Millimetre, out)
+}
+
+/// [`write_assembly`], lengths taken to be in `unit` (see [`write_in`]).
+pub fn write_assembly_in(model: &Model, roots: &[Node], unit: LengthUnit, out: &mut dyn Write) -> Result<()> {
     let mut w = Writer::new(model);
+    w.unit = unit;
     let (application, product_context, definition_context) = w.contexts();
     for root in roots {
         w.product(root, &application, (product_context, definition_context))?;
@@ -55,6 +67,7 @@ struct Writer<'a> {
     vertices: HashMap<(NodeId, [u64; 12]), usize>,
     edges: HashMap<(NodeId, [u64; 12]), usize>,
     context: Option<usize>,
+    unit: LengthUnit,
 }
 
 fn key(t: &Transform) -> [u64; 12] {
@@ -70,7 +83,7 @@ fn key(t: &Transform) -> [u64; 12] {
 
 impl<'a> Writer<'a> {
     fn new(model: &'a Model) -> Self {
-        Writer { model, lines: Vec::new(), vertices: HashMap::default(), edges: HashMap::default(), context: None }
+        Writer { model, lines: Vec::new(), vertices: HashMap::default(), edges: HashMap::default(), context: None, unit: LengthUnit::Millimetre }
     }
 
     /// Adds an entity; its number.
@@ -113,7 +126,16 @@ impl<'a> Writer<'a> {
         if let Some(c) = self.context {
             return c;
         }
-        let length = self.add("( LENGTH_UNIT() NAMED_UNIT(*) SI_UNIT(.MILLI.,.METRE.) )".into());
+        let length = match self.unit.si_prefix() {
+            Some(prefix) => self.add(format!("( LENGTH_UNIT() NAMED_UNIT(*) SI_UNIT({prefix},.METRE.) )")),
+            // A unit defined as so many millimetres (as OCCT writes inches).
+            None => {
+                let mm = self.add("( LENGTH_UNIT() NAMED_UNIT(*) SI_UNIT(.MILLI.,.METRE.) )".into());
+                let measure = self.add(format!("LENGTH_MEASURE_WITH_UNIT(LENGTH_MEASURE({}),#{mm})", real(self.unit.millimetres())));
+                let exponents = self.add("DIMENSIONAL_EXPONENTS(1.,0.,0.,0.,0.,0.,0.)".into());
+                self.add(format!("( CONVERSION_BASED_UNIT('{}',#{measure}) LENGTH_UNIT() NAMED_UNIT(#{exponents}) )", self.unit.name()))
+            }
+        };
         let angle = self.add("( NAMED_UNIT(*) PLANE_ANGLE_UNIT() SI_UNIT($,.RADIAN.) )".into());
         let solid = self.add("( NAMED_UNIT(*) SI_UNIT($,.STERADIAN.) SOLID_ANGLE_UNIT() )".into());
         let uncertainty = self.add(format!("UNCERTAINTY_MEASURE_WITH_UNIT(LENGTH_MEASURE(1.E-07),#{length},'distance_accuracy_value','confusion accuracy')"));
@@ -485,6 +507,24 @@ impl<'a> Writer<'a> {
 mod tests {
     use super::*;
     use crate::primitives::{Cuboid, Cylinder};
+
+    /// A unit box written as inches or metres reads back (in millimetres) scaled to match;
+    /// the file declares the unit.
+    #[test]
+    fn units_other_than_millimetres() {
+        for (unit, mm, declared) in [(LengthUnit::Inch, 25.4, "CONVERSION_BASED_UNIT('INCH'"), (LengthUnit::Metre, 1000.0, "SI_UNIT($,.METRE.)")] {
+            let mut model = Model::new();
+            let cube = Cuboid::new(1.0, 1.0, 1.0).build(&mut model).unwrap();
+            let mut bytes = Vec::new();
+            write_in(&model, cube, "cube", None, unit, &mut bytes).unwrap();
+            let text = String::from_utf8(bytes.clone()).unwrap();
+            assert!(text.contains(declared), "{unit:?} declared");
+            let mut read_model = Model::new();
+            let read = super::super::read(&mut read_model, &mut bytes.as_slice()).unwrap();
+            let volume = crate::properties::volume(&read_model, read).mass;
+            assert!((volume - mm * mm * mm).abs() <= 1e-9 * mm * mm * mm, "{unit:?}: volume {volume}");
+        }
+    }
 
     /// A box and a cylinder, written and read back: same volumes, names and colours.
     #[test]

@@ -50,6 +50,17 @@ def _type_of(fname, exportType) -> str:
     raise ValueError("Unknown extensions, specify export type explicitly")
 
 
+# Millimetres per length unit, by CadQuery's names for them.
+_MM_PER = {"MM": 1.0, "CM": 10.0, "M": 1e3, "KM": 1e6, "INCH": 25.4, "IN": 25.4, "FT": 304.8, "MI": 1609344.0, "UM": 1e-3, "NM": 1e-6}
+
+
+def _mm_per(unit: str) -> float:
+    try:
+        return _MM_PER[unit.upper()]
+    except KeyError:
+        raise ValueError(f"unknown length unit {unit}") from None
+
+
 def export(w, fname, exportType: Optional[str] = None, tolerance: float = 0.1, angularTolerance: float = 0.1, unit: str = "MM", outputUnit=None, opt=None, **kwargs) -> None:
     """Writes a shape, or a workplane's shapes, to a file of a type (or the file's
     extension's)."""
@@ -60,9 +71,12 @@ def export(w, fname, exportType: Optional[str] = None, tolerance: float = 0.1, a
     if kind == "BREP":
         shape.exportBrep(fname)
     elif kind == "STEP":
-        if unit.upper() != "MM" or (outputUnit is not None and outputUnit.upper() != "MM"):
-            raise NotImplementedError("STEP units other than millimetres")
-        native.write_step(shape.wrapped, fname, Path(fname).stem)
+        # The shape's lengths are in `unit`; the file is written in `outputUnit` (by default
+        # the same), declared so.
+        out = (outputUnit or unit).upper()
+        factor = _mm_per(unit) / _mm_per(out)
+        written = shape.scale(factor) if factor != 1.0 else shape
+        native.write_step(written.wrapped, fname, Path(fname).stem, unit=out)
     elif kind == "STL":
         ascii = bool(opt.get("ascii", False) or opt.get("ASCII", False) or kwargs.get("ascii", False))
         native.write_stl(shape.wrapped, fname, tolerance, angularTolerance, ascii)

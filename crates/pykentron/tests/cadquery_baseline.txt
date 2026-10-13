@@ -1,7 +1,6 @@
 # CadQuery v2.8.0 tests that fail on pykentron (cadquery_tests.py --update-baseline)
 ::tests.test_nurbs
 ::tests.test_vis
-tests.test_assembly::test_assembly_import_step_unit
 tests.test_assembly::test_assembly_multi_subshape_import[step]
 tests.test_assembly::test_assembly_multi_subshape_import[xbf]
 tests.test_assembly::test_assembly_multi_subshape_import[xml]
@@ -72,12 +71,8 @@ tests.test_assembly::test_save_gltf_boxes2
 tests.test_assembly::test_save_stl_formats
 tests.test_assembly::test_save_vtkjs
 tests.test_assembly::test_shallow_assy
-tests.test_assembly::test_step_export_assembly_output_unit
-tests.test_assembly::test_step_export_assembly_unit_meters
 tests.test_assembly::test_step_export_loc[boxes8_assy-expected0]
 tests.test_assembly::test_step_export_loc[boxes9_assy-expected1]
-tests.test_assembly::test_step_export_meta_unit_meters
-tests.test_assembly::test_step_roundtrip_unit
 tests.test_assembly::test_step_roundtrip_with_materials[step]
 tests.test_assembly::test_step_roundtrip_with_materials[xbf]
 tests.test_assembly::test_step_roundtrip_with_materials[xml]
@@ -129,8 +124,6 @@ tests.test_exporters::test_fused_assembly_top_level_with_children
 tests.test_exporters::test_fused_assembly_with_one_part
 tests.test_exporters::test_fused_not_touching_assembly
 tests.test_exporters::test_nested_fused_assembly
-tests.test_exporters::test_step_export_output_unit
-tests.test_exporters::test_step_export_unit_inches
 tests.test_exporters::test_stl_binary[0-None-STL Exported by Open CASCADE]
 tests.test_exporters::test_stl_binary[1-opt1-STL Exported by Open CASCADE]
 tests.test_exporters::test_stl_binary[2-opt2-STL Exported by Open CASCADE]

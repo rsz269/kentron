@@ -17,9 +17,12 @@ def importStep(fileName, unit: str = "MM") -> "Workplane":
     """The file's shapes (one compound of its products, placed) on a workplane."""
     from .workplane import Workplane
 
-    if unit.upper() != "MM":
-        raise NotImplementedError("STEP units other than millimetres")
-    return Workplane("XY").add(Shape.cast(native.read_step(str(fileName))))
+    from .exporters import _mm_per
+
+    # Read in millimetres, then in `unit`.
+    shape = Shape.cast(native.read_step(str(fileName)))
+    factor = 1.0 / _mm_per(unit)
+    return Workplane("XY").add(shape.scale(factor) if factor != 1.0 else shape)
 
 
 def importStepAssembly(fileName):
