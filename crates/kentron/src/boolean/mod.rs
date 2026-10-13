@@ -99,7 +99,33 @@ fn only_solids(model: &Model, shape: Shape) -> Option<Vec<Shape>> {
 #[doc(alias = "BRepAlgoAPI_Cut")]
 #[doc(alias = "cut")]
 pub fn difference(model: &mut Model, a: Shape, b: Shape) -> Result<Shape> {
+    if let Some(each) = each_solid_apart(model, a, b, Operation::Difference)? {
+        return Ok(each);
+    }
     run(model, a, b, Operation::Difference)
+}
+
+/// For an object `a` made of solids overlapping one another: the operation on each of its
+/// solids, gathered (`None` otherwise). OCCT keeps an object's solids apart too; one run
+/// would take each for inside the others and drop the faces where they overlap.
+fn each_solid_apart(model: &mut Model, a: Shape, b: Shape, operation: Operation) -> Result<Option<Shape>> {
+    let Some(solids) = only_solids(model, a) else { return Ok(None) };
+    if solids.len() < 2 {
+        return Ok(None);
+    }
+    let boxes: Vec<BoundingBox> = solids.iter().map(|&s| crate::properties::tight_bounding_box(model, s).enlarged(geom::on_tol())).collect();
+    let overlap = (0..boxes.len()).any(|i| (i + 1..boxes.len()).any(|j| boxes[i].overlaps(&boxes[j])));
+    if !overlap {
+        return Ok(None);
+    }
+    let gathered = model.new_empty(crate::topology::NodeKind::Compound);
+    for solid in solids {
+        let part = run(model, solid, b, operation)?;
+        for piece in model.explore(part, crate::topology::NodeKind::Solid).collect::<Vec<_>>() {
+            model.add(gathered, piece)?;
+        }
+    }
+    Ok(Some(gathered))
 }
 
 /// [`difference`] built once, at the current tolerances, its shells closed or not: for
@@ -112,6 +138,9 @@ pub(crate) fn difference_once(model: &mut Model, a: Shape, b: Shape) -> Result<S
 #[doc(alias = "BRepAlgoAPI_Common")]
 #[doc(alias = "common")]
 pub fn intersection(model: &mut Model, a: Shape, b: Shape) -> Result<Shape> {
+    if let Some(each) = each_solid_apart(model, a, b, Operation::Intersection)? {
+        return Ok(each);
+    }
     run(model, a, b, Operation::Intersection)
 }
 

@@ -188,6 +188,9 @@ class Shape:
         return self
 
     def moved(self, *args, **kwargs) -> "Shape":
+        # Another shape: copies at its locations (CadQuery's `moved(s.toLocs())`).
+        if len(args) == 1 and not kwargs and isinstance(args[0], Shape):
+            return self.moved(args[0].toLocs())
         if kwargs:
             return self._copy_with(self.wrapped.moved(_location_of(*args, **kwargs).rows))
         # Several locations: a compound of copies.
@@ -1286,17 +1289,24 @@ class Face(Shape):
             if not w.IsClosed():
                 raise ValueError("Cannot build face(s): inner wire is not closed")
 
-        def overlap(a, b) -> bool:
-            # (Within a tolerance: wires in one plane have boxes as flat as rounding leaves.)
-            tol = 1e-7 * (1.0 + max(a.xlen, a.ylen, a.zlen))
-            return all(lo1 <= hi2 + tol and lo2 <= hi1 + tol for lo1, hi1, lo2, hi2 in (
-                (a.xmin, a.xmax, b.xmin, b.xmax), (a.ymin, a.ymax, b.ymin, b.ymax), (a.zmin, a.zmax, b.zmin, b.zmax)))
+        # A wire is a hole of a group when it lies within the group's outer wire: a point on
+        # it at no distance from the face the outer wire bounds (bounding boxes overlap for
+        # wires side by side, rotated rectangles for one).
+        bounded = {}
+
+        def within(outer, w) -> bool:
+            key = id(outer)
+            if key not in bounded:
+                bounded[key] = Shape.cast(native.make_face(outer.wrapped, []))
+            face = bounded[key]
+            p = w.positionAt(0.5)
+            tol = 1e-7 * (1.0 + max(outer.BoundingBox().DiagonalLength, 1.0))
+            return face.distance(Vertex.makeVertex(p.x, p.y, p.z)) <= tol
 
         groups = [[outerWire]]
         for w in innerWires:
-            box = w.BoundingBox()
             for g in groups:
-                if overlap(g[0].BoundingBox(), box):
+                if within(g[0], w):
                     g.append(w)
                     break
             else:
@@ -1384,10 +1394,11 @@ class Shell(Shape):
 
 class Mixin3D:
     def isInside(self, point, tolerance: float = 1e-6) -> bool:
-        """True if the point is inside the solid or on its boundary (within `tolerance`)."""
+        """True if the point is inside the solid or on its boundary (closer to it than
+        `tolerance`; a point at the tolerance, up to rounding, is outside, as in OCCT)."""
         if native.classify_point(self.wrapped, _tuple(point)) != "out":
             return True
-        return native.distance(native.make_vertex(_tuple(point)), self.wrapped)[0] < tolerance
+        return native.distance(native.make_vertex(_tuple(point)), self.wrapped)[0] < tolerance * (1.0 - 1e-9)
 
     def fillet(self, radius: float, edgeList) -> "Shape":
         """The solid with `edgeList`'s edges rounded to `radius`."""
@@ -1432,7 +1443,17 @@ class Mixin3D:
         reach = 2.0 * self.BoundingBox().DiagonalLength
         for face in profiles:
             n = face.normalAt()
-            if upToFace is not None:
+            if upToFace is not None and upToFace.geomType() == "PLANE":
+                # Far along the normal, then only what lies on the profile's side of the
+                # face's plane: the prism ends on the plane, at whatever slant it has.
+                origin, normal = upToFace.Center(), upToFace.normalAt()
+                size = 4.0 * (reach + face.BoundingBox().DiagonalLength + (origin - face.Center()).Length)
+                towards = n if (origin - face.Center()).dot(n) >= 0 else -n
+                far = Shape.cast(native.extrude(face.wrapped, (towards * size).toTuple()))
+                side = 1.0 if (face.Center() - origin).dot(normal) >= 0 else -1.0
+                slab = Shape.cast(native.extrude(Face.makePlane(size, size, origin, normal).wrapped, (normal * (side * size)).toTuple()))
+                prism = far.intersect(slab).wrapped
+            elif upToFace is not None:
                 prism = native.extrude(face.wrapped, (n * (upToFace.Center() - face.Center()).dot(n)).toTuple())
             elif thruAll or depth is None:
                 d = n * (reach + face.BoundingBox().DiagonalLength)

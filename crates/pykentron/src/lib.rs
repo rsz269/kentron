@@ -19,7 +19,7 @@ use kentron::geometry::surface::Surface;
 use kentron::geometry::{ParametricCurve, ParametricSurface};
 use kentron::math::{Axis, Direction, Frame, Point, Transform, Vector};
 use kentron::hashing::FastMap;
-use kentron::topology::{CollectOptions, Model, NodeId, NodeKind, Orientation, Shape};
+use kentron::topology::{CollectOptions, Model, NodeId, NodeKind, Orientation, Shape, WireId};
 use kentron::{blend, boolean, loft, make, modify, offset, primitives, properties, sweep, validity};
 
 mod cadquery;
@@ -387,6 +387,11 @@ fn make_face(outer: Handle, inners: Vec<Handle>) -> PyResult<Handle> {
             make::wire(m, &edges)
         };
         let outer = rewire(m, outer.shape)?;
+        // An open outer wire makes an invalid face, as in OCCT (the caller checks validity).
+        let open = WireId::try_from(outer.node).is_ok_and(|w| !m.is_closed_wire(w));
+        if open && inners.is_empty() {
+            return make::open_face(m, outer);
+        }
         let face = make::planar_face(m, outer)?;
         let normal = face_normal(m, face);
         for inner in inners {

@@ -184,6 +184,15 @@ pub fn planar_face(model: &mut Model, wire: Shape) -> Result<Shape> {
     face_with_boundary(model, Surface::Plane(plane), wire)
 }
 
+/// A face on the plane of the open `wire`, bounded by it as it is: an invalid face (its
+/// boundary does not close), as OCCT's `BRepBuilderAPI_MakeFace` makes from an open wire.
+/// For callers that report a face's validity rather than fail on it (CadQuery's
+/// `Face.makeFromWires`); [`planar_face`] fails instead.
+pub fn open_face(model: &mut Model, wire: Shape) -> Result<Shape> {
+    let plane = plane_of_wire(model, wire)?;
+    face_with_boundary(model, Surface::Plane(plane), wire)
+}
+
 /// The plane containing `wire`, open or closed (an open one as if closed by a segment from
 /// its end to its start), its normal such that the wire runs counter-clockwise about it.
 /// Fails unless the wire is planar and not straight.
