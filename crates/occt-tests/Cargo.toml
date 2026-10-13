@@ -1,0 +1,25 @@
+[package]
+name = "occt-tests"
+version = "0.11.0"
+edition.workspace = true
+publish = false
+repository.workspace = true
+rust-version.workspace = true
+# Translations of OCCT's tests (LGPL-2.1 with the Open CASCADE exception) and of BRL-CAD's
+# libbg tests (LGPL-2.1): see README.md.
+license = "LGPL-2.1-only WITH OCCT-exception-1.0 AND LGPL-2.1-only"
+description = "Tests converted from OCCT (GTests and DRAW scripts) by tools/draw2rs.py and by hand, plus the support code they use."
+
+[dependencies]
+kentron = { path = "../kentron" }
+yaml-rust2 = "0.13.0"
+
+[dev-dependencies]
+libc = "0.2"
+libtest-mimic = "0.8.2"
+rayon = "1.11"
+
+# Test cases in YAML (cases/**/*.yaml), one libtest trial per case.
+[[test]]
+name = "cases"
+harness = false

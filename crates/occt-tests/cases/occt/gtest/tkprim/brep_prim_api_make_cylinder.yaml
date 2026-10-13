@@ -1,0 +1,65 @@
+# OCCT GTests moved from crates/occt-tests/tests/gtest_tkprim by hand.
+case: full_cylinder
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKPrim/GTests/BRepPrimAPI_MakeCylinder_Test.cxx
+  test: BRepPrimAPI_MakeCylinderTest.FullCylinder
+build:
+  - shape: {cylinder: {radius: 5, height: 10}}
+checks:
+  - {valid: shape}
+---
+case: face_count
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKPrim/GTests/BRepPrimAPI_MakeCylinder_Test.cxx
+  test: BRepPrimAPI_MakeCylinderTest.FaceCount
+notes:
+  - "1 lateral + 2 caps."
+build:
+  - shape: {cylinder: {radius: 5, height: 10}}
+checks:
+  - {count: shape, occurrences: true, eq: {faces: 3}}
+---
+case: volume
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKPrim/GTests/BRepPrimAPI_MakeCylinder_Test.cxx
+  test: BRepPrimAPI_MakeCylinderTest.Volume
+build:
+  - shape: {cylinder: {radius: 5, height: 10}}
+checks:
+  - {volume: shape, eq: "pi*5*5*10", abs: 0.01}
+---
+case: partial_cylinder_angle_limited
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKPrim/GTests/BRepPrimAPI_MakeCylinder_Test.cxx
+  test: BRepPrimAPI_MakeCylinderTest.PartialCylinder_AngleLimited
+notes:
+  - "1 lateral + 2 caps + 2 planar sides."
+build:
+  - shape: {cylinder: {radius: 5, height: 10, angle: 180}}
+checks:
+  - {valid: shape}
+  - {count: shape, occurrences: true, eq: {faces: 5}}
+---
+case: shape_validity
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKPrim/GTests/BRepPrimAPI_MakeCylinder_Test.cxx
+  test: BRepPrimAPI_MakeCylinderTest.ShapeValidity
+build:
+  - shape: {cylinder: {radius: 100, height: 200}}
+checks:
+  - {valid: shape}

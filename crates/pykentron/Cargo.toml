@@ -1,0 +1,27 @@
+[package]
+name = "pykentron"
+version = "0.11.0"
+edition.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+# (A Python extension module: built by build.py, not published as a crate.)
+publish = false
+# (The CadQuery code copied in, under python/cadquery_shim/cadquery and
+# python/pykentron/occ_impl/exporters, is Apache-2.0 alone.)
+license = "(MIT OR Apache-2.0) AND Apache-2.0"
+description = "Python bindings of kentron, with a CadQuery-compatible API (the `pykentron` package)."
+
+[lib]
+name = "_kentron"
+crate-type = ["cdylib"]
+
+[features]
+default = ["mimalloc"]
+# The allocator of the `fast` profile (src/profile.rs).
+mimalloc = ["dep:mimalloc"]
+
+[dependencies]
+kentron = { path = "../kentron" }
+pyo3 = { version = "0.27", features = ["extension-module", "abi3-py39"] }
+mimalloc = { version = "0.1", default-features = false, optional = true }

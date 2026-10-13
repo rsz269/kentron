@@ -1,0 +1,18 @@
+[workspace]
+resolver = "2"
+members = ["crates/kentron", "crates/occt-tests", "crates/pykentron"]
+
+[workspace.package]
+edition = "2021"
+# occt-tests, translated from OCCT's and BRL-CAD's tests, has their licence instead.
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/rsz269/kentron"
+homepage = "https://github.com/rsz269/kentron"
+rust-version = "1.88"
+
+# Optimized across crates, for the Python module (crates/pykentron/build.py); the tests keep
+# the quicker-to-build `release`.
+[profile.dist]
+inherits = "release"
+lto = "fat"
+codegen-units = 1

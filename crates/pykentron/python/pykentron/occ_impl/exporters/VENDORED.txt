@@ -1,0 +1,4 @@
+Copied unchanged from CadQuery v2.8.0 (https://github.com/CadQuery/cadquery.git), Apache License 2.0 (LICENSE.CadQuery), by crates/pykentron/scripts/vendor_cadquery.py:
+  occ_impl/exporters/amf.py
+  occ_impl/exporters/json.py
+  occ_impl/exporters/threemf.py

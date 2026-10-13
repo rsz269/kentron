@@ -1,0 +1,202 @@
+# OCCT GTests moved from crates/occt-tests/tests/gtest_tkprim by hand.
+case: full_torus
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKPrim/GTests/BRepPrimAPI_MakeTorus_Test.cxx
+  test: BRepPrimAPI_MakeTorusTest.FullTorus
+build:
+  - shape: {torus: {major: 10, minor: 2}}
+checks:
+  - {valid: shape}
+  - {count: shape, occurrences: true, eq: {faces: 1}}
+---
+case: partial_torus_angle_only
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKPrim/GTests/BRepPrimAPI_MakeTorus_Test.cxx
+  test: BRepPrimAPI_MakeTorusTest.PartialTorusAngleOnly
+notes:
+  - "1 lateral + 2 planar sides."
+build:
+  - shape: {torus: {major: 10, minor: 2, angle: 180}}
+checks:
+  - {valid: shape}
+  - {count: shape, occurrences: true, eq: {faces: 3}}
+---
+case: partial_torus_symmetric_around_zero
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKPrim/GTests/BRepPrimAPI_MakeTorus_Test.cxx
+  test: BRepPrimAPI_MakeTorusTest.PartialTorus_SymmetricAroundZero
+notes:
+  - "Bug 33133's original report."
+  - "1 lateral + 2 top/bottom + 2 start/end."
+build:
+  - shape: {torus: {major: 1, minor: 0.1, tube: [-90, 90], angle: "2.094*180/pi"}}
+checks:
+  - {valid: shape}
+  - {count: shape, occurrences: true, eq: {faces: 5}}
+---
+case: partial_torus_small_symmetric_range
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKPrim/GTests/BRepPrimAPI_MakeTorus_Test.cxx
+  test: BRepPrimAPI_MakeTorusTest.PartialTorus_SmallSymmetricRange
+build:
+  - shape: {torus: {major: 10, minor: 2, tube: [-45, 45], angle: 45}}
+checks:
+  - {valid: shape}
+---
+case: partial_torus_bug23612
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKPrim/GTests/BRepPrimAPI_MakeTorus_Test.cxx
+  test: BRepPrimAPI_MakeTorusTest.PartialTorus_Bug23612
+notes:
+  - "Bug 23612: the end heights decrease."
+build:
+  - shape: {torus: {major: 10, minor: 2, tube: [90, 270], angle: 45}}
+checks:
+  - {valid: shape}
+---
+case: partial_torus_zero_to180
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKPrim/GTests/BRepPrimAPI_MakeTorus_Test.cxx
+  test: BRepPrimAPI_MakeTorusTest.PartialTorus_ZeroTo180
+notes:
+  - "Equal end heights. OCCT asserts these partial tori are invalid, documenting a known limitation of its implementation (a degenerate edge on the axis). The cross-section is well defined (the region between the arc and its chord; OCCT builds it for a full revolution), so kentron expects a valid solid."
+expect: not_done
+build:
+  - shape: {torus: {major: 10, minor: 2, tube: [0, 180], angle: 45}}
+checks:
+  - {valid: shape}
+---
+case: partial_torus_minus180_to_zero
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKPrim/GTests/BRepPrimAPI_MakeTorus_Test.cxx
+  test: BRepPrimAPI_MakeTorusTest.PartialTorus_Minus180ToZero
+notes:
+  - "Equal end heights. OCCT asserts these partial tori are invalid, documenting a known limitation of its implementation (a degenerate edge on the axis). The cross-section is well defined (the region between the arc and its chord; OCCT builds it for a full revolution), so kentron expects a valid solid."
+expect: not_done
+build:
+  - shape: {torus: {major: 10, minor: 2, tube: [-180, 0], angle: 45}}
+checks:
+  - {valid: shape}
+---
+case: partial_torus_180_to360
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKPrim/GTests/BRepPrimAPI_MakeTorus_Test.cxx
+  test: BRepPrimAPI_MakeTorusTest.PartialTorus_180To360
+notes:
+  - "Equal end heights. OCCT asserts these partial tori are invalid, documenting a known limitation of its implementation (a degenerate edge on the axis). The cross-section is well defined (the region between the arc and its chord; OCCT builds it for a full revolution), so kentron expects a valid solid."
+expect: not_done
+build:
+  - shape: {torus: {major: 10, minor: 2, tube: [180, 360], angle: 45}}
+checks:
+  - {valid: shape}
+---
+case: partial_torus_positive_range
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKPrim/GTests/BRepPrimAPI_MakeTorus_Test.cxx
+  test: BRepPrimAPI_MakeTorusTest.PartialTorus_PositiveRange
+notes:
+  - "Equal end heights. OCCT asserts these partial tori are invalid, documenting a known limitation of its implementation (a degenerate edge on the axis). The cross-section is well defined (the region between the arc and its chord; OCCT builds it for a full revolution), so kentron expects a valid solid."
+expect: not_done
+build:
+  - shape: {torus: {major: 10, minor: 2, tube: [45, 135], angle: 45}}
+checks:
+  - {valid: shape}
+---
+case: partial_torus_negative_range
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKPrim/GTests/BRepPrimAPI_MakeTorus_Test.cxx
+  test: BRepPrimAPI_MakeTorusTest.PartialTorus_NegativeRange
+notes:
+  - "Equal end heights. OCCT asserts these partial tori are invalid, documenting a known limitation of its implementation (a degenerate edge on the axis). The cross-section is well defined (the region between the arc and its chord; OCCT builds it for a full revolution), so kentron expects a valid solid."
+expect: not_done
+build:
+  - shape: {torus: {major: 10, minor: 2, tube: [-135, -45], angle: 45}}
+checks:
+  - {valid: shape}
+---
+case: partial_torus_asymmetric_crossing_zero
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKPrim/GTests/BRepPrimAPI_MakeTorus_Test.cxx
+  test: BRepPrimAPI_MakeTorusTest.PartialTorus_AsymmetricCrossingZero
+build:
+  - shape: {torus: {major: 10, minor: 2, tube: [-30, 60], angle: 45}}
+checks:
+  - {valid: shape}
+---
+case: partial_torus_small_positive_range
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKPrim/GTests/BRepPrimAPI_MakeTorus_Test.cxx
+  test: BRepPrimAPI_MakeTorusTest.PartialTorus_SmallPositiveRange
+build:
+  - shape: {torus: {major: 10, minor: 2, tube: [30, 60], angle: 45}}
+checks:
+  - {valid: shape}
+---
+case: root_cause_height_ordering_assumption
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKPrim/GTests/BRepPrimAPI_MakeTorus_Test.cxx
+  test: BRepPrimAPI_MakeTorusTest.RootCause_HeightOrderingAssumption
+notes:
+  - "The order of the cross-section's end heights: increasing, decreasing (bug 23612) and equal (where OCCT expects an invalid result, kentron a valid one) must work."
+expect: not_done
+build:
+  - increasing: {torus: {major: 10, minor: 2, tube: [-90, 90], angle: 45}}
+  - decreasing: {torus: {major: 10, minor: 2, tube: [90, 270], angle: 45}}
+  - equal: {torus: {major: 10, minor: 2, tube: [45, 135], angle: 45}}
+checks:
+  - {valid: increasing}
+  - {valid: decreasing}
+  - {valid: equal}
+---
+case: full_torus_equal_heights
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKPrim/GTests/BRepPrimAPI_MakeTorus_Test.cxx
+  test: BRepPrimAPI_MakeTorusTest.FullTorus_EqualHeights
+notes:
+  - "Equal end heights are fine for a full revolution (no side faces)."
+build:
+  - shape: {torus: {major: 10, minor: 2, tube: [0, 180]}}
+checks:
+  - {valid: shape}

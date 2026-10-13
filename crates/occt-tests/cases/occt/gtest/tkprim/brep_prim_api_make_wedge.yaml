@@ -1,0 +1,62 @@
+# OCCT GTests moved from crates/occt-tests/tests/gtest_tkprim by hand.
+case: wedge_from_dimensions
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKPrim/GTests/BRepPrimAPI_MakeWedge_Test.cxx
+  test: BRepPrimAPI_MakeWedgeTest.WedgeFromDimensions
+build:
+  - shape: {wedge: {size: [10, 10, 10], top_dx: 5}}
+checks:
+  - {valid: shape}
+---
+case: wedge_face_count_ltx5
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKPrim/GTests/BRepPrimAPI_MakeWedge_Test.cxx
+  test: BRepPrimAPI_MakeWedgeTest.WedgeFaceCount_Ltx5
+build:
+  - shape: {wedge: {size: [10, 10, 10], top_dx: 5}}
+checks:
+  - {count: shape, occurrences: true, eq: {faces: 6}}
+---
+case: wedge_face_count_ltx0
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKPrim/GTests/BRepPrimAPI_MakeWedge_Test.cxx
+  test: BRepPrimAPI_MakeWedgeTest.WedgeFaceCount_Ltx0
+notes:
+  - "The top degenerates to a line."
+build:
+  - shape: {wedge: {size: [10, 10, 10], top_dx: 0}}
+checks:
+  - {count: shape, occurrences: true, eq: {faces: 5}}
+---
+case: wedge_volume
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKPrim/GTests/BRepPrimAPI_MakeWedge_Test.cxx
+  test: BRepPrimAPI_MakeWedgeTest.WedgeVolume
+build:
+  - shape: {wedge: {size: [10, 10, 10], top_dx: 5}}
+checks:
+  - {volume: shape, eq: "10*10*(10 + 5)/2", abs: 1.0e-7}
+---
+case: wedge_full_params
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKPrim/GTests/BRepPrimAPI_MakeWedge_Test.cxx
+  test: BRepPrimAPI_MakeWedgeTest.WedgeFullParams
+build:
+  - shape: {wedge: {size: [20, 10, 20], top: [5, 5, 15, 15]}}
+checks:
+  - {valid: shape}

@@ -1,0 +1,22 @@
+case: rounded_box_edge
+build:
+  - s: { box: { size: [300, 300, 100] } }
+  - e: { select: { of: s, edge: [0, 0, 50] } }
+  - result: { fillet: { shape: s, edges: [e], radius: 100 } }
+checks:
+  - valid: result
+  - volume: result
+    eq: "300*300*100 - (10000 - pi*10000/4)*100"
+---
+case: wedge_volume_and_faces
+build:
+  - w: { wedge: { size: [10, 10, 10], top_dx: 5 } }
+  - w0: { wedge: { size: [10, 10, 10], top_dx: 0 } }
+checks:
+  - valid: w
+  - volume: w
+    eq: "10*10*(10+5)/2"
+  - count: w
+    eq: { faces: 6 }
+  - count: w0
+    eq: { faces: 5 }

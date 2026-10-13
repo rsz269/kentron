@@ -1,0 +1,1053 @@
+//! Boolean operations and sections.
+//!
+//! Implemented for shapes bounded by planes, quadrics and surfaces of revolution and
+//! extrusion; other surfaces are `todo!()`. Operations on solids are described below; those on
+//! other shapes (faces, edges, vertices) in [`mixed`]. The algorithm follows OCCT's general
+//! fuse:
+//!
+//! 1. Every edge of one operand is intersected with every face of the other, splitting the
+//!    edge where it meets the face (or noting that it lies on the face's surface). Edges
+//!    are also split at any vertex lying on them, so both operands agree on their meeting
+//!    points.
+//! 2. Every face of one operand is intersected with every face of the other: the curves
+//!    where their surfaces meet ([`intersect::quadrics`](crate::geometry::intersect::quadrics),
+//!    or branches of [`intersect::cylinder_quadric`](crate::geometry::intersect::cylinder_quadric)
+//!    for crossing cylinders) are cut at the points found in step 1, and the stretches
+//!    inside both faces become section edges.
+//! 3. Each face is split into regions along the pieces of edges lying on it, traced in
+//!    the face's parameter space.
+//! 4. Each region is classified against the other operand: inside, outside, or on its
+//!    boundary with the same or the opposite outward normal.
+//! 5. The operation keeps some regions (turning those of the tool inside out for a difference),
+//!    which are sewn along shared edges into shells and solids.
+//!
+//! The result is a compound of solids, as in OCCT; it is empty when nothing remains.
+
+mod build;
+mod cells;
+mod classify;
+mod far;
+mod geom;
+mod graph;
+mod intersect;
+mod mixed;
+mod split;
+mod volume;
+
+use crate::error::{Error, Result};
+use crate::math::BoundingBox;
+use crate::topology::{Model, Shape};
+
+pub use cells::{cells, Cell};
+pub use volume::{enclosed_solids, enclosed_solids_unsplit};
+
+use build::Kept;
+use classify::State;
+use graph::Graph;
+
+/// The union of `a` and `b`.
+#[doc(alias = "BRepAlgoAPI_Fuse")]
+#[doc(alias = "fuse")]
+pub fn union(model: &mut Model, a: Shape, b: Shape) -> Result<Shape> {
+    // An operand may be a compound of solids that overlap one another: like OCCT's general
+    // fuse, every solid is fused with those it meets (boxes overlapping or touching), one
+    // after another; groups apart from each other are only gathered.
+    if let (Some(sa), Some(sb)) = (only_solids(model, a), only_solids(model, b)) {
+        if sa.len() > 1 || sb.len() > 1 {
+            let solids: Vec<Shape> = sa.into_iter().chain(sb).collect();
+            let boxes: Vec<BoundingBox> = solids.iter().map(|&s| crate::properties::tight_bounding_box(model, s).enlarged(geom::on_tol())).collect();
+            let mut group: Vec<usize> = (0..solids.len()).collect();
+            fn root(group: &mut [usize], mut i: usize) -> usize {
+                while group[i] != i {
+                    group[i] = group[group[i]];
+                    i = group[i];
+                }
+                i
+            }
+            for i in 0..solids.len() {
+                for j in i + 1..solids.len() {
+                    if boxes[i].overlaps(&boxes[j]) {
+                        let (ri, rj) = (root(&mut group, i), root(&mut group, j));
+                        group[ri.max(rj)] = ri.min(rj);
+                    }
+                }
+            }
+            let result = model.new_empty(crate::topology::NodeKind::Compound);
+            for r in 0..solids.len() {
+                let members: Vec<Shape> = (0..solids.len()).filter(|&i| root(&mut group, i) == r).map(|i| solids[i]).collect();
+                let Some((&first, rest)) = members.split_first() else { continue };
+                let fused = rest.iter().try_fold(first, |acc, &s| run(model, acc, s, Operation::Union))?;
+                for solid in model.explore(fused, crate::topology::NodeKind::Solid).collect::<Vec<_>>() {
+                    model.add(result, solid)?;
+                }
+            }
+            return Ok(result);
+        }
+    }
+    run(model, a, b, Operation::Union)
+}
+
+/// The solids of `shape` when every face of it belongs to one of them.
+fn only_solids(model: &Model, shape: Shape) -> Option<Vec<Shape>> {
+    use crate::topology::NodeKind;
+    let solids: Vec<Shape> = model.explore(shape, NodeKind::Solid).collect();
+    let faces_in_solids: usize = solids.iter().map(|&s| model.explore(s, NodeKind::Face).count()).sum();
+    (!solids.is_empty() && model.explore(shape, NodeKind::Face).count() == faces_in_solids).then_some(solids)
+}
+
+/// `a` minus `b`.
+#[doc(alias = "BRepAlgoAPI_Cut")]
+#[doc(alias = "cut")]
+pub fn difference(model: &mut Model, a: Shape, b: Shape) -> Result<Shape> {
+    run(model, a, b, Operation::Difference)
+}
+
+/// [`difference`] built once, at the current tolerances, its shells closed or not: for
+/// callers keeping only some of its faces (and checking what they build from them).
+pub(crate) fn difference_once(model: &mut Model, a: Shape, b: Shape) -> Result<Shape> {
+    Ok(run_tolerant(model, a, b, Operation::Difference)?.0)
+}
+
+/// The intersection of `a` and `b`.
+#[doc(alias = "BRepAlgoAPI_Common")]
+#[doc(alias = "common")]
+pub fn intersection(model: &mut Model, a: Shape, b: Shape) -> Result<Shape> {
+    run(model, a, b, Operation::Intersection)
+}
+
+/// The edges where `a` and `b` meet: where their faces cross, and pieces of edges of either
+/// lying on the other; and the points where they touch elsewhere.
+#[doc(alias = "BRepAlgoAPI_Section")]
+pub fn section(model: &mut Model, a: Shape, b: Shape) -> Result<Shape> {
+    if [a, b].iter().any(|&s| is_empty(model, s)) {
+        return Ok(model.new_empty(crate::topology::NodeKind::Compound));
+    }
+    let graph = operands(model, a, b, false)?;
+    mixed::section(model, graph)
+}
+
+/// [`union`], and the result's edges where the operands' faces meet.
+#[doc(alias = "BRepAlgoAPI_BooleanOperation::SectionEdges")]
+pub fn union_with_sections(model: &mut Model, a: Shape, b: Shape) -> Result<(Shape, Vec<Shape>)> {
+    run_with_sections(model, a, b, Operation::Union)
+}
+
+/// [`difference`], and the result's edges where the operands' faces meet.
+pub fn difference_with_sections(model: &mut Model, a: Shape, b: Shape) -> Result<(Shape, Vec<Shape>)> {
+    run_with_sections(model, a, b, Operation::Difference)
+}
+
+/// Where a point lies with respect to a solid.
+#[doc(alias = "TopAbs_State")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PointLocation {
+    Inside,
+    Outside,
+    /// On its boundary (within 1e-6).
+    Boundary,
+}
+
+/// Where `p` lies with respect to the solids of `shape` (inside any of them counts).
+#[doc(alias = "BRepClass3d_SolidClassifier")]
+#[doc(alias = "isInside")]
+pub fn classify_point(model: &Model, shape: Shape, p: crate::math::Point) -> Result<PointLocation> {
+    Ok(PointClassifier::new(model, shape)?.locate(p))
+}
+
+/// [`classify_point`] for several points of one shape: the shape is prepared once.
+pub struct PointClassifier {
+    graph: Graph,
+}
+
+impl PointClassifier {
+    pub fn new(model: &Model, shape: Shape) -> Result<PointClassifier> {
+        // (A large shape's faces' samples and edges' boxes found for all at once first.)
+        let edges = model.unique_subshapes(shape, crate::topology::NodeKind::Edge);
+        far::prepare(model, [shape, shape], [&edges, &edges]);
+        let mut graph = Graph::default();
+        graph.add_operand(model, shape, 0, &Default::default())?;
+        Ok(PointClassifier { graph })
+    }
+
+    /// Where `p` lies with respect to the shape's solids.
+    pub fn locate(&self, p: crate::math::Point) -> PointLocation {
+        match self.graph.classify(p, crate::math::Vector::new(0.0, 0.0, 1.0), 0) {
+            State::Inside => PointLocation::Inside,
+            State::Outside => PointLocation::Outside,
+            State::OnSame | State::OnOpposite => PointLocation::Boundary,
+        }
+    }
+}
+
+/// True for a shape with nothing in it: no faces, edges or vertices (a face without edges,
+/// as of a whole sphere, is something).
+fn is_empty(model: &Model, s: Shape) -> bool {
+    use crate::topology::NodeKind;
+    [NodeKind::Face, NodeKind::Edge, NodeKind::Vertex].iter().all(|&k| model.explore(s, k).next().is_none())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Operation {
+    Union,
+    Difference,
+    Intersection,
+}
+
+impl Operation {
+    /// Whether a region of operand `k` (0 for the object, 1 for the tool) in `state`
+    /// belongs to the result, and if so whether it is turned inside out. Regions shared by
+    /// both operands are taken from the object.
+    fn keeps(self, k: usize, state: State) -> Option<bool> {
+        use State::*;
+        match (self, k, state) {
+            (Operation::Union, _, Outside) | (Operation::Union, 0, OnSame) => Some(false),
+            (Operation::Intersection, _, Inside) | (Operation::Intersection, 0, OnSame) => Some(false),
+            (Operation::Difference, 0, Outside) | (Operation::Difference, 0, OnOpposite) => Some(false),
+            (Operation::Difference, 1, Inside) => Some(true),
+            _ => None,
+        }
+    }
+}
+
+fn run(model: &mut Model, a: Shape, b: Shape, operation: Operation) -> Result<Shape> {
+    Ok(run_with_sections(model, a, b, operation)?.0)
+}
+
+fn operands(model: &Model, a: Shape, b: Shape, use_far: bool) -> Result<Graph> {
+    let mut graph = Graph::default();
+    // The operands' edges, found once for the steps that go through them all.
+    let edges = [a, b].map(|s| model.unique_subshapes(s, crate::topology::NodeKind::Edge));
+    let prepared = far::prepare(model, [a, b], [&edges[0], &edges[1]]);
+    let far = if use_far { far::choose(model, a, b, &prepared) } else { Default::default() };
+    graph.add_operand(model, a, 0, &far[0])?;
+    graph.add_operand(model, b, 1, &far[1])?;
+    for k in 0..2 {
+        // (Not on free-form faces, where it is not needed.)
+        let freeform = graph.faces.iter().filter(|f| f.operand == k).any(|f| geom::freeform(&f.surface))
+            || graph.far.iter().filter(|f| f.operand == k).any(|f| geom::freeform(&f.data.surface));
+        if freeform {
+            continue;
+        }
+        // The faces' grid boxes (holding them) spare finding the extremes of faces that
+        // lie within the box of the others.
+        let tight = crate::properties::tight_bounding_box_within(model, [a, b][k], &edges[k], &graph.face_bounds[k]);
+        if !tight.is_empty() {
+            graph.tight_boxes[k] = Some((tight.min, tight.max));
+        }
+    }
+    Ok(graph)
+}
+
+fn run_with_sections(model: &mut Model, a: Shape, b: Shape, operation: Operation) -> Result<(Shape, Vec<Shape>)> {
+    // An empty operand (as OCCT): nothing added, nothing taken away, nothing in common.
+    let empty = |s: Shape, model: &Model| is_empty(model, s);
+    match (empty(a, model), empty(b, model), operation) {
+        (_, true, Operation::Union | Operation::Difference) => return Ok((a, Vec::new())),
+        (true, false, Operation::Union) => return Ok((b, Vec::new())),
+        (true, _, _) | (_, true, _) => return Ok((model.new_empty(crate::topology::NodeKind::Compound), Vec::new())),
+        _ => {}
+    }
+    // Where the result's shells are not closed (or none could be built), again with the
+    // looser tolerances: shapes read from files may put points meant to coincide (a
+    // cylinder through a box's corners) only nearly together. That result if it is valid.
+    let first = run_tolerant(model, a, b, operation);
+    if crate::tolerance::loosened() || first.as_ref().is_ok_and(|r| r.2) {
+        return first.map(|(r, s, _)| (r, s));
+    }
+    match crate::tolerance::with_loosened(true, || run_tolerant(model, a, b, operation)) {
+        Ok((r, s, _)) if crate::validity::check(model, r).is_valid() => Ok((r, s)),
+        _ => first.map(|(r, s, _)| (r, s)),
+    }
+}
+
+/// [`run_with_sections`] at the current tolerances, with whether the result's shells are
+/// closed.
+fn run_tolerant(model: &mut Model, a: Shape, b: Shape, operation: Operation) -> Result<(Shape, Vec<Shape>, bool)> {
+    // With faces far from the other operand left out of the graph, unless that turns out
+    // not to hold (an open operand, a shared edge the result cannot keep): then with all.
+    if let Some(result) = run_graph(model, a, b, operation, true)? {
+        return Ok(result);
+    }
+    run_graph(model, a, b, operation, false)?.ok_or_else(|| Error::InvalidInput("a boolean operation that could not be built".into()))
+}
+
+/// The operation on the operands' graph; `None` if far faces (with `use_far`) cannot be
+/// left out after all.
+fn run_graph(model: &mut Model, a: Shape, b: Shape, operation: Operation, use_far: bool) -> Result<Option<(Shape, Vec<Shape>, bool)>> {
+    let mut graph = operands(model, a, b, use_far)?;
+    if !graph.far.is_empty() && (graph.open != [false, false] || graph.dimension != [3, 3] || !graph.only_solids()) {
+        return Ok(None);
+    }
+    if !graph.only_solids() {
+        return Ok(Some((mixed::run(model, graph, operation)?, Vec::new(), true)));
+    }
+    let (pieces, arcs_of, regions) = classified(model, &mut graph);
+    let mut kept = Vec::new();
+    for (fi, region, state) in regions {
+        if let Some(flip) = operation.keeps(graph.faces[fi].operand, state) {
+            kept.push(Kept { face: fi, region, flip, far: false });
+        }
+    }
+    // Faces far from the other operand lie outside it, whole.
+    for (i, f) in graph.far.iter().enumerate() {
+        if let Some(flip) = operation.keeps(f.operand, State::Outside) {
+            kept.push(Kept { face: i, region: split::Region::whole(), flip, far: true });
+        }
+    }
+    // In the operands' order of faces.
+    kept.sort_by_key(|k| if k.far { graph.far[k.face].seq } else { graph.faces[k.face].seq });
+    let invalid_operands = |model: &Model| [a, b].iter().any(|&s| !crate::validity::check(model, s).is_valid());
+    build::build(model, &graph, &pieces, &arcs_of, &kept, &invalid_operands)
+}
+
+/// The operands' faces split along where they meet, and each region with where it lies
+/// with respect to the other operand.
+#[allow(clippy::type_complexity)]
+fn classified(model: &Model, graph: &mut Graph) -> (Vec<split::Piece>, Vec<Vec<split::ArcOnFace>>, Vec<(usize, split::Region, State)>) {
+    graph.intersect_edges_with_faces();
+    graph.intersect_edges_on_faces();
+    graph.share_vertices();
+    graph.intersect_faces();
+    let (mut pieces, of_edge) = graph.pieces();
+    let arcs_of: Vec<_> = (0..graph.faces.len()).map(|fi| graph.arcs_on_face(fi, &mut pieces, &of_edge)).collect();
+    // Each face's regions and where they lie, found for all faces at once.
+    let faces: Vec<usize> = (0..arcs_of.len()).collect();
+    let graph: &Graph = graph;
+    let found = crate::parallel::map(&faces, |&fi| {
+        let arcs = &arcs_of[fi];
+        let face = &graph.faces[fi];
+        let scale = face.bbox.0.distance(face.bbox.1);
+        // A face met by nothing (its arcs its own edges, each whole, in order) is one region,
+        // the same each time: kept in the model with the face.
+        let untouched = face.origin.filter(|_| {
+            arcs.len() == face.boundary.len()
+                && arcs.iter().zip(&face.boundary).all(|(a, b)| {
+                    let (p, e) = (&pieces[a.piece], &graph.edges[b.edge]);
+                    p.edge == b.edge && p.first == e.first && p.last == e.last
+                })
+        });
+        let regions_of_face = match untouched {
+            Some(id) => {
+                let fingerprint = model.face_fingerprint(id);
+                (*model.derived(id.into(), fingerprint, || FaceRegions(split::split_face(arcs, &pieces, &face.polylines, scale)))).0.clone()
+            }
+            None => split::split_face(arcs, &pieces, &face.polylines, scale),
+        };
+        regions_of_face
+            .into_iter()
+            .map(|region| {
+                let uv = region.interior;
+                let p = geom::surface_point(&face.surface, uv);
+                let outward = geom::normal_at(&face.surface, uv) * face.outward;
+                let state = graph.classify(p, outward, 1 - face.operand);
+                (fi, region, state)
+            })
+            .collect::<Vec<_>>()
+    });
+    let mut regions: Vec<(usize, split::Region, State)> = found.into_iter().flatten().collect();
+    agree_across_clean_edges(graph, &pieces, &arcs_of, &mut regions);
+    (pieces, arcs_of, regions)
+}
+
+/// `a` and `b` split by one another: the solids inside both, inside `a` only and inside
+/// `b` only, sharing the faces, edges and vertices where they meet (each made once).
+#[doc(alias = "BOPAlgo_Builder")]
+pub(crate) fn partition(model: &mut Model, a: Shape, b: Shape) -> Result<[Shape; 3]> {
+    let mut graph = operands(model, a, b, false)?;
+    if !graph.only_solids() {
+        return Err(Error::InvalidInput("a partition of shapes other than solids".into()));
+    }
+    let (pieces, arcs_of, regions) = classified(model, &mut graph);
+    // Each region once (coplanar ones of `a` only, the other operand's being the same),
+    // and the cells it bounds: as it is, or turned inside out.
+    use State::*;
+    let mut all = Vec::new();
+    let mut cells: [Vec<(usize, bool)>; 3] = Default::default();
+    let mut regions = regions;
+    regions.sort_by_key(|r| graph.faces[r.0].seq);
+    for (fi, region, state) in regions {
+        let operand = graph.faces[fi].operand;
+        let uses: &[(usize, bool)] = match (operand, state) {
+            (0, Inside) => &[(0, false), (2, true)],
+            (0, Outside) => &[(1, false)],
+            (0, OnSame) => &[(0, false)],
+            (0, OnOpposite) => &[(1, false), (2, true)],
+            (_, Inside) => &[(0, false), (1, true)],
+            (_, Outside) => &[(2, false)],
+            _ => &[],
+        };
+        if uses.is_empty() {
+            continue;
+        }
+        let index = all.len();
+        all.push(Kept { face: fi, region, flip: false, far: false });
+        for &(cell, flip) in uses {
+            cells[cell].push((index, flip));
+        }
+    }
+    let invalid_operands = |model: &Model| [a, b].iter().any(|&s| !crate::validity::check(model, s).is_valid());
+    let built = build::build_partition(model, &graph, &pieces, &arcs_of, &all, &cells, &invalid_operands)?;
+    Ok([built[0], built[1], built[2]])
+}
+
+/// The regions of a face met by nothing, kept in the model.
+struct FaceRegions(Vec<split::Region>);
+
+/// Regions of one operand joined across a piece of its own edge that the other operand
+/// leaves alone (no section, not shared with it, not on its faces) lie on the same side
+/// of it: each such group of regions found inside or outside takes its majority, so
+/// that one region classified wrongly (a ray miscounting near a thin feature) follows its
+/// neighbours.
+fn agree_across_clean_edges(graph: &Graph, pieces: &[split::Piece], arcs_of: &[Vec<split::ArcOnFace>], regions: &mut [(usize, split::Region, State)]) {
+    use crate::hashing::{FastMap as HashMap, FastSet as HashSet};
+    // Pieces touched by the other operand: shared with its pieces, or of edges on its faces.
+    let mut by_rep: HashMap<usize, HashSet<Option<usize>>> = HashMap::default();
+    for p in pieces {
+        by_rep.entry(p.rep).or_default().insert(graph.edges[p.edge].operand);
+    }
+    let on_other: HashSet<usize> = graph.faces.iter().flat_map(|f| f.on_edges.iter().chain(&f.sections).copied()).collect();
+    let clean = |piece: usize, operand: usize| {
+        let p = &pieces[piece];
+        let e = &graph.edges[p.edge];
+        e.operand == Some(operand) && e.curve.is_some() && !on_other.contains(&p.edge) && by_rep.get(&p.rep).is_some_and(|ops| ops.len() == 1)
+    };
+    // The face of the other operand a piece lies on (where its edge does only in part, so
+    // not found as on it): the regions on its two sides may lie on the two sides of that
+    // face.
+    let lies_on = |piece: &split::Piece, operand: usize| -> Option<usize> {
+        use crate::geometry::ParametricCurve as _;
+        let curve = graph.edges[piece.edge].curve.as_ref()?;
+        let p = curve.point(0.5 * (piece.first + piece.last));
+        graph.index().faces_containing(1 - operand, p).into_iter().find(|&g| {
+            let face = &graph.faces[g];
+            geom::signed_distance(&face.surface, p).abs() <= geom::on_tol() && face.locate(p, &graph.edges, &graph.vertices) != graph::Location::Outside
+        })
+    };
+    // Which side of face `g` region `ri` leaves the piece of its arc `ai` (run `forward` or
+    // not) towards: by a point a little into the region (to the left of its loop) from the
+    // arc's middle; 0 where the region runs along the face.
+    let side = |ri: usize, ai: usize, forward: bool, g: usize| -> i8 {
+        let fi = regions[ri].0;
+        let uv = &arcs_of[fi][ai].uv;
+        if uv.len() < 2 {
+            return 0;
+        }
+        let length: f64 = uv.windows(2).map(|w| (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1])).sum();
+        let k = (uv.len() / 2).max(1);
+        let (a, b) = (uv[k - 1], uv[k]);
+        let sign = if forward { 1.0 } else { -1.0 };
+        let (dx, dy) = ((b[0] - a[0]) * sign, (b[1] - a[1]) * sign);
+        let norm = dx.hypot(dy);
+        if !(norm > 0.0) {
+            return 0;
+        }
+        let step = 0.01 * length / norm;
+        let q = [0.5 * (a[0] + b[0]) - dy * step, 0.5 * (a[1] + b[1]) + dx * step];
+        let d = geom::signed_distance(&graph.faces[g].surface, geom::surface_point(&graph.faces[fi].surface, q));
+        if d.abs() <= 10.0 * geom::on_tol() { 0 } else if d > 0.0 { 1 } else { -1 }
+    };
+    let mut parent: Vec<usize> = (0..regions.len()).collect();
+    fn find(parent: &mut [usize], i: usize) -> usize {
+        let mut r = i;
+        while parent[r] != r {
+            r = parent[r];
+        }
+        parent[i] = r;
+        r
+    }
+    let mut first_by_rep: HashMap<usize, (usize, i8)> = HashMap::default();
+    for (ri, (fi, region, _)) in regions.iter().enumerate() {
+        let operand = graph.faces[*fi].operand;
+        for &(ai, forward) in region.loops.iter().flatten() {
+            let piece = arcs_of[*fi][ai].piece;
+            if !clean(piece, operand) {
+                continue;
+            }
+            let here = lies_on(&pieces[piece], operand).map_or(0, |g| side(ri, ai, forward, g));
+            match first_by_rep.get(&pieces[piece].rep) {
+                // (Not across a face of the other operand passing between them.)
+                Some(&(_, there)) if here * there < 0 => {}
+                Some(&(rj, _)) => {
+                    let (a, b) = (find(&mut parent, ri), find(&mut parent, rj));
+                    parent[a] = b;
+                }
+                None => {
+                    first_by_rep.insert(pieces[piece].rep, (ri, here));
+                }
+            }
+        }
+    }
+    let mut votes: HashMap<usize, (usize, usize)> = HashMap::default();
+    for ri in 0..regions.len() {
+        let root = find(&mut parent, ri);
+        let v = votes.entry(root).or_default();
+        match regions[ri].2 {
+            State::Inside => v.0 += 1,
+            State::Outside => v.1 += 1,
+            _ => {}
+        }
+    }
+    for ri in 0..regions.len() {
+        let root = find(&mut parent, ri);
+        let (inside, outside) = votes[&root];
+        if matches!(regions[ri].2, State::Inside | State::Outside) && inside != outside {
+            regions[ri].2 = if inside > outside { State::Inside } else { State::Outside };
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::f64::consts::PI;
+
+    use crate::math::{Direction, Frame, Point, Vector};
+    use crate::primitives::{Cone, Cuboid, Cylinder, Sphere};
+    use crate::topology::NodeKind;
+    use crate::{properties, validity};
+
+    fn cuboid(model: &mut Model, corner: (f64, f64, f64), size: (f64, f64, f64)) -> Shape {
+        let p = Point::new(corner.0, corner.1, corner.2);
+        Cuboid::from_corners(p, p + Vector::new(size.0, size.1, size.2)).build(model).unwrap()
+    }
+
+    /// Checks the result is valid and has the expected volume, area and number of solids.
+    fn check(model: &Model, shape: Shape, volume: f64, area: f64, solids: usize) {
+        let report = validity::check(model, shape);
+        assert!(report.problems.is_empty(), "{report:?}");
+        let v = properties::volume(model, shape).mass;
+        let a = properties::area(model, shape).mass;
+        assert!((v - volume).abs() <= 1e-9 * volume.max(1.0), "volume {v} != {volume}");
+        assert!((a - area).abs() <= 1e-9 * area.max(1.0), "area {a} != {area}");
+        assert_eq!(model.unique_subshapes(shape, NodeKind::Solid).len(), solids);
+    }
+
+    #[test]
+    fn overlapping_boxes() {
+        // Two unit cubes overlapping in a 0.5 x 1 x 1 slab.
+        type Op = fn(&mut Model, Shape, Shape) -> Result<Shape>;
+        let cases: [(Op, f64, f64); 3] = [(union, 1.5, 8.0), (difference, 0.5, 4.0), (intersection, 0.5, 4.0)];
+        for (op, volume, area) in cases {
+            let mut model = Model::new();
+            let a = cuboid(&mut model, (0.0, 0.0, 0.0), (1.0, 1.0, 1.0));
+            let b = cuboid(&mut model, (0.5, 0.0, 0.0), (1.0, 1.0, 1.0));
+            let result = op(&mut model, a, b).unwrap();
+            check(&model, result, volume, area, 1);
+        }
+    }
+
+    #[test]
+    fn corner_overlap() {
+        // Cubes overlapping in a 0.5 cube at a corner.
+        let mut model = Model::new();
+        let a = cuboid(&mut model, (0.0, 0.0, 0.0), (1.0, 1.0, 1.0));
+        let b = cuboid(&mut model, (0.5, 0.5, 0.5), (1.0, 1.0, 1.0));
+        let fused = union(&mut model, a, b).unwrap();
+        check(&model, fused, 2.0 - 0.125, 12.0 - 6.0 * 0.25, 1);
+        let cut_result = difference(&mut model, a, b).unwrap();
+        check(&model, cut_result, 1.0 - 0.125, 6.0, 1);
+        let common_result = intersection(&mut model, a, b).unwrap();
+        check(&model, common_result, 0.125, 1.5, 1);
+    }
+
+    #[test]
+    fn mirrored_operands() {
+        // A box reflected across x = 0 (left-handed plane frames) fused with an upright one.
+        use crate::math::{Direction, Point, Transform};
+        let mut model = Model::new();
+        let a = cuboid(&mut model, (0.5, 0.0, 0.0), (1.0, 1.0, 1.0));
+        let mirror = Transform::mirror_plane(Point::ORIGIN, Direction::new(1.0, 0.0, 0.0));
+        let a = crate::modify::transform(&mut model, a, &mirror, Default::default()).unwrap();
+        let b = cuboid(&mut model, (-1.0, 0.0, 0.0), (1.0, 1.0, 1.0));
+        let fused = union(&mut model, a, b).unwrap();
+        check(&model, fused, 1.5, 8.0, 1);
+        let cut_result = difference(&mut model, a, b).unwrap();
+        check(&model, cut_result, 0.5, 4.0, 1);
+    }
+
+    #[test]
+    fn a_twisted_ruled_loft_and_a_slab() {
+        // A ruled loft between squares turned 30° apart (bilinear B-spline sides) and a slab
+        // across it: the slab cuts it in two (OCCT gives these values).
+        use crate::loft::{loft, LoftOptions};
+        let mut model = Model::new();
+        let square = |model: &mut Model, z: f64, turn: f64, r: f64| {
+            let corners: Vec<Point> = (0..4)
+                .map(|k| {
+                    let a = turn + k as f64 * PI / 2.0;
+                    Point::new(r * a.cos(), r * a.sin(), z)
+                })
+                .collect();
+            let edges: Vec<Shape> = (0..4).map(|k| crate::make::edge_between(model, corners[k], corners[(k + 1) % 4]).unwrap()).collect();
+            crate::make::wire(model, &edges).unwrap()
+        };
+        let (bottom, top) = (square(&mut model, 0.0, 0.0, 1.5), square(&mut model, 2.0, PI / 6.0, 1.0));
+        let ruled = loft(&mut model, &[bottom, top], &LoftOptions { solid: true, ruled: true, ..Default::default() }).unwrap().shape;
+        let slab = cuboid(&mut model, (-2.0, -2.0, 0.5), (4.0, 4.0, 1.0));
+        let cut_result = difference(&mut model, ruled, slab).unwrap();
+        check(&model, cut_result, 3.114182544031942, 19.65470359808339, 2);
+        let fused = union(&mut model, ruled, slab).unwrap();
+        check(&model, fused, 19.114182544031934, 55.632589281053406, 1);
+        let common_result = intersection(&mut model, ruled, slab).unwrap();
+        check(&model, common_result, 2.95120159687027, 13.035647114615353, 1);
+    }
+
+    #[test]
+    fn empty_operands() {
+        let mut model = Model::new();
+        let a = cuboid(&mut model, (0.0, 0.0, 0.0), (1.0, 1.0, 1.0));
+        let nothing = model.new_empty(NodeKind::Compound);
+        assert_eq!(difference(&mut model, a, nothing).unwrap(), a);
+        assert_eq!(union(&mut model, nothing, a).unwrap(), a);
+        let common = intersection(&mut model, a, nothing).unwrap();
+        assert_eq!(model.unique_subshapes(common, NodeKind::Solid).len(), 0);
+        let cut = difference(&mut model, nothing, a).unwrap();
+        assert_eq!(model.unique_subshapes(cut, NodeKind::Solid).len(), 0);
+    }
+
+    #[test]
+    fn hole_through_a_box() {
+        // A bar through a block: the difference is a block with a square hole.
+        let mut model = Model::new();
+        let block = cuboid(&mut model, (0.0, 0.0, 0.0), (3.0, 3.0, 1.0));
+        let bar = cuboid(&mut model, (1.0, 1.0, -1.0), (1.0, 1.0, 3.0));
+        let result = difference(&mut model, block, bar).unwrap();
+        check(&model, result, 8.0, 2.0 * 8.0 + 12.0 + 4.0, 1);
+    }
+
+    #[test]
+    fn faces_far_from_the_other_operand_pass_through() {
+        let mut model = Model::new();
+        // An L of two blocks, cut at one end: the faces at the other end are far from the
+        // cutter and stay the same faces.
+        let long = cuboid(&mut model, (0.0, 0.0, 0.0), (10.0, 1.0, 1.0));
+        let leg = cuboid(&mut model, (0.0, 1.0, 0.0), (1.0, 5.0, 1.0));
+        let l = union(&mut model, long, leg).unwrap();
+        let frame = Frame::new(Point::new(9.5, 0.5, -1.0), Direction::Z, Direction::X);
+        let cutter = Cylinder::new(0.25, 3.0).with_frame(frame).build(&mut model).unwrap();
+        let cut = difference(&mut model, l, cutter).unwrap();
+        assert!(validity::check(&model, cut).is_valid());
+        let expected = 10.0 + 5.0 - PI * 0.25 * 0.25;
+        assert!((properties::volume(&model, cut).mass - expected).abs() < 1e-6);
+        let nodes = |s: Shape, model: &Model| model.explore(s, NodeKind::Face).map(|f| f.node).collect::<crate::hashing::FastSet<_>>();
+        let (before, after) = (nodes(l, &model), nodes(cut, &model));
+        assert!(before.intersection(&after).count() >= 5, "the far faces are the same faces");
+        // Solids apart: every face is far.
+        let apart = cuboid(&mut model, (20.0, 0.0, 0.0), (1.0, 1.0, 1.0));
+        let both = union(&mut model, cut, apart).unwrap();
+        assert!(validity::check(&model, both).is_valid());
+        assert!((properties::volume(&model, both).mass - expected - 1.0).abs() < 1e-6);
+        assert_eq!(model.explore(both, NodeKind::Solid).count(), 2);
+        let common = intersection(&mut model, cut, apart).unwrap();
+        assert_eq!(properties::volume(&model, common).mass, 0.0);
+    }
+
+    #[test]
+    fn void_inside_a_box() {
+        let mut model = Model::new();
+        let block = cuboid(&mut model, (0.0, 0.0, 0.0), (3.0, 3.0, 3.0));
+        let inner = cuboid(&mut model, (1.0, 1.0, 1.0), (1.0, 1.0, 1.0));
+        let result = difference(&mut model, block, inner).unwrap();
+        check(&model, result, 26.0, 54.0 + 6.0, 1);
+        let solid = model.unique_subshapes(result, NodeKind::Solid)[0];
+        assert_eq!(model.unique_subshapes(solid, NodeKind::Shell).len(), 2);
+    }
+
+    #[test]
+    fn disjoint_and_touching_boxes() {
+        let mut model = Model::new();
+        let a = cuboid(&mut model, (0.0, 0.0, 0.0), (1.0, 1.0, 1.0));
+        let far = cuboid(&mut model, (2.0, 0.0, 0.0), (1.0, 1.0, 1.0));
+        let fused = union(&mut model, a, far).unwrap();
+        check(&model, fused, 2.0, 12.0, 2);
+        let common_result = intersection(&mut model, a, far).unwrap();
+        assert!(model.unique_subshapes(common_result, NodeKind::Solid).is_empty());
+        // Sharing a whole face: the union is one 2 x 1 x 1 box.
+        let next = cuboid(&mut model, (1.0, 0.0, 0.0), (1.0, 1.0, 1.0));
+        let fused = union(&mut model, a, next).unwrap();
+        check(&model, fused, 2.0, 10.0, 1);
+        let cut_result = difference(&mut model, a, next).unwrap();
+        check(&model, cut_result, 1.0, 6.0, 1);
+    }
+
+    #[test]
+    fn identical_boxes() {
+        let mut model = Model::new();
+        let a = cuboid(&mut model, (0.0, 0.0, 0.0), (1.0, 1.0, 1.0));
+        let b = cuboid(&mut model, (0.0, 0.0, 0.0), (1.0, 1.0, 1.0));
+        let fused = union(&mut model, a, b).unwrap();
+        check(&model, fused, 1.0, 6.0, 1);
+        let common_result = intersection(&mut model, a, b).unwrap();
+        check(&model, common_result, 1.0, 6.0, 1);
+        let cut_result = difference(&mut model, a, b).unwrap();
+        assert!(model.unique_subshapes(cut_result, NodeKind::Solid).is_empty());
+    }
+
+    #[test]
+    fn cut_splits_a_bar_in_two() {
+        let mut model = Model::new();
+        let bar = cuboid(&mut model, (0.0, 0.0, 0.0), (3.0, 1.0, 1.0));
+        let slab = cuboid(&mut model, (1.0, -1.0, -1.0), (1.0, 3.0, 3.0));
+        let result = difference(&mut model, bar, slab).unwrap();
+        check(&model, result, 2.0, 12.0, 2);
+    }
+
+    #[test]
+    fn solids_touching_along_an_edge() {
+        // Cubes meeting along an edge stay two solids with a shell each (sharing the edge);
+        // filling in the other two corners of the 2 x 2 square makes one solid again.
+        let mut model = Model::new();
+        let a = cuboid(&mut model, (0.0, 0.0, 0.0), (2.0, 1.0, 1.0));
+        let b = cuboid(&mut model, (1.0, 1.0, 0.0), (1.0, 1.0, 1.0));
+        let fused = union(&mut model, a, b).unwrap();
+        check(&model, fused, 3.0, 14.0, 1);
+        let c = cuboid(&mut model, (0.0, 1.0, 0.0), (1.0, 1.0, 1.0));
+        let d = cuboid(&mut model, (1.0, 0.0, 0.0), (1.0, 1.0, 1.0));
+        let corner_a = cuboid(&mut model, (0.0, 0.0, 0.0), (1.0, 1.0, 1.0));
+        let left = union(&mut model, corner_a, b).unwrap();
+        let both = union(&mut model, left, c).unwrap();
+        let both = union(&mut model, both, d).unwrap();
+        check(&model, both, 4.0, 16.0, 1);
+        let touching = union(&mut model, corner_a, b).unwrap();
+        check(&model, touching, 2.0, 12.0, 2);
+    }
+
+    #[test]
+    fn cylinder_grazing_a_box_edge() {
+        // A cylinder poking 0.01 past a box's side, its end flush with the box's front: the
+        // box's edges along the side dip into it between samples (OCCT gives these values).
+        let mut model = Model::new();
+        let bar = cuboid(&mut model, (-19.8, -54.5, -37.73), (12.4, 3.5, 47.73));
+        let boss = cylinder(&mut model, (-12.0, -54.5, -24.7), Direction::Y, 4.61, 40.0);
+        let fused = union(&mut model, bar, boss).unwrap();
+        check(&model, fused, 4508.434770483955, 2661.863807650023, 1);
+    }
+
+    fn cylinder(model: &mut Model, origin: (f64, f64, f64), axis: Direction, radius: f64, height: f64) -> Shape {
+        let frame = Frame::from_z(Point::new(origin.0, origin.1, origin.2), axis);
+        Cylinder::new(radius, height).with_frame(frame).build(model).unwrap()
+    }
+
+    fn sphere(model: &mut Model, center: (f64, f64, f64), radius: f64) -> Shape {
+        let frame = Frame::new(Point::new(center.0, center.1, center.2), Direction::Z, Direction::X);
+        Sphere::new(radius).with_frame(frame).build(model).unwrap()
+    }
+
+    /// Like `check`, to a relative accuracy (for results with approximated geometry).
+    fn check_near(model: &Model, shape: Shape, volume: f64, area: f64, relative: f64) {
+        let report = validity::check(model, shape);
+        assert!(report.problems.is_empty(), "{report:?}");
+        let v = properties::volume(model, shape).mass;
+        let a = properties::area(model, shape).mass;
+        assert!((v - volume).abs() <= relative * volume.abs().max(1.0), "volume {v} != {volume}");
+        assert!((a - area).abs() <= relative * area.abs().max(1.0), "area {a} != {area}");
+    }
+
+    /// Union, intersection and difference of `a` and `b` are valid and add up: |A ∪ B| +
+    /// |A ∩ B| = |A| + |B| and |A − B| = |A| − |A ∩ B|, for volumes and (union and
+    /// intersection) areas.
+    fn check_consistent(model: &mut Model, a: Shape, b: Shape, relative: f64) -> (f64, f64) {
+        let volume = |m: &Model, s: Shape| properties::volume(m, s).mass;
+        let area = |m: &Model, s: Shape| properties::area(m, s).mass;
+        let (va, vb, aa, ab) = (volume(model, a), volume(model, b), area(model, a), area(model, b));
+        let merged = union(model, a, b).unwrap();
+        let both = intersection(model, a, b).unwrap();
+        let rest = difference(model, a, b).unwrap();
+        for s in [merged, both, rest] {
+            let report = validity::check(model, s);
+            assert!(report.problems.is_empty(), "{report:?}");
+        }
+        let (vu, vc, vr) = (volume(model, merged), volume(model, both), volume(model, rest));
+        let close = |x: f64, y: f64| (x - y).abs() <= relative * y.abs().max(1.0);
+        assert!(close(vu + vc, va + vb), "volumes: {vu} + {vc} != {va} + {vb}");
+        assert!(close(vr, va - vc), "difference volume {vr} != {va} - {vc}");
+        assert!(vc > 0.0);
+        let (au, ac) = (area(model, merged), area(model, both));
+        assert!(close(au + ac, aa + ab), "areas: {au} + {ac} != {aa} + {ab}");
+        (vc, ac)
+    }
+
+    #[test]
+    fn box_with_a_cylindrical_hole() {
+        let mut model = Model::new();
+        let block = cuboid(&mut model, (0.0, 0.0, 0.0), (4.0, 4.0, 2.0));
+        let drill = cylinder(&mut model, (2.0, 2.0, -1.0), Direction::Z, 1.0, 4.0);
+        let result = difference(&mut model, block, drill).unwrap();
+        check(&model, result, 32.0 - 2.0 * PI, 64.0 + 2.0 * PI, 1);
+        let plug = intersection(&mut model, block, drill).unwrap();
+        check(&model, plug, 2.0 * PI, 6.0 * PI, 1);
+    }
+
+    #[test]
+    fn half_a_cylinder() {
+        // A box cuts a cylinder along its axis (the plane meets it in two lines).
+        let mut model = Model::new();
+        let rod = cylinder(&mut model, (0.0, 0.0, 0.0), Direction::Z, 1.0, 2.0);
+        let half = cuboid(&mut model, (0.0, -2.0, -1.0), (2.0, 4.0, 4.0));
+        let result = difference(&mut model, rod, half).unwrap();
+        check(&model, result, PI, 3.0 * PI + 4.0, 1);
+    }
+
+    #[test]
+    fn oblique_cut_through_a_cylinder() {
+        // A tilted half-space keeps the cylinder below z = 2 + x·tan α: the cap is an
+        // ellipse; by symmetry the volume is that of height 2.
+        let mut model = Model::new();
+        let rod = cylinder(&mut model, (0.0, 0.0, 0.0), Direction::Z, 1.0, 4.0);
+        let alpha: f64 = 0.4;
+        let slab = cuboid(&mut model, (-5.0, -5.0, -10.0), (10.0, 10.0, 10.0));
+        let tilt = crate::math::Transform::translation(Vector::new(0.0, 0.0, 2.0))
+            * crate::math::Transform::rotation(crate::math::Axis::Y, -alpha);
+        let below = intersection(&mut model, rod, slab.moved(&tilt)).unwrap();
+        // The cap's pcurve on the cylinder (a sine wave) is approximated.
+        check_near(&model, below, 2.0 * PI, 4.0 * PI + PI + PI / alpha.cos(), 1e-8);
+    }
+
+    #[test]
+    fn hemisphere() {
+        let mut model = Model::new();
+        let ball = sphere(&mut model, (0.0, 0.0, 0.0), 1.0);
+        let upper = cuboid(&mut model, (-2.0, -2.0, 0.0), (4.0, 4.0, 2.0));
+        let dome = intersection(&mut model, ball, upper).unwrap();
+        check_near(&model, dome, 2.0 * PI / 3.0, 3.0 * PI, 1e-9);
+        let bowl = difference(&mut model, ball, upper).unwrap();
+        check_near(&model, bowl, 2.0 * PI / 3.0, 3.0 * PI, 1e-9);
+    }
+
+    #[test]
+    fn sphere_and_box_anywhere() {
+        let mut model = Model::new();
+        let ball = sphere(&mut model, (0.3, 0.2, 0.1), 1.0);
+        let block = cuboid(&mut model, (0.0, 0.0, 0.0), (1.0, 1.0, 1.0));
+        check_consistent(&mut model, ball, block, 1e-9);
+    }
+
+    #[test]
+    fn parallel_cylinders() {
+        // Two unit cylinders whose axes are 1 apart overlap in a lens.
+        let mut model = Model::new();
+        let a = cylinder(&mut model, (0.0, 0.0, 0.0), Direction::Z, 1.0, 2.0);
+        let b = cylinder(&mut model, (1.0, 0.0, -1.0), Direction::Z, 1.0, 4.0);
+        let lens = 2.0 * (0.5f64).acos() - 0.5 * 3.0f64.sqrt();
+        let (volume, _) = check_consistent(&mut model, a, b, 1e-9);
+        assert!((volume - 2.0 * lens).abs() < 1e-9, "{volume}");
+    }
+
+    #[test]
+    fn crossing_cylinders() {
+        // A thin cylinder through a thick one, axes crossing at right angles.
+        let mut model = Model::new();
+        let thick = cylinder(&mut model, (0.0, 0.0, -3.0), Direction::Z, 2.0, 6.0);
+        let thin = cylinder(&mut model, (-4.0, 0.0, 0.0), Direction::X, 1.0, 8.0);
+        let (volume, _) = check_consistent(&mut model, thick, thin, 1e-6);
+        // The intersection's volume: ∫ over the thin disc of the chord across the thick one.
+        let n = 20000;
+        let exact: f64 = (0..n)
+            .map(|i| {
+                let y = -1.0 + 2.0 * (i as f64 + 0.5) / n as f64;
+                4.0 * (1.0 - y * y).sqrt() * (4.0 - y * y).sqrt() * 2.0 / n as f64
+            })
+            .sum();
+        assert!((volume - exact).abs() < 1e-5 * exact, "{volume} vs {exact}");
+        // Offset so that the thin cylinder only bites into the thick one.
+        let biting = cylinder(&mut model, (-4.0, 1.5, 0.0), Direction::X, 1.0, 8.0);
+        check_consistent(&mut model, thick, biting, 1e-6);
+    }
+
+    fn cone(model: &mut Model, origin: (f64, f64, f64), axis: Direction, r1: f64, r2: f64, height: f64) -> Shape {
+        let frame = Frame::from_z(Point::new(origin.0, origin.1, origin.2), axis);
+        Cone::new(r1, r2, height).with_frame(frame).build(model).unwrap()
+    }
+
+    #[test]
+    fn frustum_of_a_cone() {
+        // A box cuts a cone (radius 2 down to an apex 3 up) at half its height.
+        let mut model = Model::new();
+        let spike = cone(&mut model, (0.0, 0.0, 0.0), Direction::Z, 2.0, 0.0, 3.0);
+        let lower = cuboid(&mut model, (-3.0, -3.0, -1.0), (6.0, 6.0, 2.5));
+        let frustum = intersection(&mut model, spike, lower).unwrap();
+        let slant = (1.5f64 * 1.5 + 1.0).sqrt();
+        check(&model, frustum, PI * 0.5 * 7.0, PI * 3.0 * slant + 5.0 * PI, 1);
+        let tip = difference(&mut model, spike, lower).unwrap();
+        check(&model, tip, PI * 1.5 / 3.0, PI * slant + PI, 1);
+    }
+
+    #[test]
+    fn half_a_cone() {
+        // A plane through the axis cuts the cone along two generators.
+        let mut model = Model::new();
+        let spike = cone(&mut model, (0.0, 0.0, 0.0), Direction::Z, 2.0, 0.0, 3.0);
+        let half = cuboid(&mut model, (0.0, -3.0, -1.0), (3.0, 6.0, 5.0));
+        let result = difference(&mut model, spike, half).unwrap();
+        let slant = 13.0f64.sqrt();
+        check(&model, result, 2.0 * PI, PI * slant + 2.0 * PI + 6.0, 1);
+    }
+
+    #[test]
+    fn cones_against_other_solids() {
+        let mut model = Model::new();
+        let spike = cone(&mut model, (0.0, 0.0, 0.0), Direction::Z, 2.0, 0.5, 3.0);
+        // A plane parallel to a generator meets the cone in a parabola.
+        let alpha = (1.5f64 / 3.0).atan();
+        let slab = cuboid(&mut model, (-5.0, -5.0, -5.0), (10.0, 10.0, 5.0));
+        let tilt = crate::math::Transform::translation(Vector::new(0.5, 0.0, 1.0))
+            * crate::math::Transform::rotation(crate::math::Axis::Y, -alpha);
+        check_consistent(&mut model, spike, slab.moved(&tilt), 1e-6);
+        let pipe = cylinder(&mut model, (-4.0, 0.3, 1.2), Direction::X, 0.6, 8.0);
+        check_consistent(&mut model, spike, pipe, 1e-6);
+        let ball = sphere(&mut model, (0.4, 0.2, 2.6), 0.9);
+        check_consistent(&mut model, spike, ball, 1e-6);
+        let other = cone(&mut model, (2.5, 0.0, 1.0), Direction::new(-1.0, 0.0, 0.1), 1.0, 0.3, 4.0);
+        check_consistent(&mut model, spike, other, 1e-6);
+    }
+
+    #[test]
+    fn torus_as_a_surface_of_revolution() {
+        let frame = Frame::new(Point::new(1.0, 2.0, 3.0), Direction::from_vector(Vector::new(1.0, 1.0, 2.0)), Direction::X);
+        use crate::geometry::ParametricSurface;
+        let torus = crate::geometry::surface::Torus::new(frame, 10.0, 3.0);
+        let revolution = graph::torus_as_revolution(&torus);
+        for (u, v) in [(0.0, 0.0), (0.3, 1.2), (2.5, 4.0), (5.0, 6.0)] {
+            assert!(torus.point(u, v).distance(revolution.point(u, v)) < 1e-12, "({u}, {v})");
+        }
+    }
+
+    #[test]
+    fn tubes_turning_a_corner() {
+        // Tubes (radius 0.5) along arcs of two circles, one ending where they cross and the
+        // other starting there: they touch above and below the corner, where the branches of
+        // their section cross. Volumes of the unions as OCCT's.
+        use crate::geometry::curve::{Circle, Curve};
+        use crate::math::Axis;
+        for (r2, expected) in [(9.1, 8.065398), (12.0, 10.09317)] {
+            let mut model = Model::new();
+            let (c1, c2) = (Point::new(0.0, 10.0, 0.0), Point::new(0.0, -9.0, 0.0));
+            let along = (100.0 - r2 * r2 + 19.0 * 19.0) / 38.0;
+            let corner = Point::new((100.0f64 - along * along).sqrt(), 10.0 - along, 0.0);
+            let disc = |model: &mut Model, centre: Point, up: f64| {
+                let normal = Vector::new(0.0, 0.0, up).cross(corner - centre);
+                let circle = Circle::new(Frame::new(corner, Direction::from_vector(normal), Direction::X), 0.5);
+                let edge = crate::make::edge_from_curve(model, Curve::Circle(circle)).unwrap();
+                let wire = crate::make::wire(model, &[edge]).unwrap();
+                crate::make::planar_face(model, wire).unwrap()
+            };
+            let f1 = disc(&mut model, c1, 1.0);
+            let start = f1.moved(&crate::math::Transform::rotation(Axis::new(c1, Direction::Z), 0.6));
+            let a = crate::sweep::revolve(&mut model, start, Axis::new(c1, -Direction::Z), 0.6).unwrap().shape;
+            let f2 = disc(&mut model, c2, -1.0);
+            let b = crate::sweep::revolve(&mut model, f2, Axis::new(c2, -Direction::Z), 0.6).unwrap().shape;
+            let r = union(&mut model, a, b).unwrap();
+            assert!(crate::validity::check(&model, r).is_valid());
+            let v = crate::properties::volume(&model, r).mass;
+            assert!((v - expected).abs() < 1e-5 * expected, "r2 {r2}: {v} (OCCT {expected})");
+        }
+    }
+
+    #[test]
+    fn half_a_torus() {
+        // A torus (R 10, r 3) cut by the half-space x > 0: half its volume 2π²Rr² and area
+        // 4π²Rr, plus the two disks.
+        let mut model = Model::new();
+        let torus = crate::primitives::Torus::new(10.0, 3.0).build(&mut model).unwrap();
+        check_near(&model, torus, 2.0 * PI * PI * 90.0, 4.0 * PI * PI * 30.0, 1e-9);
+        let block = cuboid(&mut model, (0.0, -20.0, -20.0), (20.0, 40.0, 40.0));
+        let half = intersection(&mut model, torus, block).unwrap();
+        check_near(&model, half, PI * PI * 90.0, 2.0 * PI * PI * 30.0 + 2.0 * PI * 9.0, 1e-6);
+    }
+
+    #[test]
+    fn extruded_ellipse() {
+        // An elliptic prism (semi-axes 10 and 5, height 30): volume π a b h, and half of it
+        // where a box covers x > 0.
+        let mut model = Model::new();
+        let ellipse = crate::geometry::curve::Ellipse::new(Frame::WORLD, 10.0, 5.0);
+        let edge = crate::make::edge_from_curve(&mut model, crate::geometry::curve::Curve::Ellipse(ellipse)).unwrap();
+        let wire = crate::make::wire(&mut model, &[edge]).unwrap();
+        let face = crate::make::planar_face(&mut model, wire).unwrap();
+        let prism = crate::sweep::extrude(&mut model, face, Vector::new(0.0, 0.0, 30.0)).unwrap().shape;
+        let volume = PI * 10.0 * 5.0 * 30.0;
+        assert!((properties::volume(&model, prism).mass - volume).abs() < 1e-8 * volume);
+        let block = cuboid(&mut model, (0.0, -20.0, -10.0), (20.0, 40.0, 50.0));
+        let half = intersection(&mut model, prism, block).unwrap();
+        let report = validity::check(&model, half);
+        assert!(report.problems.is_empty(), "{report:?}");
+        let v = properties::volume(&model, half).mass;
+        assert!((v - volume / 2.0).abs() < 1e-6 * volume, "{v} != {}", volume / 2.0);
+    }
+
+    #[test]
+    fn surface_of_revolution() {
+        // A stadium in a plane parallel to the axis, revolved: its arcs sweep surfaces of
+        // revolution that are neither tori nor quadrics (bcut_simple/G6).
+        let mut model = Model::new();
+        let block = cuboid(&mut model, (0.0, 0.0, 0.0), (100.0, 100.0, 40.0));
+        let z = 40.0;
+        let p = |x: f64, y: f64| Point::new(x, y, z);
+        let arc = |model: &mut Model, center: Point, start: Point, end: Point| {
+            let circle = crate::geometry::curve::Circle::new(Frame::new(center, Direction::Z, Direction::from_vector(start - center)), 10.0);
+            let angle = {
+                let (a, b) = (start - center, end - center);
+                let t = a.cross(b).z.atan2(a.dot(b));
+                if t <= 0.0 { t + 2.0 * PI } else { t }
+            };
+            crate::make::edge_from_curve_range(model, crate::geometry::curve::Curve::Circle(circle), 0.0, angle).unwrap()
+        };
+        let e1 = crate::make::edge_between(&mut model, p(50.0, 20.0), p(50.0, 70.0)).unwrap();
+        let e2 = arc(&mut model, p(40.0, 70.0), p(50.0, 70.0), p(30.0, 70.0));
+        let e3 = crate::make::edge_between(&mut model, p(30.0, 70.0), p(30.0, 20.0)).unwrap();
+        let e4 = arc(&mut model, p(40.0, 20.0), p(30.0, 20.0), p(50.0, 20.0));
+        let wire = crate::make::wire(&mut model, &[e1, e2, e3, e4]).unwrap();
+        let face = crate::make::planar_face(&mut model, wire).unwrap();
+        let ring = crate::sweep::revolve(&mut model, face, crate::math::Axis::new(Point::new(0.0, 0.0, 50.0), Direction::Y), 2.0 * PI)
+            .unwrap()
+            .shape;
+        // The ring itself: area 2π ∮ ρ ds_m (ds_m the arc length in the meridian half-plane,
+        // shorter than the profile's own for these arcs off the axis's planes) and volume
+        // 2π x̄ A (each point of the stadium turns at a distance whose projection is x).
+        let rho = |x: f64| (x * x + 100.0f64).sqrt();
+        let n = 20000;
+        let mut area = 50.0 * (rho(30.0) + rho(50.0));
+        for i in 0..n {
+            let a = PI * (i as f64 + 0.5) / n as f64;
+            let x = 40.0 + 10.0 * a.cos();
+            let (dx, dy) = (-10.0 * a.sin(), 10.0 * a.cos());
+            area += 2.0 * rho(x) * ((x * dx / rho(x)).powi(2) + dy * dy).sqrt() * PI / n as f64;
+        }
+        let area = 2.0 * PI * area;
+        let volume = 2.0 * PI * 40.0 * (20.0 * 50.0 + PI * 100.0);
+        let a = properties::area(&model, ring).mass;
+        let v = properties::volume(&model, ring).mass;
+        assert!((a - area).abs() < 1e-6 * area, "ring area {a} != {area}");
+        assert!((v - volume).abs() < 1e-6 * volume, "ring volume {v} != {volume}");
+        // OCCT's bcut_simple/G6 expects 41187.4 for the difference's area (checked independently by
+        // integrating over the box's faces outside the ring and the ring's inside the box).
+        let (_, common_area) = check_consistent(&mut model, block, ring, 1e-6);
+        let _ = common_area;
+        let r = difference(&mut model, block, ring).unwrap();
+        let a = properties::area(&model, r).mass;
+        assert!((a - 41187.4).abs() < 1e-5 * 41187.4, "difference area {a}");
+    }
+
+    #[test]
+    fn cones_with_parallel_axes() {
+        // bopcommon_simple/ZN2: OCCT expects the intersection to have area 340.979.
+        let mut model = Model::new();
+        let a = cone(&mut model, (0.0, 0.0, 0.0), Direction::Z, 8.0, 4.0, 8.0);
+        let b = cone(&mut model, (4.0, 0.0, 0.0), Direction::Z, 8.0, 4.0, 4.0);
+        let (_, area) = check_consistent(&mut model, a, b, 1e-6);
+        assert!((area - 340.979).abs() < 1e-5 * 340.979, "intersection area {area}");
+    }
+
+    #[test]
+    fn rotated_box() {
+        // A cube turned 45° about Z, centred on a face of another: the difference removes a prism
+        // with a square-diagonal cross-section.
+        let mut model = Model::new();
+        let a = cuboid(&mut model, (0.0, 0.0, 0.0), (2.0, 2.0, 1.0));
+        let h = std::f64::consts::FRAC_1_SQRT_2;
+        let frame = Frame::new(Point::new(1.0, 1.0 - h, -1.0), Direction::Z, Direction::new(h, h, 0.0));
+        let b = Cuboid::new(1.0, 1.0, 3.0).with_frame(frame).build(&mut model).unwrap();
+        let result = difference(&mut model, a, b).unwrap();
+        check(&model, result, 4.0 - 1.0, 2.0 * 3.0 + 8.0 + 4.0 * 1.0, 1);
+    }
+}

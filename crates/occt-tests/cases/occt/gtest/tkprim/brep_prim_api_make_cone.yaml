@@ -1,0 +1,77 @@
+# OCCT GTests moved from crates/occt-tests/tests/gtest_tkprim by hand.
+case: full_cone
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKPrim/GTests/BRepPrimAPI_MakeCone_Test.cxx
+  test: BRepPrimAPI_MakeConeTest.FullCone
+build:
+  - shape: {cone: {r1: 5, r2: 0, height: 10}}
+checks:
+  - {valid: shape}
+---
+case: truncated_cone
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKPrim/GTests/BRepPrimAPI_MakeCone_Test.cxx
+  test: BRepPrimAPI_MakeConeTest.TruncatedCone
+build:
+  - shape: {cone: {r1: 5, r2: 2, height: 10}}
+checks:
+  - {valid: shape}
+---
+case: full_cone_face_count
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKPrim/GTests/BRepPrimAPI_MakeCone_Test.cxx
+  test: BRepPrimAPI_MakeConeTest.FullConeFaceCount
+notes:
+  - "Lateral + base."
+build:
+  - shape: {cone: {r1: 5, r2: 0, height: 10}}
+checks:
+  - {count: shape, occurrences: true, eq: {faces: 2}}
+---
+case: truncated_cone_face_count
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKPrim/GTests/BRepPrimAPI_MakeCone_Test.cxx
+  test: BRepPrimAPI_MakeConeTest.TruncatedConeFaceCount
+notes:
+  - "Lateral + 2 bases."
+build:
+  - shape: {cone: {r1: 5, r2: 2, height: 10}}
+checks:
+  - {count: shape, occurrences: true, eq: {faces: 3}}
+---
+case: truncated_cone_volume
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKPrim/GTests/BRepPrimAPI_MakeCone_Test.cxx
+  test: BRepPrimAPI_MakeConeTest.TruncatedConeVolume
+build:
+  - shape: {cone: {r1: 5, r2: 2, height: 10}}
+checks:
+  - {volume: shape, eq: "pi*10/3*(5*5 + 5*2 + 2*2)", abs: 1.0e-7}
+---
+case: partial_cone
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKPrim/GTests/BRepPrimAPI_MakeCone_Test.cxx
+  test: BRepPrimAPI_MakeConeTest.PartialCone
+build:
+  - shape: {cone: {r1: 5, r2: 2, height: 10, angle: 180}}
+checks:
+  - {valid: shape}
+  - {count: shape, occurrences: true, gt: {faces: 3}}

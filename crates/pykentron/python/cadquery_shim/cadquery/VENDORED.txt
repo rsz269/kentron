@@ -1,0 +1,15 @@
+Copied unchanged from CadQuery v2.8.0 (https://github.com/CadQuery/cadquery.git), Apache License 2.0 (LICENSE.CadQuery), by crates/pykentron/scripts/vendor_cadquery.py:
+  assembly.py
+  cq.py
+  cqgi.py
+  func.py
+  hull.py
+  selectors.py
+  sketch.py
+  types.py
+  units.py
+  utils.py
+  plugins/__init__.py
+  occ_impl/shape_protocols.py
+  occ_impl/sketch_solver.py
+  occ_impl/solver.py

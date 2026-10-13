@@ -1,0 +1,1260 @@
+# OCCT GTests moved from crates/occt-tests/tests/gtest_tkbo/brep_algo_api_cut.rs by tools/gtest2yaml.py.
+case: sphere_minus_box_a1
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.SphereMinusBox_A1
+build:
+  - sphere: {sphere: {radius: 1}}
+  - box_: {box: {size: [1, 1, 1]}}
+  - result: {difference: {object: sphere, tool: box_}}
+checks:
+  - {area: result, eq: 13.3518, abs: 0.00133518}
+---
+case: rotated_sphere_minus_box_a2
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.RotatedSphereMinusBox_A2
+build:
+  - sphere: {sphere: {radius: 1}}
+  - t2: {rotate: {shape: sphere, axis: {origin: [0, 0, 0], direction: [0, 0, 1]}, angle: -90.0}}
+  - rotated_sphere: {rotate: {shape: t2, axis: {origin: [0, 0, 0], direction: [0, 1, 0]}, angle: -45.0}}
+  - box_: {box: {size: [1, 1, 1]}}
+  - result: {difference: {object: rotated_sphere, tool: box_}}
+checks:
+  - {area: result, eq: 13.3517, abs: 0.0013351699999999999}
+---
+case: box_minus_rotated_sphere_a3
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.BoxMinusRotatedSphere_A3
+build:
+  - sphere: {sphere: {radius: 1}}
+  - t2: {rotate: {shape: sphere, axis: {origin: [0, 0, 0], direction: [0, 0, 1]}, angle: -90.0}}
+  - rotated_sphere: {rotate: {shape: t2, axis: {origin: [0, 0, 0], direction: [0, 1, 0]}, angle: -45.0}}
+  - box_: {box: {size: [1, 1, 1]}}
+  - result: {difference: {object: box_, tool: rotated_sphere}}
+checks:
+  - {area: result, eq: 5.2146, abs: 0.0005214600000000001}
+---
+case: sphere_minus_rotated_box_a4
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.SphereMinusRotatedBox_A4
+build:
+  - sphere: {sphere: {radius: 1}}
+  - box_: {box: {size: [1, 1, 1]}}
+  - rotated_box: {rotate: {shape: box_, axis: {origin: [0, 0, 1], direction: [0, 1, 0]}, angle: 90}}
+  - result: {difference: {object: sphere, tool: rotated_box}}
+checks:
+  - {area: result, eq: 13.3517, abs: 0.0013351699999999999}
+---
+case: rotated_box_minus_sphere_a5
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.RotatedBoxMinusSphere_A5
+build:
+  - sphere: {sphere: {radius: 1}}
+  - box_: {box: {size: [1, 1, 1]}}
+  - rotated_box: {rotate: {shape: box_, axis: {origin: [0, 0, 1], direction: [0, 1, 0]}, angle: 90}}
+  - result: {difference: {object: rotated_box, tool: sphere}}
+checks:
+  - {area: result, eq: 5.2146, abs: 0.0005214600000000001}
+---
+case: identical_nurbs_box_minus_box_a6
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.IdenticalNurbsBoxMinusBox_A6
+build:
+  - nurbs_box: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - nurbs_box: {to_nurbs: {shape: nurbs_box}}
+  - box_: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - result: {difference: {object: nurbs_box, tool: box_}}
+checks:
+  - {area: result, le: 1e-06}
+---
+case: identical_box_minus_nurbs_box_a7
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.IdenticalBoxMinusNurbsBox_A7
+build:
+  - nurbs_box: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - nurbs_box: {to_nurbs: {shape: nurbs_box}}
+  - box_: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - result: {difference: {object: box_, tool: nurbs_box}}
+checks:
+  - {area: result, le: 1e-06}
+---
+case: nurbs_box_minus_larger_box_a8
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.NurbsBoxMinusLargerBox_A8
+build:
+  - nurbs_box: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - nurbs_box: {to_nurbs: {shape: nurbs_box}}
+  - larger_box: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.5, 1.0]}}
+  - result: {difference: {object: nurbs_box, tool: larger_box}}
+checks:
+  - {area: result, le: 1e-06}
+---
+case: larger_box_minus_nurbs_box_a9
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.LargerBoxMinusNurbsBox_A9
+build:
+  - nurbs_box: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - nurbs_box: {to_nurbs: {shape: nurbs_box}}
+  - larger_box: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.5, 1.0]}}
+  - result: {difference: {object: larger_box, tool: nurbs_box}}
+checks:
+  - {area: result, eq: 4.0, abs: 0.0004}
+---
+case: nurbs_box_minus_box_b1
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.NurbsBoxMinusBox_B1
+build:
+  - box1: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - box1: {to_nurbs: {shape: box1}}
+  - box2: {box: {corner: [0.0, 1.0, 0.0], size: [1.0, 0.5, 1.0]}}
+  - result: {difference: {object: box1, tool: box2}}
+checks:
+  - {area: result, eq: 6.0, abs: 0.0006000000000000001}
+---
+case: box_minus_nurbs_box_b2
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.BoxMinusNurbsBox_B2
+build:
+  - nurbs_box: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - nurbs_box: {to_nurbs: {shape: nurbs_box}}
+  - box_: {box: {corner: [0.0, 1.0, 0.0], size: [1.0, 0.5, 1.0]}}
+  - result: {difference: {object: box_, tool: nurbs_box}}
+checks:
+  - {area: result, eq: 4.0, abs: 0.0004}
+---
+case: nurbs_box_minus_adjacent_box_b3
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.NurbsBoxMinusAdjacentBox_B3
+build:
+  - nurbs_box: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - nurbs_box: {to_nurbs: {shape: nurbs_box}}
+  - adjacent_box: {box: {corner: [1.0, 1.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - result: {difference: {object: nurbs_box, tool: adjacent_box}}
+checks:
+  - {area: result, eq: 6.0, abs: 0.0006000000000000001}
+---
+case: adjacent_box_minus_nurbs_box_b4
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.AdjacentBoxMinusNurbsBox_B4
+build:
+  - nurbs_box: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - nurbs_box: {to_nurbs: {shape: nurbs_box}}
+  - adjacent_box: {box: {corner: [1.0, 1.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - result: {difference: {object: adjacent_box, tool: nurbs_box}}
+checks:
+  - {area: result, eq: 6.0, abs: 0.0006000000000000001}
+---
+case: nurbs_box_minus_smaller_box_b5
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.NurbsBoxMinusSmallerBox_B5
+build:
+  - nurbs_box: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - nurbs_box: {to_nurbs: {shape: nurbs_box}}
+  - smaller_box: {box: {corner: [0.0, 0.0, 0.0], size: [0.5, 1.0, 0.5]}}
+  - result: {difference: {object: nurbs_box, tool: smaller_box}}
+checks:
+  - {area: result, eq: 5.5, abs: 0.00055}
+---
+case: smaller_box_minus_nurbs_box_b6
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.SmallerBoxMinusNurbsBox_B6
+build:
+  - nurbs_box: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - nurbs_box: {to_nurbs: {shape: nurbs_box}}
+  - smaller_box: {box: {corner: [0.0, 0.0, 0.0], size: [0.5, 1.0, 0.5]}}
+  - result: {difference: {object: smaller_box, tool: nurbs_box}}
+checks:
+  - {area: result, le: 1e-06}
+---
+case: nurbs_box_minus_partially_overlapping_box_b7
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.NurbsBoxMinusPartiallyOverlappingBox_B7
+build:
+  - nurbs_box: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - nurbs_box: {to_nurbs: {shape: nurbs_box}}
+  - partial_box: {box: {corner: [0.0, -0.5, 0.0], size: [0.5, 0.5, 1.0]}}
+  - result: {difference: {object: nurbs_box, tool: partial_box}}
+checks:
+  - {area: result, eq: 6.0, abs: 0.0006000000000000001}
+---
+case: partially_overlapping_box_minus_nurbs_box_b8
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.PartiallyOverlappingBoxMinusNurbsBox_B8
+build:
+  - nurbs_box: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - nurbs_box: {to_nurbs: {shape: nurbs_box}}
+  - partial_box: {box: {corner: [0.0, -0.5, 0.0], size: [0.5, 0.5, 1.0]}}
+  - result: {difference: {object: partial_box, tool: nurbs_box}}
+checks:
+  - {area: result, eq: 2.5, abs: 0.00025}
+---
+case: nurbs_box_minus_extended_box_b9
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.NurbsBoxMinusExtendedBox_B9
+build:
+  - nurbs_box: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - nurbs_box: {to_nurbs: {shape: nurbs_box}}
+  - extended_box: {box: {corner: [0.0, -0.5, 0.0], size: [0.5, 1.5, 1.0]}}
+  - result: {difference: {object: nurbs_box, tool: extended_box}}
+checks:
+  - {area: result, eq: 4.0, abs: 0.0004}
+---
+case: extended_box_minus_nurbs_box_c1
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.ExtendedBoxMinusNurbsBox_C1
+build:
+  - nurbs_box: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - nurbs_box: {to_nurbs: {shape: nurbs_box}}
+  - extended_box: {box: {corner: [0.0, -0.5, 0.0], size: [0.5, 1.5, 1.0]}}
+  - result: {difference: {object: extended_box, tool: nurbs_box}}
+checks:
+  - {area: result, eq: 2.5, abs: 0.00025}
+---
+case: nurbs_box_minus_shifted_box_c2
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.NurbsBoxMinusShiftedBox_C2
+build:
+  - nurbs_box: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - nurbs_box: {to_nurbs: {shape: nurbs_box}}
+  - shifted_box: {box: {corner: [0.0, 0.5, 0.0], size: [1.0, 1.0, 1.0]}}
+  - result: {difference: {object: nurbs_box, tool: shifted_box}}
+checks:
+  - {area: result, eq: 4.0, abs: 0.0004}
+---
+case: shifted_box_minus_nurbs_box_c3
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.ShiftedBoxMinusNurbsBox_C3
+build:
+  - nurbs_box: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - nurbs_box: {to_nurbs: {shape: nurbs_box}}
+  - shifted_box: {box: {corner: [0.0, 0.5, 0.0], size: [1.0, 1.0, 1.0]}}
+  - result: {difference: {object: shifted_box, tool: nurbs_box}}
+checks:
+  - {area: result, eq: 4.0, abs: 0.0004}
+---
+case: nurbs_box_minus_narrow_box_c4
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.NurbsBoxMinusNarrowBox_C4
+build:
+  - nurbs_box: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - nurbs_box: {to_nurbs: {shape: nurbs_box}}
+  - narrow_box: {box: {corner: [0.0, 0.25, 0.0], size: [1.0, 0.5, 1.0]}}
+  - result: {difference: {object: nurbs_box, tool: narrow_box}}
+checks:
+  - {area: result, eq: 6.0, abs: 0.0006000000000000001}
+---
+case: narrow_box_minus_nurbs_box_c5
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.NarrowBoxMinusNurbsBox_C5
+build:
+  - nurbs_box: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - nurbs_box: {to_nurbs: {shape: nurbs_box}}
+  - narrow_box: {box: {corner: [0.0, 0.25, 0.0], size: [1.0, 0.5, 1.0]}}
+  - result: {difference: {object: narrow_box, tool: nurbs_box}}
+checks:
+  - {area: result, le: 1e-06}
+---
+case: nurbs_box_minus_corner_cube_c6
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.NurbsBoxMinusCornerCube_C6
+build:
+  - nurbs_box: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - nurbs_box: {to_nurbs: {shape: nurbs_box}}
+  - corner_cube: {box: {corner: [0.0, 0.0, 0.0], size: [0.5, 0.5, 0.5]}}
+  - result: {difference: {object: nurbs_box, tool: corner_cube}}
+checks:
+  - {area: result, eq: 6.0, abs: 0.0006000000000000001}
+---
+case: corner_cube_minus_nurbs_box_c7
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.CornerCubeMinusNurbsBox_C7
+build:
+  - nurbs_box: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - nurbs_box: {to_nurbs: {shape: nurbs_box}}
+  - corner_cube: {box: {corner: [0.0, 0.0, 0.0], size: [0.5, 0.5, 0.5]}}
+  - result: {difference: {object: corner_cube, tool: nurbs_box}}
+checks:
+  - {area: result, le: 1e-06}
+---
+case: nurbs_box_minus_offset_cube_c8
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.NurbsBoxMinusOffsetCube_C8
+build:
+  - nurbs_box: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - nurbs_box: {to_nurbs: {shape: nurbs_box}}
+  - offset_cube: {box: {corner: [0.0, -0.5, 0.0], size: [0.5, 0.5, 0.5]}}
+  - result: {difference: {object: nurbs_box, tool: offset_cube}}
+checks:
+  - {area: result, eq: 6.0, abs: 0.0006000000000000001}
+---
+case: offset_cube_minus_nurbs_box_c9
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.OffsetCubeMinusNurbsBox_C9
+build:
+  - nurbs_box: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - nurbs_box: {to_nurbs: {shape: nurbs_box}}
+  - offset_cube: {box: {corner: [0.0, -0.5, 0.0], size: [0.5, 0.5, 0.5]}}
+  - result: {difference: {object: offset_cube, tool: nurbs_box}}
+checks:
+  - {area: result, eq: 1.5, abs: 0.00015000000000000001}
+---
+case: nurbs_box_minus_offset_corner_cube_d1
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.NurbsBoxMinusOffsetCornerCube_D1
+build:
+  - nurbs_box: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - nurbs_box: {to_nurbs: {shape: nurbs_box}}
+  - offset_corner_cube: {box: {corner: [0.0, -0.5, -0.5], size: [0.5, 0.5, 0.5]}}
+  - result: {difference: {object: nurbs_box, tool: offset_corner_cube}}
+checks:
+  - {area: result, eq: 6.0, abs: 0.0006000000000000001}
+---
+case: offset_corner_cube_minus_nurbs_box_d2
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.OffsetCornerCubeMinusNurbsBox_D2
+build:
+  - nurbs_box: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - nurbs_box: {to_nurbs: {shape: nurbs_box}}
+  - offset_corner_cube: {box: {corner: [0.0, -0.5, -0.5], size: [0.5, 0.5, 0.5]}}
+  - result: {difference: {object: offset_corner_cube, tool: nurbs_box}}
+checks:
+  - {area: result, eq: 1.5, abs: 0.00015000000000000001}
+---
+case: nurbs_box_minus_shifted_corner_cube_d3
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.NurbsBoxMinusShiftedCornerCube_D3
+build:
+  - nurbs_box: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - nurbs_box: {to_nurbs: {shape: nurbs_box}}
+  - shifted_corner_cube: {box: {corner: [-0.5, -0.5, -0.5], size: [0.5, 0.5, 0.5]}}
+  - result: {difference: {object: nurbs_box, tool: shifted_corner_cube}}
+checks:
+  - {area: result, eq: 6.0, abs: 0.0006000000000000001}
+---
+case: shifted_corner_cube_minus_nurbs_box_d4
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.ShiftedCornerCubeMinusNurbsBox_D4
+build:
+  - nurbs_box: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - nurbs_box: {to_nurbs: {shape: nurbs_box}}
+  - shifted_corner_cube: {box: {corner: [-0.5, -0.5, -0.5], size: [0.5, 0.5, 0.5]}}
+  - result: {difference: {object: shifted_corner_cube, tool: nurbs_box}}
+checks:
+  - {area: result, eq: 1.5, abs: 0.00015000000000000001}
+---
+case: nurbs_box_minus_extended_x_box_d5
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.NurbsBoxMinusExtendedXBox_D5
+build:
+  - nurbs_box: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - nurbs_box: {to_nurbs: {shape: nurbs_box}}
+  - extended_x_box: {box: {corner: [0.0, 0.0, 0.0], size: [1.5, 0.5, 0.5]}}
+  - result: {difference: {object: nurbs_box, tool: extended_x_box}}
+checks:
+  - {area: result, eq: 5.5, abs: 0.00055}
+---
+case: extended_x_box_minus_nurbs_box_d6
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.ExtendedXBoxMinusNurbsBox_D6
+build:
+  - nurbs_box: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - nurbs_box: {to_nurbs: {shape: nurbs_box}}
+  - extended_x_box: {box: {corner: [0.0, 0.0, 0.0], size: [1.5, 0.5, 0.5]}}
+  - result: {difference: {object: extended_x_box, tool: nurbs_box}}
+checks:
+  - {area: result, eq: 1.5, abs: 0.00015000000000000001}
+---
+case: nurbs_box_minus_offset_extended_x_box_d7
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.NurbsBoxMinusOffsetExtendedXBox_D7
+build:
+  - nurbs_box: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - nurbs_box: {to_nurbs: {shape: nurbs_box}}
+  - offset_extended_x_box: {box: {corner: [0.0, -0.5, 0.0], size: [1.5, 0.5, 0.5]}}
+  - result: {difference: {object: nurbs_box, tool: offset_extended_x_box}}
+checks:
+  - {area: result, eq: 6.0, abs: 0.0006000000000000001}
+---
+case: offset_extended_x_box_minus_nurbs_box_d8
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.OffsetExtendedXBoxMinusNurbsBox_D8
+build:
+  - nurbs_box: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - nurbs_box: {to_nurbs: {shape: nurbs_box}}
+  - offset_extended_x_box: {box: {corner: [0.0, -0.5, 0.0], size: [1.5, 0.5, 0.5]}}
+  - result: {difference: {object: offset_extended_x_box, tool: nurbs_box}}
+checks:
+  - {area: result, eq: 3.5, abs: 0.00035}
+---
+case: nurbs_box_minus_shifted_narrow_box_d9
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.NurbsBoxMinusShiftedNarrowBox_D9
+build:
+  - nurbs_box: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - nurbs_box: {to_nurbs: {shape: nurbs_box}}
+  - shifted_narrow_box: {box: {corner: [0.25, 0.0, 0.0], size: [0.5, 0.5, 1.0]}}
+  - result: {difference: {object: nurbs_box, tool: shifted_narrow_box}}
+checks:
+  - {area: result, eq: 6.5, abs: 0.0006500000000000001}
+---
+case: shifted_narrow_box_minus_nurbs_box_e1
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.ShiftedNarrowBoxMinusNurbsBox_E1
+build:
+  - nurbs_box: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - nurbs_box: {to_nurbs: {shape: nurbs_box}}
+  - shifted_narrow_box: {box: {corner: [0.25, 0.0, 0.0], size: [0.5, 0.5, 1.0]}}
+  - result: {difference: {object: shifted_narrow_box, tool: nurbs_box}}
+checks:
+  - {area: result, le: 1e-06}
+---
+case: nurbs_box_minus_offset_shifted_narrow_box_e2
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.NurbsBoxMinusOffsetShiftedNarrowBox_E2
+build:
+  - nurbs_box: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - nurbs_box: {to_nurbs: {shape: nurbs_box}}
+  - offset_shifted_narrow_box: {box: {corner: [0.25, -0.5, 0.0], size: [0.5, 0.5, 1.0]}}
+  - result: {difference: {object: nurbs_box, tool: offset_shifted_narrow_box}}
+checks:
+  - {area: result, eq: 6.0, abs: 0.0006000000000000001}
+---
+case: offset_shifted_narrow_box_minus_nurbs_box_e3
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.OffsetShiftedNarrowBoxMinusNurbsBox_E3
+build:
+  - nurbs_box: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - nurbs_box: {to_nurbs: {shape: nurbs_box}}
+  - offset_shifted_narrow_box: {box: {corner: [0.25, -0.5, 0.0], size: [0.5, 0.5, 1.0]}}
+  - result: {difference: {object: offset_shifted_narrow_box, tool: nurbs_box}}
+checks:
+  - {area: result, eq: 2.5, abs: 0.00025}
+---
+case: nurbs_box_minus_extended_y_shifted_narrow_box_e4
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.NurbsBoxMinusExtendedYShiftedNarrowBox_E4
+build:
+  - nurbs_box: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - nurbs_box: {to_nurbs: {shape: nurbs_box}}
+  - extended_y_shifted_narrow_box: {box: {corner: [0.25, 0.0, 0.0], size: [0.5, 1.5, 1.0]}}
+  - result: {difference: {object: nurbs_box, tool: extended_y_shifted_narrow_box}}
+checks:
+  - {area: result, eq: 6.0, abs: 0.0006000000000000001}
+---
+case: extended_y_shifted_narrow_box_minus_nurbs_box_e5
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.ExtendedYShiftedNarrowBoxMinusNurbsBox_E5
+build:
+  - nurbs_box: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - nurbs_box: {to_nurbs: {shape: nurbs_box}}
+  - extended_y_shifted_narrow_box: {box: {corner: [0.25, 0.0, 0.0], size: [0.5, 1.5, 1.0]}}
+  - result: {difference: {object: extended_y_shifted_narrow_box, tool: nurbs_box}}
+checks:
+  - {area: result, eq: 2.5, abs: 0.00025}
+---
+case: nurbs_box_minus_right_half_box_e6
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.NurbsBoxMinusRightHalfBox_E6
+build:
+  - nurbs_box: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - nurbs_box: {to_nurbs: {shape: nurbs_box}}
+  - right_half_box: {box: {corner: [0.5, 0.0, 0.0], size: [1.0, 1.0, 0.5]}}
+  - result: {difference: {object: nurbs_box, tool: right_half_box}}
+checks:
+  - {area: result, eq: 5.5, abs: 0.00055}
+---
+case: right_half_box_minus_nurbs_box_e7
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.RightHalfBoxMinusNurbsBox_E7
+build:
+  - nurbs_box: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - nurbs_box: {to_nurbs: {shape: nurbs_box}}
+  - right_half_box: {box: {corner: [0.5, 0.0, 0.0], size: [1.0, 1.0, 0.5]}}
+  - result: {difference: {object: right_half_box, tool: nurbs_box}}
+checks:
+  - {area: result, eq: 2.5, abs: 0.00025}
+---
+case: nurbs_box_minus_offset_right_half_box_e8
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.NurbsBoxMinusOffsetRightHalfBox_E8
+build:
+  - nurbs_box: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - nurbs_box: {to_nurbs: {shape: nurbs_box}}
+  - offset_right_half_box: {box: {corner: [0.5, 0.0, -0.5], size: [1.0, 1.0, 0.5]}}
+  - result: {difference: {object: nurbs_box, tool: offset_right_half_box}}
+checks:
+  - {area: result, eq: 6.0, abs: 0.0006000000000000001}
+---
+case: offset_right_half_box_minus_nurbs_box_e9
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.OffsetRightHalfBoxMinusNurbsBox_E9
+build:
+  - nurbs_box: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - nurbs_box: {to_nurbs: {shape: nurbs_box}}
+  - offset_right_half_box: {box: {corner: [0.5, 0.0, -0.5], size: [1.0, 1.0, 0.5]}}
+  - result: {difference: {object: offset_right_half_box, tool: nurbs_box}}
+checks:
+  - {area: result, eq: 4.0, abs: 0.0004}
+---
+case: nurbs_box_minus_rotated_rectangular_box_f1
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.NurbsBoxMinusRotatedRectangularBox_F1
+build:
+  - nurbs_box: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - nurbs_box: {to_nurbs: {shape: nurbs_box}}
+  - rectangular_box: {box: {corner: [0.0, 0.0, 0.0], size: [1.4142135623730951, 0.7071067811865476, 1.0]}}
+  - rectangular_box: {rotate: {shape: rectangular_box, axis: {origin: [0.0, 0.0, 0.0], direction: [0, 0, 1]}, angle: 45.0}}
+  - result: {difference: {object: nurbs_box, tool: rectangular_box}}
+checks:
+  - {area: result, eq: 4.41421, abs: 0.000441421}
+---
+case: rotated_rectangular_box_minus_nurbs_box_f2
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.RotatedRectangularBoxMinusNurbsBox_F2
+build:
+  - nurbs_box: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - nurbs_box: {to_nurbs: {shape: nurbs_box}}
+  - rectangular_box: {box: {corner: [0.0, 0.0, 0.0], size: [1.4142135623730951, 0.7071067811865476, 1.0]}}
+  - rectangular_box: {rotate: {shape: rectangular_box, axis: {origin: [0.0, 0.0, 0.0], direction: [0, 0, 1]}, angle: 45.0}}
+  - result: {difference: {object: rectangular_box, tool: nurbs_box}}
+checks:
+  - {area: result, eq: 5.82843, abs: 0.000582843}
+---
+case: nurbs_box_minus_rotated_thin_box_f5
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.NurbsBoxMinusRotatedThinBox_F5
+build:
+  - nurbs_box: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - nurbs_box: {to_nurbs: {shape: nurbs_box}}
+  - thin_box: {box: {corner: [0.0, 0.0, 0.0], size: [1.4142135623730951, 0.25, 1.0]}}
+  - thin_box: {rotate: {shape: thin_box, axis: {origin: [0.0, 0.0, 0.0], direction: [0, 0, 1]}, angle: 45.0}}
+  - result: {difference: {object: nurbs_box, tool: thin_box}}
+checks:
+  - {area: result, eq: 7.03921, abs: 0.000703921}
+---
+case: rotated_thin_box_minus_nurbs_box_f6
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.RotatedThinBoxMinusNurbsBox_F6
+build:
+  - nurbs_box: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - nurbs_box: {to_nurbs: {shape: nurbs_box}}
+  - thin_box: {box: {corner: [0.0, 0.0, 0.0], size: [1.4142135623730951, 0.25, 1.0]}}
+  - thin_box: {rotate: {shape: thin_box, axis: {origin: [0.0, 0.0, 0.0], direction: [0, 0, 1]}, angle: 45.0}}
+  - result: {difference: {object: thin_box, tool: nurbs_box}}
+checks:
+  - {area: result, eq: 1.83211, abs: 0.000183211}
+---
+case: nurbs_box_minus_rotated_narrow_box_f7
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.NurbsBoxMinusRotatedNarrowBox_F7
+build:
+  - nurbs_box: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - nurbs_box: {to_nurbs: {shape: nurbs_box}}
+  - narrow_box: {box: {corner: [0.0, 0.0, 0.0], size: [1.3919410907075054, 0.25, 1.0]}}
+  - narrow_box: {rotate: {shape: narrow_box, axis: {origin: [0.0, 0.0, 0.0], direction: [0, 0, 1]}, angle: 34.73}}
+  - result: {difference: {object: nurbs_box, tool: narrow_box}}
+checks:
+  - {area: result, eq: 7.21677, abs: 0.0007216770000000001}
+---
+case: rotated_narrow_box_minus_nurbs_box_f8
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.RotatedNarrowBoxMinusNurbsBox_F8
+build:
+  - nurbs_box: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - nurbs_box: {to_nurbs: {shape: nurbs_box}}
+  - narrow_box: {box: {corner: [0.0, 0.0, 0.0], size: [1.3919410907075054, 0.25, 1.0]}}
+  - narrow_box: {rotate: {shape: narrow_box, axis: {origin: [0.0, 0.0, 0.0], direction: [0, 0, 1]}, angle: 34.73}}
+  - result: {difference: {object: narrow_box, tool: nurbs_box}}
+checks:
+  - {area: result, eq: 1.54631, abs: 0.00015463100000000002}
+---
+case: sphere_minus_box_f9
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.SphereMinusBox_F9
+build:
+  - sphere: {sphere: {radius: 1.0, frame: {origin: [0.0, 0.0, 0.0], z: [0, 0, 1], x: [1, 0, 0]}}}
+  - box_: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - result: {difference: {object: sphere, tool: box_}}
+checks:
+  - {area: result, eq: 13.3518, abs: 0.00133518}
+---
+case: box_minus_sphere_g1
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.BoxMinusSphere_G1
+build:
+  - sphere: {sphere: {radius: 1.0, frame: {origin: [0.0, 0.0, 0.0], z: [0, 0, 1], x: [1, 0, 0]}}}
+  - box_: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - result: {difference: {object: box_, tool: sphere}}
+checks:
+  - {area: result, eq: 5.2146, abs: 0.0005214600000000001}
+---
+case: rotated_sphere_minus_box_g2
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.RotatedSphereMinusBox_G2
+build:
+  - sphere: {sphere: {radius: 1.0, frame: {origin: [0.0, 0.0, 0.0], z: [0, 0, 1], x: [1, 0, 0]}}}
+  - sphere: {rotate: {shape: sphere, axis: {origin: [0.0, 0.0, 0.0], direction: [0, 0, 1]}, angle: -90.0}}
+  - sphere: {rotate: {shape: sphere, axis: {origin: [0.0, 0.0, 0.0], direction: [0, 1, 0]}, angle: -45.0}}
+  - box_: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - result: {difference: {object: sphere, tool: box_}}
+checks:
+  - {area: result, eq: 13.3517, abs: 0.0013351699999999999}
+---
+case: box_minus_rotated_sphere_g3
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.BoxMinusRotatedSphere_G3
+build:
+  - sphere: {sphere: {radius: 1.0, frame: {origin: [0.0, 0.0, 0.0], z: [0, 0, 1], x: [1, 0, 0]}}}
+  - sphere: {rotate: {shape: sphere, axis: {origin: [0.0, 0.0, 0.0], direction: [0, 0, 1]}, angle: -90.0}}
+  - sphere: {rotate: {shape: sphere, axis: {origin: [0.0, 0.0, 0.0], direction: [0, 1, 0]}, angle: -45.0}}
+  - box_: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - result: {difference: {object: box_, tool: sphere}}
+checks:
+  - {area: result, eq: 5.2146, abs: 0.0005214600000000001}
+---
+case: sphere_minus_rotated_box_g4
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.SphereMinusRotatedBox_G4
+build:
+  - sphere: {sphere: {radius: 1.0, frame: {origin: [0.0, 0.0, 0.0], z: [0, 0, 1], x: [1, 0, 0]}}}
+  - box_: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - box_: {rotate: {shape: box_, axis: {origin: [0.0, 0.0, 1.0], direction: [0, 1, 0]}, angle: 90.0}}
+  - result: {difference: {object: sphere, tool: box_}}
+checks:
+  - {area: result, eq: 13.3517, abs: 0.0013351699999999999}
+---
+case: rotated_box_minus_sphere_g5
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.RotatedBoxMinusSphere_G5
+build:
+  - sphere: {sphere: {radius: 1.0, frame: {origin: [0.0, 0.0, 0.0], z: [0, 0, 1], x: [1, 0, 0]}}}
+  - box_: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - box_: {rotate: {shape: box_, axis: {origin: [0.0, 0.0, 1.0], direction: [0, 1, 0]}, angle: 90.0}}
+  - result: {difference: {object: box_, tool: sphere}}
+checks:
+  - {area: result, eq: 5.2146, abs: 0.0005214600000000001}
+---
+case: complex_profile_revol_operation_g6
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.ComplexProfileRevolOperation_G6
+build:
+  - box_: {box: {corner: [0.0, 0.0, 0.0], size: [100.0, 100.0, 40.0]}}
+  - profile: {profile: {frame: {origin: [0.0, 0.0, 40.0], z: [0, 0, 1]}, steps: [{start: [50.0, 20.0]}, {along_y: 50.0}, {arc: {radius: 10.0, angle: 180.0}}, {along_y: -50.0}, {arc: {radius: 10.0, angle: 180.0}}]}}
+  - revolution: {revolve: {profile: profile, axis: {origin: [0.0, 0.0, 50.0], direction: [0, 1, 0]}, angle: 360.0}}
+  - result: {difference: {object: box_, tool: revolution}}
+checks:
+  - {area: result, eq: 41187.4, abs: 4.118740000000001}
+---
+case: box_minus_translated_box_g7
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.BoxMinusTranslatedBox_G7
+build:
+  - box1: {box: {corner: [0.0, 0.0, 0.0], size: [3.0, 3.0, 3.0]}}
+  - box2: {box: {corner: [0.0, 3.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - result: {difference: {object: box1, tool: box2}}
+checks:
+  - {area: result, eq: 54.0, abs: 0.0054}
+---
+case: complex_cylinder_cone_operation_g9
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.ComplexCylinderConeOperation_G9
+build:
+  - cylinder: {cylinder: {radius: 9.0, height: 3.0}}
+  - cone: {cone: {r1: 7.0, r2: 6.0, height: 4.0}}
+  - fuse_op: {union: {object: cylinder, tool: cone}}
+  - body: fuse_op
+  - small_cylinder: {cylinder: {radius: 1.0, height: 9.0}}
+  - small_cylinder: {translate: {shape: small_cylinder, by: [5.0, 0.0, -2.0]}}
+  - result: {difference: {object: body, tool: small_cylinder}}
+checks:
+  - {area: result, eq: 727.481, abs: 0.0727481}
+---
+case: complex_cylinder_cone_operation_pro13307_h3
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.ComplexCylinderConeOperationPro13307_H3
+build:
+  - cylinder: {cylinder: {radius: 9.0, height: 3.0}}
+  - cone: {cone: {r1: 7.0, r2: 6.0, height: 4.0}}
+  - fuse_op: {union: {object: cylinder, tool: cone}}
+  - body: fuse_op
+  - small_cylinder: {cylinder: {radius: 1.0, height: 9.0}}
+  - small_cylinder: {translate: {shape: small_cylinder, by: [5.0, 0.0, -2.0]}}
+  - result: {difference: {object: body, tool: small_cylinder}}
+checks:
+  - {area: result, eq: 727.481, abs: 0.0727481}
+---
+case: complex_profile_forward_forward_h4
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.ComplexProfileForwardForward_H4
+notes:
+  - "OCCT's translation drops the `p 0 0 -1 1 0 0` of the DRAW profiles it quotes, which its"
+  - "expected area assumes (its \u00b15000 tolerance hides the difference); restored here."
+build:
+  - profile1: {profile: {frame: {origin: [0.0, 0.0, 40.0], z: [0, 0, 1]}, steps: [{origin: [0.0, 0.0, 40.0]}, {along_x: 150.0}, {along_y: 200.0}, {along_x: -150.0}]}}
+  - prism1: {extrude: {profile: profile1, by: [0.0, 0.0, -40.0]}}
+  - profile2: {profile: {frame: {origin: [0.0, 0.0, 50.0], z: [0, 0, 1]}, steps: [{origin: [0.0, 0.0, 50.0]}, {start: [25.0, 25.0]}, {along_y: 100.0}, {along_x: 75.0}, {along_y: -100.0}]}}
+  - prism2: {extrude: {profile: profile2, by: [0.0, 0.0, -30.0]}}
+  - cut_op1: {difference: {object: prism1, tool: prism2}}
+  - intermediate: cut_op1
+  - profile3: {profile: {frame: {origin: [0.0, 0.0, 50.0], z: [0, 0, 1]}, steps: [{plane: {normal: [0.0, 0.0, -1.0], x: [1.0, 0.0, 0.0]}}, {origin: [0.0, 0.0, 50.0]}, {start: [50.0, -75.0]}, {along_x: 75.0}, {along_y: -100.0}, {along_x: -75.0}]}}
+  - prism3: {extrude: {profile: profile3, by: [0.0, 0.0, -30.0]}}
+  - result: {difference: {object: intermediate, tool: prism3}}
+checks:
+  - {area: result, eq: 98000.0, abs: 9.8}
+---
+case: complex_profile_forward_forward_variation_h5
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.ComplexProfileForwardForwardVariation_H5
+notes:
+  - "OCCT's translation drops the `p 0 0 -1 1 0 0` of the DRAW profiles it quotes, which its"
+  - "expected area assumes (its \u00b15000 tolerance hides the difference); restored here."
+build:
+  - profile1: {profile: {frame: {origin: [0.0, 0.0, 40.0], z: [0, 0, 1]}, steps: [{origin: [0.0, 0.0, 40.0]}, {along_x: 150.0}, {along_y: 200.0}, {along_x: -150.0}]}}
+  - prism1: {extrude: {profile: profile1, by: [0.0, 0.0, -40.0]}}
+  - profile2: {profile: {frame: {origin: [0.0, 0.0, 50.0], z: [0, 0, 1]}, steps: [{origin: [0.0, 0.0, 50.0]}, {start: [25.0, 25.0]}, {along_y: 100.0}, {along_x: 75.0}, {along_y: -100.0}]}}
+  - prism2: {extrude: {profile: profile2, by: [0.0, 0.0, -30.0]}}
+  - cut_op1: {difference: {object: prism1, tool: prism2}}
+  - intermediate: cut_op1
+  - profile3: {profile: {frame: {origin: [0.0, 0.0, 50.0], z: [0, 0, 1]}, steps: [{plane: {normal: [0.0, 0.0, -1.0], x: [1.0, 0.0, 0.0]}}, {origin: [0.0, 0.0, 50.0]}, {start: [50.0, -75.0]}, {along_y: -100.0}, {along_x: 75.0}, {along_y: 100.0}]}}
+  - prism3: {extrude: {profile: profile3, by: [0.0, 0.0, -30.0]}}
+  - result: {difference: {object: intermediate, tool: prism3}}
+checks:
+  - {area: result, eq: 98000.0, abs: 9.8}
+---
+case: complex_profile_forward_reversed_h6
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.ComplexProfileForwardReversed_H6
+build:
+  - profile1: {profile: {frame: {origin: [0.0, 0.0, 40.0], z: [0, 0, 1]}, steps: [{origin: [0.0, 0.0, 40.0]}, {along_x: 150.0}, {along_y: 200.0}, {along_x: -150.0}]}}
+  - prism1: {extrude: {profile: profile1, by: [0.0, 0.0, -40.0]}}
+  - profile2: {profile: {frame: {origin: [0.0, 0.0, 50.0], z: [0, 0, 1]}, steps: [{origin: [0.0, 0.0, 50.0]}, {start: [25.0, 25.0]}, {along_y: 100.0}, {along_x: 75.0}, {along_y: -100.0}]}}
+  - prism2: {extrude: {profile: profile2, by: [0.0, 0.0, -30.0]}}
+  - cut_op1: {difference: {object: prism1, tool: prism2}}
+  - intermediate: cut_op1
+  - profile3: {profile: {frame: {origin: [0.0, 0.0, 50.0], z: [0, 0, 1]}, steps: [{origin: [0.0, 0.0, 50.0]}, {start: [50.0, 75.0]}, {along_x: 75.0}, {along_y: 100.0}, {along_x: -75.0}]}}
+  - prism3: {extrude: {profile: profile3, by: [0.0, 0.0, -30.0]}}
+  - result: {difference: {object: intermediate, tool: prism3}}
+checks:
+  - {area: result, eq: 98000.0, abs: 9.8}
+---
+case: complex_profile_forward_reversed_variation_h7
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.ComplexProfileForwardReversedVariation_H7
+build:
+  - profile1: {profile: {frame: {origin: [0.0, 0.0, 40.0], z: [0, 0, 1]}, steps: [{origin: [0.0, 0.0, 40.0]}, {along_x: 150.0}, {along_y: 200.0}, {along_x: -150.0}]}}
+  - prism1: {extrude: {profile: profile1, by: [0.0, 0.0, -40.0]}}
+  - profile2: {profile: {frame: {origin: [0.0, 0.0, 50.0], z: [0, 0, 1]}, steps: [{origin: [0.0, 0.0, 50.0]}, {start: [25.0, 25.0]}, {along_y: 100.0}, {along_x: 75.0}, {along_y: -100.0}]}}
+  - prism2: {extrude: {profile: profile2, by: [0.0, 0.0, -30.0]}}
+  - cut_op1: {difference: {object: prism1, tool: prism2}}
+  - intermediate: cut_op1
+  - profile3: {profile: {frame: {origin: [0.0, 0.0, 50.0], z: [0, 0, 1]}, steps: [{origin: [0.0, 0.0, 50.0]}, {start: [50.0, 75.0]}, {along_y: 100.0}, {along_x: 75.0}, {along_y: -100.0}]}}
+  - prism3: {extrude: {profile: profile3, by: [0.0, 0.0, -30.0]}}
+  - result: {difference: {object: intermediate, tool: prism3}}
+checks:
+  - {area: result, eq: 98000.0, abs: 9.8}
+---
+case: complex_profile_reversed_forward_h8
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.ComplexProfileReversedForward_H8
+notes:
+  - "OCCT's translation drops the `p 0 0 -1 1 0 0` of the DRAW profiles it quotes, which its"
+  - "expected area assumes (its \u00b15000 tolerance hides the difference); restored here."
+build:
+  - profile1: {profile: {frame: {origin: [0.0, 0.0, 40.0], z: [0, 0, 1]}, steps: [{plane: {normal: [0.0, 0.0, -1.0], x: [1.0, 0.0, 0.0]}}, {origin: [0.0, 0.0, 40.0]}, {along_y: -200.0}, {along_x: 150.0}, {along_y: 200.0}]}}
+  - prism1: {extrude: {profile: profile1, by: [0.0, 0.0, -40.0]}}
+  - profile2: {profile: {frame: {origin: [0.0, 0.0, 50.0], z: [0, 0, 1]}, steps: [{plane: {normal: [0.0, 0.0, -1.0], x: [1.0, 0.0, 0.0]}}, {origin: [0.0, 0.0, 50.0]}, {start: [25.0, -25.0]}, {along_x: 75.0}, {along_y: -100.0}, {along_x: -75.0}]}}
+  - prism2: {extrude: {profile: profile2, by: [0.0, 0.0, -30.0]}}
+  - cut_op1: {difference: {object: prism1, tool: prism2}}
+  - intermediate: cut_op1
+  - profile3: {profile: {frame: {origin: [0.0, 0.0, 50.0], z: [0, 0, 1]}, steps: [{plane: {normal: [0.0, 0.0, -1.0], x: [1.0, 0.0, 0.0]}}, {origin: [0.0, 0.0, 50.0]}, {start: [50.0, -75.0]}, {along_x: 75.0}, {along_y: -100.0}, {along_x: -75.0}]}}
+  - prism3: {extrude: {profile: profile3, by: [0.0, 0.0, -30.0]}}
+  - result: {difference: {object: intermediate, tool: prism3}}
+checks:
+  - {area: result, eq: 98000.0, abs: 9.8}
+---
+case: complex_profile_reversed_forward_variation_h9
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.ComplexProfileReversedForwardVariation_H9
+notes:
+  - "OCCT's translation drops the `p 0 0 -1 1 0 0` of the DRAW profiles it quotes, which its"
+  - "expected area assumes (its \u00b15000 tolerance hides the difference); restored here."
+build:
+  - profile1: {profile: {frame: {origin: [0.0, 0.0, 40.0], z: [0, 0, 1]}, steps: [{plane: {normal: [0.0, 0.0, -1.0], x: [1.0, 0.0, 0.0]}}, {origin: [0.0, 0.0, 40.0]}, {along_y: -200.0}, {along_x: 150.0}, {along_y: 200.0}]}}
+  - prism1: {extrude: {profile: profile1, by: [0.0, 0.0, -40.0]}}
+  - profile2: {profile: {frame: {origin: [0.0, 0.0, 50.0], z: [0, 0, 1]}, steps: [{plane: {normal: [0.0, 0.0, -1.0], x: [1.0, 0.0, 0.0]}}, {origin: [0.0, 0.0, 50.0]}, {start: [25.0, -25.0]}, {along_x: 75.0}, {along_y: -100.0}, {along_x: -75.0}]}}
+  - prism2: {extrude: {profile: profile2, by: [0.0, 0.0, -30.0]}}
+  - cut_op1: {difference: {object: prism1, tool: prism2}}
+  - intermediate: cut_op1
+  - profile3: {profile: {frame: {origin: [0.0, 0.0, 50.0], z: [0, 0, 1]}, steps: [{plane: {normal: [0.0, 0.0, -1.0], x: [1.0, 0.0, 0.0]}}, {origin: [0.0, 0.0, 50.0]}, {start: [50.0, -75.0]}, {along_y: -100.0}, {along_x: 75.0}, {along_y: 100.0}]}}
+  - prism3: {extrude: {profile: profile3, by: [0.0, 0.0, -30.0]}}
+  - result: {difference: {object: intermediate, tool: prism3}}
+checks:
+  - {area: result, eq: 98000.0, abs: 9.8}
+---
+case: complex_profile_reversed_reversed_i1
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.ComplexProfileReversedReversed_I1
+notes:
+  - "OCCT's translation drops the `p 0 0 -1 1 0 0` of the DRAW profiles it quotes, which its"
+  - "expected area assumes (its \u00b15000 tolerance hides the difference); restored here."
+build:
+  - profile1: {profile: {frame: {origin: [0.0, 0.0, 40.0], z: [0, 0, 1]}, steps: [{plane: {normal: [0.0, 0.0, -1.0], x: [1.0, 0.0, 0.0]}}, {origin: [0.0, 0.0, 40.0]}, {along_y: -200.0}, {along_x: 150.0}, {along_y: 200.0}]}}
+  - prism1: {extrude: {profile: profile1, by: [0.0, 0.0, -40.0]}}
+  - profile2: {profile: {frame: {origin: [0.0, 0.0, 50.0], z: [0, 0, 1]}, steps: [{plane: {normal: [0.0, 0.0, -1.0], x: [1.0, 0.0, 0.0]}}, {origin: [0.0, 0.0, 50.0]}, {start: [25.0, -25.0]}, {along_x: 75.0}, {along_y: -100.0}, {along_x: -75.0}]}}
+  - prism2: {extrude: {profile: profile2, by: [0.0, 0.0, -30.0]}}
+  - cut_op1: {difference: {object: prism1, tool: prism2}}
+  - intermediate: cut_op1
+  - profile3: {profile: {frame: {origin: [0.0, 0.0, 50.0], z: [0, 0, 1]}, steps: [{origin: [0.0, 0.0, 50.0]}, {start: [50.0, 75.0]}, {along_x: 75.0}, {along_y: 100.0}, {along_x: -75.0}]}}
+  - prism3: {extrude: {profile: profile3, by: [0.0, 0.0, -30.0]}}
+  - result: {difference: {object: intermediate, tool: prism3}}
+checks:
+  - {area: result, eq: 98000.0, abs: 9.8}
+---
+case: complex_profile_reversed_reversed_variation_i2
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.ComplexProfileReversedReversedVariation_I2
+notes:
+  - "OCCT's translation drops the `p 0 0 -1 1 0 0` of the DRAW profiles it quotes, which its"
+  - "expected area assumes (its \u00b15000 tolerance hides the difference); restored here."
+build:
+  - profile1: {profile: {frame: {origin: [0.0, 0.0, 40.0], z: [0, 0, 1]}, steps: [{plane: {normal: [0.0, 0.0, -1.0], x: [1.0, 0.0, 0.0]}}, {origin: [0.0, 0.0, 40.0]}, {along_y: -200.0}, {along_x: 150.0}, {along_y: 200.0}]}}
+  - prism1: {extrude: {profile: profile1, by: [0.0, 0.0, -40.0]}}
+  - profile2: {profile: {frame: {origin: [0.0, 0.0, 50.0], z: [0, 0, 1]}, steps: [{plane: {normal: [0.0, 0.0, -1.0], x: [1.0, 0.0, 0.0]}}, {origin: [0.0, 0.0, 50.0]}, {start: [25.0, -25.0]}, {along_x: 75.0}, {along_y: -100.0}, {along_x: -75.0}]}}
+  - prism2: {extrude: {profile: profile2, by: [0.0, 0.0, -30.0]}}
+  - cut_op1: {difference: {object: prism1, tool: prism2}}
+  - intermediate: cut_op1
+  - profile3: {profile: {frame: {origin: [0.0, 0.0, 50.0], z: [0, 0, 1]}, steps: [{origin: [0.0, 0.0, 50.0]}, {start: [50.0, 75.0]}, {along_y: 100.0}, {along_x: 75.0}, {along_y: -100.0}]}}
+  - prism3: {extrude: {profile: profile3, by: [0.0, 0.0, -30.0]}}
+  - result: {difference: {object: intermediate, tool: prism3}}
+checks:
+  - {area: result, eq: 98000.0, abs: 9.8}
+---
+case: complex_profile_forward_forward_variation2_i3
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.ComplexProfileForwardForwardVariation2_I3
+notes:
+  - "OCCT's translation drops the `p 0 0 -1 1 0 0` of the DRAW profiles it quotes, which its"
+  - "expected area assumes (its \u00b15000 tolerance hides the difference); restored here."
+build:
+  - profile1: {profile: {frame: {origin: [0.0, 0.0, 40.0], z: [0, 0, 1]}, steps: [{origin: [0.0, 0.0, 40.0]}, {start: [0.0, 50.0]}, {along_x: 150.0}, {along_y: 100.0}, {along_x: -150.0}]}}
+  - prism1: {extrude: {profile: profile1, by: [0.0, 0.0, -40.0]}}
+  - profile2: {profile: {frame: {origin: [0.0, 0.0, 50.0], z: [0, 0, 1]}, steps: [{origin: [0.0, 0.0, 50.0]}, {start: [25.0, 25.0]}, {along_y: 100.0}, {along_x: 75.0}, {along_y: -100.0}]}}
+  - prism2: {extrude: {profile: profile2, by: [0.0, 0.0, -30.0]}}
+  - cut_op1: {difference: {object: prism1, tool: prism2}}
+  - intermediate: cut_op1
+  - profile3: {profile: {frame: {origin: [0.0, 0.0, 50.0], z: [0, 0, 1]}, steps: [{plane: {normal: [0.0, 0.0, -1.0], x: [1.0, 0.0, 0.0]}}, {origin: [0.0, 0.0, 50.0]}, {start: [50.0, -75.0]}, {along_x: 75.0}, {along_y: -100.0}, {along_x: -75.0}]}}
+  - prism3: {extrude: {profile: profile3, by: [0.0, 0.0, -30.0]}}
+  - result: {difference: {object: intermediate, tool: prism3}}
+checks:
+  - {area: result, eq: 52000.0, abs: 5.2}
+---
+case: complex_profile_forward_forward_variation3_i4
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.ComplexProfileForwardForwardVariation3_I4
+notes:
+  - "OCCT's translation drops the `p 0 0 -1 1 0 0` of the DRAW profiles it quotes, which its"
+  - "expected area assumes (its \u00b15000 tolerance hides the difference); restored here."
+build:
+  - profile1: {profile: {frame: {origin: [0.0, 0.0, 40.0], z: [0, 0, 1]}, steps: [{origin: [0.0, 0.0, 40.0]}, {start: [0.0, 50.0]}, {along_x: 150.0}, {along_y: 100.0}, {along_x: -150.0}]}}
+  - prism1: {extrude: {profile: profile1, by: [0.0, 0.0, -40.0]}}
+  - profile2: {profile: {frame: {origin: [0.0, 0.0, 50.0], z: [0, 0, 1]}, steps: [{origin: [0.0, 0.0, 50.0]}, {start: [25.0, 25.0]}, {along_y: 100.0}, {along_x: 75.0}, {along_y: -100.0}]}}
+  - prism2: {extrude: {profile: profile2, by: [0.0, 0.0, -30.0]}}
+  - cut_op1: {difference: {object: prism1, tool: prism2}}
+  - intermediate: cut_op1
+  - profile3: {profile: {frame: {origin: [0.0, 0.0, 50.0], z: [0, 0, 1]}, steps: [{plane: {normal: [0.0, 0.0, -1.0], x: [1.0, 0.0, 0.0]}}, {origin: [0.0, 0.0, 50.0]}, {start: [50.0, -75.0]}, {along_y: -100.0}, {along_x: 75.0}, {along_y: 100.0}]}}
+  - prism3: {extrude: {profile: profile3, by: [0.0, 0.0, -3.0]}}
+  - result: {difference: {object: intermediate, tool: prism3}}
+checks:
+  - {area: result, eq: 53000.0, abs: 5.3}
+---
+case: complex_profile_forward_reversed_variation2_i5
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.ComplexProfileForwardReversedVariation2_I5
+build:
+  - profile1: {profile: {frame: {origin: [0.0, 0.0, 40.0], z: [0, 0, 1]}, steps: [{origin: [0.0, 0.0, 40.0]}, {start: [0.0, 50.0]}, {along_x: 150.0}, {along_y: 100.0}, {along_x: -150.0}]}}
+  - prism1: {extrude: {profile: profile1, by: [0.0, 0.0, -40.0]}}
+  - profile2: {profile: {frame: {origin: [0.0, 0.0, 50.0], z: [0, 0, 1]}, steps: [{origin: [0.0, 0.0, 50.0]}, {start: [25.0, 25.0]}, {along_y: 100.0}, {along_x: 75.0}, {along_y: -100.0}]}}
+  - prism2: {extrude: {profile: profile2, by: [0.0, 0.0, -30.0]}}
+  - cut_op1: {difference: {object: prism1, tool: prism2}}
+  - intermediate: cut_op1
+  - profile3: {profile: {frame: {origin: [0.0, 0.0, 50.0], z: [0, 0, 1]}, steps: [{origin: [0.0, 0.0, 50.0]}, {start: [50.0, 75.0]}, {along_x: 75.0}, {along_y: 100.0}, {along_x: -75.0}]}}
+  - prism3: {extrude: {profile: profile3, by: [0.0, 0.0, -30.0]}}
+  - result: {difference: {object: intermediate, tool: prism3}}
+checks:
+  - {area: result, eq: 52000.0, abs: 5.2}
+---
+case: complex_profile_forward_reversed_variation3_i6
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.ComplexProfileForwardReversedVariation3_I6
+build:
+  - profile1: {profile: {frame: {origin: [0.0, 0.0, 40.0], z: [0, 0, 1]}, steps: [{origin: [0.0, 0.0, 40.0]}, {start: [0.0, 50.0]}, {along_x: 150.0}, {along_y: 100.0}, {along_x: -150.0}]}}
+  - prism1: {extrude: {profile: profile1, by: [0.0, 0.0, -40.0]}}
+  - profile2: {profile: {frame: {origin: [0.0, 0.0, 50.0], z: [0, 0, 1]}, steps: [{origin: [0.0, 0.0, 50.0]}, {start: [25.0, 25.0]}, {along_y: 100.0}, {along_x: 75.0}, {along_y: -100.0}]}}
+  - prism2: {extrude: {profile: profile2, by: [0.0, 0.0, -30.0]}}
+  - cut_op1: {difference: {object: prism1, tool: prism2}}
+  - intermediate: cut_op1
+  - profile3: {profile: {frame: {origin: [0.0, 0.0, 50.0], z: [0, 0, 1]}, steps: [{origin: [0.0, 0.0, 50.0]}, {start: [50.0, 75.0]}, {along_y: 100.0}, {along_x: 75.0}, {along_y: -100.0}]}}
+  - prism3: {extrude: {profile: profile3, by: [0.0, 0.0, -30.0]}}
+  - result: {difference: {object: intermediate, tool: prism3}}
+checks:
+  - {area: result, eq: 52000.0, abs: 5.2}
+---
+case: complex_profile_reversed_forward_variation2_i7
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.ComplexProfileReversedForwardVariation2_I7
+notes:
+  - "OCCT's translation drops the `p 0 0 -1 1 0 0` of the DRAW profiles it quotes, which its"
+  - "expected area assumes (its \u00b15000 tolerance hides the difference); restored here."
+build:
+  - profile1: {profile: {frame: {origin: [0.0, 0.0, 40.0], z: [0, 0, 1]}, steps: [{plane: {normal: [0.0, 0.0, -1.0], x: [1.0, 0.0, 0.0]}}, {origin: [0.0, 0.0, 40.0]}, {start: [0.0, -50.0]}, {along_y: -100.0}, {along_x: 150.0}, {along_y: 100.0}]}}
+  - prism1: {extrude: {profile: profile1, by: [0.0, 0.0, -40.0]}}
+  - profile2: {profile: {frame: {origin: [0.0, 0.0, 50.0], z: [0, 0, 1]}, steps: [{plane: {normal: [0.0, 0.0, -1.0], x: [1.0, 0.0, 0.0]}}, {origin: [0.0, 0.0, 50.0]}, {start: [25.0, -25.0]}, {along_x: 75.0}, {along_y: -100.0}, {along_x: -75.0}]}}
+  - prism2: {extrude: {profile: profile2, by: [0.0, 0.0, -30.0]}}
+  - cut_op1: {difference: {object: prism1, tool: prism2}}
+  - intermediate: cut_op1
+  - profile3: {profile: {frame: {origin: [0.0, 0.0, 50.0], z: [0, 0, 1]}, steps: [{plane: {normal: [0.0, 0.0, -1.0], x: [1.0, 0.0, 0.0]}}, {origin: [0.0, 0.0, 50.0]}, {start: [50.0, -75.0]}, {along_x: 75.0}, {along_y: -100.0}, {along_x: -75.0}]}}
+  - prism3: {extrude: {profile: profile3, by: [0.0, 0.0, -30.0]}}
+  - result: {difference: {object: intermediate, tool: prism3}}
+checks:
+  - {area: result, eq: 52000.0, abs: 5.2}
+---
+case: complex_profile_reversed_forward_variation3_i8
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.ComplexProfileReversedForwardVariation3_I8
+notes:
+  - "OCCT's translation drops the `p 0 0 -1 1 0 0` of the DRAW profiles it quotes, which its"
+  - "expected area assumes (its \u00b15000 tolerance hides the difference); restored here."
+build:
+  - profile1: {profile: {frame: {origin: [0.0, 0.0, 40.0], z: [0, 0, 1]}, steps: [{plane: {normal: [0.0, 0.0, -1.0], x: [1.0, 0.0, 0.0]}}, {origin: [0.0, 0.0, 40.0]}, {start: [0.0, -50.0]}, {along_y: -100.0}, {along_x: 150.0}, {along_y: 100.0}]}}
+  - prism1: {extrude: {profile: profile1, by: [0.0, 0.0, -40.0]}}
+  - profile2: {profile: {frame: {origin: [0.0, 0.0, 50.0], z: [0, 0, 1]}, steps: [{plane: {normal: [0.0, 0.0, -1.0], x: [1.0, 0.0, 0.0]}}, {origin: [0.0, 0.0, 50.0]}, {start: [25.0, -25.0]}, {along_x: 75.0}, {along_y: -100.0}, {along_x: -75.0}]}}
+  - prism2: {extrude: {profile: profile2, by: [0.0, 0.0, -30.0]}}
+  - cut_op1: {difference: {object: prism1, tool: prism2}}
+  - intermediate: cut_op1
+  - profile3: {profile: {frame: {origin: [0.0, 0.0, 50.0], z: [0, 0, 1]}, steps: [{plane: {normal: [0.0, 0.0, -1.0], x: [1.0, 0.0, 0.0]}}, {origin: [0.0, 0.0, 50.0]}, {start: [50.0, -75.0]}, {along_y: -100.0}, {along_x: 75.0}, {along_y: 100.0}]}}
+  - prism3: {extrude: {profile: profile3, by: [0.0, 0.0, -30.0]}}
+  - result: {difference: {object: intermediate, tool: prism3}}
+checks:
+  - {area: result, eq: 52000.0, abs: 5.2}
+---
+case: complex_profile_reversed_reversed_variation2_i9
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Cut_Test.cxx
+  test: BCutSimpleTest.ComplexProfileReversedReversedVariation2_I9
+notes:
+  - "OCCT's translation drops the `p 0 0 -1 1 0 0` of the DRAW profiles it quotes, which its"
+  - "expected area assumes (its \u00b15000 tolerance hides the difference); restored here."
+build:
+  - profile1: {profile: {frame: {origin: [0.0, 0.0, 40.0], z: [0, 0, 1]}, steps: [{plane: {normal: [0.0, 0.0, -1.0], x: [1.0, 0.0, 0.0]}}, {origin: [0.0, 0.0, 40.0]}, {start: [0.0, -50.0]}, {along_y: -100.0}, {along_x: 150.0}, {along_y: 100.0}]}}
+  - prism1: {extrude: {profile: profile1, by: [0.0, 0.0, -40.0]}}
+  - profile2: {profile: {frame: {origin: [0.0, 0.0, 50.0], z: [0, 0, 1]}, steps: [{plane: {normal: [0.0, 0.0, -1.0], x: [1.0, 0.0, 0.0]}}, {origin: [0.0, 0.0, 50.0]}, {start: [25.0, -25.0]}, {along_x: 75.0}, {along_y: -100.0}, {along_x: -75.0}]}}
+  - prism2: {extrude: {profile: profile2, by: [0.0, 0.0, -30.0]}}
+  - cut_op1: {difference: {object: prism1, tool: prism2}}
+  - intermediate: cut_op1
+  - profile3: {profile: {frame: {origin: [0.0, 0.0, 50.0], z: [0, 0, 1]}, steps: [{origin: [0.0, 0.0, 50.0]}, {start: [50.0, 75.0]}, {along_x: 75.0}, {along_y: 100.0}, {along_x: -75.0}]}}
+  - prism3: {extrude: {profile: profile3, by: [0.0, 0.0, -30.0]}}
+  - result: {difference: {object: intermediate, tool: prism3}}
+checks:
+  - {area: result, eq: 52000.0, abs: 5.2}

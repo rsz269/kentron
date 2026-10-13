@@ -1,0 +1,61 @@
+# OCCT GTests moved from crates/occt-tests/tests/gtest_tkprim by hand.
+case: full_sphere
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKPrim/GTests/BRepPrimAPI_MakeSphere_Test.cxx
+  test: BRepPrimAPI_MakeSphereTest.FullSphere
+build:
+  - shape: {sphere: {radius: 5}}
+checks:
+  - {valid: shape}
+---
+case: face_count
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKPrim/GTests/BRepPrimAPI_MakeSphere_Test.cxx
+  test: BRepPrimAPI_MakeSphereTest.FaceCount
+build:
+  - shape: {sphere: {radius: 5}}
+checks:
+  - {count: shape, occurrences: true, eq: {faces: 1}}
+---
+case: volume
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKPrim/GTests/BRepPrimAPI_MakeSphere_Test.cxx
+  test: BRepPrimAPI_MakeSphereTest.Volume
+build:
+  - shape: {sphere: {radius: 5}}
+checks:
+  - {volume: shape, eq: "4/3*pi*5^3", abs: 0.01}
+---
+case: partial_sphere_angle_limited
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKPrim/GTests/BRepPrimAPI_MakeSphere_Test.cxx
+  test: BRepPrimAPI_MakeSphereTest.PartialSphere_AngleLimited
+build:
+  - shape: {sphere: {radius: 5, angle: 180}}
+checks:
+  - {valid: shape}
+  - {count: shape, occurrences: true, gt: {faces: 1}}
+---
+case: center_of_mass
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKPrim/GTests/BRepPrimAPI_MakeSphere_Test.cxx
+  test: BRepPrimAPI_MakeSphereTest.CenterOfMass
+build:
+  - shape: {sphere: {radius: 5}}
+checks:
+  - {centroid: shape, eq: [0, 0, 0], abs: 1.0e-7}

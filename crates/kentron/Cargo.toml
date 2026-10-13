@@ -1,0 +1,20 @@
+[package]
+name = "kentron"
+version = "0.11.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "A boundary-representation CAD kernel: solids over exact curves and surfaces, with booleans, fillets, offsets, sweeps and lofts, modelled on Open CASCADE (OCCT)."
+readme = "../../README.md"
+keywords = ["cad", "brep", "geometry", "solid-modeling", "nurbs"]
+categories = ["mathematics", "graphics", "science"]
+
+[dependencies]
+rayon = { version = "1.11", optional = true }
+
+[features]
+default = ["parallel"]
+# Independent steps of operations (pairs of faces to intersect, ...) run on a thread pool.
+parallel = ["dep:rayon"]

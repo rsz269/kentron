@@ -1,0 +1,162 @@
+# STEP files from BRL-CAD's sources (see crates/occt-tests/README.md), checked against OCCT's reading of them.
+case: nist_mbe_pmi_1
+ported_from:
+  project: BRL-CAD
+  repo: https://github.com/BRL-CAD/brlcad
+  file: db/nist/NIST_MBE_PMI_1.stp
+notes:
+  - "NIST MBE PMI test part 1 (a solid of 113 faces). Expected values: OCCT's reading of the file (DRAW stepread; sprops/vprops at 1e-9; nbshapes)."
+build:
+  - result: {load: {step: "NIST_MBE_PMI_1.stp"}}
+checks:
+  - {valid: result}
+  - {count: result, eq: {faces: 113, solids: 1, shells: 1, edges: 314}}
+  - {area: result, eq: 807327, rel: 1.0e-4}
+  - {volume: result, eq: 1.46431e+07, rel: 1.0e-4}
+---
+case: nist_mbe_pmi_2
+ported_from:
+  project: BRL-CAD
+  repo: https://github.com/BRL-CAD/brlcad
+  file: db/nist/NIST_MBE_PMI_2.stp
+notes:
+  - "NIST MBE PMI test part 2 (597 faces, edges up to 0.01 off their B-spline faces). Expected values: OCCT's reading of the file (DRAW stepread; sprops/vprops at 1e-9; nbshapes)."
+build:
+  - result: {load: {step: "NIST_MBE_PMI_2.stp"}}
+checks:
+  - {valid: result}
+  - {count: result, eq: {faces: 597, solids: 1, shells: 1, edges: 1581}}
+  - {area: result, eq: 2.46382e+06, rel: 1.0e-4}
+  - {volume: result, eq: 4.66944e+07, rel: 1.0e-4}
+---
+case: nist_mbe_pmi_3
+ported_from:
+  project: BRL-CAD
+  repo: https://github.com/BRL-CAD/brlcad
+  file: db/nist/NIST_MBE_PMI_3.stp
+notes:
+  - "NIST MBE PMI test part 3. Expected values: OCCT's reading of the file (DRAW stepread; sprops/vprops at 1e-9; nbshapes)."
+build:
+  - result: {load: {step: "NIST_MBE_PMI_3.stp"}}
+checks:
+  - {valid: result}
+  - {count: result, eq: {faces: 120, solids: 1, shells: 1, edges: 390}}
+  - {area: result, eq: 353029, rel: 1.0e-4}
+  - {volume: result, eq: 313108, rel: 1.0e-4}
+---
+case: nist_mbe_pmi_4
+ported_from:
+  project: BRL-CAD
+  repo: https://github.com/BRL-CAD/brlcad
+  file: db/nist/NIST_MBE_PMI_4.stp
+notes:
+  - "NIST MBE PMI test part 4 (495 faces, sphere-like B-spline faces with poles). Expected values: OCCT's reading of the file (DRAW stepread; sprops/vprops at 1e-9; nbshapes)."
+build:
+  - result: {load: {step: "NIST_MBE_PMI_4.stp"}}
+checks:
+  - {valid: result}
+  - {count: result, eq: {faces: 495, solids: 1, shells: 1, edges: 1212}}
+  - {area: result, eq: 1.00869e+06, rel: 1.0e-4}
+  - {volume: result, eq: 1.73645e+07, rel: 1.0e-4}
+---
+case: nist_mbe_pmi_5
+ported_from:
+  project: BRL-CAD
+  repo: https://github.com/BRL-CAD/brlcad
+  file: db/nist/NIST_MBE_PMI_5.stp
+notes:
+  - "NIST MBE PMI test part 5. Expected values: OCCT's reading of the file (DRAW stepread; sprops/vprops at 1e-9; nbshapes)."
+build:
+  - result: {load: {step: "NIST_MBE_PMI_5.stp"}}
+checks:
+  - {valid: result}
+  - {count: result, eq: {faces: 163, solids: 1, shells: 1, edges: 426}}
+  - {area: result, eq: 857522, rel: 1.0e-4}
+  - {volume: result, eq: 1.27099e+07, rel: 1.0e-4}
+---
+case: nist_mbe_pmi_6
+ported_from:
+  project: BRL-CAD
+  repo: https://github.com/BRL-CAD/brlcad
+  file: db/nist/NIST_MBE_PMI_6.stp
+notes:
+  - "NIST MBE PMI test part 6 (faces on closed B-spline surfaces bounded at their seams and poles). Expected values: OCCT's reading of the file (DRAW stepread; sprops/vprops at 1e-9; nbshapes)."
+build:
+  - result: {load: {step: "NIST_MBE_PMI_6.stp"}}
+checks:
+  - {valid: result}
+  - {count: result, eq: {faces: 152, solids: 1, shells: 1, edges: 470}}
+  - {area: result, eq: 282233, rel: 1.0e-4}
+  - {volume: result, eq: 3.32811e+06, rel: 1.0e-4}
+---
+case: nist_mbe_pmi_11
+ported_from:
+  project: BRL-CAD
+  repo: https://github.com/BRL-CAD/brlcad
+  file: db/nist/NIST_MBE_PMI_11.stp
+notes:
+  - "NIST MBE PMI test part 11 (cylinders as closed rational B-spline surfaces). Expected values: OCCT's reading of the file (DRAW stepread; sprops/vprops at 1e-9; nbshapes)."
+build:
+  - result: {load: {step: "NIST_MBE_PMI_11.stp"}}
+checks:
+  - {valid: result}
+  - {count: result, eq: {faces: 10, solids: 1, shells: 1, edges: 26}}
+  - {area: result, eq: 5474.48, rel: 1.0e-4}
+  - {volume: result, eq: 5129.39, rel: 1.0e-4}
+---
+case: freecad_surface
+ported_from:
+  project: BRL-CAD
+  repo: https://github.com/BRL-CAD/brlcad
+  file: src/libbrep/tests/freecad_surface.stp
+notes:
+  - "a single B-spline face exported by FreeCAD. Expected values: OCCT's reading of the file (DRAW stepread; sprops/vprops at 1e-9; nbshapes)."
+build:
+  - result: {load: {step: "freecad_surface.stp"}}
+checks:
+  - {valid: result}
+  - {count: result, eq: {faces: 1, shells: 1, edges: 4}}
+  - {area: result, eq: 11.5066, rel: 1.0e-4}
+---
+case: plate_mode_samples_creo
+ported_from:
+  project: BRL-CAD
+  repo: https://github.com/BRL-CAD/brlcad
+  file: src/libbrep/tests/plate_mode_samples_creo.stp
+notes:
+  - "surfaces bounded by curves on them (CURVE_BOUNDED_SURFACE) in a geometric set, exported by Creo, angles in degrees. Expected values: OCCT's reading of the file (DRAW stepread; sprops/vprops at 1e-9; nbshapes)."
+  - "Edges not counted: the file bounds adjacent faces by the same trimmed curves, which kentron makes one shared edge and OCCT one edge per face (64 edges against OCCT's 86)."
+build:
+  - result: {load: {step: "plate_mode_samples_creo.stp"}}
+checks:
+  - {valid: result}
+  - {count: result, eq: {faces: 22, shells: 0}}
+  - {area: result, eq: 6.60902e+09, rel: 1.0e-4}
+---
+case: plate_mode_samples_rhino
+ported_from:
+  project: BRL-CAD
+  repo: https://github.com/BRL-CAD/brlcad
+  file: src/libbrep/tests/plate_mode_samples_rhino.stp
+notes:
+  - "open shells exported by Rhino, seams of closed B-spline surfaces used twice. Expected values: OCCT's reading of the file (DRAW stepread; sprops/vprops at 1e-9; nbshapes)."
+build:
+  - result: {load: {step: "plate_mode_samples_rhino.stp"}}
+checks:
+  - {valid: result}
+  - {count: result, eq: {faces: 8, shells: 4, edges: 21}}
+  - {area: result, eq: 2.82924e+09, rel: 1.0e-4}
+---
+case: vsp
+ported_from:
+  project: BRL-CAD
+  repo: https://github.com/BRL-CAD/brlcad
+  file: src/libbrep/tests/vsp.stp
+notes:
+  - "untrimmed B-spline surfaces in a geometric set, exported by OpenVSP (piecewise Bézier, C0 at their knots). Expected values: OCCT's reading of the file (DRAW stepread; sprops/vprops at 1e-9; nbshapes)."
+build:
+  - result: {load: {step: "vsp.stp"}}
+checks:
+  - {valid: result}
+  - {count: result, eq: {faces: 12, shells: 0, edges: 48}}
+  - {area: result, eq: 8.72771e+06, rel: 1.0e-4}

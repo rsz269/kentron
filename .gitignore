@@ -1,0 +1,8 @@
+/target
+__pycache__/
+*.abi3.so
+# Scratch probes (kept locally, not in the repository)
+/crates/occt-tests/examples/
+/crates/kentron/examples/*
+!/crates/kentron/examples/kernel_bench.rs
+!/crates/kentron/examples/boolean_bench.rs

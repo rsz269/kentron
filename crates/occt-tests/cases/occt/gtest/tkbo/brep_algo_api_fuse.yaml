@@ -1,0 +1,1576 @@
+# OCCT GTests moved from crates/occt-tests/tests/gtest_tkbo/brep_algo_api_fuse.rs by tools/gtest2yaml.py.
+case: sphere_plus_box_a1
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.SpherePlusBox_A1
+build:
+  - sphere: {sphere: {radius: 1}}
+  - box_: {box: {size: [1, 1, 1]}}
+  - result: {union: {object: sphere, tool: box_}}
+checks:
+  - {area: result, eq: 14.6394, abs: 0.0014639400000000002}
+---
+case: rotated_sphere_plus_box_a2
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.RotatedSpherePlusBox_A2
+build:
+  - sphere: {sphere: {radius: 1}}
+  - t2: {rotate: {shape: sphere, axis: {origin: [0, 0, 0], direction: [0, 0, 1]}, angle: -90.0}}
+  - rotated_sphere: {rotate: {shape: t2, axis: {origin: [0, 0, 0], direction: [0, 1, 0]}, angle: -45.0}}
+  - box_: {box: {size: [1, 1, 1]}}
+  - result: {union: {object: rotated_sphere, tool: box_}}
+checks:
+  - {area: result, eq: 14.6393, abs: 0.00146393}
+---
+case: box_plus_rotated_sphere_a3
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.BoxPlusRotatedSphere_A3
+build:
+  - sphere: {sphere: {radius: 1}}
+  - t2: {rotate: {shape: sphere, axis: {origin: [0, 0, 0], direction: [0, 0, 1]}, angle: -90.0}}
+  - rotated_sphere: {rotate: {shape: t2, axis: {origin: [0, 0, 0], direction: [0, 1, 0]}, angle: -45.0}}
+  - box_: {box: {size: [1, 1, 1]}}
+  - result: {union: {object: box_, tool: rotated_sphere}}
+checks:
+  - {area: result, eq: 14.6393, abs: 0.00146393}
+---
+case: sphere_plus_rotated_box_a4
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.SpherePlusRotatedBox_A4
+build:
+  - sphere: {sphere: {radius: 1}}
+  - box_: {box: {size: [1, 1, 1]}}
+  - rotated_box: {rotate: {shape: box_, axis: {origin: [0, 0, 0], direction: [0, 1, 0]}, angle: 90.0}}
+  - result: {union: {object: sphere, tool: rotated_box}}
+checks:
+  - {area: result, eq: 14.6393, abs: 0.00146393}
+---
+case: rotated_box_plus_sphere_a5
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.RotatedBoxPlusSphere_A5
+build:
+  - sphere: {sphere: {radius: 1}}
+  - box_: {box: {size: [1, 1, 1]}}
+  - rotated_box: {rotate: {shape: box_, axis: {origin: [0, 0, 0], direction: [0, 1, 0]}, angle: 90.0}}
+  - result: {union: {object: rotated_box, tool: sphere}}
+checks:
+  - {area: result, eq: 14.6393, abs: 0.00146393}
+---
+case: identical_nurbs_box_plus_box_a6
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.IdenticalNurbsBoxPlusBox_A6
+build:
+  - box1: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - box1: {to_nurbs: {shape: box1}}
+  - box2: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - result: {union: {object: box1, tool: box2}}
+checks:
+  - {area: result, eq: 6.0, abs: 0.0006000000000000001}
+---
+case: identical_box_plus_nurbs_box_a7
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.IdenticalBoxPlusNurbsBox_A7
+build:
+  - box1: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - box2: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - box2: {to_nurbs: {shape: box2}}
+  - result: {union: {object: box1, tool: box2}}
+checks:
+  - {area: result, eq: 6.0, abs: 0.0006000000000000001}
+---
+case: nurbs_box_plus_larger_box_a8
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.NurbsBoxPlusLargerBox_A8
+build:
+  - box1: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - box1: {to_nurbs: {shape: box1}}
+  - box2: {box: {corner: [-0.5, -0.5, -0.5], size: [2.0, 2.0, 2.0]}}
+  - result: {union: {object: box1, tool: box2}}
+checks:
+  - {area: result, eq: 24.0, abs: 0.0024000000000000002}
+---
+case: larger_box_plus_nurbs_box_a9
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.LargerBoxPlusNurbsBox_A9
+build:
+  - box1: {box: {corner: [-0.5, -0.5, -0.5], size: [2.0, 2.0, 2.0]}}
+  - box2: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - box2: {to_nurbs: {shape: box2}}
+  - result: {union: {object: box1, tool: box2}}
+checks:
+  - {area: result, eq: 24.0, abs: 0.0024000000000000002}
+---
+case: nurbs_box_plus_box_b1
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.NurbsBoxPlusBox_B1
+build:
+  - box1: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - box1: {to_nurbs: {shape: box1}}
+  - box2: {box: {corner: [0.0, 0.0, 0.0], size: [0.5, 1.0, 0.5]}}
+  - result: {union: {object: box2, tool: box1}}
+checks:
+  - {area: result, eq: 6.0, abs: 0.0006000000000000001}
+---
+case: box_plus_nurbs_box_b2
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.BoxPlusNurbsBox_B2
+build:
+  - box1: {box: {corner: [0.0, -0.5, 0.0], size: [0.5, 0.5, 1.0]}}
+  - box2: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - box2: {to_nurbs: {shape: box2}}
+  - result: {union: {object: box1, tool: box2}}
+checks:
+  - {area: result, eq: 7.5, abs: 0.00075}
+---
+case: nurbs_box_plus_adjacent_box_b3
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.NurbsBoxPlusAdjacentBox_B3
+build:
+  - box1: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - box1: {to_nurbs: {shape: box1}}
+  - box2: {box: {corner: [0.0, -0.5, 0.0], size: [0.5, 1.5, 1.0]}}
+  - result: {union: {object: box2, tool: box1}}
+checks:
+  - {area: result, eq: 7.5, abs: 0.00075}
+---
+case: adjacent_box_plus_nurbs_box_b4
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.AdjacentBoxPlusNurbsBox_B4
+build:
+  - box1: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - box1: {to_nurbs: {shape: box1}}
+  - box2: {box: {corner: [0.0, 0.5, 0.0], size: [1.0, 1.0, 1.0]}}
+  - result: {union: {object: box2, tool: box1}}
+checks:
+  - {area: result, eq: 8.0, abs: 0.0008}
+---
+case: nurbs_box_plus_smaller_box_b5
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.NurbsBoxPlusSmallerBox_B5
+build:
+  - box1: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - box1: {to_nurbs: {shape: box1}}
+  - box2: {box: {corner: [0.25, 0.25, 0.25], size: [0.5, 0.5, 0.5]}}
+  - result: {union: {object: box1, tool: box2}}
+checks:
+  - {area: result, eq: 6.0, abs: 0.0006000000000000001}
+---
+case: smaller_box_plus_nurbs_box_b6
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.SmallerBoxPlusNurbsBox_B6
+build:
+  - box1: {box: {corner: [0.25, 0.25, 0.25], size: [0.5, 0.5, 0.5]}}
+  - box2: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - box2: {to_nurbs: {shape: box2}}
+  - result: {union: {object: box1, tool: box2}}
+checks:
+  - {area: result, eq: 6.0, abs: 0.0006000000000000001}
+---
+case: nurbs_box_plus_partially_overlapping_box_b7
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.NurbsBoxPlusPartiallyOverlappingBox_B7
+notes:
+  - "OCCT's expected area does not match these boxes (they differ from the DRAW script the"
+  - "test cites; its \u00b15000 tolerance hides it): this is the area of the shapes built here."
+build:
+  - box1: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - box1: {to_nurbs: {shape: box1}}
+  - box2: {box: {corner: [0.5, 0.5, 0.5], size: [1.0, 1.0, 1.0]}}
+  - result: {union: {object: box1, tool: box2}}
+checks:
+  - {area: result, eq: 10.5, abs: 0.0010500000000000002}
+---
+case: partially_overlapping_box_plus_nurbs_box_b8
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.PartiallyOverlappingBoxPlusNurbsBox_B8
+notes:
+  - "OCCT's expected area does not match these boxes (they differ from the DRAW script the"
+  - "test cites; its \u00b15000 tolerance hides it): this is the area of the shapes built here."
+build:
+  - box1: {box: {corner: [0.5, 0.5, 0.5], size: [1.0, 1.0, 1.0]}}
+  - box2: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - box2: {to_nurbs: {shape: box2}}
+  - result: {union: {object: box1, tool: box2}}
+checks:
+  - {area: result, eq: 10.5, abs: 0.0010500000000000002}
+---
+case: nurbs_box_plus_extended_box_b9
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.NurbsBoxPlusExtendedBox_B9
+build:
+  - box1: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - box1: {to_nurbs: {shape: box1}}
+  - box2: {box: {corner: [-0.5, -0.5, -0.5], size: [2.0, 2.0, 2.0]}}
+  - result: {union: {object: box1, tool: box2}}
+checks:
+  - {area: result, eq: 24.0, abs: 0.0024000000000000002}
+---
+case: extended_box_plus_nurbs_box_c1
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.ExtendedBoxPlusNurbsBox_C1
+build:
+  - box1: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - box1: {to_nurbs: {shape: box1}}
+  - box2: {box: {corner: [0.0, 0.0, 0.0], size: [1.5, 0.5, 0.5]}}
+  - result: {union: {object: box2, tool: box1}}
+checks:
+  - {area: result, eq: 7.0, abs: 0.0007}
+---
+case: nurbs_box_plus_shifted_box_c2
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.NurbsBoxPlusShiftedBox_C2
+build:
+  - box1: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - box1: {to_nurbs: {shape: box1}}
+  - box2: {box: {corner: [0.0, -0.5, 0.0], size: [1.5, 0.5, 0.5]}}
+  - result: {union: {object: box2, tool: box1}}
+checks:
+  - {area: result, eq: 8.5, abs: 0.0008500000000000001}
+---
+case: shifted_box_plus_nurbs_box_c3
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.ShiftedBoxPlusNurbsBox_C3
+build:
+  - box1: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - box1: {to_nurbs: {shape: box1}}
+  - box2: {box: {corner: [0.25, 0.0, 0.0], size: [0.5, 0.5, 1.0]}}
+  - result: {union: {object: box2, tool: box1}}
+checks:
+  - {area: result, eq: 6.0, abs: 0.0006000000000000001}
+---
+case: nurbs_box_plus_narrow_box_c4
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.NurbsBoxPlusNarrowBox_C4
+notes:
+  - "OCCT's expected area does not match these boxes (they differ from the DRAW script the"
+  - "test cites; its \u00b15000 tolerance hides it): this is the area of the shapes built here."
+build:
+  - box1: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - box1: {to_nurbs: {shape: box1}}
+  - box2: {box: {corner: [0.25, 0.25, 0.0], size: [0.5, 0.5, 1.5]}}
+  - result: {union: {object: box1, tool: box2}}
+checks:
+  - {area: result, eq: 7.0, abs: 0.0007}
+---
+case: narrow_box_plus_nurbs_box_c5
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.NarrowBoxPlusNurbsBox_C5
+notes:
+  - "OCCT's expected area does not match these boxes (they differ from the DRAW script the"
+  - "test cites; its \u00b15000 tolerance hides it): this is the area of the shapes built here."
+build:
+  - box1: {box: {corner: [0.25, 0.25, 0.0], size: [0.5, 0.5, 1.5]}}
+  - box2: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - box2: {to_nurbs: {shape: box2}}
+  - result: {union: {object: box1, tool: box2}}
+checks:
+  - {area: result, eq: 7.0, abs: 0.0007}
+---
+case: nurbs_box_plus_corner_cube_c6
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.NurbsBoxPlusCornerCube_C6
+build:
+  - box1: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - box1: {to_nurbs: {shape: box1}}
+  - box2: {box: {corner: [0.5, 0.5, 0.5], size: [0.5, 0.5, 0.5]}}
+  - result: {union: {object: box1, tool: box2}}
+checks:
+  - {area: result, eq: 6.0, abs: 0.0006000000000000001}
+---
+case: corner_cube_plus_nurbs_box_c7
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.CornerCubePlusNurbsBox_C7
+build:
+  - box1: {box: {corner: [0.5, 0.5, 0.5], size: [0.5, 0.5, 0.5]}}
+  - box2: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - box2: {to_nurbs: {shape: box2}}
+  - result: {union: {object: box1, tool: box2}}
+checks:
+  - {area: result, eq: 6.0, abs: 0.0006000000000000001}
+---
+case: nurbs_box_plus_offset_cube_c8
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.NurbsBoxPlusOffsetCube_C8
+notes:
+  - "OCCT's expected area does not match these boxes (they differ from the DRAW script the"
+  - "test cites; its \u00b15000 tolerance hides it): this is the area of the shapes built here."
+build:
+  - box1: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - box1: {to_nurbs: {shape: box1}}
+  - box2: {box: {corner: [1.0, 1.0, 0.0], size: [0.5, 0.5, 1.0]}}
+  - result: {union: {object: box1, tool: box2}}
+checks:
+  - {area: result, eq: 8.5, abs: 0.0008500000000000001}
+---
+case: offset_cube_plus_nurbs_box_c9
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.OffsetCubePlusNurbsBox_C9
+notes:
+  - "OCCT's expected area does not match these boxes (they differ from the DRAW script the"
+  - "test cites; its \u00b15000 tolerance hides it): this is the area of the shapes built here."
+build:
+  - box1: {box: {corner: [1.0, 1.0, 0.0], size: [0.5, 0.5, 1.0]}}
+  - box2: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - box2: {to_nurbs: {shape: box2}}
+  - result: {union: {object: box1, tool: box2}}
+checks:
+  - {area: result, eq: 8.5, abs: 0.0008500000000000001}
+---
+case: nurbs_box_plus_rotated_narrow_box_d1
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.NurbsBoxPlusRotatedNarrowBox_D1
+build:
+  - box1: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - box1: {to_nurbs: {shape: box1}}
+  - box2: {box: {corner: [0.0, 0.0, 0.0], size: [1.4142135623730951, 0.25, 1.0]}}
+  - box2: {rotate: {shape: box2, axis: {origin: [0.0, 0.0, 0.0], direction: [0, 0, 1]}, angle: 45.0}}
+  - result: {union: {object: box2, tool: box1}}
+checks:
+  - {area: result, eq: 6.41789, abs: 0.000641789}
+---
+case: nurbs_box_plus_rotated_narrow_box_variation_d2
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.NurbsBoxPlusRotatedNarrowBoxVariation_D2
+build:
+  - box1: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - box1: {to_nurbs: {shape: box1}}
+  - box2: {box: {corner: [0.0, 0.0, 0.0], size: [1.3919410907075054, 0.25, 1.0]}}
+  - box2: {rotate: {shape: box2, axis: {origin: [0.0, 0.0, 0.0], direction: [0, 0, 1]}, angle: 34.73}}
+  - result: {union: {object: box2, tool: box1}}
+checks:
+  - {area: result, eq: 6.32953, abs: 0.000632953}
+---
+case: sphere_plus_box_d3
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.SpherePlusBox_D3
+build:
+  - sphere: {sphere: {radius: 1.0, frame: {origin: [0.0, 0.0, 0.0], z: [0, 0, 1], x: [1, 0, 0]}}}
+  - box_: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - result: {union: {object: sphere, tool: box_}}
+checks:
+  - {area: result, eq: 14.6394, abs: 0.0014639400000000002}
+---
+case: box_plus_sphere_d4
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.BoxPlusSphere_D4
+build:
+  - sphere: {sphere: {radius: 1.0, frame: {origin: [0.0, 0.0, 0.0], z: [0, 0, 1], x: [1, 0, 0]}}}
+  - box_: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - result: {union: {object: box_, tool: sphere}}
+checks:
+  - {area: result, eq: 14.6394, abs: 0.0014639400000000002}
+---
+case: sphere_plus_rotated_box_d7
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.SpherePlusRotatedBox_D7
+build:
+  - sphere: {sphere: {radius: 1.0, frame: {origin: [0.0, 0.0, 0.0], z: [0, 0, 1], x: [1, 0, 0]}}}
+  - box_: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - box_: {rotate: {shape: box_, axis: {origin: [0.0, 0.0, 1.0], direction: [0, 1, 0]}, angle: 90.0}}
+  - result: {union: {object: sphere, tool: box_}}
+checks:
+  - {area: result, eq: 14.6393, abs: 0.00146393}
+---
+case: rotated_box_plus_sphere_d8
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.RotatedBoxPlusSphere_D8
+build:
+  - sphere: {sphere: {radius: 1.0, frame: {origin: [0.0, 0.0, 0.0], z: [0, 0, 1], x: [1, 0, 0]}}}
+  - box_: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - box_: {rotate: {shape: box_, axis: {origin: [0.0, 0.0, 1.0], direction: [0, 1, 0]}, angle: 90.0}}
+  - result: {union: {object: box_, tool: sphere}}
+checks:
+  - {area: result, eq: 14.6393, abs: 0.00146393}
+---
+case: adjacent_boxes_e2
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.AdjacentBoxes_E2
+build:
+  - box1: {box: {corner: [0.0, 0.0, 0.0], size: [3.0, 3.0, 3.0]}}
+  - box2: {box: {corner: [0.0, 3.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - result: {union: {object: box1, tool: box2}}
+checks:
+  - {area: result, eq: 58.0, abs: 0.0058000000000000005}
+---
+case: complex_vertex_edge_wire_revolution_e3
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.ComplexVertexEdgeWireRevolution_E3
+build:
+  - wire: {polyline: {points: [[0.0, 0.0, 0.0], [9.0, 0.0, 0.0], [9.0, 0.0, 3.0], [6.25, 0.0, 3.0], [6.0, 0.0, 4.0], [0.0, 0.0, 4.0], [0.0, 0.0, 0.0]]}}
+  - face: {face: {wire: wire}}
+  - revolution: {revolve: {profile: face, axis: {origin: [0.0, 0.0, 0.0], direction: [0, 0, 1]}, angle: 360.0}}
+  - cylinder: {cylinder: {radius: 1.0, height: 9.0}}
+  - cylinder: {translate: {shape: cylinder, by: [5.0, 0.0, -2.0]}}
+  - result: {union: {object: revolution, tool: cylinder}}
+checks:
+  - {area: result, eq: 740.048, abs: 0.07400480000000001}
+---
+case: cylinder_with_complex_wire_revolution_e4
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.CylinderWithComplexWireRevolution_E4
+build:
+  - cylinder: {cylinder: {radius: 3.0, height: 5.0}}
+  - wire: {polyline: {points: [[0.0, 3.0, 2.0], [0.0, 4.0, 2.0], [0.0, 4.0, 3.0], [0.0, 3.0, 3.0], [0.0, 3.0, 2.0]]}}
+  - face: {face: {wire: wire}}
+  - ring: {revolve: {profile: face, axis: {origin: [0.0, 0.0, 0.0], direction: [0, 0, 1]}, angle: 269.0}}
+  - result: {union: {object: cylinder, tool: ring}}
+checks:
+  - {area: result, eq: 190.356, abs: 0.0190356}
+---
+case: box_with_prism_from_vertex_edge_e5
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.BoxWithPrismFromVertexEdge_E5
+build:
+  - box_: {box: {corner: [3.0, 3.0, 0.0], size: [5.0, 7.0, 4.0]}}
+  - wire: {polyline: {points: [[3.0, 2.0, 0.0], [4.0, 2.0, 0.0], [4.0, 3.0, 0.0], [3.0, 3.0, 0.0], [3.0, 2.0, 0.0]]}}
+  - face: {face: {wire: wire}}
+  - prism: {extrude: {profile: face, by: [0.0, 0.0, 1.0]}}
+  - result: {union: {object: box_, tool: prism}}
+checks:
+  - {area: result, eq: 170.0, abs: 0.017}
+---
+case: box_with_prism_from_front_e6
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.BoxWithPrismFromFront_E6
+build:
+  - box_: {box: {corner: [3.0, 3.0, 0.0], size: [5.0, 7.0, 4.0]}}
+  - wire: {polyline: {points: [[3.0, 2.0, 0.0], [4.0, 2.0, 0.0], [4.0, 2.0, 1.0], [3.0, 2.0, 1.0], [3.0, 2.0, 0.0]]}}
+  - face: {face: {wire: wire}}
+  - prism: {extrude: {profile: face, by: [0.0, 1.0, 0.0]}}
+  - result: {union: {object: box_, tool: prism}}
+checks:
+  - {area: result, eq: 170.0, abs: 0.017}
+---
+case: box_with_prism_from_left_e7
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.BoxWithPrismFromLeft_E7
+build:
+  - box_: {box: {corner: [3.0, 3.0, 0.0], size: [5.0, 7.0, 4.0]}}
+  - wire: {polyline: {points: [[3.0, 2.0, 0.0], [3.0, 3.0, 0.0], [3.0, 3.0, 1.0], [3.0, 2.0, 1.0], [3.0, 2.0, 0.0]]}}
+  - face: {face: {wire: wire}}
+  - prism: {extrude: {profile: face, by: [1.0, 0.0, 0.0]}}
+  - result: {union: {object: box_, tool: prism}}
+checks:
+  - {area: result, eq: 170.0, abs: 0.017}
+---
+case: box_with_prism_from_top_e8
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.BoxWithPrismFromTop_E8
+build:
+  - box_: {box: {corner: [3.0, 3.0, 0.0], size: [5.0, 7.0, 4.0]}}
+  - wire: {polyline: {points: [[3.0, 2.0, 1.0], [4.0, 2.0, 1.0], [4.0, 3.0, 1.0], [3.0, 3.0, 1.0], [3.0, 2.0, 1.0]]}}
+  - face: {face: {wire: wire}}
+  - prism: {extrude: {profile: face, by: [0.0, 0.0, -1.0]}}
+  - result: {union: {object: box_, tool: prism}}
+checks:
+  - {area: result, eq: 170.0, abs: 0.017}
+---
+case: box_with_prism_from_back_e9
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.BoxWithPrismFromBack_E9
+build:
+  - box_: {box: {corner: [3.0, 3.0, 0.0], size: [5.0, 7.0, 4.0]}}
+  - wire: {polyline: {points: [[3.0, 3.0, 0.0], [4.0, 3.0, 0.0], [4.0, 3.0, 1.0], [3.0, 3.0, 1.0], [3.0, 3.0, 0.0]]}}
+  - face: {face: {wire: wire}}
+  - prism: {extrude: {profile: face, by: [0.0, -1.0, 0.0]}}
+  - result: {union: {object: box_, tool: prism}}
+checks:
+  - {area: result, eq: 170.0, abs: 0.017}
+---
+case: box_with_prism_from_right_f1
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.BoxWithPrismFromRight_F1
+build:
+  - box_: {box: {corner: [3.0, 3.0, 0.0], size: [5.0, 7.0, 4.0]}}
+  - wire: {polyline: {points: [[4.0, 2.0, 0.0], [4.0, 3.0, 0.0], [4.0, 3.0, 1.0], [4.0, 2.0, 1.0], [4.0, 2.0, 0.0]]}}
+  - face: {face: {wire: wire}}
+  - prism: {extrude: {profile: face, by: [-1.0, 0.0, 0.0]}}
+  - result: {union: {object: box_, tool: prism}}
+checks:
+  - {area: result, eq: 170.0, abs: 0.017}
+---
+case: box_with_prism_from_bottom_different_f2
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.BoxWithPrismFromBottomDifferent_F2
+build:
+  - box_: {box: {corner: [3.0, 3.0, 0.0], size: [5.0, 7.0, 4.0]}}
+  - wire: {polyline: {points: [[4.0, 3.0, 0.0], [4.0, 2.0, 0.0], [3.0, 2.0, 0.0], [3.0, 3.0, 0.0], [4.0, 3.0, 0.0]]}}
+  - face: {face: {wire: wire}}
+  - prism: {extrude: {profile: face, by: [0.0, 0.0, 1.0]}}
+  - result: {union: {object: box_, tool: prism}}
+checks:
+  - {area: result, eq: 170.0, abs: 0.017}
+---
+case: box_with_prism_from_bottom_external_f3
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.BoxWithPrismFromBottomExternal_F3
+build:
+  - box_: {box: {corner: [3.0, 3.0, 0.0], size: [5.0, 7.0, 4.0]}}
+  - wire: {polyline: {points: [[8.0, 3.0, 0.0], [9.0, 3.0, 0.0], [9.0, 4.0, 0.0], [8.0, 4.0, 0.0], [8.0, 3.0, 0.0]]}}
+  - face: {face: {wire: wire}}
+  - prism: {extrude: {profile: face, by: [0.0, 0.0, 1.0]}}
+  - result: {union: {object: box_, tool: prism}}
+checks:
+  - {area: result, eq: 170.0, abs: 0.017}
+---
+case: box_with_prism_from_front_external_f4
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.BoxWithPrismFromFrontExternal_F4
+build:
+  - box_: {box: {corner: [3.0, 3.0, 0.0], size: [5.0, 7.0, 4.0]}}
+  - wire: {polyline: {points: [[8.0, 3.0, 0.0], [9.0, 3.0, 0.0], [9.0, 3.0, 1.0], [8.0, 3.0, 1.0], [8.0, 3.0, 0.0]]}}
+  - face: {face: {wire: wire}}
+  - prism: {extrude: {profile: face, by: [0.0, 1.0, 0.0]}}
+  - result: {union: {object: box_, tool: prism}}
+checks:
+  - {area: result, eq: 170.0, abs: 0.017}
+---
+case: box_with_prism_from_left_external_f5
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.BoxWithPrismFromLeftExternal_F5
+build:
+  - box_: {box: {corner: [3.0, 3.0, 0.0], size: [5.0, 7.0, 4.0]}}
+  - wire: {polyline: {points: [[8.0, 3.0, 0.0], [8.0, 4.0, 0.0], [8.0, 4.0, 1.0], [8.0, 3.0, 1.0], [8.0, 3.0, 0.0]]}}
+  - face: {face: {wire: wire}}
+  - prism: {extrude: {profile: face, by: [1.0, 0.0, 0.0]}}
+  - result: {union: {object: box_, tool: prism}}
+checks:
+  - {area: result, eq: 170.0, abs: 0.017}
+---
+case: box_with_prism_from_top_external_f6
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.BoxWithPrismFromTopExternal_F6
+build:
+  - box_: {box: {corner: [3.0, 3.0, 0.0], size: [5.0, 7.0, 4.0]}}
+  - wire: {polyline: {points: [[8.0, 3.0, 1.0], [9.0, 3.0, 1.0], [9.0, 4.0, 1.0], [8.0, 4.0, 1.0], [8.0, 3.0, 1.0]]}}
+  - face: {face: {wire: wire}}
+  - prism: {extrude: {profile: face, by: [0.0, 0.0, -1.0]}}
+  - result: {union: {object: box_, tool: prism}}
+checks:
+  - {area: result, eq: 170.0, abs: 0.017}
+---
+case: box_with_prism_from_back_external_f7
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.BoxWithPrismFromBackExternal_F7
+build:
+  - box_: {box: {corner: [3.0, 3.0, 0.0], size: [5.0, 7.0, 4.0]}}
+  - wire: {polyline: {points: [[8.0, 4.0, 0.0], [9.0, 4.0, 0.0], [9.0, 4.0, 1.0], [8.0, 4.0, 1.0], [8.0, 4.0, 0.0]]}}
+  - face: {face: {wire: wire}}
+  - prism: {extrude: {profile: face, by: [0.0, -1.0, 0.0]}}
+  - result: {union: {object: box_, tool: prism}}
+checks:
+  - {area: result, eq: 170.0, abs: 0.017}
+---
+case: box_with_prism_from_right_external_f8
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.BoxWithPrismFromRightExternal_F8
+build:
+  - box_: {box: {corner: [3.0, 3.0, 0.0], size: [5.0, 7.0, 4.0]}}
+  - wire: {polyline: {points: [[9.0, 3.0, 0.0], [9.0, 4.0, 0.0], [9.0, 4.0, 1.0], [9.0, 3.0, 1.0], [9.0, 3.0, 0.0]]}}
+  - face: {face: {wire: wire}}
+  - prism: {extrude: {profile: face, by: [-1.0, 0.0, 0.0]}}
+  - result: {union: {object: box_, tool: prism}}
+checks:
+  - {area: result, eq: 170.0, abs: 0.017}
+---
+case: box_with_prism_from_bottom_top_position_f9
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.BoxWithPrismFromBottomTopPosition_F9
+build:
+  - box_: {box: {corner: [3.0, 3.0, 0.0], size: [5.0, 7.0, 4.0]}}
+  - wire: {polyline: {points: [[3.0, 3.0, 4.0], [4.0, 3.0, 4.0], [4.0, 4.0, 4.0], [3.0, 4.0, 4.0], [3.0, 3.0, 4.0]]}}
+  - face: {face: {wire: wire}}
+  - prism: {extrude: {profile: face, by: [0.0, 0.0, 1.0]}}
+  - result: {union: {object: box_, tool: prism}}
+checks:
+  - {area: result, eq: 170.0, abs: 0.017}
+---
+case: box_with_prism_from_front_top_level_g1
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.BoxWithPrismFromFrontTopLevel_G1
+build:
+  - box_: {box: {corner: [3.0, 3.0, 0.0], size: [5.0, 7.0, 4.0]}}
+  - wire: {polyline: {points: [[3.0, 3.0, 4.0], [4.0, 3.0, 4.0], [4.0, 3.0, 5.0], [3.0, 3.0, 5.0], [3.0, 3.0, 4.0]]}}
+  - face: {face: {wire: wire}}
+  - prism: {extrude: {profile: face, by: [0.0, 1.0, 0.0]}}
+  - result: {union: {object: box_, tool: prism}}
+checks:
+  - {area: result, eq: 170.0, abs: 0.017}
+---
+case: box_with_prism_from_left_top_level_g2
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.BoxWithPrismFromLeftTopLevel_G2
+build:
+  - box_: {box: {corner: [3.0, 3.0, 0.0], size: [5.0, 7.0, 4.0]}}
+  - wire: {polyline: {points: [[3.0, 3.0, 4.0], [3.0, 4.0, 4.0], [3.0, 4.0, 5.0], [3.0, 3.0, 5.0], [3.0, 3.0, 4.0]]}}
+  - face: {face: {wire: wire}}
+  - prism: {extrude: {profile: face, by: [1.0, 0.0, 0.0]}}
+  - result: {union: {object: box_, tool: prism}}
+checks:
+  - {area: result, eq: 170.0, abs: 0.017}
+---
+case: box_with_prism_from_top_top_level_g3
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.BoxWithPrismFromTopTopLevel_G3
+build:
+  - box_: {box: {corner: [3.0, 3.0, 0.0], size: [5.0, 7.0, 4.0]}}
+  - wire: {polyline: {points: [[3.0, 3.0, 5.0], [4.0, 3.0, 5.0], [4.0, 4.0, 5.0], [3.0, 4.0, 5.0], [3.0, 3.0, 5.0]]}}
+  - face: {face: {wire: wire}}
+  - prism: {extrude: {profile: face, by: [0.0, 0.0, -1.0]}}
+  - result: {union: {object: box_, tool: prism}}
+checks:
+  - {area: result, eq: 170.0, abs: 0.017}
+---
+case: box_with_prism_from_back_top_level_g4
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.BoxWithPrismFromBackTopLevel_G4
+build:
+  - box_: {box: {corner: [3.0, 3.0, 0.0], size: [5.0, 7.0, 4.0]}}
+  - wire: {polyline: {points: [[3.0, 4.0, 4.0], [4.0, 4.0, 4.0], [4.0, 4.0, 5.0], [3.0, 4.0, 5.0], [3.0, 4.0, 4.0]]}}
+  - face: {face: {wire: wire}}
+  - prism: {extrude: {profile: face, by: [0.0, -1.0, 0.0]}}
+  - result: {union: {object: box_, tool: prism}}
+checks:
+  - {area: result, eq: 170.0, abs: 0.017}
+---
+case: box_with_prism_from_right_top_level_g5
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.BoxWithPrismFromRightTopLevel_G5
+build:
+  - box_: {box: {corner: [3.0, 3.0, 0.0], size: [5.0, 7.0, 4.0]}}
+  - wire: {polyline: {points: [[4.0, 3.0, 4.0], [4.0, 4.0, 4.0], [4.0, 4.0, 5.0], [4.0, 3.0, 5.0], [4.0, 3.0, 4.0]]}}
+  - face: {face: {wire: wire}}
+  - prism: {extrude: {profile: face, by: [-1.0, 0.0, 0.0]}}
+  - result: {union: {object: box_, tool: prism}}
+checks:
+  - {area: result, eq: 170.0, abs: 0.017}
+---
+case: large_prism_with_small_prism_from_bottom_g6
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.LargePrismWithSmallPrismFromBottom_G6
+build:
+  - base_wire: {polyline: {points: [[3.0, 3.0, 0.0], [8.0, 3.0, 0.0], [8.0, 9.0, 0.0], [3.0, 9.0, 0.0], [3.0, 3.0, 0.0]]}}
+  - base_face: {face: {wire: base_wire}}
+  - base_prism: {extrude: {profile: base_face, by: [0.0, 0.0, 4.0]}}
+  - small_wire: {polyline: {points: [[3.0, 2.0, 0.0], [4.0, 2.0, 0.0], [4.0, 3.0, 0.0], [3.0, 3.0, 0.0], [3.0, 2.0, 0.0]]}}
+  - small_face: {face: {wire: small_wire}}
+  - small_prism: {extrude: {profile: small_face, by: [0.0, 0.0, 1.0]}}
+  - result: {union: {object: base_prism, tool: small_prism}}
+checks:
+  - {area: result, eq: 152.0, abs: 0.0152}
+---
+case: large_prism_with_small_prism_from_front_g7
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.LargePrismWithSmallPrismFromFront_G7
+build:
+  - base_wire: {polyline: {points: [[3.0, 3.0, 0.0], [8.0, 3.0, 0.0], [8.0, 9.0, 0.0], [3.0, 9.0, 0.0], [3.0, 3.0, 0.0]]}}
+  - base_face: {face: {wire: base_wire}}
+  - base_prism: {extrude: {profile: base_face, by: [0.0, 0.0, 4.0]}}
+  - small_wire: {polyline: {points: [[3.0, 2.0, 0.0], [4.0, 2.0, 0.0], [4.0, 2.0, 1.0], [3.0, 2.0, 1.0], [3.0, 2.0, 0.0]]}}
+  - small_face: {face: {wire: small_wire}}
+  - small_prism: {extrude: {profile: small_face, by: [0.0, 1.0, 0.0]}}
+  - result: {union: {object: base_prism, tool: small_prism}}
+checks:
+  - {area: result, eq: 152.0, abs: 0.0152}
+---
+case: large_prism_with_small_prism_from_left_g8
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.LargePrismWithSmallPrismFromLeft_G8
+build:
+  - base_wire: {polyline: {points: [[3.0, 3.0, 0.0], [8.0, 3.0, 0.0], [8.0, 9.0, 0.0], [3.0, 9.0, 0.0], [3.0, 3.0, 0.0]]}}
+  - base_face: {face: {wire: base_wire}}
+  - base_prism: {extrude: {profile: base_face, by: [0.0, 0.0, 4.0]}}
+  - small_wire: {polyline: {points: [[3.0, 2.0, 0.0], [3.0, 3.0, 0.0], [3.0, 3.0, 1.0], [3.0, 2.0, 1.0], [3.0, 2.0, 0.0]]}}
+  - small_face: {face: {wire: small_wire}}
+  - small_prism: {extrude: {profile: small_face, by: [1.0, 0.0, 0.0]}}
+  - result: {union: {object: base_prism, tool: small_prism}}
+checks:
+  - {area: result, eq: 152.0, abs: 0.0152}
+---
+case: large_prism_with_small_prism_from_top_g9
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.LargePrismWithSmallPrismFromTop_G9
+build:
+  - base_wire: {polyline: {points: [[3.0, 3.0, 0.0], [8.0, 3.0, 0.0], [8.0, 9.0, 0.0], [3.0, 9.0, 0.0], [3.0, 3.0, 0.0]]}}
+  - base_face: {face: {wire: base_wire}}
+  - base_prism: {extrude: {profile: base_face, by: [0.0, 0.0, 4.0]}}
+  - small_wire: {polyline: {points: [[3.0, 2.0, 1.0], [4.0, 2.0, 1.0], [4.0, 3.0, 1.0], [3.0, 3.0, 1.0], [3.0, 2.0, 1.0]]}}
+  - small_face: {face: {wire: small_wire}}
+  - small_prism: {extrude: {profile: small_face, by: [0.0, 0.0, -1.0]}}
+  - result: {union: {object: base_prism, tool: small_prism}}
+checks:
+  - {area: result, eq: 152.0, abs: 0.0152}
+---
+case: large_prism_with_small_prism_from_back_edge_h1
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.LargePrismWithSmallPrismFromBackEdge_H1
+build:
+  - base_wire: {polyline: {points: [[3.0, 3.0, 0.0], [8.0, 3.0, 0.0], [8.0, 9.0, 0.0], [3.0, 9.0, 0.0], [3.0, 3.0, 0.0]]}}
+  - base_face: {face: {wire: base_wire}}
+  - base_prism: {extrude: {profile: base_face, by: [0.0, 0.0, 4.0]}}
+  - small_wire: {polyline: {points: [[3.0, 3.0, 0.0], [4.0, 3.0, 0.0], [4.0, 3.0, 1.0], [3.0, 3.0, 1.0], [3.0, 3.0, 0.0]]}}
+  - small_face: {face: {wire: small_wire}}
+  - small_prism: {extrude: {profile: small_face, by: [0.0, -1.0, 0.0]}}
+  - result: {union: {object: base_prism, tool: small_prism}}
+checks:
+  - {area: result, eq: 152.0, abs: 0.0152}
+---
+case: large_prism_with_small_prism_from_right_edge_h2
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.LargePrismWithSmallPrismFromRightEdge_H2
+build:
+  - base_wire: {polyline: {points: [[3.0, 3.0, 0.0], [8.0, 3.0, 0.0], [8.0, 9.0, 0.0], [3.0, 9.0, 0.0], [3.0, 3.0, 0.0]]}}
+  - base_face: {face: {wire: base_wire}}
+  - base_prism: {extrude: {profile: base_face, by: [0.0, 0.0, 4.0]}}
+  - small_wire: {polyline: {points: [[4.0, 2.0, 0.0], [4.0, 3.0, 0.0], [4.0, 3.0, 1.0], [4.0, 2.0, 1.0], [4.0, 2.0, 0.0]]}}
+  - small_face: {face: {wire: small_wire}}
+  - small_prism: {extrude: {profile: small_face, by: [-1.0, 0.0, 0.0]}}
+  - result: {union: {object: base_prism, tool: small_prism}}
+checks:
+  - {area: result, eq: 152.0, abs: 0.0152}
+---
+case: large_prism_with_small_prism_from_bottom_corner_h3
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.LargePrismWithSmallPrismFromBottomCorner_H3
+build:
+  - base_wire: {polyline: {points: [[3.0, 3.0, 0.0], [8.0, 3.0, 0.0], [8.0, 9.0, 0.0], [3.0, 9.0, 0.0], [3.0, 3.0, 0.0]]}}
+  - base_face: {face: {wire: base_wire}}
+  - base_prism: {extrude: {profile: base_face, by: [0.0, 0.0, 4.0]}}
+  - small_wire: {polyline: {points: [[8.0, 3.0, 0.0], [9.0, 3.0, 0.0], [9.0, 4.0, 0.0], [8.0, 4.0, 0.0], [8.0, 3.0, 0.0]]}}
+  - small_face: {face: {wire: small_wire}}
+  - small_prism: {extrude: {profile: small_face, by: [0.0, 0.0, 1.0]}}
+  - result: {union: {object: base_prism, tool: small_prism}}
+checks:
+  - {area: result, eq: 152.0, abs: 0.0152}
+---
+case: large_prism_with_small_prism_from_front_edge_h4
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.LargePrismWithSmallPrismFromFrontEdge_H4
+build:
+  - base_wire: {polyline: {points: [[3.0, 3.0, 0.0], [8.0, 3.0, 0.0], [8.0, 9.0, 0.0], [3.0, 9.0, 0.0], [3.0, 3.0, 0.0]]}}
+  - base_face: {face: {wire: base_wire}}
+  - base_prism: {extrude: {profile: base_face, by: [0.0, 0.0, 4.0]}}
+  - small_wire: {polyline: {points: [[8.0, 3.0, 0.0], [9.0, 3.0, 0.0], [9.0, 3.0, 1.0], [8.0, 3.0, 1.0], [8.0, 3.0, 0.0]]}}
+  - small_face: {face: {wire: small_wire}}
+  - small_prism: {extrude: {profile: small_face, by: [0.0, 1.0, 0.0]}}
+  - result: {union: {object: base_prism, tool: small_prism}}
+checks:
+  - {area: result, eq: 152.0, abs: 0.0152}
+---
+case: large_prism_with_small_prism_from_left_edge_h5
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.LargePrismWithSmallPrismFromLeftEdge_H5
+build:
+  - base_wire: {polyline: {points: [[3.0, 3.0, 0.0], [8.0, 3.0, 0.0], [8.0, 9.0, 0.0], [3.0, 9.0, 0.0], [3.0, 3.0, 0.0]]}}
+  - base_face: {face: {wire: base_wire}}
+  - base_prism: {extrude: {profile: base_face, by: [0.0, 0.0, 4.0]}}
+  - small_wire: {polyline: {points: [[8.0, 3.0, 0.0], [8.0, 4.0, 0.0], [8.0, 4.0, 1.0], [8.0, 3.0, 1.0], [8.0, 3.0, 0.0]]}}
+  - small_face: {face: {wire: small_wire}}
+  - small_prism: {extrude: {profile: small_face, by: [1.0, 0.0, 0.0]}}
+  - result: {union: {object: base_prism, tool: small_prism}}
+checks:
+  - {area: result, eq: 152.0, abs: 0.0152}
+---
+case: large_prism_with_small_prism_from_top_edge_h6
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.LargePrismWithSmallPrismFromTopEdge_H6
+build:
+  - base_wire: {polyline: {points: [[3.0, 3.0, 0.0], [8.0, 3.0, 0.0], [8.0, 9.0, 0.0], [3.0, 9.0, 0.0], [3.0, 3.0, 0.0]]}}
+  - base_face: {face: {wire: base_wire}}
+  - base_prism: {extrude: {profile: base_face, by: [0.0, 0.0, 4.0]}}
+  - small_wire: {polyline: {points: [[8.0, 3.0, 1.0], [9.0, 3.0, 1.0], [9.0, 4.0, 1.0], [8.0, 4.0, 1.0], [8.0, 3.0, 1.0]]}}
+  - small_face: {face: {wire: small_wire}}
+  - small_prism: {extrude: {profile: small_face, by: [0.0, 0.0, -1.0]}}
+  - result: {union: {object: base_prism, tool: small_prism}}
+checks:
+  - {area: result, eq: 152.0, abs: 0.0152}
+---
+case: large_prism_with_small_prism_from_back_edge_corner_h7
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.LargePrismWithSmallPrismFromBackEdgeCorner_H7
+build:
+  - base_wire: {polyline: {points: [[3.0, 3.0, 0.0], [8.0, 3.0, 0.0], [8.0, 9.0, 0.0], [3.0, 9.0, 0.0], [3.0, 3.0, 0.0]]}}
+  - base_face: {face: {wire: base_wire}}
+  - base_prism: {extrude: {profile: base_face, by: [0.0, 0.0, 4.0]}}
+  - small_wire: {polyline: {points: [[8.0, 4.0, 0.0], [9.0, 4.0, 0.0], [9.0, 4.0, 1.0], [8.0, 4.0, 1.0], [8.0, 4.0, 0.0]]}}
+  - small_face: {face: {wire: small_wire}}
+  - small_prism: {extrude: {profile: small_face, by: [0.0, -1.0, 0.0]}}
+  - result: {union: {object: base_prism, tool: small_prism}}
+checks:
+  - {area: result, eq: 152.0, abs: 0.0152}
+---
+case: large_prism_with_small_prism_from_right_edge_corner_h8
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.LargePrismWithSmallPrismFromRightEdgeCorner_H8
+build:
+  - base_wire: {polyline: {points: [[3.0, 3.0, 0.0], [8.0, 3.0, 0.0], [8.0, 9.0, 0.0], [3.0, 9.0, 0.0], [3.0, 3.0, 0.0]]}}
+  - base_face: {face: {wire: base_wire}}
+  - base_prism: {extrude: {profile: base_face, by: [0.0, 0.0, 4.0]}}
+  - small_wire: {polyline: {points: [[9.0, 3.0, 0.0], [9.0, 4.0, 0.0], [9.0, 4.0, 1.0], [9.0, 3.0, 1.0], [9.0, 3.0, 0.0]]}}
+  - small_face: {face: {wire: small_wire}}
+  - small_prism: {extrude: {profile: small_face, by: [-1.0, 0.0, 0.0]}}
+  - result: {union: {object: base_prism, tool: small_prism}}
+checks:
+  - {area: result, eq: 152.0, abs: 0.0152}
+---
+case: large_prism_with_small_prism_from_top_corner_h9
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.LargePrismWithSmallPrismFromTopCorner_H9
+build:
+  - base_wire: {polyline: {points: [[3.0, 3.0, 0.0], [8.0, 3.0, 0.0], [8.0, 9.0, 0.0], [3.0, 9.0, 0.0], [3.0, 3.0, 0.0]]}}
+  - base_face: {face: {wire: base_wire}}
+  - base_prism: {extrude: {profile: base_face, by: [0.0, 0.0, 4.0]}}
+  - small_wire: {polyline: {points: [[3.0, 3.0, 4.0], [4.0, 3.0, 4.0], [4.0, 4.0, 4.0], [3.0, 4.0, 4.0], [3.0, 3.0, 4.0]]}}
+  - small_face: {face: {wire: small_wire}}
+  - small_prism: {extrude: {profile: small_face, by: [0.0, 0.0, 1.0]}}
+  - result: {union: {object: base_prism, tool: small_prism}}
+checks:
+  - {area: result, eq: 152.0, abs: 0.0152}
+---
+case: large_prism_with_small_prism_from_front_top_level_i1
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.LargePrismWithSmallPrismFromFrontTopLevel_I1
+build:
+  - base_wire: {polyline: {points: [[3.0, 3.0, 0.0], [8.0, 3.0, 0.0], [8.0, 9.0, 0.0], [3.0, 9.0, 0.0], [3.0, 3.0, 0.0]]}}
+  - base_face: {face: {wire: base_wire}}
+  - base_prism: {extrude: {profile: base_face, by: [0.0, 0.0, 4.0]}}
+  - small_wire: {polyline: {points: [[3.0, 3.0, 4.0], [4.0, 3.0, 4.0], [4.0, 3.0, 5.0], [3.0, 3.0, 5.0], [3.0, 3.0, 4.0]]}}
+  - small_face: {face: {wire: small_wire}}
+  - small_prism: {extrude: {profile: small_face, by: [0.0, 1.0, 0.0]}}
+  - result: {union: {object: base_prism, tool: small_prism}}
+checks:
+  - {area: result, eq: 152.0, abs: 0.0152}
+---
+case: large_prism_with_small_prism_from_left_top_level_i2
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.LargePrismWithSmallPrismFromLeftTopLevel_I2
+build:
+  - base_wire: {polyline: {points: [[3.0, 3.0, 0.0], [8.0, 3.0, 0.0], [8.0, 9.0, 0.0], [3.0, 9.0, 0.0], [3.0, 3.0, 0.0]]}}
+  - base_face: {face: {wire: base_wire}}
+  - base_prism: {extrude: {profile: base_face, by: [0.0, 0.0, 4.0]}}
+  - small_wire: {polyline: {points: [[3.0, 3.0, 4.0], [3.0, 4.0, 4.0], [3.0, 4.0, 5.0], [3.0, 3.0, 5.0], [3.0, 3.0, 4.0]]}}
+  - small_face: {face: {wire: small_wire}}
+  - small_prism: {extrude: {profile: small_face, by: [1.0, 0.0, 0.0]}}
+  - result: {union: {object: base_prism, tool: small_prism}}
+checks:
+  - {area: result, eq: 152.0, abs: 0.0152}
+---
+case: large_prism_with_small_prism_from_top_above_i3
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.LargePrismWithSmallPrismFromTopAbove_I3
+build:
+  - base_wire: {polyline: {points: [[3.0, 3.0, 0.0], [8.0, 3.0, 0.0], [8.0, 9.0, 0.0], [3.0, 9.0, 0.0], [3.0, 3.0, 0.0]]}}
+  - base_face: {face: {wire: base_wire}}
+  - base_prism: {extrude: {profile: base_face, by: [0.0, 0.0, 4.0]}}
+  - small_wire: {polyline: {points: [[3.0, 3.0, 5.0], [4.0, 3.0, 5.0], [4.0, 4.0, 5.0], [3.0, 4.0, 5.0], [3.0, 3.0, 5.0]]}}
+  - small_face: {face: {wire: small_wire}}
+  - small_prism: {extrude: {profile: small_face, by: [0.0, 0.0, -1.0]}}
+  - result: {union: {object: base_prism, tool: small_prism}}
+checks:
+  - {area: result, eq: 152.0, abs: 0.0152}
+---
+case: large_prism_with_small_prism_from_back_top_level_i4
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.LargePrismWithSmallPrismFromBackTopLevel_I4
+build:
+  - base_wire: {polyline: {points: [[3.0, 3.0, 0.0], [8.0, 3.0, 0.0], [8.0, 9.0, 0.0], [3.0, 9.0, 0.0], [3.0, 3.0, 0.0]]}}
+  - base_face: {face: {wire: base_wire}}
+  - base_prism: {extrude: {profile: base_face, by: [0.0, 0.0, 4.0]}}
+  - small_wire: {polyline: {points: [[3.0, 4.0, 4.0], [4.0, 4.0, 4.0], [4.0, 4.0, 5.0], [3.0, 4.0, 5.0], [3.0, 4.0, 4.0]]}}
+  - small_face: {face: {wire: small_wire}}
+  - small_prism: {extrude: {profile: small_face, by: [0.0, -1.0, 0.0]}}
+  - result: {union: {object: base_prism, tool: small_prism}}
+checks:
+  - {area: result, eq: 152.0, abs: 0.0152}
+---
+case: large_prism_with_small_prism_from_right_top_level_i5
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.LargePrismWithSmallPrismFromRightTopLevel_I5
+build:
+  - base_wire: {polyline: {points: [[3.0, 3.0, 0.0], [8.0, 3.0, 0.0], [8.0, 9.0, 0.0], [3.0, 9.0, 0.0], [3.0, 3.0, 0.0]]}}
+  - base_face: {face: {wire: base_wire}}
+  - base_prism: {extrude: {profile: base_face, by: [0.0, 0.0, 4.0]}}
+  - small_wire: {polyline: {points: [[4.0, 3.0, 4.0], [4.0, 4.0, 4.0], [4.0, 4.0, 5.0], [4.0, 3.0, 5.0], [4.0, 3.0, 4.0]]}}
+  - small_face: {face: {wire: small_wire}}
+  - small_prism: {extrude: {profile: small_face, by: [-1.0, 0.0, 0.0]}}
+  - result: {union: {object: base_prism, tool: small_prism}}
+checks:
+  - {area: result, eq: 152.0, abs: 0.0152}
+---
+case: large_prism_with_oblong_prism_profile_i6
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.LargePrismWithOblongPrismProfile_I6
+notes:
+  - "OCCT's BOPTest_Utilities::CreateProfile ignores the W of the DRAW profile it quotes and makes a face; so does this case (DRAW's profile would make a wire)."
+build:
+  - base_wire: {polyline: {points: [[3.0, 3.0, 0.0], [8.0, 3.0, 0.0], [8.0, 9.0, 0.0], [3.0, 9.0, 0.0], [3.0, 3.0, 0.0]]}}
+  - base_face: {face: {wire: base_wire}}
+  - base_prism: {extrude: {profile: base_face, by: [0.0, 0.0, 5.0]}}
+  - profile_face: {profile: {steps: [{origin: [4.0, 3.0, 0.0]}, {plane: {normal: [0.0, 1.0, 0.0], x: [1.0, 0.0, 0.0]}}, {direction: [-1.0, 0.0]}, {arc: {radius: 1.0, angle: 180.0}}, {along_x: 2.0}, {arc: {radius: 1.0, angle: 180.0}}]}}
+  - oblong_prism: {extrude: {profile: profile_face, by: [0.0, -1.0, 0.0]}}
+  - result: {union: {object: base_prism, tool: oblong_prism}}
+checks:
+  - {area: result, eq: 180.283, abs: 0.0180283}
+---
+case: large_prism_with_oblong_prism_y_direction_i7
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.LargePrismWithOblongPrismYDirection_I7
+notes:
+  - "OCCT's BOPTest_Utilities::CreateProfile ignores the W of the DRAW profile it quotes and makes a face; so does this case (DRAW's profile would make a wire)."
+build:
+  - base_wire: {polyline: {points: [[3.0, 3.0, 0.0], [8.0, 3.0, 0.0], [8.0, 9.0, 0.0], [3.0, 9.0, 0.0], [3.0, 3.0, 0.0]]}}
+  - base_face: {face: {wire: base_wire}}
+  - base_prism: {extrude: {profile: base_face, by: [0.0, 0.0, 5.0]}}
+  - profile_face: {profile: {steps: [{origin: [3.0, 3.0, 3.0]}, {plane: {normal: [0.0, 1.0, 0.0], x: [1.0, 0.0, 0.0]}}, {direction: [0.0, -1.0]}, {arc: {radius: 1.0, angle: 180.0}}, {along_y: 2.0}, {arc: {radius: 1.0, angle: 180.0}}]}}
+  - oblong_prism: {extrude: {profile: profile_face, by: [0.0, -1.0, 0.0]}}
+  - result: {union: {object: base_prism, tool: oblong_prism}}
+checks:
+  - {area: result, eq: 180.283, abs: 0.0180283}
+---
+case: large_prism_with_oblong_prism_x_direction_i8
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.LargePrismWithOblongPrismXDirection_I8
+notes:
+  - "OCCT's BOPTest_Utilities::CreateProfile ignores the W of the DRAW profile it quotes and makes a face; so does this case (DRAW's profile would make a wire)."
+build:
+  - base_wire: {polyline: {points: [[3.0, 3.0, 0.0], [8.0, 3.0, 0.0], [8.0, 9.0, 0.0], [3.0, 9.0, 0.0], [3.0, 3.0, 0.0]]}}
+  - base_face: {face: {wire: base_wire}}
+  - base_prism: {extrude: {profile: base_face, by: [0.0, 0.0, 5.0]}}
+  - profile_face: {profile: {steps: [{origin: [5.0, 3.0, 0.0]}, {plane: {normal: [0.0, 1.0, 0.0], x: [1.0, 0.0, 0.0]}}, {direction: [-1.0, 0.0]}, {arc: {radius: 1.0, angle: 180.0}}, {along_x: 2.0}, {arc: {radius: 1.0, angle: 180.0}}]}}
+  - oblong_prism: {extrude: {profile: profile_face, by: [0.0, -1.0, 0.0]}}
+  - result: {union: {object: base_prism, tool: oblong_prism}}
+checks:
+  - {area: result, eq: 180.283, abs: 0.0180283}
+---
+case: large_prism_with_oblong_prism_y_direction_final_i9
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.LargePrismWithOblongPrismYDirectionFinal_I9
+notes:
+  - "OCCT's BOPTest_Utilities::CreateProfile ignores the W of the DRAW profile it quotes and makes a face; so does this case (DRAW's profile would make a wire)."
+build:
+  - base_wire: {polyline: {points: [[3.0, 3.0, 0.0], [8.0, 3.0, 0.0], [8.0, 9.0, 0.0], [3.0, 9.0, 0.0], [3.0, 3.0, 0.0]]}}
+  - base_face: {face: {wire: base_wire}}
+  - base_prism: {extrude: {profile: base_face, by: [0.0, 0.0, 5.0]}}
+  - profile_face: {profile: {steps: [{origin: [6.0, 3.0, 3.0]}, {plane: {normal: [0.0, 1.0, 0.0], x: [1.0, 0.0, 0.0]}}, {direction: [0.0, -1.0]}, {arc: {radius: 1.0, angle: 180.0}}, {along_y: 2.0}, {arc: {radius: 1.0, angle: 180.0}}]}}
+  - oblong_prism: {extrude: {profile: profile_face, by: [0.0, -1.0, 0.0]}}
+  - result: {union: {object: base_prism, tool: oblong_prism}}
+checks:
+  - {area: result, eq: 180.283, abs: 0.0180283}
+---
+case: large_prism_with_oblong_prism_right_side_j1
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.LargePrismWithOblongPrismRightSide_J1
+notes:
+  - "OCCT's BOPTest_Utilities::CreateProfile ignores the W of the DRAW profile it quotes and makes a face; so does this case (DRAW's profile would make a wire)."
+build:
+  - base_wire: {polyline: {points: [[3.0, 3.0, 0.0], [8.0, 3.0, 0.0], [8.0, 9.0, 0.0], [3.0, 9.0, 0.0], [3.0, 3.0, 0.0]]}}
+  - base_face: {face: {wire: base_wire}}
+  - base_prism: {extrude: {profile: base_face, by: [0.0, 0.0, 5.0]}}
+  - profile_face: {profile: {steps: [{origin: [8.0, 4.0, 0.0]}, {plane: {normal: [-1.0, 0.0, 0.0], x: [0.0, 1.0, 0.0]}}, {direction: [-1.0, 0.0]}, {arc: {radius: 1.0, angle: 180.0}}, {along_x: 2.0}, {arc: {radius: 1.0, angle: 180.0}}]}}
+  - oblong_prism: {extrude: {profile: profile_face, by: [1.0, 0.0, 0.0]}}
+  - result: {union: {object: base_prism, tool: oblong_prism}}
+checks:
+  - {area: result, eq: 180.283, abs: 0.0180283}
+---
+case: large_prism_with_oblong_prism_right_side_y_j2
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.LargePrismWithOblongPrismRightSideY_J2
+notes:
+  - "OCCT's BOPTest_Utilities::CreateProfile ignores the W of the DRAW profile it quotes and makes a face; so does this case (DRAW's profile would make a wire)."
+build:
+  - base_wire: {polyline: {points: [[3.0, 3.0, 0.0], [8.0, 3.0, 0.0], [8.0, 9.0, 0.0], [3.0, 9.0, 0.0], [3.0, 3.0, 0.0]]}}
+  - base_face: {face: {wire: base_wire}}
+  - base_prism: {extrude: {profile: base_face, by: [0.0, 0.0, 5.0]}}
+  - profile_face: {profile: {steps: [{origin: [8.0, 3.0, 3.0]}, {plane: {normal: [-1.0, 0.0, 0.0], x: [0.0, 1.0, 0.0]}}, {direction: [0.0, -1.0]}, {arc: {radius: 1.0, angle: 180.0}}, {along_y: 2.0}, {arc: {radius: 1.0, angle: 180.0}}]}}
+  - oblong_prism: {extrude: {profile: profile_face, by: [1.0, 0.0, 0.0]}}
+  - result: {union: {object: base_prism, tool: oblong_prism}}
+checks:
+  - {area: result, eq: 180.283, abs: 0.0180283}
+---
+case: large_prism_with_oblong_prism_right_side_x_j3
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.LargePrismWithOblongPrismRightSideX_J3
+notes:
+  - "OCCT's BOPTest_Utilities::CreateProfile ignores the W of the DRAW profile it quotes and makes a face; so does this case (DRAW's profile would make a wire)."
+build:
+  - base_wire: {polyline: {points: [[3.0, 3.0, 0.0], [8.0, 3.0, 0.0], [8.0, 9.0, 0.0], [3.0, 9.0, 0.0], [3.0, 3.0, 0.0]]}}
+  - base_face: {face: {wire: base_wire}}
+  - base_prism: {extrude: {profile: base_face, by: [0.0, 0.0, 5.0]}}
+  - profile_face: {profile: {steps: [{origin: [8.0, 6.0, 0.0]}, {plane: {normal: [-1.0, 0.0, 0.0], x: [0.0, 1.0, 0.0]}}, {direction: [-1.0, 0.0]}, {arc: {radius: 1.0, angle: 180.0}}, {along_x: 2.0}, {arc: {radius: 1.0, angle: 180.0}}]}}
+  - oblong_prism: {extrude: {profile: profile_face, by: [1.0, 0.0, 0.0]}}
+  - result: {union: {object: base_prism, tool: oblong_prism}}
+checks:
+  - {area: result, eq: 180.283, abs: 0.0180283}
+---
+case: large_prism_with_oblong_prism_right_side_y2_j4
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.LargePrismWithOblongPrismRightSideY2_J4
+notes:
+  - "OCCT's BOPTest_Utilities::CreateProfile ignores the W of the DRAW profile it quotes and makes a face; so does this case (DRAW's profile would make a wire)."
+build:
+  - base_wire: {polyline: {points: [[3.0, 3.0, 0.0], [8.0, 3.0, 0.0], [8.0, 9.0, 0.0], [3.0, 9.0, 0.0], [3.0, 3.0, 0.0]]}}
+  - base_face: {face: {wire: base_wire}}
+  - base_prism: {extrude: {profile: base_face, by: [0.0, 0.0, 5.0]}}
+  - profile_face: {profile: {steps: [{origin: [8.0, 7.0, 3.0]}, {plane: {normal: [-1.0, 0.0, 0.0], x: [0.0, 1.0, 0.0]}}, {direction: [0.0, -1.0]}, {arc: {radius: 1.0, angle: 180.0}}, {along_y: 2.0}, {arc: {radius: 1.0, angle: 180.0}}]}}
+  - oblong_prism: {extrude: {profile: profile_face, by: [1.0, 0.0, 0.0]}}
+  - result: {union: {object: base_prism, tool: oblong_prism}}
+checks:
+  - {area: result, eq: 180.283, abs: 0.0180283}
+---
+case: large_prism_with_oblong_prism_right_side_j5
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.LargePrismWithOblongPrismRightSide_J5
+notes:
+  - "OCCT expects 180.283, the area with the DRAW script's oblong prism (rounded ends),"
+  - "which this test simplifies to a box: the fuse with the box has area 178."
+build:
+  - base_wire: {polyline: {points: [[3.0, 3.0, 0.0], [8.0, 3.0, 0.0], [8.0, 9.0, 0.0], [3.0, 9.0, 0.0], [3.0, 3.0, 0.0]]}}
+  - base_face: {face: {wire: base_wire}}
+  - base_prism: {extrude: {profile: base_face, by: [0.0, 0.0, 5.0]}}
+  - oblong_prism: {box: {corner: [8.0, 4.0, 1.0], size: [1.0, 2.0, 2.0]}}
+  - result: {union: {object: base_prism, tool: oblong_prism}}
+checks:
+  - {area: result, eq: 178.0, abs: 0.0178}
+---
+case: large_prism_with_oblong_prism_right_side_j6
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.LargePrismWithOblongPrismRightSide_J6
+notes:
+  - "OCCT expects 180.283, the area with the DRAW script's oblong prism (rounded ends),"
+  - "which this test simplifies to a box: the fuse with the box has area 178."
+build:
+  - base_wire: {polyline: {points: [[3.0, 3.0, 0.0], [8.0, 3.0, 0.0], [8.0, 9.0, 0.0], [3.0, 9.0, 0.0], [3.0, 3.0, 0.0]]}}
+  - base_face: {face: {wire: base_wire}}
+  - base_prism: {extrude: {profile: base_face, by: [0.0, 0.0, 5.0]}}
+  - oblong_prism: {box: {corner: [8.0, 5.0, 2.0], size: [1.0, 2.0, 2.0]}}
+  - result: {union: {object: base_prism, tool: oblong_prism}}
+checks:
+  - {area: result, eq: 178.0, abs: 0.0178}
+---
+case: large_prism_with_oblong_prism_right_side_j7
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.LargePrismWithOblongPrismRightSide_J7
+notes:
+  - "OCCT expects 180.283, the area with the DRAW script's oblong prism (rounded ends),"
+  - "which this test simplifies to a box: the fuse with the box has area 178."
+build:
+  - base_wire: {polyline: {points: [[3.0, 3.0, 0.0], [8.0, 3.0, 0.0], [8.0, 9.0, 0.0], [3.0, 9.0, 0.0], [3.0, 3.0, 0.0]]}}
+  - base_face: {face: {wire: base_wire}}
+  - base_prism: {extrude: {profile: base_face, by: [0.0, 0.0, 5.0]}}
+  - oblong_prism: {box: {corner: [8.0, 6.0, 1.0], size: [1.0, 2.0, 2.0]}}
+  - result: {union: {object: base_prism, tool: oblong_prism}}
+checks:
+  - {area: result, eq: 178.0, abs: 0.0178}
+---
+case: large_prism_with_oblong_prism_top_j8
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.LargePrismWithOblongPrismTop_J8
+notes:
+  - "OCCT's BOPTest_Utilities::CreateProfile ignores the W of the DRAW profile it quotes and makes a face; so does this case (DRAW's profile would make a wire)."
+build:
+  - base_wire: {polyline: {points: [[3.0, 3.0, 0.0], [8.0, 3.0, 0.0], [8.0, 9.0, 0.0], [3.0, 9.0, 0.0], [3.0, 3.0, 0.0]]}}
+  - base_face: {face: {wire: base_wire}}
+  - base_prism: {extrude: {profile: base_face, by: [0.0, 0.0, 5.0]}}
+  - profile_face: {profile: {steps: [{origin: [8.0, 4.0, 5.0]}, {plane: {normal: [0.0, 0.0, -1.0], x: [1.0, 0.0, 0.0]}}, {direction: [0.0, 1.0]}, {arc: {radius: 1.0, angle: 180.0}}, {along_y: -2.0}, {arc: {radius: 1.0, angle: 180.0}}]}}
+  - oblong_prism: {extrude: {profile: profile_face, by: [0.0, 0.0, 1.0]}}
+  - result: {union: {object: base_prism, tool: oblong_prism}}
+checks:
+  - {area: result, eq: 180.283, abs: 0.0180283}
+---
+case: cylinder_with_revolution_ring_j9
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.CylinderWithRevolutionRing_J9
+build:
+  - cylinder: {cylinder: {radius: 3.0, height: 5.0}}
+  - ring_wire: {polyline: {points: [[0.0, 3.0, 2.0], [0.0, 4.0, 2.0], [0.0, 4.0, 3.0], [0.0, 3.0, 3.0], [0.0, 3.0, 2.0]]}}
+  - ring_face: {face: {wire: ring_wire}}
+  - ring: {revolve: {profile: ring_face, axis: {origin: [0.0, 0.0, 0.0], direction: [0, 0, 1]}, angle: 269.0}}
+  - result: {union: {object: cylinder, tool: ring}}
+checks:
+  - {area: result, eq: 190.356, abs: 0.0190356}
+---
+case: complex_profile_with_revolution_k1
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.ComplexProfileWithRevolution_K1
+notes:
+  - "OCCT's BOPTest_Utilities::CreateProfile ignores the W of the DRAW profile it quotes and makes a face; so does this case (DRAW's profile would make a wire)."
+build:
+  - box_: {box: {corner: [0.0, 0.0, 0.0], size: [200.0, 200.0, 100.0]}}
+  - profile: {profile: {frame: {origin: [0.0, 0.0, 0.0], z: [1, 0, 0]}, steps: [{origin: [50.0, 0.0, 0.0]}, {start: [50.0, -80.0]}, {along_x: 50.0}, {along_y: 5.0}, {along_x: 10.0}, {along_y: -25.0}, {along_x: -60.0}]}}
+  - revolution: {revolve: {profile: profile, axis: {origin: [50.0, 100.0, 50.0], direction: [0, 0, 1]}, angle: 360.0}}
+  - result: {union: {object: box_, tool: revolution}}
+checks:
+  - {area: result, eq: 161571.0, abs: 16.1571}
+---
+case: blend_box_with_cylinder_k2
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.BlendBoxWithCylinder_K2
+build:
+  - box_: {box: {corner: [0.0, 0.0, 0.0], size: [300.0, 300.0, 100.0]}}
+  - cylinder: {cylinder: {radius: 100.0, height: 50.0}}
+  - result: {union: {object: box_, tool: cylinder}}
+checks:
+  - {area: result, eq: 360686.0, abs: 36.0686}
+---
+case: blend_box_with_cylinder_neg_x_k3
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.BlendBoxWithCylinderNegX_K3
+build:
+  - box_: {box: {corner: [0.0, 0.0, 0.0], size: [300.0, 300.0, 100.0]}}
+  - t2: {select: {of: box_, edge: [0.0, 0.0, 50.0]}}
+  - blended_box: {fillet: {shape: box_, edges: [{edge: t2, radius: 100.0}]}}
+  - cylinder: {cylinder: {radius: 100.0, height: 50.0, frame: {origin: [100.0, 100.0, 100.0], z: [0, 0, 1], x: [-1, 0, 0]}}}
+  - result: {union: {object: blended_box, tool: cylinder}}
+checks:
+  - {area: result, eq: 322832.0, abs: 32.2832}
+---
+case: blend_box_with_cylinder_y_k4
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.BlendBoxWithCylinderY_K4
+build:
+  - box_: {box: {corner: [0.0, 0.0, 0.0], size: [300.0, 300.0, 100.0]}}
+  - t2: {select: {of: box_, edge: [0.0, 0.0, 50.0]}}
+  - blended_box: {fillet: {shape: box_, edges: [{edge: t2, radius: 100.0}]}}
+  - cylinder: {cylinder: {radius: 100.0, height: 50.0, frame: {origin: [100.0, 100.0, 100.0], z: [0, 0, 1], x: [0, 1, 0]}}}
+  - result: {union: {object: blended_box, tool: cylinder}}
+checks:
+  - {area: result, eq: 322832.0, abs: 32.2832}
+---
+case: blend_box_with_cylinder_neg_y_k5
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.BlendBoxWithCylinderNegY_K5
+build:
+  - box_: {box: {corner: [0.0, 0.0, 0.0], size: [300.0, 300.0, 100.0]}}
+  - t2: {select: {of: box_, edge: [0.0, 0.0, 50.0]}}
+  - blended_box: {fillet: {shape: box_, edges: [{edge: t2, radius: 100.0}]}}
+  - cylinder: {cylinder: {radius: 100.0, height: 50.0, frame: {origin: [100.0, 100.0, 100.0], z: [0, 0, 1], x: [0, -1, 0]}}}
+  - result: {union: {object: blended_box, tool: cylinder}}
+checks:
+  - {area: result, eq: 322832.0, abs: 32.2832}
+---
+case: blend_box_with_cylinder_bottom_x_k6
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.BlendBoxWithCylinderBottomX_K6
+build:
+  - box_: {box: {corner: [0.0, 0.0, 0.0], size: [300.0, 300.0, 100.0]}}
+  - t2: {select: {of: box_, edge: [0.0, 0.0, 50.0]}}
+  - blended_box: {fillet: {shape: box_, edges: [{edge: t2, radius: 100.0}]}}
+  - cylinder: {cylinder: {radius: 100.0, height: 50.0, frame: {origin: [100.0, 100.0, 0.0], z: [0, 0, -1], x: [1, 0, 0]}}}
+  - result: {union: {object: blended_box, tool: cylinder}}
+checks:
+  - {area: result, eq: 322832.0, abs: 32.2832}
+---
+case: blend_box_with_cylinder_bottom_neg_x_k7
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.BlendBoxWithCylinderBottomNegX_K7
+build:
+  - box_: {box: {corner: [0.0, 0.0, 0.0], size: [300.0, 300.0, 100.0]}}
+  - t2: {select: {of: box_, edge: [0.0, 0.0, 50.0]}}
+  - blended_box: {fillet: {shape: box_, edges: [{edge: t2, radius: 100.0}]}}
+  - cylinder: {cylinder: {radius: 100.0, height: 50.0, frame: {origin: [100.0, 100.0, 0.0], z: [0, 0, -1], x: [-1, 0, 0]}}}
+  - result: {union: {object: blended_box, tool: cylinder}}
+checks:
+  - {area: result, eq: 322832.0, abs: 32.2832}
+---
+case: blend_box_with_cylinder_bottom_y_k8
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.BlendBoxWithCylinderBottomY_K8
+build:
+  - box_: {box: {corner: [0.0, 0.0, 0.0], size: [300.0, 300.0, 100.0]}}
+  - t2: {select: {of: box_, edge: [0.0, 0.0, 50.0]}}
+  - blended_box: {fillet: {shape: box_, edges: [{edge: t2, radius: 100.0}]}}
+  - cylinder: {cylinder: {radius: 100.0, height: 50.0, frame: {origin: [100.0, 100.0, 0.0], z: [0, 0, -1], x: [0, 1, 0]}}}
+  - result: {union: {object: blended_box, tool: cylinder}}
+checks:
+  - {area: result, eq: 322832.0, abs: 32.2832}
+---
+case: blend_box_with_cylinder_bottom_neg_y_k9
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Fuse_Test.cxx
+  test: BFuseSimpleTest.BlendBoxWithCylinderBottomNegY_K9
+build:
+  - box_: {box: {corner: [0.0, 0.0, 0.0], size: [300.0, 300.0, 100.0]}}
+  - t2: {select: {of: box_, edge: [0.0, 0.0, 50.0]}}
+  - blended_box: {fillet: {shape: box_, edges: [{edge: t2, radius: 100.0}]}}
+  - cylinder: {cylinder: {radius: 100.0, height: 50.0, frame: {origin: [100.0, 100.0, 0.0], z: [0, 0, -1], x: [0, -1, 0]}}}
+  - result: {union: {object: blended_box, tool: cylinder}}
+checks:
+  - {area: result, eq: 322832.0, abs: 32.2832}

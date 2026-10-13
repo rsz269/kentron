@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: Rust tests (with OCCT's dataset)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      # CI machines are slower than the ones the per-case limit (40 s of CPU) was set on.
+      KENTRON_CASE_TIMEOUT: "120"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Cache OCCT's test dataset
+        id: dataset
+        uses: actions/cache@v4
+        with:
+          path: ~/occt-data
+          key: occt-dataset-7.9.0-3d097a03
+      - name: Download OCCT's test dataset
+        if: steps.dataset.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/occt-data/occ
+          curl -fsSL https://github.com/Open-Cascade-SAS/OCCT/releases/download/V7_9_0_beta1/opencascade-dataset-7.9.0.tar.xz | tar -xJ -C ~/occt-data
+          # Two shapes the tests read are in OCCT's source tree, not in the dataset.
+          for f in hammer.brep terrain.brep; do
+            curl -fsSL -o ~/occt-data/occ/$f https://raw.githubusercontent.com/Open-Cascade-SAS/OCCT/3d097a0328e71b826377d4814ab05ec3c3d23871/data/occ/$f
+          done
+      - name: Test
+        run: cargo test --release --workspace
+
+  msrv:
+    name: Minimum Rust version (1.88)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust 1.88
+        run: rustup toolchain install 1.88.0 --profile minimal
+      - uses: Swatinem/rust-cache@v2
+      - name: Check
+        run: cargo +1.88.0 check --workspace --all-targets
+
+  python:
+    name: pykentron against CadQuery
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build pykentron
+        run: python crates/pykentron/build.py --quick
+      - name: Import it
+        run: python -c "import sys; sys.path.insert(0, 'crates/pykentron/python'); import pykentron as cq; assert abs(cq.Workplane().box(1, 2, 3).val().Volume() - 6) < 1e-9"
+      - name: Compare with CadQuery
+        run: |
+          python -m pip install --quiet cadquery==2.8.0
+          python crates/pykentron/tests/test_against_cadquery.py
+      - uses: astral-sh/setup-uv@v5
+      - name: CadQuery's own test suite (against tests/cadquery_baseline.txt)
+        run: python crates/pykentron/scripts/cadquery_tests.py

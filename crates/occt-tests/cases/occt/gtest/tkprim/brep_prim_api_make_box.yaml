@@ -1,0 +1,77 @@
+# OCCT GTests moved from crates/occt-tests/tests/gtest_tkprim by hand.
+case: unit_box
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKPrim/GTests/BRepPrimAPI_MakeBox_Test.cxx
+  test: BRepPrimAPI_MakeBoxTest.UnitBox
+build:
+  - shape: {box: {size: [1, 1, 1]}}
+checks:
+  - {valid: shape}
+---
+case: topology_counts
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKPrim/GTests/BRepPrimAPI_MakeBox_Test.cxx
+  test: BRepPrimAPI_MakeBoxTest.TopologyCounts
+notes:
+  - "Counts of uses, as TopExp_Explorer counts them: 12 edges x 2 faces, 8 vertices x 6 faces."
+build:
+  - shape: {box: {size: [10, 20, 30]}}
+checks:
+  - {count: shape, occurrences: true, eq: {faces: 6, edges: 24, vertices: 48}}
+---
+case: volume
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKPrim/GTests/BRepPrimAPI_MakeBox_Test.cxx
+  test: BRepPrimAPI_MakeBoxTest.Volume
+build:
+  - shape: {box: {size: [3, 4, 5]}}
+checks:
+  - {volume: shape, eq: 60, abs: 1.0e-7}
+---
+case: surface_area
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKPrim/GTests/BRepPrimAPI_MakeBox_Test.cxx
+  test: BRepPrimAPI_MakeBoxTest.SurfaceArea
+build:
+  - shape: {box: {size: [3, 4, 5]}}
+checks:
+  - {area: shape, eq: "2*(3*4 + 3*5 + 4*5)", abs: 1.0e-7}
+---
+case: two_corner_points
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKPrim/GTests/BRepPrimAPI_MakeBox_Test.cxx
+  test: BRepPrimAPI_MakeBoxTest.TwoCornerPoints
+notes:
+  - "From the corners (1, 2, 3) and (4, 6, 8)."
+build:
+  - shape: {box: {corner: [1, 2, 3], size: [3, 4, 5]}}
+checks:
+  - {valid: shape}
+  - {volume: shape, eq: 60, abs: 1.0e-7}
+---
+case: shape_validity
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKPrim/GTests/BRepPrimAPI_MakeBox_Test.cxx
+  test: BRepPrimAPI_MakeBoxTest.ShapeValidity
+build:
+  - shape: {box: {size: [100, 200, 300]}}
+checks:
+  - {valid: shape}

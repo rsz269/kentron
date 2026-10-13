@@ -1,0 +1,31 @@
+# OCCT GTests moved from crates/occt-tests/tests/gtest_tkbo/brep_algo_api_common.rs by tools/gtest2yaml.py.
+case: identical_boxes_a1
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Common_Test.cxx
+  test: BOPCommonSimpleTest.IdenticalBoxes_A1
+build:
+  - box1: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - box2: {box: {corner: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0]}}
+  - result: {intersection: {object: box1, tool: box2}}
+checks:
+  - {area: result, eq: 6.0, abs: 0.0006000000000000001}
+---
+case: occ23855_coincident_spheres_preserve_solid
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKBO/GTests/BRepAlgoAPI_Common_Test.cxx
+  test: BOPCommonSimpleTest.OCC23855_CoincidentSpheresPreserveSolid
+build:
+  - sphere1: {sphere: {radius: 10.0, frame: {origin: [0, 0, 0], z: [0, 0, 1], x: [1, 0, 0]}}}
+  - sphere2: {sphere: {radius: 10.0, frame: {origin: [0, 0, 0], z: [0, 0, 1], x: [1, 0, 0]}}}
+  - result: {intersection: {object: sphere1, tool: sphere2}}
+checks:
+  - {count: result, eq: {solids: 1}}
+  - {count: result, eq: {faces: 1}}
+  - {area: result, eq: 1256.6370614359173, abs: 1e-06}
+  - {volume: result, eq: 4188.790204786391, abs: 1e-06}

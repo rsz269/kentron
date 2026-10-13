@@ -1,0 +1,15 @@
+# OCCT GTests moved from crates/occt-tests/tests/gtest_tkprim by hand.
+case: modalg_bug_24328_revolved_wire_is_valid
+ported_from:
+  project: OCCT
+  repo: https://github.com/Open-Cascade-SAS/OCCT
+  git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
+  file: src/ModelingAlgorithms/TKPrim/GTests/BRepPrimAPI_MakeRevol_Test.cxx
+  test: BRepPrimAPI_MakeRevolTest.ModalgBug_24328_RevolvedWireIsValid
+notes:
+  - "From tests/bugs/modalg_5/bug24328: revolving a two-edge wire must give a valid shape."
+build:
+  - wire: {polyline: {points: [[23.5, 11.123, 0], [22, 11.1409, 0], [20.5, 11.1807, 0]]}}
+  - result: {revolve: {profile: wire, axis: {origin: [0, 0, 0], direction: x}, angle: 360}}
+checks:
+  - {valid: result}
