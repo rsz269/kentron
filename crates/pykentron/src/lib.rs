@@ -354,9 +354,26 @@ fn make_three_point_arc(a: Xyz, b: Xyz, c: Xyz) -> PyResult<Handle> {
 
 /// A wire through `edges`, in order.
 #[pyfunction]
-fn make_wire(edges: Vec<Handle>) -> PyResult<Handle> {
+#[pyo3(signature = (edges, tolerance=0.0))]
+fn make_wire(edges: Vec<Handle>, tolerance: f64) -> PyResult<Handle> {
     let edges: Vec<Shape> = edges.iter().map(|h| h.shape).collect();
-    with_model(|m| make::wire(m, &edges)).map(handle)
+    with_model(|m| make::wire_within(m, &edges, tolerance)).map(handle)
+}
+
+/// Whether an edge or wire is closed topologically: an edge starting and ending at one
+/// vertex, a wire whose last edge returns to its first vertex (OCCT's `BRep_Tool::IsClosed`).
+#[pyfunction]
+fn is_closed(shape: Handle) -> PyResult<bool> {
+    with_model(|m| {
+        Ok(match shape.shape.kind() {
+            NodeKind::Wire => WireId::try_from(shape.shape.node).is_ok_and(|w| m.is_closed_wire(w)),
+            NodeKind::Edge => {
+                let (a, b) = m.edge_vertices(shape.shape);
+                a.node == b.node
+            }
+            _ => false,
+        })
+    })
 }
 
 /// The polygon through `points` (closed back to the first if `close`).
@@ -1004,6 +1021,7 @@ fn _kentron(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(profile::set_profile, m)?)?;
     m.add_class::<Handle>()?;
     m.add_class::<Mesh>()?;
+    m.add_function(wrap_pyfunction!(is_closed, m)?)?;
     m.add_function(wrap_pyfunction!(make_box, m)?)?;
     m.add_function(wrap_pyfunction!(make_cylinder, m)?)?;
     m.add_function(wrap_pyfunction!(make_cone, m)?)?;

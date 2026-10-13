@@ -425,11 +425,13 @@ impl Revolver<'_> {
         let p = self.point(v);
         let end = self.end_vertex(v);
         let tol = self.tolerance();
-        let edge = self.model.add_edge(v, end, tol)?;
+        // (At least the vertex's tolerance, as OCCT's sweeps give the edges they generate.)
+        let edge_tol = self.model[v].tolerance.max(tol);
+        let edge = self.model.add_edge(v, end, edge_tol)?;
         let (center, radial) = self.radial(p);
         if let Some(x) = Direction::try_from_vector(radial).filter(|_| radial.length() > tol) {
             let circle = Circle::new(Frame::new(center, self.axis.direction, x), radial.length());
-            self.model.set_edge_curve(edge.into(), Curve::Circle(circle), tol)?;
+            self.model.set_edge_curve(edge.into(), Curve::Circle(circle), edge_tol)?;
             self.model.set_edge_range(edge.into(), 0.0, self.angle)?;
             self.vertex_paths.insert(v, edge);
         }
@@ -754,9 +756,11 @@ impl Extruder<'_> {
             return Ok(e);
         }
         let end = self.end_vertex(v);
-        let edge = self.model.add_edge(v, end, tolerance::LINEAR)?;
+        // (At least the vertex's tolerance, as OCCT's sweeps give the edges they generate.)
+        let tol = self.model[v].tolerance.max(tolerance::LINEAR);
+        let edge = self.model.add_edge(v, end, tol)?;
         let line = Line::new(self.point(v), Direction::from_vector(self.v));
-        self.model.set_edge_curve(edge.into(), Curve::Line(line), tolerance::LINEAR)?;
+        self.model.set_edge_curve(edge.into(), Curve::Line(line), tol)?;
         self.model.set_edge_range(edge.into(), 0.0, self.v.length())?;
         self.vertex_paths.insert(v, edge);
         self.record(v, edge.into());

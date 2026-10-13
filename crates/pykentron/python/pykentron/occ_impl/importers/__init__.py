@@ -62,13 +62,15 @@ def importStep(fileName: str, unit: str = "MM"):
         factor = _MILLIMETRES[unit.upper()]
     except KeyError:
         raise ValueError(f"unknown unit {unit!r}")
+    from ...importers import _step_roots
+
     try:
-        shape = Shape.cast(native.read_step(str(fileName)))
+        shapes = _step_roots(fileName)
     except (OSError, ValueError) as e:
         raise ValueError("STEP File could not be loaded") from e
+    # A shape per root product (as OCCT's reader), in `unit`s.
     if factor != 1.0:
-        shape = shape.scale(1.0 / factor)
-    shapes = list(shape) if shape.ShapeType() == "Compound" else [shape]
+        shapes = [s.scale(1.0 / factor) for s in shapes]
     return _workplane()("XY").newObject(shapes)
 
 

@@ -82,6 +82,14 @@ pub fn edge_from_curve_range(model: &mut Model, curve: Curve, first: f64, last: 
 /// use the earlier one's vertex), as are the wire's two ends if they meet.
 #[doc(alias = "BRepBuilderAPI_MakeWire")]
 pub fn wire(model: &mut Model, edges: &[Shape]) -> Result<Shape> {
+    wire_within(model, edges, 0.0)
+}
+
+/// [`wire`], ends also counting as meeting where they lie within `tolerance` of each other
+/// (as OCCT's `ShapeAnalysis_FreeBounds` joins them): the vertex kept where two are merged
+/// across a gap has its tolerance raised to cover it.
+pub fn wire_within(model: &mut Model, edges: &[Shape], tolerance: f64) -> Result<Shape> {
+    let gap_tolerance = tolerance;
     let ends = |model: &Model, e: EdgeId| -> Result<(VertexId, VertexId)> {
         let edge = model.get(e).ok_or_else(|| Error::InvalidInput(format!("no {e:?}")))?;
         let vertex = |u| model.get(u).map(|u: &crate::topology::VertexUse| u.vertex);
@@ -93,7 +101,20 @@ pub fn wire(model: &mut Model, edges: &[Shape]) -> Result<Shape> {
     // Vertices that coincide within their tolerances count as the same (and get merged).
     let meet = |model: &Model, a: VertexId, b: VertexId| {
         let (va, vb) = (&model[a], &model[b]);
-        a == b || va.point.distance(vb.point) <= va.tolerance.max(vb.tolerance).max(tolerance::LINEAR)
+        a == b || va.point.distance(vb.point) <= va.tolerance.max(vb.tolerance).max(tolerance::LINEAR).max(gap_tolerance)
+    };
+    // Merging `gone` into `kept` across a gap, for edge `edge`: `kept`'s tolerance and the
+    // edge's cover the gap.
+    let cover = |model: &mut Model, kept: VertexId, gone: VertexId, edge: EdgeId| -> Result<()> {
+        let (k, g) = (&model[kept], &model[gone]);
+        let gap = k.point.distance(g.point) + g.tolerance;
+        if gap > k.tolerance {
+            model.set_vertex_tolerance(kept, gap)?;
+        }
+        if gap > model[edge].tolerance {
+            model.set_edge_tolerance(edge, gap)?;
+        }
+        Ok(())
     };
     // A wire holds its edges where they are: a placed edge is copied with its placement
     // applied.
@@ -138,6 +159,7 @@ pub fn wire(model: &mut Model, edges: &[Shape]) -> Result<Shape> {
         // Make the edge use the wire's vertex where it only coincides with it.
         let record = &model[id];
         let joining_use = if joined { record.start } else { record.end };
+        cover(model, end, if joined { a } else { b }, id)?;
         model.replace_edge_vertex(id, joining_use, end)?;
         orientations.push(orientation);
         end = next_end;
@@ -147,6 +169,7 @@ pub fn wire(model: &mut Model, edges: &[Shape]) -> Result<Shape> {
         let last = *ids.last().expect("edges");
         let record = &model[last];
         let closing_use = if *orientations.last().expect("edges") == Orientation::Forward { record.end } else { record.start };
+        cover(model, first_start, end, last)?;
         model.replace_edge_vertex(last, closing_use, first_start)?;
     }
     let coedges = ids

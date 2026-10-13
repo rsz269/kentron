@@ -164,7 +164,6 @@ tests.test_free_functions::test_text
 tests.test_free_functions::test_utils
 tests.test_importers.TestImporters::testBIN
 tests.test_importers.TestImporters::testImportDXF
-tests.test_importers.TestImporters::testSTEP
 tests.test_jupyter.TestJupyter::test_display_error
 tests.test_jupyter.TestJupyter::test_repr_javascript
 tests.test_selectors.TestCQSelectors::testNearestToShape
@@ -178,7 +177,6 @@ tests.test_shapes::test_sample
 tests.test_shapes::test_trimming
 tests.test_sketch::test_bool_ops
 tests.test_sketch::test_constraint_solver
-tests.test_sketch::test_dxf_import
 tests.test_sketch::test_face_interface
 tests.test_sketch::test_parray
 tests.test_workplanes.TestWorkplanes::test_mirror_face

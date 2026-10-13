@@ -788,6 +788,10 @@ class Mixin1D:
         return circle[0]
 
     def IsClosed(self) -> bool:
+        """Closed topologically (its ends one vertex, as OCCT's BRep_Tool::IsClosed), or with
+        its ends at one point."""
+        if native.is_closed(self.wrapped):
+            return True
         a, b = self._ends()
         return (a - b).Length <= 1e-7
 
@@ -1144,7 +1148,7 @@ def _edges_to_wires(edges: List[Edge], tol: float) -> List[Wire]:
                     continue
                 grown = True
                 break
-        wires.append(Shape.cast(native.make_wire([e.wrapped for e in chain])))
+        wires.append(Shape.cast(native.make_wire([e.wrapped for e in chain], tol)))
     return wires
 
 
