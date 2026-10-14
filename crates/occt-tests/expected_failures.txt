@@ -7,9 +7,6 @@ tests/blend/bfuseblend/A8
 tests/blend/bfuseblend/A9
 tests/blend/bfuseblend/B6
 tests/blend/buildevol/B3
-tests/blend/buildevol/C1
-tests/blend/buildevol/C8
-tests/blend/buildevol/D8
 tests/blend/buildevol/H3
 tests/blend/buildevol/K5
 tests/blend/buildevol/K6
@@ -25,7 +22,6 @@ tests/blend/complex/C2
 tests/blend/complex/C5
 tests/blend/complex/D2
 tests/blend/complex/D8
-tests/blend/complex/E1
 tests/blend/complex/E3
 tests/blend/complex/E7
 tests/blend/complex/F1
@@ -43,13 +39,6 @@ tests/blend/encoderegularity/A7
 tests/blend/simple/C8
 tests/blend/simple/D1
 tests/blend/simple/D9
-tests/blend/simple/F8
-tests/blend/simple/F9
-tests/blend/simple/G2
-tests/blend/simple/H3
-tests/blend/simple/H5
-tests/blend/simple/H8
-tests/blend/simple/H9
 tests/blend/simple/Q3
 tests/blend/simple/Q9
 tests/blend/simple/R1

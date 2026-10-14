@@ -18,7 +18,7 @@ use crate::geometry::{fit, project, ParametricCurve, ParametricSurface};
 use crate::math::{Direction2, Point, Point2};
 use crate::topology::{EdgeId, Model, NodeKind, Orientation, Shape, VertexId};
 
-use super::{end_cut, extension, fillet_surface, new_face, rebuild_face, rolling, unwrapped, EndCut, Rolling, Use};
+use super::{cover_pcurve, end_cut, extension, fillet_surface, new_face, rebuild_face, rolling_past, unwrapped, EndCut, Rolling, Use, NOT_REACHED};
 
 /// Samples along a fillet's stop curve at a corner, and across a corner patch.
 const ACROSS: usize = 32;
@@ -83,9 +83,18 @@ struct MitreCut {
 /// faces meet) rounded by rolling-ball fillets of the given radii (as laws over the fraction
 /// of each edge's length), built together.
 pub(in crate::blend) fn fillet_network(model: &mut Model, shape: Shape, edges: &[(Shape, &dyn Fn(f64) -> f64)]) -> Result<Shape> {
+    // (Further past the ends where the end faces are not reached.)
+    match fillet_network_past(model, shape, edges, 1) {
+        Err(Error::InvalidInput(m)) if m == NOT_REACHED => fillet_network_past(model, shape, edges, 3),
+        other => other,
+    }
+}
+
+/// [`fillet_network`] with the sections carried `far` times as far past the edges' ends.
+fn fillet_network_past(model: &mut Model, shape: Shape, edges: &[(Shape, &dyn Fn(f64) -> f64)], far: usize) -> Result<Shape> {
     let mut stripes = Vec::with_capacity(edges.len());
     for &(edge, radius) in edges {
-        let rolling = rolling(model, shape, edge, radius)?;
+        let rolling = rolling_past(model, shape, edge, radius, far)?;
         if rolling.closed {
             return Err(Error::InvalidInput("closed edges in a network of fillets are not supported yet".into()));
         }
@@ -718,6 +727,7 @@ fn build(model: &mut Model, shape: Shape, stripes: &[Stripe], ends: &[[End; 2]],
                         &s.ts,
                     )?),
                 };
+                cover_pcurve(model, contact_edges[i][j], &Curve::BSpline(s.rolling.contacts[j].clone()), &pcurve, &side.surface, stops[i][0].v[j], stops[i][1].v[j])?;
                 replaces.push((s.rolling.id, vec![(contact_edges[i][j], stops[i][0].v[j], stops[i][1].v[j])], pcurve));
             }
         }

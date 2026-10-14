@@ -264,16 +264,27 @@ fn roll(model: &Model, shape: Shape, edge: Shape, radius: f64, count: usize, swi
         let surface = model.surface(face)?.transformed(&face.placement);
         let (u, v, _) = nearest_on_surface(p, &surface, None);
         let (_, du, dv) = surface.d1(u, v);
-        let n = du.cross(dv).normalized();
+        let n = du.cross(dv);
+        // (None at a singular point, as a cone's apex.)
+        if n.length() <= 1e-300 {
+            return None;
+        }
+        let n = n.normalized();
         Some(if face.orientation == Orientation::Reversed { -n } else { n })
     };
     let spine = |t: f64| -> (Point, Vector) {
         let (p, d) = curve.d1(t);
         (p, d.normalized())
     };
-    // The first place: between the faces' tangent planes at the start of the edge.
-    let (p0, d0) = spine(t0);
-    let (n0, n1) = (outward(model, f0, p0).ok_or_else(|| Error::InvalidInput("a face without a surface".into()))?, outward(model, f1, p0).ok_or_else(|| Error::InvalidInput("a face without a surface".into()))?);
+    // The first place: between the faces' tangent planes at the start of the edge (or just
+    // along it, where a face's surface is singular there).
+    let ((p0, d0), (n0, n1)) = [0.0, 1e-4, 1e-2]
+        .iter()
+        .find_map(|&f| {
+            let (p, d) = spine(t0 + (t1 - t0) * f);
+            Some(((p, d), (outward(model, f0, p)?, outward(model, f1, p)?)))
+        })
+        .ok_or_else(|| Error::InvalidInput("a fillet's faces have no normals at its edge".into()))?;
     // (Into each face, square to the edge.)
     let (w0, w1) = (n0.cross(d0 * along0).normalized(), n1.cross(d0 * along1).normalized());
     // (Convex where the faces' normals point apart from where the material lies between;

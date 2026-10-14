@@ -20,6 +20,7 @@ use crate::topology::{CoEdgeId, EdgeId, Model, NodeKind, Orientation, Shape, Ver
 mod network;
 pub(super) use network::fillet_network;
 
+
 /// Sections along the edge, and past each of its ends.
 const SECTIONS: usize = 48;
 const PAST_END: usize = 8;
@@ -139,6 +140,15 @@ struct Section {
 /// The ball's sections along `edge` of `shape` (and past its ends), with what the fillet
 /// is built from: the edge, its faces, the contact curves and whether it is convex.
 fn rolling(model: &Model, shape: Shape, edge: Shape, radius: &dyn Fn(f64) -> f64) -> Result<Rolling> {
+    rolling_past(model, shape, edge, radius, 1)
+}
+
+/// The fillet doesn't reach the face at an end of its edge within the usual reach past it
+/// (an end face oblique to the edge).
+const NOT_REACHED: &str = "the fillet does not reach the face at the end of its edge";
+
+/// [`rolling`] with the sections carried `far` times as far past the edge's ends.
+fn rolling_past(model: &Model, shape: Shape, edge: Shape, radius: &dyn Fn(f64) -> f64, far: usize) -> Result<Rolling> {
     let id = EdgeId::try_from(edge.node).map_err(|n| Error::InvalidInput(format!("{n:?} is not an edge")))?;
     let forward = Shape { orientation: Orientation::Forward, ..edge };
     let (curve, t0, t1) = model.edge_curve(forward).ok_or_else(|| Error::InvalidInput("a degenerate edge has no fillet".into()))?;
@@ -178,7 +188,7 @@ fn rolling(model: &Model, shape: Shape, edge: Shape, radius: &dyn Fn(f64) -> f64
 
     // The spine: points of the edge, continued past its ends (by a few radii) along the
     // faces' intersection.
-    let reach = if closed { 0.0 } else { 4.0 * (0..=8).map(|i| radius(i as f64 / 8.0)).fold(0.0, f64::max) };
+    let reach = if closed { 0.0 } else { 4.0 * far as f64 * (0..=8).map(|i| radius(i as f64 / 8.0)).fold(0.0, f64::max) };
     let past = |t_end: f64| -> f64 { reach / curve.d1(t_end).1.length() };
     let (t_min, t_max) = (t0 - past(t0), t1 + past(t1));
     let spine_at = |t: f64| -> Result<(Point, Vector)> {
@@ -224,19 +234,35 @@ fn rolling(model: &Model, shape: Shape, edge: Shape, radius: &dyn Fn(f64) -> f64
     let mut previous_worst = f64::INFINITY;
     let mut previous_poor = false;
     let (sections, contacts) = loop {
-        let past_n = if closed { 0 } else { (PAST_END * n / SECTIONS).max(PAST_END) };
+        let past_n = if closed { 0 } else { far * (PAST_END * n / SECTIONS).max(PAST_END) };
         // Past each end, outwards as far as the ball still fits between the faces (their
         // surfaces may end or degenerate further on).
         let past = |end: f64, far: f64| -> Vec<Section> {
             (1..=past_n).map(|j| end + (far - end) * j as f64 / past_n as f64).map_while(|t| section_at(t).ok()).collect()
         };
         let before = past(t0, t_min);
-        let after = past(t1, t_max);
         let mut sections: Vec<Section> = before.into_iter().rev().collect();
+        // (Where no ball fits near an end of an open edge (a face's surface singular there,
+        // as at a cone's apex), the sections stop short of it: the fillet must end on the
+        // face there before.)
+        let mut short = [false; 2];
         for k in 0..=n {
-            sections.push(section_at(t0 + (t1 - t0) * k as f64 / n as f64)?);
+            match section_at(t0 + (t1 - t0) * k as f64 / n as f64) {
+                Ok(s) => sections.push(s),
+                Err(_) if !closed && 4 * k < n && (short[0] || k == 0) => {
+                    short[0] = true;
+                    sections.clear();
+                }
+                Err(_) if !closed && 4 * k > 3 * n => {
+                    short[1] = true;
+                    break;
+                }
+                Err(e) => return Err(e),
+            }
         }
-        sections.extend(after);
+        if !short[1] {
+            sections.extend(past(t1, t_max));
+        }
         let ts: Vec<f64> = sections.iter().map(|s| s.t).collect();
         let contact = |i: usize| -> Result<BSplineCurve> {
             let points: Vec<Point> = sections.iter().map(|s| s.contacts[i]).collect();
@@ -285,7 +311,15 @@ struct Rolling {
 /// `shape` with `edge` rounded by a ball of radius `radius(s)`, `s` the fraction of the
 /// edge's length from its start.
 pub(super) fn rolling_ball(model: &mut Model, shape: Shape, edge: Shape, radius: &dyn Fn(f64) -> f64) -> Result<Shape> {
-    let Rolling { id, va, vb, closed, sides, sections, contacts, convex, target, .. } = rolling(model, shape, edge, radius)?;
+    // (Further past the ends where the end faces are not reached.)
+    match rolling_ball_past(model, shape, edge, radius, 1) {
+        Err(Error::InvalidInput(m)) if m == NOT_REACHED => rolling_ball_past(model, shape, edge, radius, 3),
+        other => other,
+    }
+}
+
+fn rolling_ball_past(model: &mut Model, shape: Shape, edge: Shape, radius: &dyn Fn(f64) -> f64, far: usize) -> Result<Shape> {
+    let Rolling { id, va, vb, closed, sides, sections, contacts, convex, target, .. } = rolling_past(model, shape, edge, radius, far)?;
     let surface = fillet_surface(&sections)?;
     let ts: Vec<f64> = sections.iter().map(|s| s.t).collect();
 
@@ -395,7 +429,13 @@ fn section(sides: &[Side; 2], o: Point, tangent: Vector, r: f64, side: f64, near
             return Ok(Section { t: 0.0, center, contacts, contact_uv, radius: r });
         }
     }
-    let normals = [sides[0].distance(o)?.2, sides[1].distance(o)?.2];
+    // (The faces' normals at `o`, or where a surface is singular there (a cone's apex), just
+    // along the edge.)
+    let normal = |i: usize| -> Result<Vector> {
+        let reach = 1e-6 * (1.0 + (o - Point::ORIGIN).length());
+        sides[i].distance(o).or_else(|e| sides[i].distance(o + tangent * reach).or_else(|_| sides[i].distance(o - tangent * reach)).map_err(|_| e)).map(|d| d.2)
+    };
+    let normals = [normal(0)?, normal(1)?];
     let into: Vec<Vector> = (0..2).map(|i| normals[i].cross(tangent * sides[i].along)).collect();
     let tiny = 1e-9;
     let unit = |v: Vector| if v.length() > tiny { v * (1.0 / v.length()) } else { v };
@@ -519,8 +559,13 @@ fn end_cut(
         let (a, b) = model.edge_vertices(Shape::from(e));
         a.node == vertex.node || b.node == vertex.node
     };
+    // (Not degenerate edges: a cone's apex, say.)
     let face_edges = |face: Shape| -> Vec<EdgeId> {
-        model.explore(face, NodeKind::Edge).filter_map(|e| EdgeId::try_from(e.node).ok()).filter(|&e| e != id && at_vertex(e)).collect()
+        model
+            .explore(face, NodeKind::Edge)
+            .filter_map(|e| EdgeId::try_from(e.node).ok())
+            .filter(|&e| e != id && at_vertex(e) && model.edge_curve(Shape::from(e)).is_some())
+            .collect()
     };
     let neighbours: Vec<Vec<EdgeId>> = sides.iter().map(|s| face_edges(s.face)).collect();
     let (Some(&a), Some(&b)) = (neighbours[0].first(), neighbours[1].first()) else {
@@ -590,7 +635,7 @@ fn end_cut(
             }
         }
         }
-        best.map(|(_, v)| (u, v)).ok_or_else(|| Error::InvalidInput("the fillet does not reach the face at the end of its edge".into()))
+        best.map(|(_, v)| (u, v)).ok_or_else(|| Error::InvalidInput(NOT_REACHED.into()))
     };
     // Where the contact curves meet the edges at the vertex.
     // (Where a contact curve would meet the edge past its far end, the fillet is wider than
@@ -611,6 +656,13 @@ fn end_cut(
         let t = parameter_on(&c, at, beyond, p);
         if c.point(t).distance(p) <= near && (t - at).abs() > 1e-9 * (last - first).abs() {
             return Ok((t, true));
+        }
+        // (Or along where the side's surface and the end face's meet, from the vertex: the
+        // edge's curve does not carry on there, as a cone's generatrix at its apex.)
+        if let Some(i) = sides.iter().position(|s| model.explore(s.face, NodeKind::Edge).any(|x| x.node == crate::topology::NodeId::from(e))) {
+            if intersection_from(&sides[i], &end, model.point(vertex), p).is_ok() {
+                return Ok((f64::NAN, true));
+            }
         }
         Err(Error::InvalidInput("a fillet running over onto the next face is not supported yet".into()))
     };
@@ -658,7 +710,12 @@ fn extension(model: &mut Model, cut: &EndCut, i: usize, side: &Side, to: VertexI
     let at = if a.node == crate::topology::NodeId::from(cut.vertex) { first } else { last };
     let n = 16;
     let ws: Vec<f64> = (0..=n).map(|k| k as f64 / n as f64).collect();
-    let points: Vec<Point> = ws.iter().map(|&w| c.point(at + (t - at) * w)).collect();
+    let points: Vec<Point> = if t.is_nan() {
+        // (Along where the side's surface and the end face's meet.)
+        intersection_from(side, &cut.face, model.point(Shape::from(cut.vertex)), model.point(Shape::from(to)))?
+    } else {
+        ws.iter().map(|&w| c.point(at + (t - at) * w)).collect()
+    };
     let curve = fit::interpolate_with_parameters(&points, &ws)?;
     let e = model.add_edge(cut.vertex, to, tolerance)?;
     model.set_edge_curve(e.into(), Curve::BSpline(curve.clone()), tolerance)?;
@@ -671,6 +728,58 @@ fn extension(model: &mut Model, cut: &EndCut, i: usize, side: &Side, to: VertexI
         Ok(Curve2::BSpline(fit::interpolate_with_parameters(&unwrapped(uv, &s.surface), &ws)?))
     };
     Ok((e, on(side)?, on(&cut.face)?, [cut.vertex, to]))
+}
+
+/// Raises `edge`'s tolerance (and its vertices') to cover how far `surface` at `pcurve`
+/// strays from `curve` over `[first, last]` (a pcurve interpolated where the surface's
+/// parameters crowd, as near a pole).
+fn cover_pcurve(model: &mut Model, edge: EdgeId, curve: &Curve, pcurve: &Curve2, surface: &Surface, first: f64, last: f64) -> Result<()> {
+    let mut worst: f64 = 0.0;
+    for k in 0..=64 {
+        let t = first + (last - first) * k as f64 / 64.0;
+        let q = pcurve.point(t);
+        worst = worst.max(surface.point(q.x, q.y).distance(curve.point(t)));
+    }
+    let needed = 1.5 * worst;
+    if needed > model.tolerance(Shape::from(edge)) {
+        model.set_edge_tolerance(edge, needed)?;
+        let (a, b) = model.edge_vertices(Shape::from(edge));
+        for v in [a, b] {
+            if needed > model.tolerance(v) {
+                model.set_vertex_tolerance(VertexId::try_from(v.node).expect("a vertex"), needed)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Points (17, evenly from `from` to `to`) where the surfaces of `a` and `b` meet: each on
+/// both, in the plane square to the chord through the chord's point.
+fn intersection_from(a: &Side, b: &Side, from: Point, to: Point) -> Result<Vec<Point>> {
+    let chord = to - from;
+    if chord.length() <= 1e-12 {
+        return Err(Error::InvalidInput("no way along the faces to a fillet's end".into()));
+    }
+    let tangent = chord.normalized();
+    let sides = [a.clone(), b.clone()];
+    let n = 16;
+    let mut points = Vec::with_capacity(n + 1);
+    for k in 0..=n {
+        let guess = from + chord * (k as f64 / n as f64);
+        let p = if k == 0 {
+            from
+        } else if k == n {
+            to
+        } else {
+            onto_both(&sides, guess, tangent)?
+        };
+        // (Close to the chord's point: the same branch of the intersection.)
+        if p.distance(guess) > 0.5 * chord.length() {
+            return Err(Error::InvalidInput("no way along the faces to a fillet's end".into()));
+        }
+        points.push(p);
+    }
+    Ok(points)
 }
 
 /// The parameter of the point of `curve` over `[first, last]` nearest to `p`.
@@ -886,6 +995,9 @@ impl Rebuild<'_> {
                     self.ts,
                 )?),
             };
+            for &(e, lo, hi) in &contact_edges[i] {
+                cover_pcurve(self.model, e, &Curve::BSpline(self.contacts[i].clone()), &pcurve, &side.surface, lo, hi)?;
+            }
             let extra: Vec<(EdgeId, Curve2, [VertexId; 2])> = side_inserts.iter().filter(|(f, _)| f.node == side.face.node).map(|(_, x)| x.clone()).collect();
             let face = rebuild_face(self.model, side.face, &[(self.id, &contact_edges[i], pcurve)], &shortened, &extra)?;
             rebuilt.push((side.face, face));
@@ -1106,6 +1218,20 @@ fn rebuild_face(
             let from = if orientation == Orientation::Reversed { 1.0 } else { 0.0 };
             let shifted = align(pcurve, from, target, &surface);
             uses.insert(k + 1, (edge, orientation, shifted, 0.0, 1.0));
+        }
+        // (A degenerate edge kept (a pole) runs from where the coedge before it ends to where
+        // the one after starts, which may have moved round the pole.)
+        let n = uses.len();
+        for k in 0..n {
+            if n < 3 || model.edge_curve(Shape::from(uses[k].0)).is_some() {
+                continue;
+            }
+            let (prev, next) = (&uses[(k + n - 1) % n], &uses[(k + 1) % n]);
+            let a = prev.2.point(if prev.1 == Orientation::Reversed { prev.3 } else { prev.4 });
+            let b = next.2.point(if next.1 == Orientation::Reversed { next.4 } else { next.3 });
+            let (first, last) = (uses[k].3, uses[k].4);
+            let (p, q) = if uses[k].1 == Orientation::Reversed { (b, a) } else { (a, b) };
+            uses[k].2 = Curve2::BSpline(BSplineCurve2::new(vec![p, q], vec![first, last], vec![2, 2], 1));
         }
         let uses = round_pole(model, &surface, forward, uses, tolerance)?;
         wires.push((uses, wire.orientation));

@@ -852,7 +852,6 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/simple/F8
-expect: not_done
 build:
   - w1: {parabola: {center: [0, 0, 0], normal: [1, 0, 0], x: [0, 0, 1], focal: 50}}
   - w1: {edge: {curve: w1, range: [-100, 100]}}
@@ -873,7 +872,6 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/simple/F9
-expect: not_done
 build:
   - w1: {parabola: {center: [0, 0, 0], normal: [1, 0, 0], x: [0, 0, 1], focal: 50}}
   - w1: {edge: {curve: w1, range: [-100, 100]}}
@@ -915,7 +913,6 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/simple/G2
-expect: not_done
 build:
   - w1: {parabola: {center: [0, 0, 0], normal: [1, 0, 0], x: [0, 0, 1], focal: 50}}
   - w1: {edge: {curve: w1, range: [-100, 100]}}
@@ -1125,7 +1122,6 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/simple/H3
-expect: not_done
 build:
   - w1: {ellipse: {center: [0, 0, 0], major: 15, minor: 10}}
   - w1: {edge: {curve: w1, range: [0, "pi/2"]}}
@@ -1170,7 +1166,6 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/simple/H5
-expect: not_done
 build:
   - w1: {ellipse: {center: [0, 0, 0], major: 15, minor: 10}}
   - w1: {edge: {curve: w1, range: [0, "pi/2"]}}
@@ -1232,7 +1227,6 @@ ported_from:
   file: tests/blend/simple/H8
 notes:
   - "OCCT TODO OCC22817 (All): Faulty shapes in variables faulty_1 to faulty_2"
-expect: not_done
 build:
   - w: {polyline: {points: [[0, 0, 25], [20, 0, 5], [5, 0, 5], [5, 0, -5], [20, 0, -5], [0, 0, -25], [0, 0, 25]]}}
   - w: {face: {wire: w}}
@@ -1250,7 +1244,6 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/simple/H9
-expect: not_done
 build:
   - w: {polyline: {points: [[0, 0, 25], [20, 0, 5], [5, 0, 5], [5, 0, -5], [20, 0, -5], [0, 0, -25], [0, 0, 25]]}}
   - w: {face: {wire: w}}
