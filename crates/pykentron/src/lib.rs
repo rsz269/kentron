@@ -970,6 +970,44 @@ fn length_unit(name: &str) -> PyResult<kentron::io::step::LengthUnit> {
 
 /// Writes one shape to a STEP file as a product named `name`, its lengths in `unit` (the
 /// file declaring it).
+/// `shape` (a wire or an edge: a wire; a face: a face) projected onto the face `target`
+/// along `direction`.
+#[pyfunction]
+fn project_along(shape: Handle, target: Handle, direction: Xyz) -> PyResult<Handle> {
+    let d = vector(direction);
+    with_model(|m| match shape.shape.kind() {
+        NodeKind::Face => kentron::project::face_along(m, shape.shape, target.shape, d),
+        NodeKind::Edge => {
+            let w = make::wire(m, &[shape.shape])?;
+            kentron::project::wire_along(m, w, target.shape, d)
+        }
+        _ => kentron::project::wire_along(m, shape.shape, target.shape, d),
+    })
+    .map(handle)
+}
+
+/// The faces of `text` set in the font file at `font_path`, `size` high (its em), aligned
+/// across (`left`, `center`, `right`) and up and down (`top`, `center`, `bottom`) as OCCT's
+/// text builder aligns: a compound of faces in the XY plane.
+#[pyfunction]
+fn text(text: &str, size: f64, font_path: &str, halign: &str, valign: &str) -> PyResult<Handle> {
+    use kentron::text::{HorizontalAlignment as H, VerticalAlignment as V};
+    let font = std::fs::read(font_path).map_err(|e| PyValueError::new_err(format!("{font_path}: {e}")))?;
+    let h = match halign {
+        "left" => H::Left,
+        "center" => H::Center,
+        "right" => H::Right,
+        other => return Err(PyValueError::new_err(format!("unknown horizontal alignment {other}"))),
+    };
+    let v = match valign {
+        "top" => V::Top,
+        "center" => V::Center,
+        "bottom" => V::Bottom,
+        other => return Err(PyValueError::new_err(format!("unknown vertical alignment {other}"))),
+    };
+    with_model(|m| kentron::text::text(m, &font, text, size, h, v)).map(handle)
+}
+
 #[pyfunction]
 #[pyo3(signature = (shape, path, name, color=None, unit="MM"))]
 fn write_step(shape: Handle, path: &str, name: &str, color: Option<Xyz>, unit: &str) -> PyResult<()> {
@@ -1046,6 +1084,8 @@ fn _kentron(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(voxelize, m)?)?;
     m.add_function(wrap_pyfunction!(morphology, m)?)?;
     m.add_function(wrap_pyfunction!(components, m)?)?;
+    m.add_function(wrap_pyfunction!(text, m)?)?;
+    m.add_function(wrap_pyfunction!(project_along, m)?)?;
     m.add_function(wrap_pyfunction!(write_step, m)?)?;
     m.add_function(wrap_pyfunction!(write_step_assembly, m)?)?;
     m.add_function(wrap_pyfunction!(distance, m)?)?;

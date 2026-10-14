@@ -17,12 +17,13 @@ eating up 1 GB+ of memory, so I figured why not spin up my own kernel.
 kentron models solids the way Open CASCADE Technology (OCCT) does: as faces bounded by
 edges and vertices, over exact curves and surfaces (analytic and NURBS). It covers
 primitives, extrusions and revolutions, lofts and pipes, booleans, fillets, chamfers,
-drafts, offsets and thick solids, sewing and healing, and BRep, STEP and STL files. All of
+drafts, offsets and thick solids, sewing and healing, text from TrueType and OpenType
+fonts, and BRep, STEP and STL files. All of
 it is kentron's own code: OCCT is the reference to match, not a dependency.
 
 - **`crates/kentron`**: the kernel, [on crates.io](https://crates.io/crates/kentron). Pure
-  Rust; its only dependency is `rayon`, for running independent steps in parallel
-  (optional).
+  Rust, with two optional dependencies: `rayon`, for running independent steps in parallel,
+  and `ttf-parser`, for text (the `text` feature).
 - **`crates/pykentron`**: Python bindings with a CadQuery-compatible API,
   [on PyPI](https://pypi.org/project/pykentron/). CadQuery scripts run on kentron by
   importing `pykentron` in place of `cadquery`, or unchanged with `pykentron-run`.
@@ -101,7 +102,9 @@ passing `CollectOptions` to `Model::collect_garbage_with`.
 - Rust: `cargo add kentron`.
 - Python 3.10 or later: `pip install pykentron`, or `pip install "pykentron[cadquery]"` to
   run CadQuery scripts (it adds what CadQuery's own Python layers need). Wheels are built
-  for Linux on x86-64; elsewhere pip builds from the source distribution, which needs Rust.
+  for Linux on x86-64, for any x86-64 CPU (not the x86-64-v3 a build from this repository
+  targets, which is somewhat faster on CPUs from 2015 on); elsewhere pip builds from the
+  source distribution, which needs Rust.
 
 ```python
 import pykentron as cq

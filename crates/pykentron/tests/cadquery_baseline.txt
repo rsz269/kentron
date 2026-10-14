@@ -102,8 +102,6 @@ tests.test_cadquery.TestCadQuery::testParametricSurface
 tests.test_cadquery.TestCadQuery::testSketch
 tests.test_cadquery.TestCadQuery::testSplineApprox
 tests.test_cadquery.TestCadQuery::testSweep
-tests.test_cadquery.TestCadQuery::testText
-tests.test_cadquery.TestCadQuery::testTextAlignment
 tests.test_cadquery.TestCadQuery::testToOCC
 tests.test_cadquery.TestCadQuery::test_interpPlate
 tests.test_cadquery.TestCadQuery::test_makeNSidedSurface
@@ -116,7 +114,6 @@ tests.test_exporters.TestExporters::testVRML
 tests.test_exporters.TestExporters::testVTP
 tests.test_exporters::test_assy_vtk_rotation
 tests.test_exporters::test_dxf_approx
-tests.test_exporters::test_dxf_text
 tests.test_exporters::test_fused_assembly
 tests.test_exporters::test_fused_assembly_glue_tol
 tests.test_exporters::test_fused_assembly_top_level_only
@@ -160,7 +157,6 @@ tests.test_free_functions::test_sewing
 tests.test_free_functions::test_solid
 tests.test_free_functions::test_sweep
 tests.test_free_functions::test_sweep_aux
-tests.test_free_functions::test_text
 tests.test_free_functions::test_utils
 tests.test_importers.TestImporters::testBIN
 tests.test_importers.TestImporters::testImportDXF

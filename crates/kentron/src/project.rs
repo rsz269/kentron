@@ -481,3 +481,218 @@ mod tests {
         assert!(model.unique_subshapes(r, NodeKind::Edge).is_empty());
     }
 }
+
+/// An edge's projection along a direction: the edge made (run as the edge projected runs),
+/// and its pcurve on the surface projected onto over the edge's range.
+struct AlongEdge {
+    edge: Shape,
+    pcurve: crate::geometry::curve2::BSplineCurve2,
+    first: f64,
+    last: f64,
+}
+
+/// The point of `surface` met from `p` along `direction` (moving either way), from `start`
+/// (its parameters and how far along): Newton's method on `S(u, v) - (p + s d)`.
+fn meet_along(surface: &Surface, p: Point, direction: crate::math::Vector, start: (f64, f64, f64)) -> Option<(f64, f64, f64)> {
+    let (mut u, mut v, mut s) = start;
+    let scale = 1.0 + (p - Point::ORIGIN).length();
+    for _ in 0..50 {
+        let (q, du, dv) = surface.d1(u, v);
+        let f = q - (p + direction * s);
+        if f.length() <= 1e-12 * scale {
+            return Some((u, v, s));
+        }
+        // [du dv -d] (Δu, Δv, Δs) = -f
+        let columns = [[du.x, du.y, du.z], [dv.x, dv.y, dv.z], [-direction.x, -direction.y, -direction.z]];
+        let step = solve3(columns, [f.x, f.y, f.z])?;
+        u -= step[0];
+        v -= step[1];
+        s -= step[2];
+    }
+    let (q, _, _) = surface.d1(u, v);
+    ((q - (p + direction * s)).length() <= 1e-8 * scale).then_some((u, v, s))
+}
+
+/// Edge `edge`'s projection onto `surface` along `direction`, between the vertices `ends`
+/// (its own start and end projected), the nearest projection where there are several.
+fn edge_along(model: &mut Model, edge: Shape, surface: &Surface, direction: crate::math::Vector, ends: [crate::topology::VertexId; 2], tolerance: f64) -> Result<AlongEdge> {
+    use crate::geometry::curve2::BSplineCurve2;
+    let forward = Shape { orientation: crate::topology::Orientation::Forward, ..edge };
+    let (curve, first, last) = model.edge_curve(forward).ok_or_else(|| Error::InvalidInput("a degenerate edge projects to nothing".into()))?;
+    let (u_period, v_period) = (surface.u_period(), surface.v_period());
+    let solve = |n: usize| -> Result<(Vec<f64>, Vec<Point>, Vec<Point2>)> {
+        let ts: Vec<f64> = (0..=n).map(|k| first + (last - first) * k as f64 / n as f64).collect();
+        let mut points = Vec::with_capacity(n + 1);
+        let mut uvs: Vec<Point2> = Vec::with_capacity(n + 1);
+        let mut previous: Option<(f64, f64, f64)> = None;
+        for &t in &ts {
+            let p = curve.point(t);
+            let start = match previous {
+                Some(s) => s,
+                None => {
+                    let (u, v, _) = nearest_on_surface(p, surface, None);
+                    (u, v, (surface.point(u, v) - p).dot(direction))
+                }
+            };
+            let (u, v, s) = meet_along(surface, p, direction, start).ok_or_else(|| Error::Failed("an edge does not project onto the surface along the direction".into()))?;
+            previous = Some((u, v, s));
+            points.push(p + direction * s);
+            // (Continuous across the surface's periods.)
+            let (mut u, mut v) = (u, v);
+            if let Some(last) = uvs.last() {
+                if let Some(pu) = u_period {
+                    u -= ((u - last.x) / pu).round() * pu;
+                }
+                if let Some(pv) = v_period {
+                    v -= ((v - last.y) / pv).round() * pv;
+                }
+            }
+            uvs.push(Point2::new(u, v));
+        }
+        Ok((ts, points, uvs))
+    };
+    // More samples until the fitted curve holds to fresh projections halfway between.
+    let mut n = 16;
+    let (curve3, pcurve) = loop {
+        let (ts, points, uvs) = solve(n)?;
+        let curve3 = fit::interpolate_with_parameters(&points, &ts)?;
+        let pcurve: BSplineCurve2 = fit::interpolate_with_parameters(&uvs, &ts)?;
+        let (fine_ts, fine_points, _) = solve(2 * n)?;
+        let worst = fine_ts.iter().zip(&fine_points).map(|(&t, &p)| curve3.point(t).distance(p)).fold(0.0, f64::max);
+        if worst <= tolerance || n >= 512 {
+            break (curve3, pcurve);
+        }
+        n *= 2;
+    };
+    let e = model.add_edge(ends[0], ends[1], tolerance)?;
+    model.set_edge_curve(e.into(), Curve::BSpline(curve3), tolerance)?;
+    model.set_edge_range(e.into(), first, last)?;
+    Ok(AlongEdge { edge: Shape { orientation: edge.orientation, ..Shape::from(e) }, pcurve, first, last })
+}
+
+/// The edges of `wire` projected onto `surface` along `direction`, in order along it, with
+/// their vertices shared (each of `vertices` projected once).
+fn wire_along_surface(
+    model: &mut Model,
+    wire: Shape,
+    surface: &Surface,
+    direction: crate::math::Vector,
+    vertices: &mut std::collections::HashMap<crate::topology::NodeId, crate::topology::VertexId>,
+    tolerance: f64,
+) -> Result<Vec<AlongEdge>> {
+    let mut out = Vec::new();
+    for edge in model.ordered_edges(wire) {
+        let forward = Shape { orientation: crate::topology::Orientation::Forward, ..edge };
+        let (a, b) = model.edge_vertices(forward);
+        let mut ends = [crate::topology::VertexId::INVALID; 2];
+        for (k, v) in [a, b].into_iter().enumerate() {
+            ends[k] = match vertices.get(&v.node) {
+                Some(&w) => w,
+                None => {
+                    let p = model.point(v);
+                    let (u, w, _) = nearest_on_surface(p, surface, None);
+                    let (u, w, s) = meet_along(surface, p, direction, (u, w, (surface.point(u, w) - p).dot(direction)))
+                        .ok_or_else(|| Error::Failed("a vertex does not project onto the surface along the direction".into()))?;
+                    let id = model.add_vertex({ let (a, b) = (surface.point(u, w), p + direction * s); a + (b - a) * 0.5 }, tolerance);
+                    vertices.insert(v.node, id);
+                    id
+                }
+            };
+        }
+        out.push(edge_along(model, edge, surface, direction, ends, tolerance)?);
+    }
+    Ok(out)
+}
+
+/// `wire` projected onto the surface of the face `target` along `direction` (the projection
+/// nearest the wire): a wire.
+#[doc(alias = "BRepProj_Projection")]
+pub fn wire_along(model: &mut Model, wire: Shape, target: Shape, direction: crate::math::Vector) -> Result<Shape> {
+    let surface = target_surface(model, target)?;
+    let direction = unit(direction)?;
+    let mut vertices = std::collections::HashMap::new();
+    let edges = wire_along_surface(model, wire, &surface, direction, &mut vertices, 1e-6)?;
+    let coedges: Vec<CoEdgeId> = edges.iter().map(|e| model.add_coedge(crate::topology::EdgeId::try_from(e.edge.node).expect("an edge"), e.edge.orientation)).collect::<Result<_>>()?;
+    Ok(Shape::from(model.add_wire(&coedges)?))
+}
+
+/// `face` projected onto the surface of the face `target` along `direction`: a face on that
+/// surface bounded by the projections of `face`'s wires (CadQuery's `Face.project`).
+pub fn face_along(model: &mut Model, face: Shape, target: Shape, direction: crate::math::Vector) -> Result<Shape> {
+    let surface = target_surface(model, target)?;
+    let direction = unit(direction)?;
+    let tolerance = 1e-6;
+    let wires: Vec<Shape> = model.children(face).collect();
+    let mut vertices = std::collections::HashMap::new();
+    let mut loops = Vec::with_capacity(wires.len());
+    for &w in &wires {
+        loops.push(wire_along_surface(model, w, &surface, direction, &mut vertices, tolerance)?);
+    }
+    let new = model.new_empty(NodeKind::Face);
+    model.set_face_surface(new, surface.clone(), tolerance)?;
+    let (u_period, v_period) = (surface.u_period(), surface.v_period());
+    for (k, edges) in loops.iter_mut().enumerate() {
+        // Each pcurve in the periods where the one before it ends.
+        let mut previous_end: Option<Point2> = None;
+        let mut uv = Vec::new();
+        for e in edges.iter_mut() {
+            let reversed = e.edge.orientation == crate::topology::Orientation::Reversed;
+            let (start, end) = if reversed { (e.last, e.first) } else { (e.first, e.last) };
+            if let Some(target) = previous_end {
+                let at = e.pcurve.point(start);
+                let shift = Point2::new(
+                    u_period.map_or(0.0, |p| ((target.x - at.x) / p).round() * p),
+                    v_period.map_or(0.0, |p| ((target.y - at.y) / p).round() * p),
+                );
+                if shift.x != 0.0 || shift.y != 0.0 {
+                    let poles = e.pcurve.poles().iter().map(|q| Point2::new(q.x + shift.x, q.y + shift.y)).collect();
+                    e.pcurve = crate::geometry::curve2::BSplineCurve2::new(poles, e.pcurve.knots().to_vec(), e.pcurve.multiplicities().to_vec(), e.pcurve.degree());
+                }
+            }
+            previous_end = Some(e.pcurve.point(end));
+            uv.extend((0..16).map(|i| e.pcurve.point(start + (end - start) * i as f64 / 16.0)));
+        }
+        // The outer loop counter-clockwise in the surface's parameters, holes clockwise.
+        let n = uv.len();
+        let area: f64 = (0..n).map(|i| uv[i].x * uv[(i + 1) % n].y - uv[(i + 1) % n].x * uv[i].y).sum();
+        let flip = (k == 0) == (area < 0.0);
+        let mut coedges = Vec::with_capacity(edges.len());
+        let order: Vec<&AlongEdge> = if flip { edges.iter().rev().collect() } else { edges.iter().collect() };
+        for e in order {
+            let o = if flip { e.edge.orientation.reversed() } else { e.edge.orientation };
+            let c = model.add_coedge(crate::topology::EdgeId::try_from(e.edge.node).expect("an edge"), o)?;
+            model.set_pcurve_with_range(c, crate::geometry::curve2::Curve2::BSpline(e.pcurve.clone()), e.first, e.last)?;
+            coedges.push(c);
+        }
+        let w = model.add_wire(&coedges)?;
+        model.add(new, Shape::from(w))?;
+    }
+    Ok(new)
+}
+
+/// The surface of the face `target`, placed as it is.
+fn target_surface(model: &Model, target: Shape) -> Result<Surface> {
+    let face = model.unique_subshapes(target, NodeKind::Face).into_iter().next().ok_or_else(|| Error::InvalidInput("nothing to project onto: no face".into()))?;
+    Ok(model.surface(face).ok_or_else(|| Error::InvalidInput("a face without a surface".into()))?.transformed(&face.placement))
+}
+
+/// `v` of unit length (an error if it has none).
+fn unit(v: crate::math::Vector) -> Result<crate::math::Vector> {
+    if v.length() > 1e-300 { Ok(v.normalized()) } else { Err(Error::InvalidInput("a projection along a zero direction".into())) }
+}
+
+/// The solution of the 3×3 system with these columns (Cramer's rule), if not singular.
+fn solve3(c: [[f64; 3]; 3], r: [f64; 3]) -> Option<[f64; 3]> {
+    let det = |a: [[f64; 3]; 3]| a[0][0] * (a[1][1] * a[2][2] - a[2][1] * a[1][2]) - a[1][0] * (a[0][1] * a[2][2] - a[2][1] * a[0][2]) + a[2][0] * (a[0][1] * a[1][2] - a[1][1] * a[0][2]);
+    let d = det(c);
+    if d.abs() <= 1e-300 {
+        return None;
+    }
+    let mut out = [0.0; 3];
+    for (i, o) in out.iter_mut().enumerate() {
+        let mut m = c;
+        m[i] = r;
+        *o = det(m) / d;
+    }
+    Some(out)
+}

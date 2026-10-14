@@ -22,6 +22,6 @@ default = ["mimalloc"]
 mimalloc = ["dep:mimalloc"]
 
 [dependencies]
-kentron = { path = "../kentron" }
+kentron = { path = "../kentron", features = ["text"] }
 pyo3 = { version = "0.27", features = ["extension-module", "abi3-py310"] }
 mimalloc = { version = "0.1", default-features = false, optional = true }

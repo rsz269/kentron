@@ -659,6 +659,9 @@ def _location_of(*args, **kwargs) -> Location:
         return args[0]
     if len(args) == 1 and _is_vector_like(args[0]):
         return Location(Vector(args[0]))
+    # CadQuery's (x, y, z, rx, ry, rz) given in order.
+    if args and len(args) <= 6 and _is_scalars(args):
+        return Location(**dict(zip(("x", "y", "z", "rx", "ry", "rz"), args)))
     return Location(*args)
 
 
@@ -841,7 +844,9 @@ class Mixin1D:
         return [self.curvatureAt(d, mode, resolution) for d in ds]
 
     def project(self, face: "Face", d, closest: bool = True):
-        raise NotImplementedError("projecting curves onto faces")
+        """The curve projected onto the face's surface along `d` (the projection nearest it):
+        a wire."""
+        return Shape.cast(native.project_along(self.wrapped, face.wrapped, Vector(d).toTuple()))
 
     Closed = IsClosed
 
@@ -1249,6 +1254,11 @@ class Face(Shape):
         du, dv = Vector(du), Vector(dv)
         return Location(Plane(Vector(p), du, du.cross(dv)))
 
+    def project(self, other: "Face", d) -> "Face":
+        """The face projected onto `other`'s surface along `d`: a face there bounded by its
+        wires' projections (as CadQuery's `Face.project`)."""
+        return Shape.cast(native.project_along(self.wrapped, other.wrapped, Vector(d).toTuple()))
+
     def normalAt(self, *args, **kwargs):
         """The unit normal (as the face is used) at the point nearest `locationVector` (the
         middle of the parameter range if none); or, given parameters `u, v`, the normal and
@@ -1626,8 +1636,31 @@ class Compound(Shape, Mixin3D):
         return self
 
     @classmethod
-    def makeText(cls, text: str, size: float, height: float, *args, **kwargs) -> "Shape":
-        raise NotImplementedError("text (kentron has no fonts)")
+    def makeText(
+        cls,
+        text: str,
+        size: float,
+        height: float,
+        font: str = "Arial",
+        fontPath: Optional[str] = None,
+        kind: str = "regular",
+        halign: str = "center",
+        valign: str = "center",
+        position: Plane = Plane.XY(),
+    ) -> "Shape":
+        """Text set in the font (`fontPath`, else the system's font best matching `font` and
+        `kind`) at em height `size`, aligned as OCCT aligns it, extruded by `height` (flat
+        faces if 0), placed on `position`."""
+        from .fonts import font_file
+
+        path = font_file(font, fontPath, kind)
+        flat = Shape.cast(native.text(text, float(size), path, halign, valign))
+        if height != 0 and flat.Faces():
+            normal = flat.Faces()[0].normalAt() * height
+            rv = cls(native.extrude(flat.wrapped, normal.toTuple())).transformShape(position.rG)
+        else:
+            rv = flat.transformShape(position.rG)
+        return rv
 
     def __bool__(self) -> bool:
         return len(native.children(self.wrapped)) > 0

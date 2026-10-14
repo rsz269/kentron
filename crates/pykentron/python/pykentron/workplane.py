@@ -270,6 +270,26 @@ class Workplane:
         new = solids[0] if len(solids) == 1 else Compound.makeCompound(solids)
         return self._combine(new, combine, clean)
 
+    def text(
+        self,
+        txt: str,
+        fontsize: float,
+        distance: float,
+        combine="cut",
+        clean: bool = True,
+        font: str = "Arial",
+        fontPath: Optional[str] = None,
+        kind: str = "regular",
+        halign: str = "center",
+        valign: str = "center",
+    ) -> "Workplane":
+        """Text on the workplane, extruded by `distance` along its normal (cut from the
+        solid by default, as CadQuery)."""
+        r = Compound.makeText(
+            txt, fontsize, distance, font=font, fontPath=fontPath, kind=kind, halign=halign, valign=valign, position=self.plane
+        )
+        return self._combine(r, combine, clean)
+
     def box(self, length: float, width: float, height: float, centered=True, combine=True, clean: bool = True) -> "Workplane":
         cx, cy, cz = (centered,) * 3 if isinstance(centered, bool) else centered
         boxes = []

@@ -357,8 +357,49 @@ def cone(*args) -> Solid:
     return Solid.makeCone(d1 / 2, d2 / 2, h)
 
 
-def text(*args, **kwargs) -> Shape:
-    raise NotImplementedError("text (kentron has no fonts)")
+def text(txt: str, size: Real, *args, **kwargs) -> Shape:
+    """Flat text (`text(txt, size, font, path, kind, halign, valign)`), text along a spine
+    (`text(txt, size, spine, planar=False, ...)`: each glyph stood on the spine at its
+    position along it, upright or lying in the plane with `planar`), or text on a base face
+    (`text(txt, size, spine, base, ...)`: the glyphs along the spine projected onto it), as
+    CadQuery's."""
+    spine = kwargs.pop("spine", None)
+    base = kwargs.pop("base", None)
+    args = list(args)
+    if spine is None and args and isinstance(args[0], Shape):
+        spine = args.pop(0)
+    if spine is None:
+        return _flat_text(txt, size, *args, **kwargs)
+    if base is None and args and isinstance(args[0], Shape):
+        base = args.pop(0)
+    if base is not None:
+        face = _get_one(base, "Face")
+        glyphs = text(txt, size, spine, False, *args, **kwargs)
+        return _normalize(compound([f.project(face, f.normalAt()) for f in glyphs.Faces()]))
+    planar = kwargs.pop("planar", args.pop(0) if args and isinstance(args[0], bool) else False)
+    wire = _get_one_wire(spine)
+    length = wire.Length()
+    placed = []
+    for f in _flat_text(txt, size, *args, **kwargs).Faces():
+        x = f.BoundingBox().center.x
+        placed.append(f.moved(-x).moved(rx=-90 if planar else 0, ry=-90).moved(wire.locationAt(x / length)))
+    return _normalize(compound(placed))
+
+
+def _flat_text(
+    txt: str,
+    size: Real,
+    font: str = "Arial",
+    path: Optional[str] = None,
+    kind: str = "regular",
+    halign: str = "center",
+    valign: str = "center",
+) -> Shape:
+    """The glyphs' faces, fused where they overlap."""
+    from ..fonts import font_file
+
+    flat = Shape.cast(native.text(txt, float(size), font_file(font, path, kind), halign, valign))
+    return clean(compound(flat.Faces()).fuse())
 
 
 # --- operations --------------------------------------------------------------------------

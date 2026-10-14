@@ -213,7 +213,6 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/bugs/modalg_4/bug779
-expect: not_done
 build:
   - s1: {load: {brep: "OCC779_s1.brep"}}
   - check: {valid: s1}

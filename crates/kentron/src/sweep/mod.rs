@@ -46,7 +46,8 @@ impl Sweep {
 /// Sweeps `profile` along the vector `v`.
 ///
 /// A vertex sweeps a straight edge, an edge a face, a wire a shell and a face a solid,
-/// closed by the profile at the start and a translated copy at the end. Straight edges
+/// closed by the profile at the start and a translated copy at the end; a compound a
+/// compound of its parts' sweeps. Straight edges
 /// sweep planes and circles swept along their axis cylinders; other edges are not
 /// supported yet.
 #[doc(alias = "BRepPrimAPI_MakePrism")]
@@ -101,6 +102,18 @@ pub fn extrude(model: &mut Model, profile: Shape, v: Vector) -> Result<Sweep> {
             let face = FaceId::from_index(profile.node.index);
             x.check(face)?;
             x.face_solid(face, profile.orientation)?
+        }
+        // A compound: each of its parts swept, as a compound.
+        NodeKind::Compound => {
+            let parts: Vec<Shape> = x.model.children(profile).collect();
+            let compound = x.model.new_empty(NodeKind::Compound);
+            let mut generated = Vec::new();
+            for part in parts {
+                let sweep = extrude(x.model, part, v)?;
+                generated.extend(sweep.generated);
+                x.model.add(compound, sweep.shape)?;
+            }
+            return Ok(Sweep { shape: compound, generated });
         }
         kind => todo!("extruding a {kind:?}"),
     };

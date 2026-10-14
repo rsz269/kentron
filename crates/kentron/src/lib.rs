@@ -61,6 +61,8 @@ pub mod properties;
 pub mod sew;
 pub mod sketch;
 pub mod sweep;
+#[cfg(feature = "text")]
+pub mod text;
 pub mod tolerance;
 pub mod topology;
 pub mod unify;
