@@ -276,18 +276,8 @@ impl Face {
     /// Where `p` (on the face's surface) lies with respect to the face: on its boundary
     /// within [`on_tol`], else inside or outside.
     pub fn locate(&self, p: Point, edges: &[Edge], vertices: &Vertices) -> Location {
-        for b in &self.boundary {
-            let e = &edges[b.edge];
-            if !geom::box_contains(&e.bbox, p) {
-                continue;
-            }
-            let d = match &e.curve {
-                Some(c) => geom::project(c, e.first, e.last, p).1,
-                None => vertices.points[e.start].distance(p),
-            };
-            if d <= on_tol() {
-                return Location::Boundary;
-            }
+        if self.near_boundary(p, on_tol(), edges, vertices) {
+            return Location::Boundary;
         }
         // A face without a boundary is its whole surface (an unbounded plane).
         if self.boundary.is_empty() {
@@ -297,11 +287,42 @@ impl Face {
         // their size): beyond its edge.
         let reach = 1e-3 * self.extent.0.distance(self.extent.1) + on_tol();
         let Some(uv) = geom::uv_within(&self.surface, p, reach) else { return Location::Outside };
-        let inside = self
-            .representatives(uv)
-            .into_iter()
-            .any(|uv| geom::inside_polylines(&self.polylines, uv));
-        if inside { Location::Inside } else { Location::Outside }
+        let inside_at = |uv: Uv| self.representatives(uv).into_iter().any(|uv| geom::inside_polylines(&self.polylines, uv));
+        if inside_at(uv) {
+            return Location::Inside;
+        }
+        // On a seam (both its copies in the polylines, neither side counting it inside):
+        // inside if a step either way across it is (a true boundary has outside on one side).
+        for (k, period) in [(0, self.u_period), (1, self.v_period)] {
+            let Some(period) = period else { continue };
+            let step = 1e-7 * period;
+            let nudged = |d: f64| {
+                let mut q = uv;
+                q[k] += d;
+                q
+            };
+            if inside_at(nudged(step)) && inside_at(nudged(-step)) {
+                return Location::Inside;
+            }
+        }
+        Location::Outside
+    }
+
+    /// Whether `p` lies within `near` of one of the face's edges.
+    pub fn near_boundary(&self, p: Point, near: f64, edges: &[Edge], vertices: &Vertices) -> bool {
+        self.boundary.iter().any(|b| {
+            let e = &edges[b.edge];
+            let (lo, hi) = e.bbox;
+            let outside = |x: f64, a: f64, b: f64| x < a - near || x > b + near;
+            if outside(p.x, lo.x, hi.x) || outside(p.y, lo.y, hi.y) || outside(p.z, lo.z, hi.z) {
+                return false;
+            }
+            let d = match &e.curve {
+                Some(c) => geom::project(c, e.first, e.last, p).1,
+                None => vertices.points[e.start].distance(p),
+            };
+            d <= near
+        })
     }
 
     /// The outward unit normal at a point of the face.

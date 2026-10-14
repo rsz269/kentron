@@ -118,36 +118,30 @@ fn i1() -> DrawResult<()> {
 
 /// `tests/boolean/bsection/I2`
 #[test]
-#[should_panic]
-fn i2() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.dset(&["SCALE", "100"])?;
-        d.restore(&[data_file("GEN510-3454.rle").as_str(), "a"])?;
-        d.explode(&["a"])?;
-        d.bsection(&["result", "a_1", "a_2"])?;
-        d.checkprops(&["result", "-l", "8.10428"])?;
-        d.checksection(&["result"])?;
-        d.checkshape(&["result"])?;
-        Ok(())
-    })
+fn i2() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.dset(&["SCALE", "100"])?;
+    d.restore(&[data_file("GEN510-3454.rle").as_str(), "a"])?;
+    d.explode(&["a"])?;
+    d.bsection(&["result", "a_1", "a_2"])?;
+    d.checkprops(&["result", "-l", "8.10428"])?;
+    d.checksection(&["result"])?;
+    d.checkshape(&["result"])?;
+    Ok(())
 }
 
 /// `tests/boolean/bsection/I3`
 #[test]
-#[should_panic]
-fn i3() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.dset(&["SCALE", "100"])?;
-        d.restore(&[data_file("GEN510-3454_nofog.rle").as_str(), "a"])?;
-        d.explode(&["a"])?;
-        d.bsection(&["result", "a_1", "a_2"])?;
-        d.checkprops(&["result", "-l", "8.14819"])?;
-        d.checksection(&["result"])?;
-        d.checkshape(&["result"])?;
-        Ok(())
-    })
+fn i3() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.dset(&["SCALE", "100"])?;
+    d.restore(&[data_file("GEN510-3454_nofog.rle").as_str(), "a"])?;
+    d.explode(&["a"])?;
+    d.bsection(&["result", "a_1", "a_2"])?;
+    d.checkprops(&["result", "-l", "8.14819"])?;
+    d.checksection(&["result"])?;
+    d.checkshape(&["result"])?;
+    Ok(())
 }
 
 /// `tests/boolean/bsection/I4`
@@ -421,19 +415,16 @@ fn k4() -> DrawResult<()> {
 
 /// `tests/boolean/bsection/K5`
 #[test]
-#[should_panic]
-fn k5() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.dset(&["SCALE", "100"])?;
-        d.restore(&[data_file("GEN664.rle").as_str(), "a"])?;
-        d.explode(&["a"])?;
-        d.bsection(&["result", "a_1", "a_2"])?;
-        d.checkprops(&["result", "-l", "718.013"])?;
-        d.checksection(&["result"])?;
-        d.checkshape(&["result"])?;
-        Ok(())
-    })
+fn k5() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.dset(&["SCALE", "100"])?;
+    d.restore(&[data_file("GEN664.rle").as_str(), "a"])?;
+    d.explode(&["a"])?;
+    d.bsection(&["result", "a_1", "a_2"])?;
+    d.checkprops(&["result", "-l", "718.013"])?;
+    d.checksection(&["result"])?;
+    d.checkshape(&["result"])?;
+    Ok(())
 }
 
 /// `tests/boolean/bsection/K6`
@@ -581,19 +572,16 @@ fn l6() -> DrawResult<()> {
 
 /// `tests/boolean/bsection/L7`
 #[test]
-#[should_panic]
-fn l7() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.dset(&["SCALE", "100"])?;
-        d.restore(&[data_file("GEN747.rle").as_str(), "a"])?;
-        d.explode(&["a"])?;
-        d.bsection(&["result", "a_1", "a_2"])?;
-        d.checkprops(&["result", "-l", "72.4212"])?;
-        d.checksection(&["result"])?;
-        d.checkshape(&["result"])?;
-        Ok(())
-    })
+fn l7() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.dset(&["SCALE", "100"])?;
+    d.restore(&[data_file("GEN747.rle").as_str(), "a"])?;
+    d.explode(&["a"])?;
+    d.bsection(&["result", "a_1", "a_2"])?;
+    d.checkprops(&["result", "-l", "72.4212"])?;
+    d.checksection(&["result"])?;
+    d.checkshape(&["result"])?;
+    Ok(())
 }
 
 /// `tests/boolean/bsection/L8`
@@ -709,19 +697,16 @@ fn m6() -> DrawResult<()> {
 
 /// `tests/boolean/bsection/M7`
 #[test]
-#[should_panic]
-fn m7() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.dset(&["SCALE", "100"])?;
-        d.restore(&[data_file("GEN778_nofog.rle").as_str(), "a"])?;
-        d.explode(&["a"])?;
-        d.bsection(&["result", "a_1", "a_2"])?;
-        d.checkprops(&["result", "-l", "456.707"])?;
-        d.checksection(&["result"])?;
-        d.checkshape(&["result"])?;
-        Ok(())
-    })
+fn m7() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.dset(&["SCALE", "100"])?;
+    d.restore(&[data_file("GEN778_nofog.rle").as_str(), "a"])?;
+    d.explode(&["a"])?;
+    d.bsection(&["result", "a_1", "a_2"])?;
+    d.checkprops(&["result", "-l", "456.707"])?;
+    d.checksection(&["result"])?;
+    d.checkshape(&["result"])?;
+    Ok(())
 }
 
 /// `tests/boolean/bsection/N2`

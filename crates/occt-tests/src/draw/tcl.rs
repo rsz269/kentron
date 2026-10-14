@@ -759,6 +759,15 @@ pub fn run_script(tests: &Path, group: &str, grid: &str, case: &str) -> Outcome 
     }
     let rules = rules(tests, group, grid);
     let session = interp.context_mut();
+    // (For debugging: the whole log.)
+    if std::env::var_os("KENTRON_DRAW_LOG").is_some() {
+        for line in &session.log {
+            eprintln!("{line}");
+        }
+        for e in &errors {
+            eprintln!("ERROR {e}");
+        }
+    }
     if let Some(todo) = session.todos.first() {
         return Outcome::KnownFailure(todo.clone());
     }

@@ -1437,10 +1437,15 @@ impl Graph {
                     Contact::On => meetings.push((fi, Meeting::On)),
                     Contact::At(ts) => {
                         let ts = if edge.free { stretch_ends(curve, edge.first, edge.last, &face.surface, ts) } else { ts };
+                        // (An edge may meet a face just past its boundary, by as far as the
+                        // face's edges stray from it: tolerant edges read from a file.)
                         let at = ts
                             .into_iter()
                             .map(|t| (t, curve.point(t)))
-                            .filter(|&(_, p)| face.locate(p, &self.edges, &self.vertices) != Location::Outside)
+                            .filter(|&(_, p)| {
+                                face.locate(p, &self.edges, &self.vertices) != Location::Outside
+                                    || (face.drift > on_tol() && face.near_boundary(p, face.drift, &self.edges, &self.vertices))
+                            })
                             .collect();
                         meetings.push((fi, Meeting::At(at)));
                     }
@@ -1705,34 +1710,49 @@ impl Graph {
         let crossings: Vec<usize> = self.faces[fa].vertices_on.iter().chain(&self.faces[fb].vertices_on).copied().collect();
         let exact: Vec<(f64, usize, bool)> = candidates.iter().flat_map(|&v| section.passes(self.vertices.points[v]).into_iter().map(move |(t, near)| (t, v, near))).collect();
         // (Only where the section would otherwise have too few to make a piece of: elsewhere
-        // the points found exactly bound it.)
+        // the points found exactly bound it. Points within a few tolerances of each other
+        // count once: the same point met by the edges of both faces, each off its face.)
+        let mut distinct: Vec<Point> = Vec::new();
+        for &(_, v, _) in &exact {
+            let p = self.vertices.points[v];
+            if !distinct.iter().any(|q| q.distance(p) <= 10.0 * drift) {
+                distinct.push(p);
+            }
+        }
         let enough = if section.closed() { 1 } else { 2 };
-        if exact.len() >= enough || drift <= on_tol() {
+        if drift <= on_tol() || distinct.len() >= enough {
             return exact;
         }
-        candidates
-            .into_iter()
-            .flat_map(|v| {
-                let p = self.vertices.points[v];
-                let mut found = section.passes(p);
-                if found.is_empty() && crossings.contains(&v) {
-                    let q = onto_both(a, b, p);
-                    // (Not where the surfaces meet nearly tangent: there edges of one lie as near
-                    // the other all along.)
-                    let crossing = geom::normal_at_point(a, q).cross(geom::normal_at_point(b, q)).length() > 0.05;
-                    if q.distance(p) <= drift && crossing {
-                        found = section.passes(q);
-                    }
-                    // (Or at an end of an open section, where the curve stops at a surface's
-                    // bounds, which such a vertex may lie past.)
-                    if found.is_empty() && !section.closed() {
-                        let (lo, hi) = section.range();
-                        found = [lo, hi].into_iter().filter(|&t| section.point(t).distance(p) <= drift).map(|t| (t, false)).collect();
-                    }
-                }
-                found.into_iter().map(move |(t, near)| (t, v, near))
-            })
-            .collect()
+        // Points where an edge meets a face not found exactly on the section: their point on
+        // both surfaces may be (an edge strays from its face by its tolerance, which where the
+        // surfaces meet at a shallow angle moves the point along them by more).
+        let mut found = exact;
+        for &v in candidates.iter().filter(|&&v| crossings.contains(&v)) {
+            if found.iter().any(|&(_, w, _)| w == v) {
+                continue;
+            }
+            let p = self.vertices.points[v];
+            let q = onto_both(a, b, p);
+            let sine = geom::normal_at_point(a, q).cross(geom::normal_at_point(b, q)).length();
+            // (Not where the surfaces meet nearly tangent: there edges of one lie as near the
+            // other all along.)
+            let crossing = sine > 0.05;
+            let reach = if crossing { (drift / sine).min(10.0 * drift) } else { drift };
+            // (A point found already far closer than the tolerance is the same point, met by
+            // another edge.)
+            if found.iter().any(|&(_, w, _)| self.vertices.points[w].distance(p) <= 0.01 * drift) {
+                continue;
+            }
+            let mut passes = if crossing && q.distance(p) <= reach { section.passes(q) } else { Vec::new() };
+            // (Or at an end of an open section, where the curve stops at a surface's bounds,
+            // which such a vertex may lie past.)
+            if passes.is_empty() && !section.closed() {
+                let (lo, hi) = section.range();
+                passes = [lo, hi].into_iter().filter(|&t| section.point(t).distance(p) <= reach).map(|t| (t, false)).collect();
+            }
+            found.extend(passes.into_iter().map(|(t, near)| (t, v, near)));
+        }
+        found
     }
 
     /// The pieces of `section` between the vertices `on` it (at their parameters) inside

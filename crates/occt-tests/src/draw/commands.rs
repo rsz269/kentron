@@ -1873,7 +1873,7 @@ impl Draw {
         need(args, 1, "checknbshapes name -kind count ...")?;
         let shape = self.shape_var(args[0])?;
         let kinds = SHAPE_KINDS.map(|(name, kind)| (name, kind));
-        let shared = args.contains(&"-t");
+        let shared = !args.contains(&"-t");
         let count = |kind: NodeKind| count_subshapes(&self.model, shape, kind, shared);
         let mut errors = Vec::new();
         let mut i = 1;
@@ -3551,11 +3551,12 @@ impl Draw {
     ///
     /// Example: `nbshapes b`
     pub fn nbshapes(&mut self, args: &[&str]) -> DrawResult {
-        // `nbshapes shape [-t]`: the numbers of its distinct sub-shapes of each kind (each
-        // TShape once with `-t`), in OCCT's report.
+        // `nbshapes shape [-t]`: the numbers of its distinct sub-shapes of each kind, in
+        // OCCT's report: each shared shape once however placed (each placement once with
+        // `-t`).
         need(args, 1, "nbshapes shape [-t]")?;
         let shape = self.shape_var(args[0])?;
-        let shared = args.contains(&"-t");
+        let shared = !args.contains(&"-t");
         let mut out = format!("Number of shapes in {}\n", args[0]);
         let mut total = 0;
         for (name, kind) in SHAPE_KINDS {

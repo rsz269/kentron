@@ -2208,7 +2208,6 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/bugs/modalg_2/bug476_1
-expect: not_done
 build:
   - s1: {load: {brep: "OCC485b.brep"}}
   - s2: {load: {brep: "OCC485a.brep"}}
@@ -2226,7 +2225,6 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/bugs/modalg_2/bug476_2
-expect: not_done
 build:
   - s1: {load: {brep: "OCC485b.brep"}}
   - s2: {load: {brep: "OCC485a.brep"}}
@@ -2244,7 +2242,6 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/bugs/modalg_2/bug476_3
-expect: not_done
 build:
   - s1: {load: {brep: "OCC485b.brep"}}
   - s2: {load: {brep: "OCC485a.brep"}}
@@ -2298,7 +2295,6 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/bugs/modalg_2/bug476_6
-expect: not_done
 build:
   - s1: {load: {brep: "OCC485b.brep"}}
   - s2: {load: {brep: "OCC485a.brep"}}
