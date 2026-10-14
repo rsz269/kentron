@@ -366,132 +366,102 @@ fn bug25810() -> DrawResult<()> {
 
 /// `tests/bugs/moddata_3/bug25892_03`
 #[test]
-#[should_panic]
-fn bug25892_03() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.restore(&[data_file("bug25892_c003").as_str(), "c"])?;
-        d.restore(&[data_file("bug25892_s003").as_str(), "s"])?;
-        d.project(&["cx", "c", "s"])?;
-        Ok(())
-    })
+fn bug25892_03() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.restore(&[data_file("bug25892_c003").as_str(), "c"])?;
+    d.restore(&[data_file("bug25892_s003").as_str(), "s"])?;
+    d.project(&["cx", "c", "s"])?;
+    Ok(())
 }
 
 /// `tests/bugs/moddata_3/bug25892_04`
 #[test]
-#[should_panic]
-fn bug25892_04() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.restore(&[data_file("bug25892_c004").as_str(), "c"])?;
-        d.restore(&[data_file("bug25892_s003").as_str(), "s"])?;
-        d.project(&["cx", "c", "s"])?;
-        Ok(())
-    })
+fn bug25892_04() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.restore(&[data_file("bug25892_c004").as_str(), "c"])?;
+    d.restore(&[data_file("bug25892_s003").as_str(), "s"])?;
+    d.project(&["cx", "c", "s"])?;
+    Ok(())
 }
 
 /// `tests/bugs/moddata_3/bug25892_05`
 #[test]
-#[should_panic]
-fn bug25892_05() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.restore(&[data_file("bug25892_c005").as_str(), "c"])?;
-        d.restore(&[data_file("bug25892_s003").as_str(), "s"])?;
-        d.project(&["cx", "c", "s"])?;
-        Ok(())
-    })
+fn bug25892_05() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.restore(&[data_file("bug25892_c005").as_str(), "c"])?;
+    d.restore(&[data_file("bug25892_s003").as_str(), "s"])?;
+    d.project(&["cx", "c", "s"])?;
+    Ok(())
 }
 
 /// `tests/bugs/moddata_3/bug25892_06`
 #[test]
-#[should_panic]
-fn bug25892_06() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.restore(&[data_file("bug25892_c006").as_str(), "c"])?;
-        d.restore(&[data_file("bug25892_s003").as_str(), "s"])?;
-        d.project(&["cx", "c", "s"])?;
-        Ok(())
-    })
+fn bug25892_06() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.restore(&[data_file("bug25892_c006").as_str(), "c"])?;
+    d.restore(&[data_file("bug25892_s003").as_str(), "s"])?;
+    d.project(&["cx", "c", "s"])?;
+    Ok(())
 }
 
 /// `tests/bugs/moddata_3/bug25892_07`
 #[test]
-#[should_panic]
-fn bug25892_07() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.restore(&[data_file("bug25892_c007").as_str(), "c"])?;
-        d.restore(&[data_file("bug25892_s003").as_str(), "s"])?;
-        d.project(&["cx", "c", "s"])?;
-        Ok(())
-    })
+fn bug25892_07() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.restore(&[data_file("bug25892_c007").as_str(), "c"])?;
+    d.restore(&[data_file("bug25892_s003").as_str(), "s"])?;
+    d.project(&["cx", "c", "s"])?;
+    Ok(())
 }
 
 /// `tests/bugs/moddata_3/bug25892_08`
 #[test]
-#[should_panic]
-fn bug25892_08() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.restore(&[data_file("bug25892_c008").as_str(), "c"])?;
-        d.restore(&[data_file("bug25892_s008").as_str(), "s"])?;
-        d.project(&["cx", "c", "s"])?;
-        Ok(())
-    })
+fn bug25892_08() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.restore(&[data_file("bug25892_c008").as_str(), "c"])?;
+    d.restore(&[data_file("bug25892_s008").as_str(), "s"])?;
+    d.project(&["cx", "c", "s"])?;
+    Ok(())
 }
 
 /// `tests/bugs/moddata_3/bug25892_09`
 #[test]
-#[should_panic]
-fn bug25892_09() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.restore(&[data_file("bug25892_c009").as_str(), "c"])?;
-        d.restore(&[data_file("bug25892_s008").as_str(), "s"])?;
-        d.project(&["cx", "c", "s"])?;
-        Ok(())
-    })
+fn bug25892_09() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.restore(&[data_file("bug25892_c009").as_str(), "c"])?;
+    d.restore(&[data_file("bug25892_s008").as_str(), "s"])?;
+    d.project(&["cx", "c", "s"])?;
+    Ok(())
 }
 
 /// `tests/bugs/moddata_3/bug25892_10`
 #[test]
-#[should_panic]
-fn bug25892_10() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.restore(&[data_file("bug25892_c010").as_str(), "c"])?;
-        d.restore(&[data_file("bug25892_s008").as_str(), "s"])?;
-        d.project(&["cx", "c", "s"])?;
-        Ok(())
-    })
+fn bug25892_10() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.restore(&[data_file("bug25892_c010").as_str(), "c"])?;
+    d.restore(&[data_file("bug25892_s008").as_str(), "s"])?;
+    d.project(&["cx", "c", "s"])?;
+    Ok(())
 }
 
 /// `tests/bugs/moddata_3/bug25892_11`
 #[test]
-#[should_panic]
-fn bug25892_11() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.restore(&[data_file("bug25892_c011").as_str(), "c"])?;
-        d.restore(&[data_file("bug25892_s008").as_str(), "s"])?;
-        d.project(&["cx", "c", "s"])?;
-        Ok(())
-    })
+fn bug25892_11() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.restore(&[data_file("bug25892_c011").as_str(), "c"])?;
+    d.restore(&[data_file("bug25892_s008").as_str(), "s"])?;
+    d.project(&["cx", "c", "s"])?;
+    Ok(())
 }
 
 /// `tests/bugs/moddata_3/bug25892_12`
 #[test]
-#[should_panic]
-fn bug25892_12() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.restore(&[data_file("bug25892_c012").as_str(), "c"])?;
-        d.restore(&[data_file("bug25892_s008").as_str(), "s"])?;
-        d.project(&["cx", "c", "s"])?;
-        Ok(())
-    })
+fn bug25892_12() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.restore(&[data_file("bug25892_c012").as_str(), "c"])?;
+    d.restore(&[data_file("bug25892_s008").as_str(), "s"])?;
+    d.project(&["cx", "c", "s"])?;
+    Ok(())
 }
 
 /// `tests/bugs/moddata_3/bug25892_13`

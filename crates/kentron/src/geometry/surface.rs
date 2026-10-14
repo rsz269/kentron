@@ -742,11 +742,27 @@ impl RevolutionSurface {
                 return (angle_in_period(u), v);
             }
         }
+        self.parameters_between(p, self.basis.first_parameter(), self.basis.last_parameter())
+    }
+
+    /// [`parameters`](Self::parameters) with `v` sought within `[first, last]` of the basis
+    /// only (a face's range: where the basis crosses the axis, the point's nearest point may
+    /// lie on its half across the axis, with the normal the other way).
+    pub fn parameters_between(&self, p: Point, first: f64, last: f64) -> (f64, f64) {
+        use super::ParametricCurve;
+        let o = self.axis.origin;
+        let z = Vector::from(self.axis.direction);
+        let meridian = |q: Point| {
+            let d = q - o;
+            let h = d.dot(z);
+            ((d - z * h).length(), h)
+        };
+        let (rp, hp) = meridian(p);
         let gap = |v: f64| {
             let (r, h) = meridian(self.basis.point(v));
             (r - rp).powi(2) + (h - hp).powi(2)
         };
-        let (mut a, mut b) = (self.basis.first_parameter(), self.basis.last_parameter());
+        let (mut a, mut b) = (first, last);
         if a <= -crate::tolerance::INFINITE || b >= crate::tolerance::INFINITE {
             // An unbounded basis (a line): around the parameter closest to p.
             let t0 = match &*self.basis {
@@ -762,6 +778,7 @@ impl RevolutionSurface {
         let (i, scanned) = (0..=n).map(|i| (i, gap(a + step * i as f64))).min_by(|x, y| x.1.total_cmp(&y.1)).expect("samples");
         let mut v = a + step * i as f64;
         let (lo, hi) = (v - step, v + step);
+        let mut converged = false;
         for _ in 0..30 {
             let (c, d1, d2) = self.basis.d2(v);
             let d = c - o;
@@ -781,13 +798,30 @@ impl RevolutionSurface {
             let next = (v - g1 / g2).clamp(lo, hi);
             if (next - v).abs() <= 1e-15 * (1.0 + v.abs()) {
                 v = next;
+                converged = true;
                 break;
             }
             v = next;
         }
-        // Newton may stall: keep the better of it and the scan.
+        // Newton may stall (at the axis, where the meridian's radius has a kink): keep the
+        // best of it, the scan and a golden-section search around the scan's best.
+        let scan_best = a + step * i as f64;
         if gap(v) > scanned {
-            v = a + step * i as f64;
+            v = scan_best;
+        }
+        let (mut x, mut y) = ((scan_best - step).max(a.min(b)), (scan_best + step).min(a.max(b)));
+        let ratio = 0.618_033_988_749_895;
+        for _ in 0..if converged { 0 } else { 80 } {
+            let (p1, p2) = (y - ratio * (y - x), x + ratio * (y - x));
+            if gap(p1) < gap(p2) {
+                y = p2;
+            } else {
+                x = p1;
+            }
+        }
+        let golden = 0.5 * (x + y);
+        if gap(golden) < gap(v) {
+            v = golden;
         }
         let c = self.basis.point(v) - o;
         let (rc, rq) = (c - z * c.dot(z), (p - o) - z * (p - o).dot(z));

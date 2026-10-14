@@ -256,7 +256,6 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/buildevol/B9
-expect: not_done
 build:
   - s: {sphere: {radius: 15, latitudes: [-90, 60], angle: 90}}
   - s: {rotate: {shape: s, axis: {origin: [0, 0, 0], direction: [0, 0, 1]}, angle: 90}}
@@ -320,7 +319,6 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/buildevol/C4
-expect: not_done
 build:
   - s: {torus: {major: 20, minor: 5, tube: [0, 160], angle: 90}}
   - s: {scale: {shape: s, center: [0, 0, 0], factor: 10}}
@@ -533,7 +531,6 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/buildevol/D6
-expect: not_done
 build:
   - w1: {ellipse: {center: [0, 0, 0], major: 15, minor: 10}}
   - w1: {edge: {curve: w1, range: [0, "pi/2"]}}
@@ -1172,7 +1169,6 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/buildevol/H7
-expect: not_done
 build:
   - s: {load: {brep: "CFI_i1234fis.rle"}}
   - s: {scale: {shape: s, center: [0, 0, 0], factor: 10}}

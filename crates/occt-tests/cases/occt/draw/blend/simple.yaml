@@ -357,7 +357,6 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/simple/C6
-expect: not_done
 build:
   - s: {cone: {r1: 90, r2: 40, height: 150, angle: 270}}
   - s_1: {select: {of: s, edge: [-8.48826264982, 8.48826264982, 150.0], length: 188.495548315}}
@@ -705,7 +704,6 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/simple/E9
-expect: not_done
 build:
   - s: {torus: {major: 20, minor: 5, tube: [0, 160], angle: 90}}
   - s: {scale: {shape: s, center: [0, 0, 0], factor: 10}}
@@ -753,7 +751,6 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/simple/F3
-expect: not_done
 build:
   - s: {torus: {major: 20, minor: 5, tube: [0, 160], angle: 90}}
   - s: {scale: {shape: s, center: [0, 0, 0], factor: 10}}
@@ -961,7 +958,6 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/simple/G4
-expect: not_done
 build:
   - w1: {bezier: {poles: [[0, 0, 0], [20, 0, 0], [20, 5, 0], [25, 10, 0], [10, 20, 0]]}}
   - w1: {edge: {curve: w1}}
@@ -1003,7 +999,6 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/simple/G6
-expect: not_done
 build:
   - w1: {bezier: {poles: [[0, 0, 0], [20, 0, 0], [20, 5, 0], [25, 10, 0], [10, 20, 0]]}}
   - w1: {edge: {curve: w1}}
@@ -1046,7 +1041,6 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/simple/G8
-expect: not_done
 build:
   - w1: {bspline: {degree: 3, knots: [[-1.0, 4], [1.0, 4]], poles: [[0, 0, 0], [2, 10, 0], [4, 6, 0], [10, 0, 0]]}}
   - w1: {edge: {curve: w1}}
@@ -1088,7 +1082,6 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/simple/H1
-expect: not_done
 build:
   - w1: {bspline: {degree: 3, knots: [[-1.0, 4], [1.0, 4]], poles: [[0, 0, 0], [2, 10, 0], [4, 6, 0], [10, 0, 0]]}}
   - w1: {edge: {curve: w1}}
@@ -1156,7 +1149,6 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/simple/H4
-expect: not_done
 build:
   - w1: {ellipse: {center: [0, 0, 0], major: 15, minor: 10}}
   - w1: {edge: {curve: w1, range: [0, "pi/2"]}}
@@ -1298,7 +1290,6 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/simple/I2
-expect: not_done
 build:
   - w: {circle: {center: [-20, 0, 0], radius: 20}}
   - w: {edge: {curve: w, range: [0, "pi/2"]}}
@@ -1425,7 +1416,6 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/simple/I8
-expect: not_done
 build:
   - w: {bezier: {poles: [[0, 0, 0], [5, 10, 0], [10, 15, 0]]}}
   - w: {edge: {curve: w}}
@@ -2265,7 +2255,6 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/simple/O3
-expect: not_done
 build:
   - s: {load: {brep: "G1234.draw"}}
   - s: {scale: {shape: s, center: [0, 0, 0], factor: 10}}
@@ -2281,7 +2270,6 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/simple/O4
-expect: not_done
 build:
   - s: {load: {brep: "G1234.draw"}}
   - s: {scale: {shape: s, center: [0, 0, 0], factor: 10}}
@@ -2299,7 +2287,6 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/simple/O5
-expect: not_done
 build:
   - s: {load: {brep: "G1234.draw"}}
   - s: {scale: {shape: s, center: [0, 0, 0], factor: 10}}
