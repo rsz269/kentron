@@ -156,7 +156,6 @@ tests/boolean/bopsection/D3
 tests/boolean/boptuc_2d/M8
 tests/boolean/boptuc_complex/B5
 tests/boolean/boptuc_complex/C7
-tests/boolean/bsection/F6
 tests/boolean/bsection/G5
 tests/boolean/bsection/L8
 tests/boolean/bsection/M2

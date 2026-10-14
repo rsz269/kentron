@@ -28,9 +28,9 @@ fn transform_options(args: &[&str]) -> modify::TransformOptions {
     modify::TransformOptions { copy_meshes: args.contains(&"-copymesh") }
 }
 
-/// A real as C++ streams print it in scientific notation: `1.000000e-07`.
+/// A real as DRAW prints tolerances in scientific notation: `1.00000e-07`.
 fn format_c_exponent(x: f64) -> String {
-    let text = format!("{x:.6e}");
+    let text = format!("{x:.5e}");
     match text.split_once('e') {
         Some((mantissa, exponent)) => {
             let (sign, digits) = exponent.strip_prefix('-').map_or(("+", exponent), |d| ("-", d));

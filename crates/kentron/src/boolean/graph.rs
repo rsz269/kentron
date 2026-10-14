@@ -186,6 +186,8 @@ impl Edge {
 pub(super) struct BoundaryUse {
     pub edge: usize,
     pub pcurve: Curve2,
+    /// False for an edge inside the face (internal or external), bounding no region of it.
+    pub bounds: bool,
 }
 
 /// A face of an operand.
@@ -310,7 +312,7 @@ impl Face {
 
     /// Whether `p` lies within `near` of one of the face's edges.
     pub fn near_boundary(&self, p: Point, near: f64, edges: &[Edge], vertices: &Vertices) -> bool {
-        self.boundary.iter().any(|b| {
+        self.boundary.iter().filter(|b| b.bounds).any(|b| {
             let e = &edges[b.edge];
             let (lo, hi) = e.bbox;
             let outside = |x: f64, a: f64, b: f64| x < a - near || x > b + near;
@@ -639,7 +641,8 @@ impl Graph {
                             i
                         }
                     };
-                    boundary.push(BoundaryUse { edge: index, pcurve });
+                    let bounds = !matches!(model[coedge_id].orientation, Orientation::Internal | Orientation::External);
+                    boundary.push(BoundaryUse { edge: index, pcurve, bounds });
                     drift = drift.max(model.tolerance(Shape::from(edge_id)));
                 }
             }
@@ -799,7 +802,7 @@ impl Graph {
 
     /// A face's boundary sampled in (u, v), its parameter ranges and boxes.
     fn sample_face(&self, surface: &Surface, boundary: &[BoundaryUse]) -> FaceSample {
-        let ranged: Vec<(&Curve2, f64, f64)> = boundary.iter().map(|b| (&b.pcurve, self.edges[b.edge].first, self.edges[b.edge].last)).collect();
+        let ranged: Vec<(&Curve2, f64, f64)> = boundary.iter().filter(|b| b.bounds).map(|b| (&b.pcurve, self.edges[b.edge].first, self.edges[b.edge].last)).collect();
         sample_face(surface, &ranged)
     }
 }

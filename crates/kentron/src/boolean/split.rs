@@ -98,16 +98,12 @@ impl Graph {
             let key = (p.start.min(p.end), p.start.max(p.end));
             let candidates = by_ends.entry(key).or_default();
             let probe = |q: &Piece, s: f64| self.edges[q.edge].point(q.first + (q.last - q.first) * s, &self.vertices);
+            // (Points of one on the other: the curves may be parametrized differently, as an
+            // arc and a B-spline along it.)
             let found = candidates.iter().copied().find(|&j| {
                 let q = &pieces[j];
-                let coincide = |same_direction: bool| {
-                    [0.5, 0.25].iter().all(|&s| {
-                        let s2 = if same_direction { s } else { 1.0 - s };
-                        probe(p, s).distance(probe(q, s2)) <= on_tol()
-                    })
-                };
-                // A closed piece (a whole circle from its one vertex) may run either way.
-                if p.start == p.end { coincide(true) || coincide(false) } else { coincide(q.start == p.start) }
+                let Some(curve) = &self.edges[q.edge].curve else { return false };
+                [0.5, 0.25, 0.75].iter().all(|&s| geom::project(curve, q.first.min(q.last), q.first.max(q.last), probe(p, s)).1 <= on_tol())
             });
             match found {
                 Some(j) => pieces[i].rep = pieces[j].rep,
