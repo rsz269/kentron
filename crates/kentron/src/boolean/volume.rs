@@ -64,6 +64,9 @@ fn enclose(model: &mut Model, shapes: &[Shape], split: bool) -> Result<Shape> {
     }
     // Shells of half-faces (a face and the side of it the space lies on), dropping faces
     // that bound nothing until none is left.
+    // (Faces of different sheets lying on one another, between the same edges, are one.)
+    let faces = distinct_faces(model, faces);
+    let mut faces = faces;
     let shells = loop {
         let sides = Sides::around_edges(model, &faces)?;
         let loose = sides.loose_faces();
@@ -119,6 +122,27 @@ fn enclose(model: &mut Model, shapes: &[Shape], split: bool) -> Result<Shape> {
         [(solid, _)] => Ok(*solid),
         _ => compound(model, &solids.iter().map(|s| s.0).collect::<Vec<_>>()),
     }
+}
+
+/// `faces` without those lying on another of them (on its surface, between the same
+/// edges).
+fn distinct_faces(model: &Model, faces: Vec<Shape>) -> Vec<Shape> {
+    use crate::geometry::ParametricSurface;
+    let mut kept: Vec<(Vec<crate::topology::NodeId>, Shape)> = Vec::new();
+    for f in faces {
+        let mut key: Vec<_> = model.unique_subshapes(f, NodeKind::Edge).iter().map(|e| e.node).collect();
+        key.sort_unstable();
+        let same = |r: Shape| -> bool {
+            let (Some(s), Some(rs), Ok(id)) = (model.surface(f), model.surface(r), crate::topology::FaceId::try_from(f.node)) else { return false };
+            let (u0, u1, v0, v1) = model.face_bounds(id);
+            let p = s.point(0.5 * (u0 + u1), 0.5 * (v0 + v1));
+            super::geom::signed_distance(rs, p).abs() <= super::geom::on_tol()
+        };
+        if !kept.iter().any(|(k, r)| *k == key && same(*r)) {
+            kept.push((key, f));
+        }
+    }
+    kept.into_iter().map(|(_, f)| f).collect()
 }
 
 /// `face` without its slits (loops running along edges and back), as a new face if it had

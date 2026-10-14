@@ -5,7 +5,7 @@ use crate::error::Result;
 use crate::math::BoundingBox;
 use crate::topology::{Model, NodeKind, Shape};
 
-use super::{cells, geom, only_solids, PointClassifier, PointLocation};
+use super::{geom, only_solids, PointClassifier, PointLocation};
 
 /// What [`combine`] makes of the objects and the tools.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,17 +33,46 @@ pub enum Combination {
 #[doc(alias = "BRepAlgoAPI_BooleanOperation")]
 #[doc(alias = "BOPAlgo_BOP")]
 pub fn combine(model: &mut Model, objects: &[Shape], tools: &[Shape], combination: Combination) -> Result<Shape> {
-    let solids = |model: &Model, list: &[Shape]| -> Option<Vec<Shape>> {
+    // Each argument's solids apart (one may hold several), else the argument whole.
+    // (A compound's members are arguments of their own: all are split by one another.)
+    fn members(model: &Model, s: Shape, out: &mut Vec<Shape>) {
+        if s.kind() == NodeKind::Compound {
+            for c in model.children(s).collect::<Vec<_>>() {
+                members(model, c, out);
+            }
+        } else {
+            out.push(s);
+        }
+    }
+    let flatten = |model: &Model, list: &[Shape]| -> Vec<Shape> {
         let mut out = Vec::new();
         for &s in list {
-            out.extend(only_solids(model, s)?);
+            members(model, s, &mut out);
         }
-        Some(out)
+        out.into_iter().flat_map(|s| only_solids(model, s).unwrap_or_else(|| vec![s])).filter(|&s| !super::is_empty(model, s)).collect()
     };
-    if let (Some(os), Some(ts)) = (solids(model, objects), solids(model, tools)) {
-        if combination != Combination::Union && !os.is_empty() && !ts.is_empty() && (meeting(model, &os) || meeting(model, &ts)) {
-            return split_together(model, &os, &ts, combination);
-        }
+    let (os, ts) = (flatten(model, objects), flatten(model, tools));
+    let dims = |model: &Model, list: &[Shape]| -> Vec<u8> { list.iter().map(|&s| super::cells::dimension(model, s)).collect() };
+    let (od, td) = (dims(model, &os), dims(model, &ts));
+    // (As OCCT's: a union of arguments of one dimension; a difference of objects of no
+    // higher dimension than the tools.)
+    let lowest = |d: &[u8]| d.iter().copied().min().unwrap_or(0);
+    let highest = |d: &[u8]| d.iter().copied().max().unwrap_or(0);
+    let refuse = |what: &str| Err(crate::error::Error::InvalidInput(format!("the {what} of arguments of these dimensions is not defined")));
+    match combination {
+        Combination::Union if od.iter().chain(&td).any(|&d| d != od.first().or(td.first()).copied().unwrap_or(0)) => return refuse("union"),
+        Combination::Difference if !ts.is_empty() && highest(&od) > lowest(&td) => return refuse("difference"),
+        Combination::ReversedDifference if !os.is_empty() && highest(&td) > lowest(&od) => return refuse("difference"),
+        _ => {}
+    }
+    let mixed = od.iter().chain(&td).any(|&d| Some(d) != od.first().copied());
+    let all_solids = od.iter().chain(&td).all(|&d| d == 3);
+    if combination != Combination::Union && !os.is_empty() && !ts.is_empty() && (mixed || (all_solids && (meeting(model, &os) || meeting(model, &ts)))) {
+        return split_together(model, &os, &ts, combination);
+    }
+    // A section of objects alone: where they meet one another.
+    if combination == Combination::Section && ts.is_empty() && os.len() > 1 {
+        return split_together(model, &os, &ts, combination);
     }
     // Each side's arguments together, then the operation of the two.
     let together = |model: &mut Model, list: &[Shape]| -> Result<Option<Shape>> {
@@ -79,32 +108,30 @@ pub(super) fn meeting(model: &Model, solids: &[Shape]) -> bool {
 /// [`combine`] of solids by their cells.
 fn split_together(model: &mut Model, objects: &[Shape], tools: &[Shape], combination: Combination) -> Result<Shape> {
     let all: Vec<Shape> = objects.iter().chain(tools).copied().collect();
-    let pieces = cells(model, &all)?;
+    // (A section needs no solid split by faces: only where the arguments meet.)
+    let pieces = super::cells::cells_with(model, &all, combination != Combination::Section)?;
     let result = model.new_empty(NodeKind::Compound);
     let n = objects.len();
     if combination == Combination::Section {
-        // The cells' edges on the boundaries of two arguments (cells share the edges where
-        // they meet).
-        let mut edges: Vec<Shape> = Vec::new();
-        let mut seen = crate::hashing::FastSet::default();
-        for cell in &pieces {
-            for e in model.unique_subshapes(cell.shape, NodeKind::Edge) {
-                if seen.insert(e.node) {
-                    edges.push(e);
-                }
-            }
-        }
-        let boxes: Vec<BoundingBox> = all.iter().map(|&s| crate::properties::bounding_box(model, s).enlarged(1e-6)).collect();
-        let classifiers: Vec<PointClassifier> = all.iter().map(|&s| PointClassifier::new(model, s)).collect::<Result<_>>()?;
-        for e in edges {
-            let Some(p) = middle(model, e) else { continue };
-            let on = (0..all.len()).filter(|&k| boxes[k].contains(p) && classifiers[k].locate(p) == PointLocation::Boundary).count();
-            if on >= 2 {
-                model.add(result, e)?;
-            }
-        }
-        return Ok(result);
+        return section_of_cells(model, &all, &pieces);
     }
+    // Kept faces and edges gathered in a shell or wire where their argument is one.
+    let containers: Vec<Option<Shape>> = all
+        .iter()
+        .map(|&s| {
+            if model.explore(s, NodeKind::Solid).next().is_none() && model.explore(s, NodeKind::Shell).next().is_some() {
+                Some(model.new_empty(NodeKind::Shell))
+            } else if model.explore(s, NodeKind::Face).next().is_none() && model.explore(s, NodeKind::Wire).next().is_some() {
+                Some(model.new_empty(NodeKind::Wire))
+            } else {
+                None
+            }
+        })
+        .collect();
+    let dims: Vec<u8> = all.iter().map(|&s| super::cells::dimension(model, s)).collect();
+    let mut used = vec![false; all.len()];
+    // (Container first or not, the argument, the dimension, the part.)
+    let mut items: Vec<(u8, usize, u8, Shape)> = Vec::new();
     for cell in pieces {
         let (in_object, in_tool) = (cell.inside[..n].iter().any(|&x| x), cell.inside[n..].iter().any(|&x| x));
         let keep = match combination {
@@ -113,13 +140,226 @@ fn split_together(model: &mut Model, objects: &[Shape], tools: &[Shape], combina
             Combination::ReversedDifference => in_tool && !in_object,
             Combination::Union | Combination::Section => unreachable!("handled by the callers"),
         };
-        if keep {
-            for solid in model.explore(cell.shape, NodeKind::Solid).collect::<Vec<_>>() {
-                model.add(result, solid)?;
+        if !keep {
+            continue;
+        }
+        let dim = super::cells::dimension(model, cell.shape);
+        // The argument it is a part of (of its dimension).
+        let owner = (0..all.len()).find(|&k| cell.inside[k] && dims[k] == dim);
+        match owner.and_then(|k| containers[k].map(|c| (k, c))) {
+            Some((k, container)) if dim == 2 => {
+                for f in model.unique_subshapes(cell.shape, NodeKind::Face) {
+                    model.add(container, f)?;
+                }
+                used[k] = true;
+            }
+            Some((k, container)) if dim == 1 => {
+                for e in model.unique_subshapes(cell.shape, NodeKind::Edge) {
+                    let id = crate::topology::EdgeId::try_from(e.node).expect("an edge");
+                    let c = model.add_coedge(id, e.orientation)?;
+                    let wire = crate::topology::WireId::try_from(container.node).expect("a wire");
+                    model.add(wire.into(), c.into())?;
+                }
+                used[k] = true;
+            }
+            _ => {
+                for part in super::cells::parts_of(model, cell.shape) {
+                    items.push((1, owner.unwrap_or(all.len()), dim, part));
+                }
             }
         }
     }
+    for (k, c) in containers.into_iter().enumerate() {
+        if let (Some(c), true) = (c, used[k]) {
+            items.push((0, k, dims[k], c));
+        }
+    }
+    // An edge (or point) lying on a kept face or solid is part of it (a face on a solid's
+    // boundary is kept apart, as OCCT does).
+    let mut within: crate::hashing::FastSet<crate::topology::NodeId> = Default::default();
+    for &(_, _, d, item) in &items {
+        for kind in [NodeKind::Edge, NodeKind::Vertex] {
+            if super::cells::dimension_of_kind(kind) < d {
+                within.extend(model.unique_subshapes(item, kind).iter().map(|s| s.node));
+            }
+        }
+    }
+    // As OCCT's results list them: the shells and wires first, then the rest, each in the
+    // order of the arguments they are parts of.
+    items.sort_by_key(|&(container, k, _, _)| (container, k));
+    for (container, _, _, item) in items {
+        if container == 1 && within.contains(&item.node) {
+            continue;
+        }
+        model.add(result, item)?;
+    }
     Ok(result)
+}
+
+/// The section of `all` from their cells: the cells' edges lying on two arguments, each
+/// stretch once (those of cells of lower dimension first: a solid left whole keeps edges
+/// its crossing faces' pieces split), split at the section's vertices lying on them; and
+/// the points where the arguments touch elsewhere.
+fn section_of_cells(model: &mut Model, all: &[Shape], pieces: &[super::Cell]) -> Result<Shape> {
+    use crate::geometry::ParametricCurve;
+    use crate::hashing::{FastMap, FastSet};
+    use crate::topology::NodeId;
+    let result = model.new_empty(NodeKind::Compound);
+    let mut edges: Vec<(u8, Shape)> = Vec::new();
+    let mut seen = FastSet::default();
+    for cell in pieces {
+        let dim = super::cells::dimension(model, cell.shape);
+        for e in model.unique_subshapes(cell.shape, NodeKind::Edge) {
+            if seen.insert(e.node) {
+                edges.push((dim, e));
+            }
+        }
+    }
+    edges.sort_by_key(|&(d, _)| d);
+    let boxes: Vec<BoundingBox> = all.iter().map(|&s| crate::properties::bounding_box(model, s).enlarged(1e-6)).collect();
+    let dims: Vec<u8> = all.iter().map(|&s| super::cells::dimension(model, s)).collect();
+    let classifiers: Vec<Option<PointClassifier>> = all.iter().zip(&dims).map(|(&s, &d)| if d == 3 { PointClassifier::new(model, s).map(Some) } else { Ok(None) }).collect::<Result<_>>()?;
+    // (Within an argument's own tolerance, for tolerant shapes read from files.)
+    let tolerances: Vec<f64> = all.iter().map(|&s| max_tolerance(model, s).max(1e-6)).collect();
+    let on_two = |model: &mut Model, p: crate::math::Point| -> Result<bool> {
+        let mut on = 0;
+        for k in 0..all.len() {
+            if boxes[k].contains(p) && on_argument(model, &classifiers[k], all[k], p, tolerances[k])? {
+                on += 1;
+                if on >= 2 {
+                    return Ok(true);
+                }
+            }
+        }
+        Ok(false)
+    };
+    // A grid of cells over the arguments, to find kept edges and vertices near a point.
+    let mut scene = BoundingBox::EMPTY;
+    for b in &boxes {
+        scene.add_box(b);
+    }
+    let h = ((scene.max - scene.min).length() / 128.0).max(1e-9);
+    let cell_of = |p: crate::math::Point| [(p.x / h).floor() as i64, (p.y / h).floor() as i64, (p.z / h).floor() as i64];
+    let cells_of_box = |b: &BoundingBox| {
+        let (lo, hi) = (cell_of(b.min), cell_of(b.max));
+        (lo[0]..=hi[0]).flat_map(move |i| (lo[1]..=hi[1]).flat_map(move |j| (lo[2]..=hi[2]).map(move |k| [i, j, k])))
+    };
+    let tol = 1e-6;
+    let mut kept: Vec<(Shape, crate::geometry::curve::Curve, f64, f64)> = Vec::new();
+    let mut grid: FastMap<[i64; 3], Vec<usize>> = FastMap::default();
+    let mut ends: FastSet<NodeId> = FastSet::default();
+    for (_, e) in edges {
+        let Some((c, first, last)) = model.edge_curve(e) else { continue };
+        let p = c.point(0.5 * (first + last));
+        if !on_two(model, p)? {
+            continue;
+        }
+        // Once: a stretch already kept (another cell's copy, or a whole solid's edge its faces'
+        // pieces split) is passed over.
+        let covered = grid.get(&cell_of(p)).is_some_and(|near| {
+            near.iter().any(|&i| {
+                let (_, kc, kf, kl) = &kept[i];
+                geom::project(kc, kf.min(*kl), kf.max(*kl), p).1 <= tol
+            })
+        });
+        if covered {
+            continue;
+        }
+        let b = crate::properties::bounding_box(model, e).enlarged(tol);
+        for g in cells_of_box(&b) {
+            grid.entry(g).or_default().push(kept.len());
+        }
+        for v in model.unique_subshapes(e, NodeKind::Vertex) {
+            ends.insert(v.node);
+        }
+        kept.push((e, c, first, last));
+    }
+    // The points where they touch elsewhere (an edge piercing a face): vertices on two
+    // arguments ending no edge of the section.
+    let mut points: Vec<Shape> = Vec::new();
+    let mut seen_v = FastSet::default();
+    for cell in pieces {
+        for v in model.unique_subshapes(cell.shape, NodeKind::Vertex) {
+            if !ends.contains(&v.node) && seen_v.insert(v.node) {
+                let p = model.point(v);
+                if on_two(model, p)? {
+                    points.push(v);
+                }
+            }
+        }
+    }
+    // Each edge split at the section's vertices lying inside it.
+    let mut vertex_grid: FastMap<[i64; 3], Vec<Shape>> = FastMap::default();
+    let mut all_vertices: Vec<Shape> = Vec::new();
+    let mut seen_end = FastSet::default();
+    for (e, ..) in &kept {
+        for v in model.unique_subshapes(*e, NodeKind::Vertex) {
+            if seen_end.insert(v.node) {
+                all_vertices.push(v);
+            }
+        }
+    }
+    all_vertices.extend(points.iter().copied());
+    for &v in &all_vertices {
+        vertex_grid.entry(cell_of(model.point(v))).or_default().push(v);
+    }
+    for (e, c, first, last) in kept {
+        let b = crate::properties::bounding_box(model, e).enlarged(tol);
+        let (a, z) = model.edge_vertices(e);
+        let mut inner: Vec<(f64, Shape)> = Vec::new();
+        for g in cells_of_box(&b) {
+            for &v in vertex_grid.get(&g).map(Vec::as_slice).unwrap_or_default() {
+                if v.node == a.node || v.node == z.node || inner.iter().any(|(_, w)| w.node == v.node) {
+                    continue;
+                }
+                let found = geom::project(&c, first.min(last), first.max(last), model.point(v));
+                let margin = 1e-9 * (last - first).abs();
+                if found.1 <= tol && found.0 > first.min(last) + margin && found.0 < first.max(last) - margin {
+                    inner.push((found.0, v));
+                }
+            }
+        }
+        if inner.is_empty() {
+            model.add(result, e)?;
+            continue;
+        }
+        inner.sort_by(|x, y| x.0.total_cmp(&y.0));
+        let (lo, hi) = (first.min(last), first.max(last));
+        let (start, end) = if first <= last { (a, z) } else { (z, a) };
+        let mut stops = vec![(lo, start)];
+        stops.extend(inner);
+        stops.push((hi, end));
+        let tolerance = model.tolerance(e);
+        for w in stops.windows(2) {
+            let ((t0, v0), (t1, v1)) = (w[0], w[1]);
+            let (v0, v1) = (crate::topology::VertexId::try_from(v0.node).expect("a vertex"), crate::topology::VertexId::try_from(v1.node).expect("a vertex"));
+            let piece = model.add_edge(v0, v1, tolerance)?;
+            model.set_edge_curve(piece.into(), c.clone(), tolerance)?;
+            model.set_edge_range(piece.into(), t0, t1)?;
+            model.add(result, piece.into())?;
+        }
+    }
+    for v in points {
+        model.add(result, v)?;
+    }
+    Ok(result)
+}
+
+/// Whether `p` lies on argument `shape`: on a solid's boundary (by its classifier), on a
+/// shell's, a face's or a wire's self (within `tolerance`).
+fn on_argument(model: &mut Model, classifier: &Option<PointClassifier>, shape: Shape, p: crate::math::Point, tolerance: f64) -> Result<bool> {
+    Ok(match classifier {
+        Some(c) => c.locate(p) == PointLocation::Boundary,
+        None => {
+            let v = crate::make::vertex(model, p);
+            crate::distance::distance(model, v, shape)?.value <= tolerance
+        }
+    })
+}
+
+/// The largest tolerance of `shape`'s faces, edges and vertices.
+fn max_tolerance(model: &Model, shape: Shape) -> f64 {
+    [NodeKind::Face, NodeKind::Edge, NodeKind::Vertex].iter().flat_map(|&k| model.unique_subshapes(shape, k)).map(|s| model.tolerance(s)).fold(0.0, f64::max)
 }
 
 /// The point half way along an edge's range.
@@ -258,5 +498,36 @@ mod tests {
         // The section: where any two of the boxes meet.
         let r = combine(&mut model, &[o1, o2], &[t], Combination::Section).unwrap();
         assert_eq!(counts(&model, r)[..2], [22, 28]);
+    }
+
+    #[test]
+    fn arguments_of_mixed_dimensions() {
+        let mut model = Model::new();
+        let block = |model: &mut Model, a: [f64; 3], b: [f64; 3]| Cuboid::from_corners(Point::new(a[0], a[1], a[2]), Point::new(b[0], b[1], b[2])).build(model).unwrap();
+        // A solid and the shell of an overlapping box as objects, a box as the tool: the
+        // cut keeps the shell's parts outside the tool, and the solid's, split by the shell
+        // (OCCT's counts, the shell first).
+        let s1 = block(&mut model, [0.0; 3], [10.0; 3]);
+        let s2 = block(&mut model, [5.0, 0.0, 0.0], [15.0, 10.0, 10.0]);
+        let shell = model.explore(s2, NodeKind::Shell).next().unwrap();
+        let tool = block(&mut model, [5.0, 0.0, 5.0], [15.0, 10.0, 15.0]);
+        let cut = combine(&mut model, &[s1, shell], &[tool], Combination::Difference).unwrap();
+        let kinds: Vec<NodeKind> = model.children(cut).map(|c| c.kind()).collect();
+        assert_eq!(kinds, [NodeKind::Shell, NodeKind::Solid, NodeKind::Solid]);
+        let v = crate::properties::volume(&model, model.explore(cut, NodeKind::Solid).collect::<Vec<_>>()[0]).mass + crate::properties::volume(&model, model.explore(cut, NodeKind::Solid).collect::<Vec<_>>()[1]).mass;
+        assert!((v - 750.0).abs() < 1e-9, "{v}");
+        // Not defined: a union of different dimensions, a solid cut by a face.
+        let face = model.explore(s2, NodeKind::Face).next().unwrap();
+        assert!(combine(&mut model, &[s1], &[face], Combination::Union).is_err());
+        assert!(combine(&mut model, &[s1], &[face], Combination::Difference).is_err());
+        // A face across a solid: their common part is the face's inside the solid; an edge
+        // through the solid meets its boundary at two points.
+        let plane = crate::geometry::surface::Surface::Plane(crate::geometry::surface::Plane::new(Point::new(5.0, 5.0, 5.0), crate::math::Direction::X));
+        let across = crate::make::face_on_domain(&mut model, plane, -20.0, 20.0, -20.0, 20.0).unwrap();
+        let common = combine(&mut model, &[s1], &[across], Combination::Intersection).unwrap();
+        assert!((crate::properties::area(&model, common).mass - 100.0).abs() < 1e-9);
+        let through = crate::make::edge_between(&mut model, Point::new(-5.0, 5.0, 5.0), Point::new(15.0, 5.0, 5.0)).unwrap();
+        let section = combine(&mut model, &[s1], &[through], Combination::Section).unwrap();
+        assert_eq!(counts(&model, section)[..2], [2, 0]);
     }
 }

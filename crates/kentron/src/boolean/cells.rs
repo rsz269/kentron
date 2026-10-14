@@ -25,8 +25,14 @@ pub struct Cell {
 #[doc(alias = "BOPAlgo_CellsBuilder")]
 #[doc(alias = "general fuse")]
 pub fn cells(model: &mut Model, shapes: &[Shape]) -> Result<Vec<Cell>> {
+    cells_with(model, shapes, true)
+}
+
+/// [`cells`]; without `split_higher`, a piece crossed by a shape of lower dimension (a solid
+/// by a face) is left whole (the shape still split by it): enough for where they meet.
+pub(super) fn cells_with(model: &mut Model, shapes: &[Shape], split_higher: bool) -> Result<Vec<Cell>> {
     let before = super::SPLITTING_CELLS.with(|f| f.replace(true));
-    let found = split_all(model, shapes);
+    let found = split_all(model, shapes, split_higher);
     super::SPLITTING_CELLS.with(|f| f.set(before));
     let found = found?;
     // (Split one after another, cells met by one shape have each their copies of its parts:
@@ -36,7 +42,7 @@ pub fn cells(model: &mut Model, shapes: &[Shape]) -> Result<Vec<Cell>> {
 }
 
 /// [`cells`], the shapes split one after another.
-fn split_all(model: &mut Model, shapes: &[Shape]) -> Result<Vec<Cell>> {
+fn split_all(model: &mut Model, shapes: &[Shape], split_higher: bool) -> Result<Vec<Cell>> {
     // Pieces inside the shapes added so far as marked, each split by every shape added
     // after it: by the next, into the part inside it and the part outside; and the part of
     // the next shape outside all of them. A shape of lower dimension than a piece (a face
@@ -61,7 +67,7 @@ fn split_all(model: &mut Model, shapes: &[Shape]) -> Result<Vec<Cell>> {
             }
             let piece_dimension = dimension(model, piece);
             if piece_dimension > shape_dimension {
-                let (parts, cut) = split_by(model, piece, shape)?;
+                let (parts, cut) = if split_higher { split_by(model, piece, shape)? } else { (vec![piece], None) };
                 if let Some(r) = rest {
                     // The shape's part inside the piece: where the piece's parts meet, when
                     // they were split by it (one face shared by both).
@@ -104,7 +110,7 @@ fn split_all(model: &mut Model, shapes: &[Shape]) -> Result<Vec<Cell>> {
             if let Some(r) = rest {
                 rest = Some(if shape_dimension > piece_dimension {
                     // (A lower-dimensional piece takes nothing away: it splits.)
-                    let (parts, _) = split_by(model, r, piece)?;
+                    let (parts, _) = if split_higher { split_by(model, r, piece)? } else { (vec![r], None) };
                     compound(model, &parts)?
                 } else {
                     super::difference(model, r, piece)?
@@ -124,7 +130,12 @@ fn split_all(model: &mut Model, shapes: &[Shape]) -> Result<Vec<Cell>> {
         if let Some(r) = rest {
             let mut marks = vec![false; k];
             marks.push(true);
-            next.push((marks, r, Some(shape_box)));
+            // (A solid split by pieces of lower dimension: each part apart, which later
+            // operations on them together would fuse again.)
+            let apart = if dimension(model, r) == 3 { parts(model, r) } else { vec![r] };
+            for part in apart {
+                next.push((marks.clone(), part, Some(shape_box)));
+            }
         }
         pieces = next;
     }
@@ -147,8 +158,18 @@ fn meet(a: &crate::math::BoundingBox, b: &crate::math::BoundingBox) -> Option<cr
     (!m.is_empty()).then_some(m)
 }
 
+/// The dimension of shapes of `kind`: 2 for faces, 1 for edges, 0 for vertices (3 else).
+pub(super) fn dimension_of_kind(kind: NodeKind) -> u8 {
+    match kind {
+        NodeKind::Face => 2,
+        NodeKind::Edge => 1,
+        NodeKind::Vertex => 0,
+        _ => 3,
+    }
+}
+
 /// 3 for a shape with solids, 2 with faces, 1 with edges, 0 otherwise.
-fn dimension(model: &Model, shape: Shape) -> u8 {
+pub(super) fn dimension(model: &Model, shape: Shape) -> u8 {
     if !model.unique_subshapes(shape, NodeKind::Solid).is_empty() {
         3
     } else if !model.unique_subshapes(shape, NodeKind::Face).is_empty() {
@@ -168,6 +189,9 @@ fn split_by(model: &mut Model, shape: Shape, cutter: Shape) -> Result<(Vec<Shape
     use crate::math::Transformable;
     let faces = model.unique_subshapes(cutter, NodeKind::Face);
     let whole = Ok((parts(model, shape), None));
+    if dimension(model, shape) == 3 && faces.len() > 1 {
+        return split_by_faces(model, shape, cutter);
+    }
     let ([face], 3) = (faces.as_slice(), dimension(model, shape)) else { return whole };
     let Some(Surface::Plane(plane)) = model.surface(*face).map(|s| s.transformed(&face.placement)) else { return whole };
     // Across the solid: the face covers its shadow on the plane.
@@ -201,6 +225,53 @@ fn split_by(model: &mut Model, shape: Shape, cutter: Shape) -> Result<(Vec<Shape
     Ok((out, cut))
 }
 
+/// The solids `shape` is split into by the faces of `cutter` (a shell across it): the
+/// pieces of space the faces of both enclose that lie inside `shape`; itself whole if the
+/// faces do not split it.
+fn split_by_faces(model: &mut Model, shape: Shape, cutter: Shape) -> Result<(Vec<Shape>, Option<Shape>)> {
+    let whole = parts(model, shape);
+    let enclosed = super::enclosed_solids(model, &[shape, cutter])?;
+    let pieces = model.unique_subshapes(enclosed, NodeKind::Solid);
+    let within = super::PointClassifier::new(model, shape)?;
+    let mut inside = Vec::new();
+    for piece in pieces {
+        let Some(p) = point_inside(model, piece)? else { continue };
+        if within.locate(p) == super::PointLocation::Inside {
+            inside.push(piece);
+        }
+    }
+    Ok((if inside.len() > 1 { inside } else { whole }, None))
+}
+
+/// A point inside `solid`: its centre of mass if inside, else one just inside a face.
+fn point_inside(model: &Model, solid: Shape) -> Result<Option<crate::math::Point>> {
+    use crate::geometry::ParametricSurface;
+    let classifier = super::PointClassifier::new(model, solid)?;
+    let centre = crate::properties::volume(model, solid).center_of_mass;
+    if classifier.locate(centre) == super::PointLocation::Inside {
+        return Ok(Some(centre));
+    }
+    let b = crate::properties::bounding_box(model, solid);
+    let step = 1e-3 * (b.max - b.min).length();
+    for face in model.explore(solid, NodeKind::Face).collect::<Vec<_>>() {
+        let (Some(surface), Ok(id)) = (model.surface(face), crate::topology::FaceId::try_from(face.node)) else { continue };
+        let (u0, u1, v0, v1) = model.face_bounds(id);
+        let (u, v) = (0.5 * (u0 + u1), 0.5 * (v0 + v1));
+        let (p, du, dv) = surface.d1(u, v);
+        let n = du.cross(dv);
+        if n.length() <= 1e-300 {
+            continue;
+        }
+        let n = n.normalized() * if face.orientation == crate::topology::Orientation::Reversed { -1.0 } else { 1.0 };
+        use crate::math::Transformable;
+        let q = p.transformed(&face.placement) - n.transformed(&face.placement) * step;
+        if classifier.locate(q) == super::PointLocation::Inside {
+            return Ok(Some(q));
+        }
+    }
+    Ok(None)
+}
+
 /// A compound of `parts`.
 fn compound(model: &mut Model, parts: &[Shape]) -> Result<Shape> {
     let c = model.new_empty(NodeKind::Compound);
@@ -208,6 +279,11 @@ fn compound(model: &mut Model, parts: &[Shape]) -> Result<Shape> {
         model.add(c, p)?;
     }
     Ok(c)
+}
+
+/// The separate parts of `shape`: its solids, or else its faces, or else its edges.
+pub(super) fn parts_of(model: &Model, shape: Shape) -> Vec<Shape> {
+    parts(model, shape)
 }
 
 /// The separate parts of `shape`: its solids, or else its faces, or else its edges.

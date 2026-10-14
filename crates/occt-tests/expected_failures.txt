@@ -645,9 +645,6 @@ tests/bugs/modalg_6/bug26525_1
 tests/bugs/modalg_6/bug26525_2
 tests/bugs/modalg_6/bug26525_3
 tests/bugs/modalg_6/bug26525_4
-tests/bugs/modalg_6/bug26565_1
-tests/bugs/modalg_6/bug26565_2
-tests/bugs/modalg_6/bug26565_3
 tests/bugs/modalg_6/bug26565_4
 tests/bugs/modalg_6/bug26565_5
 tests/bugs/modalg_6/bug26565_6
