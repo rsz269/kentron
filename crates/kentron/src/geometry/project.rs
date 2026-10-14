@@ -32,6 +32,12 @@ pub fn curve_on_plane(
     let translation = d * ((plane.origin() - Point::ORIGIN).dot(n) / dn);
     let map = AffineTransform::new(matrix, translation);
     let (projected, reparametrization) = project_affine(curve, &map)?;
+    if keep_parametrization && reparametrization.0 == 1.0 && reparametrization.1 != 0.0 {
+        // A circle takes the shift of the parameter by turning its frame.
+        if let Some(turned) = turned_circle(&projected, reparametrization.1) {
+            return Some(turned);
+        }
+    }
     if keep_parametrization && reparametrization != (1.0, 0.0) {
         // The same parameters: a B-spline of the curve, projected pole by pole.
         let (a, b) = (curve.first_parameter(), curve.last_parameter());
@@ -43,6 +49,24 @@ pub fn curve_on_plane(
         return Some(Curve::BSpline(bspline.affine_transformed(&map)));
     }
     Some(projected)
+}
+
+/// A circle (or a trimmed one) `c` as the circle whose point at `t` is `c`'s at `t + shift`
+/// (its frame turned by `shift`); `None` for another curve.
+fn turned_circle(c: &Curve, shift: f64) -> Option<Curve> {
+    match c {
+        Curve::Circle(circle) => {
+            let f = circle.frame();
+            let (sin, cos) = shift.sin_cos();
+            let x = Vector::from(f.x()) * cos + Vector::from(f.y()) * sin;
+            Some(Curve::Circle(Circle::new(Frame::new(f.origin(), f.z(), Direction::try_from_vector(x)?), circle.radius())))
+        }
+        Curve::Trimmed(t) => {
+            let (a, b) = t.range();
+            Some(Curve::Trimmed(TrimmedCurve::new(turned_circle(t.basis(), shift)?, a - shift, b - shift)))
+        }
+        _ => None,
+    }
 }
 
 /// The image of `curve` under the affine map `map`, as a curve of the same kind where

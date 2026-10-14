@@ -18,6 +18,28 @@ fn format_real(x: f64) -> String {
     format!("{x}")
 }
 
+/// The arguments without the transformation commands' `-copy` and `-copymesh` options.
+fn without_copy_flags<'a>(args: &[&'a str]) -> Vec<&'a str> {
+    args.iter().copied().filter(|a| !matches!(*a, "-copy" | "-copymesh")).collect()
+}
+
+/// The transformation options of the arguments: `-copymesh` keeps the meshes.
+fn transform_options(args: &[&str]) -> modify::TransformOptions {
+    modify::TransformOptions { copy_meshes: args.contains(&"-copymesh") }
+}
+
+/// A real as C++ streams print it in scientific notation: `1.000000e-07`.
+fn format_c_exponent(x: f64) -> String {
+    let text = format!("{x:.6e}");
+    match text.split_once('e') {
+        Some((mantissa, exponent)) => {
+            let (sign, digits) = exponent.strip_prefix('-').map_or(("+", exponent), |d| ("-", d));
+            format!("{mantissa}e{sign}{digits:0>2}")
+        }
+        None => text,
+    }
+}
+
 // Shims appended by tools/draw2rs.py. Implement in place; the tool never
 // modifies an existing method.
 #[allow(non_snake_case)]
@@ -1517,6 +1539,92 @@ impl Draw {
         };
         self.set_shape_var(args[0], r)
     }
+    /// DRAW command `isbbinterf`.
+    ///
+    /// Example: `isbbinterf b1 b2 -o`
+    pub fn isbbinterf(&mut self, args: &[&str]) -> DrawResult {
+        // `isbbinterf shape1 shape2 [-o]`: whether their bounding boxes (oriented ones with
+        // `-o`) overlap.
+        need(args, 2, "isbbinterf shape1 shape2 [-o]")?;
+        let (a, b) = (self.shape_var(args[0])?, self.shape_var(args[1])?);
+        if args.get(2) == Some(&"-o") {
+            let (x, y) = (properties::oriented_bounding_box(&self.model, a), properties::oriented_bounding_box(&self.model, b));
+            return Ok(if x.intersects(&y) { "The shapes are interfered by OBB.\n" } else { "The shapes are NOT interfered by OBB.\n" }.into());
+        }
+        let (x, y) = (properties::bounding_box(&self.model, a), properties::bounding_box(&self.model, b));
+        let apart = x.max.x < y.min.x || y.max.x < x.min.x || x.max.y < y.min.y || y.max.y < x.min.y || x.max.z < y.min.z || y.max.z < x.min.z;
+        Ok(if apart { "The shapes are NOT interfered by AABB.\n" } else { "The shapes are interfered by AABB.\n" }.into())
+    }
+    /// DRAW command `cmovetangent`.
+    ///
+    /// Example: `cmovetangent b1 2.0 x y dx dy 1`
+    pub fn cmovetangent(&mut self, args: &[&str]) -> DrawResult {
+        // `cmovetangent name u x y [z] tx ty [tz] [constraint]`: the B-spline moved to pass
+        // through the point at `u` with the tangent there, keeping `constraint + 1` poles at
+        // each end (one by default).
+        need(args, 6, "cmovetangent name u x y [z] tx ty [tz] [constraint]")?;
+        let v = self.numbers(&args[1..])?;
+        let tolerance = 1e-5;
+        let constraint = |c: Option<&f64>, degree: usize| c.map_or(0, |&c| (c as i32).max(-1).min(degree as i32 - 1));
+        let moved = if args.len() <= 7 {
+            let DrawObject::Curve2(Curve2::BSpline(mut b)) = self.get(args[0]).cloned().ok_or_else(|| DrawError::Failed(format!("{} is not a DRAW variable", args[0])))? else {
+                return Ok(String::new());
+            };
+            let c = constraint(v.get(5), b.degree());
+            let ok = b.move_point_and_tangent(v[0], Point2::new(v[1], v[2]), Vector2::new(v[3], v[4]), tolerance, c, c);
+            self.set(args[0], DrawObject::Curve2(Curve2::BSpline(b)));
+            ok
+        } else {
+            need(args, 8, "cmovetangent name u x y z tx ty tz [constraint]")?;
+            let DrawObject::Curve(Curve::BSpline(mut b)) = self.get(args[0]).cloned().ok_or_else(|| DrawError::Failed(format!("{} is not a DRAW variable", args[0])))? else {
+                return Ok(String::new());
+            };
+            let c = constraint(v.get(7), b.degree());
+            let ok = b.move_point_and_tangent(v[0], Point::new(v[1], v[2], v[3]), Vector::new(v[4], v[5], v[6]), tolerance, c, c);
+            self.set(args[0], DrawObject::Curve(Curve::BSpline(b)));
+            ok
+        };
+        Ok(if moved.is_some() { String::new() } else { "Not enough degree of freedom increase degree please\n".into() })
+    }
+    /// DRAW command `chamf_throat`.
+    ///
+    /// Example: `chamf_throat result b b_8 2.`
+    pub fn chamf_throat(&mut self, args: &[&str]) -> DrawResult {
+        // `chamf_throat result shape edge throat [edge throat ...]`: symmetric chamfers whose
+        // faces lie at `throat` from their edges, between faces meeting at the angle at the
+        // edge's middle (exactly so between planes).
+        use kentron::blend::{ChamferSize, ChamferedEdge};
+        use kentron::topology::{EdgeId, FaceId};
+        need(args, 4, "chamf_throat result shape edge throat [edge throat ...]")?;
+        let shape = self.shape_var(args[1])?;
+        let faces: Vec<Shape> = self.model.explore(shape, NodeKind::Face).collect();
+        let mut edges = Vec::new();
+        for pair in args[2..].chunks(2) {
+            let [edge, throat] = pair else { return Err(DrawError::Failed("chamf_throat: an edge without a throat".into())) };
+            let (edge, throat) = (self.shape_var(edge)?, self.number(throat)?);
+            let edge_id = EdgeId::try_from(edge.node).map_err(|_| DrawError::Failed("chamf_throat: not an edge".into()))?;
+            // The outward normals of the faces along the edge, at its middle.
+            let mut normals = Vec::new();
+            for &face in &faces {
+                let Ok(face_id) = FaceId::try_from(face.node) else { continue };
+                let Some(coedge) = self.model.find_coedge(edge_id, face_id) else { continue };
+                let (Some((pcurve, first, last)), Some(surface)) = (self.model.effective_pcurve(coedge), self.model.surface(face)) else { continue };
+                let uv = pcurve.point(0.5 * (first + last));
+                let Some(n) = kentron::geometry::props::surface_normal(surface, uv.x, uv.y, 1e-12) else { continue };
+                let n = Vector::from(n.direction());
+                normals.push(if face.orientation == Orientation::Reversed { -n } else { n });
+            }
+            let [a, b] = normals[..] else {
+                return Err(DrawError::Failed("chamf_throat: the edge must bound two faces".into()));
+            };
+            // The faces' angle inside the solid is π less the normals'.
+            let inside = std::f64::consts::PI - a.angle(b);
+            let distance = throat / (0.5 * inside).cos();
+            edges.push(ChamferedEdge { edge, size: ChamferSize::Distances(distance, distance), face: None });
+        }
+        let result = kentron::blend::chamfer_edges(&mut self.model, shape, &edges)?;
+        self.set_shape_var(args[0], result)
+    }
     /// DRAW command `chamf`: 17 uses in 8 converted scripts.
     ///
     /// Example: `chamf result s s_10_3 50`
@@ -1897,13 +2005,15 @@ impl Draw {
     ///
     /// Example: `checktrinfo result -tri 294 -nod 300`
     pub fn checktrinfo(&mut self, args: &[&str]) -> DrawResult {
-        // `checktrinfo shape [-tri [n]] [-nod [n]] [-defl [d]] [-tol_abs_* t] [-tol_rel_* t]`:
-        // the numbers of triangles and nodes and the largest deflection of the faces' meshes;
+        // `checktrinfo shape [-face n] [-tri [n]] [-nod [n]] [-defl [d]] [-tol_abs_* t]
+        // [-tol_rel_* t]`: the number of faces, the numbers of triangles and nodes and the
+        // largest deflection of the faces' meshes;
         // an option without a value checks that the number is not zero.
         need(args, 1, "checktrinfo shape [-tri [n]] [-nod [n]] [-defl [d]]")?;
         let shape = self.shape_var(args[0])?;
         let (mut triangles, mut nodes, mut deflection) = (0usize, 0usize, 0.0f64);
-        for face in self.model.unique_subshapes(shape, NodeKind::Face) {
+        let faces = self.model.unique_subshapes(shape, NodeKind::Face);
+        for &face in &faces {
             if let Some(mesh) = self.model.face_mesh(face) {
                 triangles += mesh.triangles().len();
                 nodes += mesh.nodes().len();
@@ -1916,7 +2026,7 @@ impl Draw {
         while i < args.len() {
             let value = args.get(i + 1).filter(|v| !v.starts_with('-') || v.parse::<f64>().is_ok()).map(|v| self.number(v)).transpose()?;
             match args[i] {
-                "-tri" | "-nod" | "-defl" => checks.push((&args[i][1..], value)),
+                "-face" | "-tri" | "-nod" | "-defl" => checks.push((&args[i][1..], value)),
                 t if t.starts_with("-tol_") => {
                     tolerances.insert(&t[5..], value.unwrap_or(0.0));
                 }
@@ -1928,6 +2038,7 @@ impl Draw {
         let mut errors = Vec::new();
         for (what, expected) in checks {
             let actual = match what {
+                "face" => faces.len() as f64,
                 "tri" => triangles as f64,
                 "nod" => nodes as f64,
                 "defl" => deflection,
@@ -3096,7 +3207,25 @@ impl Draw {
     ///
     /// Example: `maxtolerance a`
     pub fn maxtolerance(&mut self, args: &[&str]) -> DrawResult {
-        self.not_implemented("maxtolerance", args)
+        // `maxtolerance shape`: the least and greatest tolerances of its faces, edges and
+        // vertices, as OCCT reports them.
+        need(args, 1, "maxtolerance shape")?;
+        let shape = self.shape_var(args[0])?;
+        let range = |kind: NodeKind| {
+            let all = self.model.unique_subshapes(shape, kind);
+            let tolerances: Vec<f64> = all.iter().map(|&s| self.model.tolerance(s)).collect();
+            let min = tolerances.iter().copied().fold(f64::INFINITY, f64::min);
+            let max = tolerances.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+            (all.len(), min, max)
+        };
+        let (f, e, v) = (range(NodeKind::Face), range(NodeKind::Edge), range(NodeKind::Vertex));
+        let mut out = format!("\n## Tolerances on the shape {}  (nbFaces:{}  nbEdges:{} nbVtx:{})\n", args[0], f.0, e.0, v.0);
+        for (name, (_, min, max)) in [("Face  ", f), ("Edge  ", e), ("Vertex", v)] {
+            if min <= max {
+                out += &format!("\n    {name} : Min {}    Max  {} \n ", format_c_exponent(min), format_c_exponent(max));
+            }
+        }
+        Ok(out)
     }
     /// DRAW command `middlepath`: 15 uses in 15 converted scripts.
     ///
@@ -3702,7 +3831,33 @@ impl Draw {
     ///
     /// Example: `parameters c x y z 1.e-7 u`
     pub fn parameters(&mut self, args: &[&str]) -> DrawResult {
-        self.not_implemented("parameters", args)
+        // `parameters surface x y z tolerance u v`, `parameters curve x y z tolerance u` or
+        // `parameters curve2d x y tolerance u`: the parameters of a point on it, into
+        // variables; an error if the point is farther than the tolerance.
+        use kentron::geometry::extrema;
+        let wrong = || DrawError::Failed("Wrong point".into());
+        match (args.len(), self.get(args.first().copied().unwrap_or_default()).cloned()) {
+            (7, Some(DrawObject::Surface(s))) => {
+                let v = self.numbers(&args[1..5])?;
+                let (u, w, d) = extrema::nearest_on_surface(Point::new(v[0], v[1], v[2]), &s, None);
+                self.set(args[5], DrawObject::Number(u));
+                self.set(args[6], DrawObject::Number(w));
+                if d > v[3] { Err(wrong()) } else { Ok(String::new()) }
+            }
+            (6, Some(DrawObject::Curve(c))) => {
+                let v = self.numbers(&args[1..5])?;
+                let found = extrema::nearest_on_curve(Point::new(v[0], v[1], v[2]), &c, c.first_parameter(), c.last_parameter());
+                self.set(args[5], DrawObject::Number(found.parameter));
+                if found.distance > v[3] { Err(wrong()) } else { Ok(String::new()) }
+            }
+            (5, Some(DrawObject::Curve2(c))) => {
+                let v = self.numbers(&args[1..4])?;
+                let found = extrema::point_curve2(Point2::new(v[0], v[1]), &c).into_iter().min_by(|a, b| a.distance.total_cmp(&b.distance)).ok_or_else(wrong)?;
+                self.set(args[4], DrawObject::Number(found.parameter));
+                if found.distance > v[2] { Err(wrong()) } else { Ok(String::new()) }
+            }
+            _ => Err(DrawError::Failed("usage: parameters surface|curve x y [z] tolerance u [v]".into())),
+        }
     }
     /// DRAW command `pbsplinecurve`: 13 uses in 13 converted scripts.
     ///
@@ -4024,7 +4179,28 @@ impl Draw {
     ///
     /// Example: `projonplane result hyperbola plane`
     pub fn projonplane(&mut self, args: &[&str]) -> DrawResult {
-        self.not_implemented("projonplane", args)
+        // `projonplane name curve plane [dx dy dz] [0|1]`: the curve projected onto the plane
+        // along the direction (else its normal), with the curve's parametrization unless 0.
+        need(args, 3, "projonplane name curve plane [dx dy dz] [0|1]")?;
+        let curve = self.curve_var(args[1])?;
+        let Surface::Plane(plane) = self.surface_var(args[2])? else {
+            return Err(DrawError::Failed(" The surface must be a plane".into()));
+        };
+        let keep = match args.len() {
+            4 => self.number(args[3])? != 0.0,
+            7 => self.number(args[6])? != 0.0,
+            _ => true,
+        };
+        let direction = if args.len() >= 6 {
+            let v = self.numbers(&args[3..6])?;
+            Direction::try_from_vector(Vector::new(v[0], v[1], v[2])).ok_or_else(|| DrawError::Failed("projonplane: null direction".into()))?
+        } else {
+            plane.normal()
+        };
+        let projected = kentron::geometry::project::curve_on_plane(&curve, &plane, direction, keep)
+            .ok_or_else(|| DrawError::Failed("projonplane: the direction is parallel to the plane".into()))?;
+        self.set(args[0], DrawObject::Curve(projected));
+        Ok(String::new())
     }
     /// DRAW command `proximity`: 1 uses in 1 converted scripts.
     ///
@@ -4637,13 +4813,32 @@ impl Draw {
             let parts = self.model.unique_subshapes(s, NodeKind::Edge).into_iter().chain(self.model.unique_subshapes(s, NodeKind::Vertex));
             parts.map(|p| (p.node, result.generated(p))).filter(|(_, g)| !g.is_empty()).collect::<Vec<_>>()
         }).collect();
+        // (OCCT flags its solids closed.)
+        if result.shape.kind() == NodeKind::Solid {
+            self.closed_solids.insert(result.shape.node);
+        }
         self.set_shape_var(args[0], result.shape)
     }
     /// DRAW command `tmirror`: 5 uses in 5 converted scripts.
     ///
     /// Example: `tmirror b 0 0 0 1 0 0`
     pub fn tmirror(&mut self, args: &[&str]) -> DrawResult {
-        self.not_implemented("tmirror", args)
+        // `tmirror name ... x y z nx ny nz [-copy] [-copymesh]`: mirrors the shapes in the
+        // plane through the point with the normal (rewriting the geometry, as a mirror is no
+        // placement).
+        let options = transform_options(args);
+        let args = &without_copy_flags(args);
+        need(args, 7, "tmirror name ... x y z nx ny nz")?;
+        let n = args.len();
+        let v = self.numbers(&args[n - 6..])?;
+        let normal = Direction::try_from_vector(Vector::new(v[3], v[4], v[5])).ok_or_else(|| DrawError::Failed("tmirror: null normal".into()))?;
+        let t = Transform::mirror_plane(Point::new(v[0], v[1], v[2]), normal);
+        for name in &args[..n - 6] {
+            let shape = self.shape_var(name)?;
+            let mirrored = modify::transform(&mut self.model, shape, &t, options)?;
+            self.set_shape_var(name, mirrored)?;
+        }
+        Ok(String::new())
     }
     /// DRAW command `to3d`: 24 uses in 4 converted scripts.
     ///
@@ -4675,19 +4870,24 @@ impl Draw {
     ///
     /// Example: `tolerance a`
     pub fn tolerance(&mut self, args: &[&str]) -> DrawResult {
-        // `tolerance shape`: the largest, smallest and mean tolerances of its vertices, edges
-        // and faces.
+        // `tolerance shape`: the largest, mean and smallest tolerances of its sub-shapes, all
+        // together, then its faces', edges' and vertices' (each counted per use, as OCCT's).
         need(args, 1, "tolerance shape")?;
         let shape = self.shape_var(args[0])?;
-        let mut out = String::new();
-        for (name, kind) in [("FACE", NodeKind::Face), ("EDGE", NodeKind::Edge), ("VERTEX", NodeKind::Vertex)] {
-            let values: Vec<f64> = self.model.unique_subshapes(shape, kind).into_iter().map(|s| self.model.tolerance(s)).collect();
+        let tolerances = |kinds: &[NodeKind]| -> Vec<f64> {
+            kinds.iter().flat_map(|&k| self.model.explore(shape, k).map(|s| self.model.tolerance(s)).collect::<Vec<_>>()).collect()
+        };
+        let line = |values: &[f64]| {
             if values.is_empty() {
-                continue;
+                return "MAX=0 AVG=0 MIN=0".to_string();
             }
             let max = values.iter().copied().fold(f64::MIN, f64::max);
             let min = values.iter().copied().fold(f64::MAX, f64::min);
-            out += &format!("{name}\t: MAX={max} MIN={min} AVG={}\n", values.iter().sum::<f64>() / values.len() as f64);
+            format!("MAX={max} AVG={} MIN={min}", values.iter().sum::<f64>() / values.len() as f64)
+        };
+        let mut out = format!("Tolerance {}\n", line(&tolerances(&[NodeKind::Face, NodeKind::Edge, NodeKind::Vertex])));
+        for (name, kind) in [("FACE    ", NodeKind::Face), ("EDGE    ", NodeKind::Edge), ("VERTEX  ", NodeKind::Vertex)] {
+            out += &format!("{name}: {}\n", line(&tolerances(&[kind])));
         }
         Ok(out)
     }
@@ -4742,7 +4942,39 @@ impl Draw {
     ///
     /// Example: `tricheck r_1`
     pub fn tricheck(&mut self, args: &[&str]) -> DrawResult {
-        self.not_implemented("tricheck", args)
+        // `tricheck shape`: problems of the faces' meshes (nothing if none): triangles with
+        // nodes out of range or repeated, mesh edges shared by more than two triangles,
+        // nodes in no triangle.
+        need(args, 1, "tricheck shape")?;
+        let shape = self.shape_var(args[0])?;
+        let mut out = String::new();
+        for (index, face) in self.model.unique_subshapes(shape, NodeKind::Face).into_iter().enumerate() {
+            let Some(mesh) = self.model.face_mesh(face) else { continue };
+            let n = mesh.nodes().len();
+            let mut used = vec![false; n];
+            let mut links: std::collections::HashMap<(usize, usize), usize> = std::collections::HashMap::new();
+            for (t, tri) in mesh.triangles().iter().enumerate() {
+                let tri = tri.map(|i| i as usize);
+                if tri.iter().any(|&i| i >= n) || tri[0] == tri[1] || tri[1] == tri[2] || tri[0] == tri[2] {
+                    out += &format!("face {} triangle {}: bad nodes {:?}\n", index + 1, t + 1, tri);
+                    continue;
+                }
+                for k in 0..3 {
+                    used[tri[k]] = true;
+                    let (a, b) = (tri[k], tri[(k + 1) % 3]);
+                    *links.entry((a.min(b), a.max(b))).or_default() += 1;
+                }
+            }
+            let shared = links.values().filter(|&&c| c > 2).count();
+            if shared > 0 {
+                out += &format!("face {}: {shared} links shared by more than two triangles\n", index + 1);
+            }
+            let free = used.iter().filter(|u| !**u).count();
+            if free > 0 {
+                out += &format!("face {}: Free_nodes {free}\n", index + 1);
+            }
+        }
+        Ok(out)
     }
     /// DRAW command `trim`: 179 uses in 105 converted scripts.
     ///
@@ -4810,25 +5042,37 @@ impl Draw {
     ///
     /// Example: `trinfo b`
     pub fn trinfo(&mut self, args: &[&str]) -> DrawResult {
-        // `trinfo shape`: the numbers of triangles and nodes of the faces' meshes, and their
-        // largest deflection.
+        // `trinfo shape`: the numbers of faces, of those without a mesh, and of triangles and
+        // nodes of the faces' meshes, and their largest deflection, as OCCT reports them.
         need(args, 1, "trinfo shape")?;
         let shape = self.shape_var(args[0])?;
-        let (mut triangles, mut nodes, mut deflection) = (0usize, 0usize, 0.0f64);
-        for face in self.model.unique_subshapes(shape, NodeKind::Face) {
-            if let Some(mesh) = self.model.face_mesh(face) {
-                triangles += mesh.triangles().len();
-                nodes += mesh.nodes().len();
-                deflection = deflection.max(mesh.deflection());
+        let faces = self.model.unique_subshapes(shape, NodeKind::Face);
+        let (mut triangles, mut nodes, mut empty, mut deflection) = (0usize, 0usize, 0usize, 0.0f64);
+        for &face in &faces {
+            match self.model.face_mesh(face) {
+                Some(mesh) => {
+                    triangles += mesh.triangles().len();
+                    nodes += mesh.nodes().len();
+                    deflection = deflection.max(mesh.deflection());
+                }
+                None => empty += 1,
             }
         }
-        Ok(format!("This shape contains {triangles} triangles.\n                    {nodes} nodes.\nMaximal deflection {}", format_real(deflection)))
+        let pad = "                    ";
+        let mut out = format!("\nThis shape contains {} faces.\n", faces.len());
+        if empty > 0 {
+            out += &format!("{pad}{empty} empty faces.\n");
+        }
+        out += &format!("{pad}{triangles} triangles.\n{pad}{nodes} nodes.\nMaximal deflection {}\n", format_real(deflection));
+        Ok(out)
     }
     /// DRAW command `trotate`: 1438 uses in 1062 converted scripts.
     ///
     /// Example: `trotate s 0 0 0 0 0 1 90`
     pub fn trotate(&mut self, args: &[&str]) -> DrawResult {
         // `trotate name ... x y z dx dy dz angle`: moves the shapes (angle in degrees).
+        // (OCCT's `-copy` and `-copymesh` change nothing here.)
+        let args = &without_copy_flags(args);
         need(args, 8, "trotate name ... x y z dx dy dz angle")?;
         let n = args.len();
         let v = args[n - 7..].iter().map(|a| self.number(a)).collect::<DrawResult<Vec<f64>>>()?;
@@ -4842,6 +5086,9 @@ impl Draw {
     /// Example: `tscale s 0 0 0 SCALE1`
     pub fn tscale(&mut self, args: &[&str]) -> DrawResult {
         // `tscale name ... x y z factor`: scales the shapes about the point.
+        // (OCCT's `-copy` and `-copymesh` change nothing here.)
+        let options = transform_options(args);
+        let args = &without_copy_flags(args);
         need(args, 5, "tscale name ... x y z factor")?;
         let n = args.len();
         let v = args[n - 4..].iter().map(|a| self.number(a)).collect::<DrawResult<Vec<f64>>>()?;
@@ -4849,7 +5096,7 @@ impl Draw {
         let t = Transform::scaling(Point::new(v[0], v[1], v[2]), v[3]);
         for name in &args[..n - 4] {
             let shape = self.shape_var(name)?;
-            let scaled = modify::transform(&mut self.model, shape, &t, Default::default())?;
+            let scaled = modify::transform(&mut self.model, shape, &t, options)?;
             self.set_shape_var(name, scaled)?;
         }
         Ok(String::new())
@@ -4859,6 +5106,8 @@ impl Draw {
     /// Example: `ttranslate s2 0 7 7`
     pub fn ttranslate(&mut self, args: &[&str]) -> DrawResult {
         // `ttranslate name ... dx dy dz`: moves the shapes.
+        // (OCCT's `-copy` and `-copymesh` change nothing here.)
+        let args = &without_copy_flags(args);
         need(args, 4, "ttranslate name ... dx dy dz")?;
         let n = args.len();
         let v = args[n - 3..].iter().map(|a| self.number(a)).collect::<DrawResult<Vec<f64>>>()?;

@@ -72,11 +72,44 @@ fn execute(name: &str, interp: &mut Interp<Session>, argv: &[Value]) -> MoltResu
     if IGNORED.contains(&name) {
         return molt_ok!();
     }
-    let args: Vec<&str> = argv[1..].iter().map(|v| v.as_str()).collect();
+    // (As in DRAW, a DRAW variable is a Tcl variable holding its own name: an argument that
+    // is a Tcl variable, as one linked by `upvar`, holding a DRAW variable's name stands
+    // for that.)
+    let resolved: Vec<String> = argv[1..]
+        .iter()
+        .map(|v| {
+            let name = v.as_str();
+            if interp.context_mut().draw.has(name) {
+                return name.to_string();
+            }
+            match interp.var(v) {
+                Ok(value) if interp.context_mut().draw.has(value.as_str()) => value.as_str().to_string(),
+                _ => name.to_string(),
+            }
+        })
+        .collect();
+    let args: Vec<&str> = resolved.iter().map(String::as_str).collect();
+    let ran = run_draw_command(interp, name, &args);
+    // The DRAW variables made are Tcl variables (global) too.
+    let created = std::mem::take(&mut interp.context_mut().draw.created);
+    if !created.is_empty() {
+        let globals = interp.vars_in_global_scope();
+        for n in created {
+            if !globals.iter().any(|g| g.as_str() == n) {
+                let set = Value::from(vec![Value::from("set"), Value::from(n.as_str()), Value::from(n.as_str())]);
+                let _ = interp.eval_at_scope(0, &set);
+            }
+        }
+    }
+    ran
+}
+
+/// Runs a DRAW command (of the dispatcher's) on the session, logging what it reports.
+fn run_draw_command(interp: &mut Interp<Session>, name: &str, args: &[&str]) -> MoltResult {
     let session = interp.context_mut();
     // (A panic is an exception, as a C++ one in DRAW: an error a script may catch.)
     let draw = &mut session.draw;
-    let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| super::dispatch::dispatch(draw, name, &args)));
+    let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| super::dispatch::dispatch(draw, name, args)));
     let ran = match ran {
         Ok(r) => r,
         Err(p) => {
@@ -118,6 +151,24 @@ fn command_type(name: &str, interp: &Interp<Session>) -> Option<CommandKind> {
 fn extra(name: &str, interp: &mut Interp<Session>, argv: &[Value]) -> Option<MoltResult> {
     let args: Vec<String> = argv[1..].iter().map(|v| v.as_str().to_string()).collect();
     Some(match name {
+        "unset" => {
+            // (Unsetting a DRAW variable deletes it, as in DRAW; a name that is not a Tcl
+            // variable is no error then.)
+            let quiet = args.iter().any(|a| a == "-nocomplain");
+            let mut words = vec![argv[0].clone()];
+            if !quiet {
+                words.push(Value::from("-nocomplain"));
+            }
+            for a in &args {
+                if !a.starts_with('-') && interp.context_mut().draw.has(a) {
+                    let _ = interp.context_mut().draw.take_var(a);
+                } else if !quiet && !a.starts_with('-') && interp.var(&Value::from(a.as_str())).is_err() {
+                    return Some(molt_err!(format!("can't unset \"{a}\": no such variable")));
+                }
+                words.push(Value::from(a.as_str()));
+            }
+            return molt_forked::__private::execute_builtin("unset", interp, &words);
+        }
         "puts" => {
             // `puts ?-nonewline? ?channel? string`: a TODO declares a known failure.
             let text = args.last().cloned().unwrap_or_default();
@@ -159,7 +210,12 @@ fn extra(name: &str, interp: &mut Interp<Session>, argv: &[Value]) -> Option<Mol
             for n in &args {
                 use super::DrawObject as O;
                 let what = match session.draw.get(n) {
-                    Some(O::Shape(s)) => format!("is a shape {} {}", format!("{:?}", s.kind()).to_uppercase(), if s.orientation == kentron::topology::Orientation::Reversed { "REVERSED" } else { "FORWARD" }),
+                    Some(O::Shape(s)) => {
+                        let s = *s;
+                        let orientation = format!("{:?}", s.orientation).to_uppercase();
+                        let closed = if shape_closed(&session.draw, s) { " Closed" } else { "" };
+                        format!("is a shape {} {orientation} Orientable{closed}", format!("{:?}", s.kind()).to_uppercase())
+                    }
                     Some(O::Curve(_)) => "is a 3d curve".into(),
                     Some(O::Curve2(_)) => "is a 2d curve".into(),
                     Some(O::Surface(_)) => "is a surface".into(),
@@ -187,6 +243,13 @@ fn extra(name: &str, interp: &mut Interp<Session>, argv: &[Value]) -> Option<Mol
                     O::Point(p) => format!("Point : {:.15e}, {:.15e}, {:.15e}\n", p.x, p.y, p.z),
                     O::Point2(p) => format!("Point 2d : {:.15e}, {:.15e}\n", p.x, p.y),
                     O::Curve(c) => describe_curve(c),
+                    O::Surface(kentron::geometry::surface::Surface::Plane(p)) => {
+                        let f = p.frame();
+                        let xyz = |v: [f64; 3]| format!("{}, {}, {} ", v[0], v[1], v[2]);
+                        let d = |d: kentron::math::Direction| xyz([d.x(), d.y(), d.z()]);
+                        let o = f.origin();
+                        format!("Plane\n  Origin :{}\n  Axis   :{}\n  XAxis  :{}\n  YAxis  :{}\n\n", xyz([o.x, o.y, o.z]), d(f.z()), d(f.x()), d(f.y()))
+                    }
                     O::Number(x) => format!("{x}\n"),
                     other => format!("{other:?}\n"),
                 };
@@ -718,6 +781,28 @@ fn describe_curve(c: &kentron::geometry::curve::Curve) -> String {
             let (a, b) = t.range();
             format!("Trimmed curve\nParameters : {a} {b}\nBasis curve :\n{}", describe_curve(t.basis()))
         }
-        other => format!("{}\n", format!("{other:?}").split(['(', ' ', '{']).next().unwrap_or("Curve")),
+        Curve::Line(_) => "Line\n".into(),
+        Curve::Circle(_) => "Circle\n".into(),
+        Curve::Ellipse(_) => "Ellipse\n".into(),
+        Curve::Hyperbola(_) => "Hyperbola\n".into(),
+        Curve::Parabola(_) => "Parabola\n".into(),
+        Curve::Bezier(_) => "BezierCurve\n".into(),
+        Curve::BSpline(_) => "BSplineCurve\n".into(),
+        Curve::Offset(_) => "OffsetCurve\n".into(),
+    }
+}
+
+/// Whether a shape is closed, as OCCT flags it: an edge from a vertex back to it, a wire
+/// round a loop, a shell enclosing a volume; a solid only as flagged by the command making
+/// it (OCCT's builders differ: a loft's is, a prism's is not).
+fn shape_closed(draw: &super::Draw, s: kentron::topology::Shape) -> bool {
+    use kentron::topology::{NodeKind, ShellId, WireId};
+    let model = &draw.model;
+    match s.kind() {
+        NodeKind::Edge => model.is_closed_edge(s),
+        NodeKind::Wire => WireId::try_from(s.node).is_ok_and(|w| model.is_closed_wire(w)),
+        NodeKind::Shell => ShellId::try_from(s.node).is_ok_and(|sh| model.is_closed_shell(sh)),
+        NodeKind::Solid => draw.closed_solids.contains(&s.node),
+        _ => false,
     }
 }

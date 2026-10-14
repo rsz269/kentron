@@ -686,6 +686,92 @@ impl<P: ControlPoint> BSplineCurve<P> {
         Some((along.first, along.last))
     }
 
+    /// Changes the poles so that the curve passes through `target` at `u` with derivative
+    /// `tangent` there, as OCCT's `MovePointAndTangent`: two smooth bumps over the poles
+    /// (cubic in the poles' Greville abscissae, peaking at the abscissae nearest `u`)
+    /// carry the corrections. The first `starting + 1` and last `ending + 1` poles stay
+    /// put (each from -1, none, up to the degree); `u` must lie within `tolerance` inside
+    /// the ends unless they are free. `None` (the curve unchanged) where there is not
+    /// enough freedom, or for a periodic curve.
+    #[doc(alias = "Geom_BSplineCurve::MovePointAndTangent")]
+    pub fn move_point_and_tangent(&mut self, u: f64, target: P, tangent: P::Vector, tolerance: f64, starting: i32, ending: i32) -> Option<()> {
+        if self.periodic {
+            return None;
+        }
+        let degree = self.degree as i32;
+        let flat = self.flat.clone();
+        let n = self.poles.len();
+        if !((-1..=degree).contains(&starting) && (-1..=degree).contains(&ending) && (starting + ending + 4) as usize <= n) {
+            return None;
+        }
+        // (1-based indices, as OCCT's.)
+        let knot = |i: usize| flat[i - 1];
+        let (start, end) = (self.degree + 1, flat.len() - self.degree);
+        let inside_start = if starting == -1 { knot(start) <= u } else { knot(start) + tolerance < u };
+        let inside_end = if ending == -1 { knot(end) >= u } else { knot(end) - tolerance > u };
+        if !(inside_start && inside_end) {
+            return None;
+        }
+        // The Greville (Schoenberg) abscissae of the poles.
+        let s: Vec<f64> = (1..=n).map(|i| (1..=self.degree).map(|j| knot(i + j)).sum::<f64>() / self.degree as f64).collect();
+        let at = |i: usize| s[i - 1];
+        let (first, last) = ((starting + 2) as usize, n - ending as usize - 1);
+        let index = locate_in(&s, u, first, last);
+        let other = if index == first {
+            index + 1
+        } else if index == last {
+            index - 1
+        } else if u - knot(index) < knot(index + 1) - u {
+            index - 1
+        } else {
+            index + 1
+        };
+        let start_value = if first == 1 { at(1) - (at(n) - at(1)) } else { at(first - 1) };
+        let end_value = if last == n { at(n) + (at(n) - at(1)) } else { at(last + 1) };
+        // A bump over the poles first..=last, 1 at the pole `peak`.
+        let bump = |peak: usize| {
+            let mut f = vec![0.0; n + 1];
+            let rise = 1.0 / (at(peak) - start_value);
+            for (i, fi) in f.iter_mut().enumerate().take(peak + 1).skip(first) {
+                *fi = ((at(i) - start_value) * rise).powi(3);
+            }
+            let fall = 1.0 / (end_value - at(peak));
+            for (i, fi) in f.iter_mut().enumerate().take(last + 1).skip(peak) {
+                *fi = ((end_value - at(i)) * fall).powi(3);
+            }
+            f
+        };
+        let (f1, f2) = (bump(index), bump(other));
+        // Each bump's value and derivative at u, as a function on the curve's basis (and
+        // weights).
+        let as_function = |f: &[f64]| -> Option<(f64, f64)> {
+            let poles: Vec<crate::math::Point2> = f[1..].iter().map(|&x| crate::math::Point2::new(x, 0.0)).collect();
+            let mut c = BSplineCurve::<crate::math::Point2>::try_new(poles, self.knots.clone(), self.multiplicities.clone(), self.degree).ok()?;
+            if let Some(w) = &self.weights {
+                c = c.with_weights(w.clone());
+            }
+            let (p, d) = c.d1(u);
+            Some((p.x, d.x))
+        };
+        let ((v1, d1), (v2, d2)) = (as_function(&f1)?, as_function(&f2)?);
+        // [v1 d1; v2 d2]⁻¹ applied to (Δ point, Δ derivative).
+        let det = v1 * d2 - d1 * v2;
+        if det.abs() <= 1e-300 {
+            return None;
+        }
+        let (now, slope) = self.d1(u);
+        let (now, slope, goal, tangent) = (now.coords(), P::vector_coords(slope), target.coords(), P::vector_coords(tangent));
+        let delta: [f64; 3] = std::array::from_fn(|k| goal[k] - now[k]);
+        let delta_d: [f64; 3] = std::array::from_fn(|k| tangent[k] - slope[k]);
+        let a: [f64; 3] = std::array::from_fn(|k| (d2 * delta[k] - v2 * delta_d[k]) / det);
+        let b: [f64; 3] = std::array::from_fn(|k| (-d1 * delta[k] + v1 * delta_d[k]) / det);
+        for i in 0..n {
+            let c = self.poles[i].coords();
+            self.set_pole(i, P::from_coords(std::array::from_fn(|k| c[k] + f1[i + 1] * a[k] + f2[i + 1] * b[k])));
+        }
+        Some(())
+    }
+
     /// The knots bounding `u`: `(i, i)` if `u` is knot `i` within `tolerance`, otherwise
     /// `(i, i + 1)` with `knot(i) < u < knot(i + 1)`.
     #[doc(alias = "LocateU")]
@@ -2268,6 +2354,25 @@ mod fast_evaluation_tests {
     use crate::geometry::{ParametricCurve, ParametricSurface};
 
     #[test]
+    fn moving_a_point_and_its_tangent() {
+        let poles: Vec<Point> = (0..7).map(|i| Point::new(i as f64, (i as f64 * 0.7).sin(), 0.0)).collect();
+        let plain = BSplineCurve::new(poles, vec![0.0, 0.3, 0.5, 1.0], vec![4, 2, 1, 4], 3);
+        let rational = plain.clone().with_weights((0..7).map(|i| 1.0 + 0.2 * (i % 3) as f64).collect());
+        for mut curve in [plain, rational] {
+            let (target, tangent) = (Point::new(3.0, 2.0, 1.0), crate::math::Vector::new(5.0, -1.0, 2.0));
+            let (first, last) = (curve.poles()[0], curve.poles()[6]);
+            curve.move_point_and_tangent(0.4, target, tangent, 1e-5, 0, 0).unwrap();
+            let (p, d) = curve.d1(0.4);
+            assert!(p.distance(target) < 1e-9 && (d - tangent).length() < 1e-9, "{p:?} {d:?}");
+            // The end poles stay put.
+            assert_eq!((curve.poles()[0], curve.poles()[6]), (first, last));
+        }
+        // Too near an end that must stay put.
+        let mut curve = BSplineCurve::new((0..4).map(|i| Point::new(i as f64, 0.0, 0.0)).collect(), vec![0.0, 1.0], vec![4, 4], 3);
+        assert!(curve.move_point_and_tangent(1e-7, Point::ORIGIN, crate::math::Vector::new(1.0, 1.0, 0.0), 1e-5, 0, 0).is_none());
+    }
+
+    #[test]
     fn fast_curve_derivatives_match_the_general_ones() {
         let poles: Vec<Point> = (0..7).map(|i| Point::new(i as f64, (i as f64 * 0.7).sin(), (i * i) as f64 * 0.1)).collect();
         let plain = BSplineCurve::new(poles, vec![0.0, 0.3, 0.5, 1.0], vec![4, 2, 1, 4], 3);
@@ -2451,4 +2556,21 @@ mod fast_evaluation_tests {
             }
         }
     }
+}
+
+/// The interval of `u` among the increasing `values` (1-based, as OCCT's
+/// `BSplCLib::LocateParameter`): the last `i` with `values[i] <= u` (a value equal to `u`
+/// within rounding counting as below), kept within `first..last` and past empty intervals.
+fn locate_in(values: &[f64], u: f64, first: usize, last: usize) -> usize {
+    let at = |i: usize| values[i - 1];
+    let eps = (values[values.len() - 1].abs().min(u.abs()) * f64::EPSILON).max(f64::MIN_POSITIVE);
+    let mut index = values.partition_point(|&x| x <= u);
+    if index < values.len() && (u - at(index + 1)).abs() <= eps {
+        index += 1;
+    }
+    index = index.clamp(first, last - 1);
+    while index != last - 1 && index < values.len() && (at(index + 1) - at(index)).abs() <= eps {
+        index += 1;
+    }
+    index
 }

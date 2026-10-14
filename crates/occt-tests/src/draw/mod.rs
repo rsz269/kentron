@@ -257,6 +257,12 @@ pub struct Draw {
     pub(crate) simplify: (bool, bool),
     /// The history of the last operation that keeps one (`savehistory` saves it).
     pub(crate) last_history: Vec<(kentron::topology::NodeId, Vec<Shape>)>,
+    /// The variables created since last taken (the Tcl runner makes each a Tcl variable
+    /// too, as DRAW does).
+    pub(crate) created: Vec<String>,
+    /// The solids flagged closed, as OCCT's builders flag them (`thrusections`'s); `whatis`
+    /// reports other shapes closed by their topology.
+    pub closed_solids: std::collections::HashSet<kentron::topology::NodeId>,
 }
 
 impl Draw {
@@ -369,7 +375,14 @@ impl Draw {
     }
 
     pub fn set(&mut self, name: &str, value: DrawObject) {
-        self.vars.insert(name.to_string(), value);
+        if self.vars.insert(name.to_string(), value).is_none() {
+            self.created.push(name.to_string());
+        }
+    }
+
+    /// Whether `name` is a DRAW variable.
+    pub fn has(&self, name: &str) -> bool {
+        self.vars.contains_key(name)
     }
 
     /// The variable `name`, removed.

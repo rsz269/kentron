@@ -824,30 +824,27 @@ fn bug25044_9() -> DrawResult<()> {
 
 /// `tests/bugs/mesh/bug25142`
 #[test]
-#[should_panic]
-fn bug25142() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.r#box(&["b1", "20", "10", "10"])?;
-        d.r#box(&["b2", "10", "10", "10"])?;
-        d.bclear(&[])?;
-        d.baddobjects(&["b1", "b2"])?;
-        d.bfillds(&[])?;
-        d.bbuild(&["r"])?;
-        d.explode(&["r"])?;
-        d.tolerance(&["r"])?;
-        d.checkshape(&["r"])?;
-        d.bopargcheck(&["r", "#F"])?;
-        d.bopargcheck(&["r_1", "r_2", "-F", "#F"])?;
-        d.incmesh(&["r_1", "0.1"])?;
-        d.tricheck(&["r_1"])?;
-        d.incmesh(&["r_2", "0.1"])?;
-        d.tricheck(&["r_2"])?;
-        d.tricheck(&["r_1"])?;
-        d.tclean(&["r"])?;
-        d.tricheck(&["r_1"])?;
-        Ok(())
-    })
+fn bug25142() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.r#box(&["b1", "20", "10", "10"])?;
+    d.r#box(&["b2", "10", "10", "10"])?;
+    d.bclear(&[])?;
+    d.baddobjects(&["b1", "b2"])?;
+    d.bfillds(&[])?;
+    d.bbuild(&["r"])?;
+    d.explode(&["r"])?;
+    d.tolerance(&["r"])?;
+    d.checkshape(&["r"])?;
+    d.bopargcheck(&["r", "#F"])?;
+    d.bopargcheck(&["r_1", "r_2", "-F", "#F"])?;
+    d.incmesh(&["r_1", "0.1"])?;
+    d.tricheck(&["r_1"])?;
+    d.incmesh(&["r_2", "0.1"])?;
+    d.tricheck(&["r_2"])?;
+    d.tricheck(&["r_1"])?;
+    d.tclean(&["r"])?;
+    d.tricheck(&["r_1"])?;
+    Ok(())
 }
 
 /// `tests/bugs/mesh/bug25157`

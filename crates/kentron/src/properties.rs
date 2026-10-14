@@ -550,6 +550,121 @@ pub fn bounding_box(model: &Model, shape: Shape) -> BoundingBox {
     b
 }
 
+/// A box along axes of its own (an oriented bounding box): `center ± half_sizes[i] *
+/// axes[i]`.
+#[doc(alias = "Bnd_OBB")]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct OrientedBox {
+    pub center: Point,
+    pub axes: [Vector; 3],
+    pub half_sizes: [f64; 3],
+}
+
+impl OrientedBox {
+    /// Whether the boxes overlap (no plane separates them: none across their 15
+    /// candidate axes, the boxes' own and the cross products of a pair).
+    #[doc(alias = "Bnd_OBB::IsOut")]
+    pub fn intersects(&self, other: &OrientedBox) -> bool {
+        let gap = other.center - self.center;
+        let reach = |b: &OrientedBox, axis: Vector| (0..3).map(|i| b.half_sizes[i] * b.axes[i].dot(axis).abs()).sum::<f64>();
+        let mut axes: Vec<Vector> = self.axes.iter().chain(other.axes.iter()).copied().collect();
+        for a in self.axes {
+            for b in other.axes {
+                let c = a.cross(b);
+                if c.length() > 1e-9 {
+                    axes.push(c.normalized());
+                }
+            }
+        }
+        axes.iter().all(|&axis| gap.dot(axis).abs() <= reach(self, axis) + reach(other, axis))
+    }
+}
+
+/// A box along axes fitting `shape` (not necessarily the smallest one): the smallest of
+/// boxes along the frames of its planar faces (their normal and an edge's direction) and
+/// along the principal axes of points spread over it, around those points enlarged by the
+/// tolerances.
+#[doc(alias = "BRepBndLib::AddOBB")]
+pub fn oriented_bounding_box(model: &Model, shape: Shape) -> OrientedBox {
+    // Points: the vertices, along the edges and over the curved faces.
+    let mut points: Vec<Point> = model.explore(shape, NodeKind::Vertex).map(|v| model.point(v)).collect();
+    let mut margin = model.explore(shape, NodeKind::Vertex).map(|v| model.tolerance(v)).fold(0.0, f64::max);
+    for edge in model.unique_subshapes(shape, NodeKind::Edge) {
+        margin = margin.max(model.tolerance(edge));
+        if let Some((curve, first, last)) = model.edge_curve(edge) {
+            let n = if matches!(curve, crate::geometry::curve::Curve::Line(_)) { 1 } else { 64 };
+            points.extend((0..=n).map(|i| curve.point(first + (last - first) * i as f64 / n as f64)));
+        }
+    }
+    let faces = model.unique_subshapes(shape, NodeKind::Face);
+    let mut frames: Vec<[Vector; 3]> = Vec::new();
+    for &f in &faces {
+        if let Some(b) = face_box(model, f) {
+            // (A curved face: its box's corners stand for it.)
+            for i in 0..8 {
+                points.push(Point::new(
+                    if i & 1 == 0 { b.min.x } else { b.max.x },
+                    if i & 2 == 0 { b.min.y } else { b.max.y },
+                    if i & 4 == 0 { b.min.z } else { b.max.z },
+                ));
+            }
+        }
+        if let Some(Surface::Plane(plane)) = model.surface(f).map(|s| s.transformed(&f.placement)) {
+            let n = Vector::from(plane.normal());
+            for e in model.explore(f, NodeKind::Edge).take(4) {
+                let Some((Some(curve), first, last)) = model.edge_curve(e).map(|(c, a, b)| (Some(c), a, b)) else { continue };
+                let d = curve.point(last) - curve.point(first);
+                let x = d - n * d.dot(n);
+                if x.length() > 1e-9 {
+                    let x = x.normalized();
+                    frames.push([n, x, n.cross(x)]);
+                }
+            }
+        }
+    }
+    if points.is_empty() {
+        return OrientedBox { center: Point::ORIGIN, axes: [Vector::new(1.0, 0.0, 0.0), Vector::new(0.0, 1.0, 0.0), Vector::new(0.0, 0.0, 1.0)], half_sizes: [0.0; 3] };
+    }
+    // The principal axes of the points, and the world's.
+    let mean = points.iter().fold(Vector::new(0.0, 0.0, 0.0), |s, p| s + (*p - Point::ORIGIN)) * (1.0 / points.len() as f64);
+    let mut covariance = [[0.0; 3]; 3];
+    for p in &points {
+        let d = (*p - Point::ORIGIN) - mean;
+        let d = [d.x, d.y, d.z];
+        for r in 0..3 {
+            for c in 0..3 {
+                covariance[r][c] += d[r] * d[c];
+            }
+        }
+    }
+    let (_, principal) = symmetric_eigen(&Matrix3::from_rows(covariance));
+    frames.push(principal.map(|v| v.normalized()));
+    frames.push([Vector::new(1.0, 0.0, 0.0), Vector::new(0.0, 1.0, 0.0), Vector::new(0.0, 0.0, 1.0)]);
+    let along = |axes: &[Vector; 3]| {
+        let mut lo = [f64::INFINITY; 3];
+        let mut hi = [f64::NEG_INFINITY; 3];
+        for p in &points {
+            let d = *p - Point::ORIGIN;
+            for i in 0..3 {
+                let x = d.dot(axes[i]);
+                (lo[i], hi[i]) = (lo[i].min(x), hi[i].max(x));
+            }
+        }
+        (lo, hi)
+    };
+    let mut best: Option<(f64, OrientedBox)> = None;
+    for axes in frames {
+        let (lo, hi) = along(&axes);
+        let half_sizes: [f64; 3] = std::array::from_fn(|i| 0.5 * (hi[i] - lo[i]) + margin);
+        let center = Point::ORIGIN + (0..3).fold(Vector::new(0.0, 0.0, 0.0), |s, i| s + axes[i] * (0.5 * (lo[i] + hi[i])));
+        let volume = half_sizes.iter().product::<f64>();
+        if best.as_ref().is_none_or(|(v, _)| volume < *v) {
+            best = Some((volume, OrientedBox { center, axes, half_sizes }));
+        }
+    }
+    best.expect("a frame").1
+}
+
 /// A curved face's part of [`bounding_box`]: points of its surface over the part of the
 /// parameter space its boundary spans, enlarged to cover the surface between them.
 fn face_box(model: &Model, f: Shape) -> Option<BoundingBox> {
@@ -995,6 +1110,22 @@ mod tests {
     use crate::math::Direction;
     use crate::primitives::Cuboid;
     use std::f64::consts::TAU;
+
+    #[test]
+    fn oriented_boxes_fit_turned_blocks() {
+        let mut model = Model::new();
+        let turn = |s: Shape, axis: Direction, angle: f64| s.moved(&crate::math::Transform::rotation(crate::math::Axis::new(Point::ORIGIN, axis), angle));
+        let block = Cuboid::new(100.0, 150.0, 200.0).build(&mut model).unwrap();
+        let a = turn(block, Direction::new(1.0, 2.0, 3.0), 0.7);
+        let b = oriented_bounding_box(&model, a);
+        let volume = 8.0 * b.half_sizes.iter().product::<f64>();
+        assert!((volume - 100.0 * 150.0 * 200.0).abs() < 1e-6 * volume, "{volume}");
+        // Apart though their axis-aligned boxes overlap; and overlapping.
+        let thin = Cuboid::new(300.0, 10.0, 10.0).build(&mut model).unwrap();
+        let (c, d) = (turn(thin, Direction::Z, 0.785), turn(thin, Direction::Z, 0.785).moved(&crate::math::Transform::translation(crate::math::Vector::new(20.0, -20.0, 0.0))));
+        assert!(!oriented_bounding_box(&model, c).intersects(&oriented_bounding_box(&model, d)));
+        assert!(oriented_bounding_box(&model, c).intersects(&oriented_bounding_box(&model, c)));
+    }
 
     #[test]
     fn tight_boxes_of_tilted_cylinders_and_cones_hold_their_sides() {
