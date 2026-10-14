@@ -36,8 +36,7 @@ used.
 
 ```
 pip install ./crates/pykentron                 # with maturin, as the PyPI wheels are built
-python3 crates/pykentron/build.py              # in place, optimized (LTO, AVX2/FMA), into python/pykentron/_kentron.abi3.so
-python3 crates/pykentron/build.py --portable   # in place, for any x86-64 CPU
+python3 crates/pykentron/build.py              # in place, optimized (LTO), into python/pykentron/_kentron.abi3.so
 python3 crates/pykentron/build.py --quick      # in place, the tests' release profile
 ```
 

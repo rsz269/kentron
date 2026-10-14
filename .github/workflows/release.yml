@@ -14,9 +14,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Build for any x86-64 CPU
-        # (The workspace builds for x86-64-v3, which wheels for all x86-64 machines cannot assume.)
-        run: rm .cargo/config.toml
       - uses: PyO3/maturin-action@v1
         with:
           target: x86_64

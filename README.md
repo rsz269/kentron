@@ -102,9 +102,7 @@ passing `CollectOptions` to `Model::collect_garbage_with`.
 - Rust: `cargo add kentron`.
 - Python 3.10 or later: `pip install pykentron`, or `pip install "pykentron[cadquery]"` to
   run CadQuery scripts (it adds what CadQuery's own Python layers need). Wheels are built
-  for Linux on x86-64, for any x86-64 CPU (not the x86-64-v3 a build from this repository
-  targets, which is somewhat faster on CPUs from 2015 on); elsewhere pip builds from the
-  source distribution, which needs Rust.
+  for Linux on x86-64; elsewhere pip builds from the source distribution, which needs Rust.
 
 ```python
 import pykentron as cq
@@ -116,9 +114,7 @@ An existing CadQuery script runs unchanged with `pykentron-run script.py`, or af
 
 ## Building and testing
 
-- Rust 1.88 or later. The workspace builds for x86-64-v3 (AVX2, FMA: Intel Haswell and AMD
-  Excavator, 2013–2015, and later); on an older x86-64 CPU, build with an empty
-  `RUSTFLAGS=` (`.cargo/config.toml`). Other architectures are not affected.
+- Rust 1.88 or later.
 - `cargo test` runs everything. Most of OCCT's converted tests read its test dataset, an
   external download: see `crates/occt-tests/README.md`. Without it those tests fail.
 - pykentron from source: `python3 crates/pykentron/build.py` (see

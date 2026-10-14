@@ -1,7 +1,0 @@
-# Builds in this workspace (the tests, the examples, pykentron) target x86-64-v3: AVX2, FMA
-# and BMI (Intel from Haswell, 2013, AMD from Excavator, 2015). The kernel does not fuse
-# multiply-adds, so the results are bit-identical to a baseline x86-64 build, only faster.
-# On an older processor, RUSTFLAGS overrides this (an empty RUSTFLAGS= builds for any
-# x86-64). Crates depending on kentron are not affected.
-[target.'cfg(target_arch = "x86_64")']
-rustflags = ["-C", "target-cpu=x86-64-v3"]
