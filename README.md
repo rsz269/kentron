@@ -56,20 +56,21 @@ and no change may make a passing test fail.
 
 ## Tested against
 
-- **OCCT's DRAW test scripts:** 9,596 of 13,183 scripts converted (the rest rely on Tcl
-  control flow or on viewers and data exchange). Converted by `tools/draw2rs.py` into Rust
-  tests and YAML cases. Many need OCCT's external test dataset (not in this repo).
+- **OCCT's DRAW test scripts:** 13,074 of its 13,183 scripts (the rest exercise viewers and
+  data exchange). 9,596 are converted by `tools/draw2rs.py` into Rust tests and YAML cases;
+  the 3,478 that use Tcl (conditions, loops, procedures) run as they are, on a Tcl
+  interpreter. Many need OCCT's external test dataset (not in this repo).
 - **OCCT's GTests:** the computational-geometry and topology toolkits, translated by hand.
 - **BRL-CAD:** NIST's MBE PMI test parts and other STEP files from its source tree, with
   OCCT's reading of them as the reference, plus its `libbg` geometry tests.
-- **CadQuery's own test suite** (v2.8.0), run unchanged against pykentron: 543 of 727 tests
+- **CadQuery's own test suite** (v2.8.0), run unchanged against pykentron: 547 of 727 tests
   pass. Most of the rest exercise OCCT's document formats (OCAF/XDE), exporters kentron
-  lacks (glTF, VRML, VTK), text, or OCCT-specific behaviour.
+  lacks (glTF, VRML, VTK), or OCCT-specific behaviour.
 - **44 CadQuery models from a private project** build on pykentron; for the 42 that return
   their parts, every part is valid and within 0.1% of CadQuery's volume.
 
-About 8,900 tests run (with OCCT's dataset). 610 of them are known gaps, marked as expected
-failures (`crates/occt-tests/expected_failures.txt` for the converted scripts): they pass
+About 10,300 tests run (with OCCT's dataset). About 1,800 of them are known gaps, marked as
+expected failures (`crates/occt-tests/expected_failures.txt` for OCCT's scripts): they pass
 while they fail, so `cargo test` is green, and fail once they pass, so a fix is noticed
 as surely as a regression.
 

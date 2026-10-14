@@ -16,13 +16,21 @@ yaml-rust2 = "0.13.0"
 # Running DRAW scripts that use Tcl: an interpreter (src/draw/tcl.rs), with regular expressions.
 molt-forked = { version = "0.6.0", features = ["full"] }
 regex = "1.11"
+# Tests' time limits (src/limit.rs): their threads' processor time, and a pool of their own.
+rayon = "1.11"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [dev-dependencies]
-libc = "0.2"
 libtest-mimic = "0.8.2"
-rayon = "1.11"
 
 # Test cases in YAML (cases/**/*.yaml), one libtest trial per case.
 [[test]]
 name = "cases"
+harness = false
+
+# OCCT's DRAW scripts that use Tcl (scripts/), run on a Tcl interpreter, one trial each.
+[[test]]
+name = "draw_tcl"
 harness = false

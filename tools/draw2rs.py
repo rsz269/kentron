@@ -978,6 +978,51 @@ def existing_command_methods() -> set:
     return {n[1] for n in names}
 
 
+# Scripts not converted that the Tcl interpreter does not run either: data exchange, viewers,
+# and those draw_deviations.json skips.
+NOT_RUN_PREFIXES = ("data-exchange:", "viewer:", "draw_deviations.json:")
+
+
+def vendor_scripts(occt: Path, skipped: list) -> set:
+    """Copies the scripts not converted (that the Tcl interpreter can run) into `scripts/`,
+    with their groups' and grids' begin and end files and parse.rules, for `tests/draw_tcl.rs`;
+    the scripts' paths (`tests/...`), as converted."""
+    import shutil
+    root = TESTS_CRATE / "scripts"
+    tests = occt / "tests"
+    if root.exists():
+        shutil.rmtree(root)
+    root.mkdir()
+    (root / "README.md").write_text(
+        "# OCCT's DRAW scripts, as they are\n\n"
+        "Copied from OCCT's `tests` by `tools/draw2rs.py`: the scripts it does not convert to Rust,\n"
+        "which `tests/draw_tcl.rs` runs on a Tcl interpreter (`src/draw/tcl.rs`), with their groups'\n"
+        "and grids' `begin` and `end` files and `parse.rules`. LGPL-2.1 with the Open CASCADE\n"
+        "exception, as OCCT (see `../README.md`). Do not edit; re-run the tool instead.\n")
+    copied = set()
+
+    def copy(rel: Path) -> None:
+        src = tests / rel
+        if src.is_file() and rel not in copied:
+            (root / rel).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(src, root / rel)
+            copied.add(rel)
+
+    copy(Path("parse.rules"))
+    run = set()
+    for path, reason in skipped:
+        if reason.startswith(NOT_RUN_PREFIXES):
+            continue
+        rel = Path(path)
+        group, grid = rel.parts[0], rel.parts[1]
+        copy(rel)
+        for d in (Path(group), Path(group) / grid):
+            for f in ("begin", "end", "parse.rules"):
+                copy(d / f)
+        run.add(f"tests/{path}")
+    return run
+
+
 def write_dispatch() -> None:
     """`src/draw/dispatch.rs`: each DRAW command `Draw` has a method for, called by its name
     (for scripts run by the Tcl interpreter, see `src/draw/tcl.rs`)."""
@@ -1166,6 +1211,7 @@ def main() -> int:
     target = TESTS_CRATE.parent.parent / "target"
     target.mkdir(exist_ok=True)
     (target / "draw_skipped.txt").write_text("".join(f"{p}\t{r}\n" for p, r in skipped_all))
+    converted |= vendor_scripts(occt, skipped_all)
 
     stale = sorted(expected - converted)
     if stale:

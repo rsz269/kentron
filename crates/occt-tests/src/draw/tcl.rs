@@ -585,18 +585,24 @@ fn rules(tests: &Path, group: &str, grid: &str) -> Vec<(bool, regex::Regex)> {
     out
 }
 
+/// The OCCT TODO a script declares that applies on this platform (`puts "TODO id platforms:
+/// message"`): a known failure of OCCT's.
+pub fn known_failure(script: &str) -> Option<String> {
+    let todo = regex::Regex::new(r#"(?m)^\s*puts\s+"(TODO\s+\S+\s+([^:"]+):[^"]*)""#).expect("a pattern");
+    let found = todo
+        .captures_iter(script)
+        .find(|c| c[2].split([' ', ',']).any(|p| ["ALL", "All", "Linux", "Debian", "Ubuntu"].contains(&p)))
+        .map(|c| c[1].to_string());
+    found
+}
+
 /// Runs OCCT's script `tests/<group>/<grid>/<case>` from the checkout `tests` (its `tests`
 /// directory) as OCCT's harness runs it.
 pub fn run_script(tests: &Path, group: &str, grid: &str, case: &str) -> Outcome {
-    // (A TODO that applies here, declared in the script's own text, makes it a known failure
-    // of OCCT's: not run, as the converted scripts with one are not.)
-    if let Ok(text) = std::fs::read_to_string(tests.join(group).join(grid).join(case)) {
-        let todo = regex::Regex::new(r#"(?m)^\s*puts\s+"(TODO\s+\S+\s+([^:"]+):[^"]*)""#).expect("a pattern");
-        for c in todo.captures_iter(&text) {
-            if c[2].split([' ', ',']).any(|p| ["ALL", "All", "Linux", "Debian", "Ubuntu"].contains(&p)) {
-                return Outcome::KnownFailure(c[1].to_string());
-            }
-        }
+    // (A TODO that applies here makes it a known failure of OCCT's: not run, as the
+    // converted scripts with one are not.)
+    if let Some(todo) = std::fs::read_to_string(tests.join(group).join(grid).join(case)).ok().and_then(|t| known_failure(&t)) {
+        return Outcome::KnownFailure(todo);
     }
     let session = Session {
         draw: Draw::new(),
