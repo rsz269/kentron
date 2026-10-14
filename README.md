@@ -1,6 +1,8 @@
 # kentron
 
 [![CI](https://github.com/rsz269/kentron/actions/workflows/ci.yml/badge.svg)](https://github.com/rsz269/kentron/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/kentron.svg)](https://crates.io/crates/kentron)
+[![PyPI](https://img.shields.io/pypi/v/pykentron.svg)](https://pypi.org/project/pykentron/)
 
 A boundary-representation CAD kernel written from scratch in Rust, with Python bindings that
 aim to run CadQuery scripts unchanged.
@@ -18,10 +20,12 @@ primitives, extrusions and revolutions, lofts and pipes, booleans, fillets, cham
 drafts, offsets and thick solids, sewing and healing, and BRep, STEP and STL files. All of
 it is kentron's own code: OCCT is the reference to match, not a dependency.
 
-- **`crates/kentron`**: the kernel. Pure Rust; its only dependency is `rayon`, for running
-  independent steps in parallel (optional).
-- **`crates/pykentron`**: Python bindings with a CadQuery-compatible API. CadQuery scripts
-  run on kentron by importing `pykentron` in place of `cadquery`.
+- **`crates/kentron`**: the kernel, [on crates.io](https://crates.io/crates/kentron). Pure
+  Rust; its only dependency is `rayon`, for running independent steps in parallel
+  (optional).
+- **`crates/pykentron`**: Python bindings with a CadQuery-compatible API,
+  [on PyPI](https://pypi.org/project/pykentron/). CadQuery scripts run on kentron by
+  importing `pykentron` in place of `cadquery`, or unchanged with `pykentron-run`.
 - **`crates/occt-tests`**: OCCT's own tests, converted to run against kentron.
 
 ## Aims and scope
@@ -36,8 +40,10 @@ it is kentron's own code: OCCT is the reference to match, not a dependency.
 - **Currently out of scope:** OCCT's visualization, hidden-line removal, OCAF/XDE documents
   and its internal bookkeeping.
 
-It is pre-1.0. Some OCCT features are still missing, for example pipes along arbitrary
-spines, offsets that change a shape's topology, and evolved solids. Some rare pathological
+It is pre-1.0. Some OCCT features are still missing, for example sweeps with several
+sections of different shapes, offsets that change a shape's topology, evolved solids, and
+fillets meeting in some kinds of corner (four or more faces at a vertex, convex and concave
+fillets together). Some rare pathological
 cases may still run very slowly or fail to converge.
 
 ## How it was made
@@ -55,12 +61,13 @@ and no change may make a passing test fail.
 - **OCCT's GTests:** the computational-geometry and topology toolkits, translated by hand.
 - **BRL-CAD:** NIST's MBE PMI test parts and other STEP files from its source tree, with
   OCCT's reading of them as the reference, plus its `libbg` geometry tests.
-- **CadQuery's own test suite** (v2.8.0), run unchanged against pykentron: 528 of 727 tests
-  pass.
+- **CadQuery's own test suite** (v2.8.0), run unchanged against pykentron: 543 of 727 tests
+  pass. Most of the rest exercise OCCT's document formats (OCAF/XDE), exporters kentron
+  lacks (glTF, VRML, VTK), text, or OCCT-specific behaviour.
 - **44 CadQuery models from a private project** build on pykentron; for the 42 that return
   their parts, every part is valid and within 0.1% of CadQuery's volume.
 
-About 8,900 tests run (with OCCT's dataset). 707 of them are known gaps, marked as expected
+About 8,900 tests run (with OCCT's dataset). 610 of them are known gaps, marked as expected
 failures (`crates/occt-tests/expected_failures.txt` for the converted scripts): they pass
 while they fail, so `cargo test` is green, and fail once they pass, so a fix is noticed
 as surely as a regression.
@@ -89,6 +96,21 @@ allocator it uses, is chosen with `PYKENTRON_PROFILE`:
 Rust programs using kentron directly make the same choice by declaring their allocator and
 passing `CollectOptions` to `Model::collect_garbage_with`.
 
+## Installing
+
+- Rust: `cargo add kentron`.
+- Python 3.10 or later: `pip install pykentron`, or `pip install "pykentron[cadquery]"` to
+  run CadQuery scripts (it adds what CadQuery's own Python layers need). Wheels are built
+  for Linux on x86-64; elsewhere pip builds from the source distribution, which needs Rust.
+
+```python
+import pykentron as cq
+box = cq.Workplane().box(10, 20, 30).edges("|Z").fillet(2)
+```
+
+An existing CadQuery script runs unchanged with `pykentron-run script.py`, or after
+`import pykentron.shim` (before anything imports `cadquery`).
+
 ## Building and testing
 
 - Rust 1.88 or later. The workspace builds for x86-64-v3 (AVX2, FMA: Intel Haswell and AMD
@@ -96,8 +118,8 @@ passing `CollectOptions` to `Model::collect_garbage_with`.
   `RUSTFLAGS=` (`.cargo/config.toml`). Other architectures are not affected.
 - `cargo test` runs everything. Most of OCCT's converted tests read its test dataset, an
   external download: see `crates/occt-tests/README.md`. Without it those tests fail.
-- pykentron is not on PyPI yet: build it with `python3 crates/pykentron/build.py`
-  (see `crates/pykentron/README.md`).
+- pykentron from source: `python3 crates/pykentron/build.py` (see
+  `crates/pykentron/README.md`).
 
 ## More
 
