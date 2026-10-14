@@ -978,6 +978,30 @@ def existing_command_methods() -> set:
     return {n[1] for n in names}
 
 
+def write_dispatch() -> None:
+    """`src/draw/dispatch.rs`: each DRAW command `Draw` has a method for, called by its name
+    (for scripts run by the Tcl interpreter, see `src/draw/tcl.rs`)."""
+    methods: set = set()
+    for f in (TESTS_CRATE / "src" / "draw").rglob("*.rs"):
+        methods.update(m[0] + m[1] for m in re.findall(r"\bpub fn (r#)?([A-Za-z0-9_]+)\(&mut self, args: &\[&str\]\) -> DrawResult", f.read_text()))
+    arms = []
+    for m in sorted(methods, key=lambda x: x.replace("r#", "")):
+        name = m.replace("r#", "")
+        if name.endswith("_cmd") and name[:-4] in RESERVED_METHODS:
+            name = name[:-4]
+        if re.fullmatch(r"_\d.*", name):
+            name = name[1:]
+        if cmd_method(name) != m:
+            continue
+        arms.append(f'        "{name}" => d.{m}(args),')
+    text = (HEADER.format(src="commands (the methods of `Draw`)") + "\n"
+            "use super::{Draw, DrawResult};\n\n"
+            "/// Runs the DRAW command `name` with `args`; `None` if `Draw` has no such command.\n"
+            "pub fn dispatch(d: &mut Draw, name: &str, args: &[&str]) -> Option<DrawResult> {\n"
+            "    Some(match name {\n" + "\n".join(arms) + "\n        _ => return None,\n    })\n}\n")
+    write_if_changed(TESTS_CRATE / "src" / "draw" / "dispatch.rs", text)
+
+
 def occt_version(occt: Path) -> str:
     """OCCT's version, as `git describe` names its checkout (the report states no local path)."""
     try:
@@ -1032,6 +1056,7 @@ def main() -> int:
     examples: dict = {}
     scripts_using: Counter = Counter()
     skipped: Counter = Counter()
+    skipped_all: list = []
     skipped_examples: dict = defaultdict(list)
     per_group: dict = defaultdict(lambda: defaultdict(list))
     stats = Counter()
@@ -1064,6 +1089,7 @@ def main() -> int:
                 raise Unsupported("checks only in the group's end script")
         except Unsupported as e:
             reason = str(e)
+            skipped_all.append((case.path.relative_to(occt / "tests").as_posix(), reason))
             skipped[reason] += 1
             if len(skipped_examples[reason]) < 3:
                 skipped_examples[reason].append(case.path.relative_to(occt / "tests").as_posix())
@@ -1135,6 +1161,11 @@ def main() -> int:
             old.unlink()
 
     added = [] if args.no_shims else append_shims(commands, examples, scripts_using)
+    write_dispatch()
+    # (The scripts not converted, with why: for running them on the Tcl interpreter.)
+    target = TESTS_CRATE.parent.parent / "target"
+    target.mkdir(exist_ok=True)
+    (target / "draw_skipped.txt").write_text("".join(f"{p}\t{r}\n" for p, r in skipped_all))
 
     stale = sorted(expected - converted)
     if stale:

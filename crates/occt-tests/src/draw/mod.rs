@@ -14,6 +14,8 @@ use kentron::geometry::surface::Surface;
 use kentron::topology::{Model, Shape};
 
 mod commands;
+pub mod dispatch;
+pub mod tcl;
 
 /// Evaluates DRAW numeric expressions as `Draw::Atof` does: numbers, `+ - * /`, parentheses,
 /// numeric DRAW variables (`pi` predefined) and the functions `sin cos tan asin acos atan2
@@ -355,6 +357,11 @@ impl Draw {
         }
         let result = self.compound_of(&parts)?;
         self.set_shape_var(name, result)
+    }
+
+    /// The names of the variables set, in no particular order.
+    pub fn variable_names(&self) -> Vec<String> {
+        self.vars.keys().cloned().collect()
     }
 
     pub fn get(&self, name: &str) -> Option<&DrawObject> {

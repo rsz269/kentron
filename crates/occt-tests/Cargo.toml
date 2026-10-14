@@ -13,6 +13,9 @@ description = "Tests converted from OCCT (GTests and DRAW scripts) by tools/draw
 [dependencies]
 kentron = { path = "../kentron" }
 yaml-rust2 = "0.13.0"
+# Running DRAW scripts that use Tcl: an interpreter (src/draw/tcl.rs), with regular expressions.
+molt-forked = { version = "0.6.0", features = ["full"] }
+regex = "1.11"
 
 [dev-dependencies]
 libc = "0.2"

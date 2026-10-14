@@ -1623,34 +1623,9 @@ impl Draw {
         // sub-shapes of each kind (the shape itself included), as OCCT's `nbshapes` reports.
         need(args, 1, "checknbshapes name -kind count ...")?;
         let shape = self.shape_var(args[0])?;
-        let kinds = [
-            ("-vertex", NodeKind::Vertex),
-            ("-edge", NodeKind::Edge),
-            ("-wire", NodeKind::Wire),
-            ("-face", NodeKind::Face),
-            ("-shell", NodeKind::Shell),
-            ("-solid", NodeKind::Solid),
-            ("-compsolid", NodeKind::CompSolid),
-            ("-compound", NodeKind::Compound),
-        ];
-        // (`-t`: each sub-shape once wherever it is placed, as OCCT counts TShapes.)
+        let kinds = SHAPE_KINDS.map(|(name, kind)| (name, kind));
         let shared = args.contains(&"-t");
-        let count = |kind: NodeKind| {
-            // (Compounds within compounds count too, as OCCT maps every sub-shape.)
-            let found = if kind == NodeKind::Compound {
-                occt_numbering(&self.model, shape).into_iter().filter(|s| s.kind() == kind).collect()
-            } else {
-                self.model.unique_subshapes(shape, kind)
-            };
-            if shared {
-                let mut nodes: Vec<_> = found.iter().map(|s| s.node).collect();
-                nodes.sort_unstable();
-                nodes.dedup();
-                nodes.len()
-            } else {
-                found.len()
-            }
-        };
+        let count = |kind: NodeKind| count_subshapes(&self.model, shape, kind, shared);
         let mut errors = Vec::new();
         let mut i = 1;
         while i < args.len() {
@@ -1673,7 +1648,7 @@ impl Draw {
                     let name = name.trim();
                     let actual = match name {
                         "SHAPE" => kinds.iter().map(|&(_, k)| count(k)).sum(),
-                        _ => match kinds.iter().find(|(o, _)| o[1..].eq_ignore_ascii_case(name)) {
+                        _ => match kinds.iter().find(|(o, _)| o.eq_ignore_ascii_case(name)) {
                             Some(&(_, kind)) => count(kind),
                             None => continue,
                         },
@@ -1692,7 +1667,7 @@ impl Draw {
                 .map_err(|_| DrawError::Failed(format!("{} needs a count", args[i])))?;
             let actual = match args[i] {
                 "-shape" => kinds.iter().map(|&(_, k)| count(k)).sum(),
-                option => match kinds.iter().find(|(o, _)| *o == option) {
+                option => match kinds.iter().find(|(o, _)| option.strip_prefix('-') == Some(*o)) {
                     Some(&(_, kind)) => count(kind),
                     None => return self.not_implemented("checknbshapes", args),
                 },
@@ -2900,6 +2875,24 @@ impl Draw {
         let d = Direction::try_from_vector(Vector::new(v[3], v[4], v[5])).ok_or_else(|| DrawError::Failed("lmirror: null direction".into()))?;
         self.transform_vars(&args[..n - 6], &Transform::mirror_axis(Axis::new(Point::new(v[0], v[1], v[2]), d)))
     }
+    /// DRAW command `sprops`: the area of a shape's faces and their centre of mass.
+    ///
+    /// Example: `sprops result`
+    pub fn sprops(&mut self, args: &[&str]) -> DrawResult {
+        // `sprops shape [eps]`: the area of its faces and their centre of mass.
+        need(args, 1, "sprops shape [eps]")?;
+        let shape = self.shape_var(args[0])?;
+        Ok(mass_report(properties::area(&self.model, shape)))
+    }
+    /// DRAW command `vprops`: the volume of a shape and its centre of mass.
+    ///
+    /// Example: `vprops s`
+    pub fn vprops(&mut self, args: &[&str]) -> DrawResult {
+        // `vprops shape [eps]`
+        need(args, 1, "vprops shape [eps]")?;
+        let shape = self.shape_var(args[0])?;
+        Ok(mass_report(properties::volume(&self.model, shape)))
+    }
     /// DRAW command `lprops`: 1 uses in 1 converted scripts.
     ///
     /// Example: `lprops result`
@@ -2907,9 +2900,7 @@ impl Draw {
         // `lprops shape`: the length of its edges and their centre of mass.
         need(args, 1, "lprops shape")?;
         let shape = self.shape_var(args[0])?;
-        let p = properties::length(&self.model, shape);
-        let c = p.center_of_mass;
-        Ok(format!("Mass : {}\n\nCenter of gravity : \nX = {}\nY = {}\nZ = {}\n", format_real(p.mass), format_real(c.x), format_real(c.y), format_real(c.z)))
+        Ok(mass_report(properties::length(&self.model, shape)))
     }
     /// DRAW command `mat`: 10 uses in 7 converted scripts.
     ///
@@ -3195,7 +3186,20 @@ impl Draw {
     ///
     /// Example: `nbshapes b`
     pub fn nbshapes(&mut self, args: &[&str]) -> DrawResult {
-        self.not_implemented("nbshapes", args)
+        // `nbshapes shape [-t]`: the numbers of its distinct sub-shapes of each kind (each
+        // TShape once with `-t`), in OCCT's report.
+        need(args, 1, "nbshapes shape [-t]")?;
+        let shape = self.shape_var(args[0])?;
+        let shared = args.contains(&"-t");
+        let mut out = format!("Number of shapes in {}\n", args[0]);
+        let mut total = 0;
+        for (name, kind) in SHAPE_KINDS {
+            let n = count_subshapes(&self.model, shape, kind, shared);
+            total += n;
+            out += &format!(" {:<10}: {n}\n", name.to_uppercase());
+        }
+        out += &format!(" {:<10}: {total}\n", "SHAPE");
+        Ok(out)
     }
     /// DRAW command `nexplode`: 328 uses in 306 converted scripts.
     ///
@@ -5023,4 +5027,41 @@ fn occt_numbering(model: &kentron::topology::Model, shape: Shape) -> Vec<Shape> 
     let mut out = Vec::new();
     visit(model, shape, &mut out);
     out
+}
+
+/// DRAW's names of the kinds of shapes, in `nbshapes`' order.
+const SHAPE_KINDS: [(&str, NodeKind); 8] = [
+    ("vertex", NodeKind::Vertex),
+    ("edge", NodeKind::Edge),
+    ("wire", NodeKind::Wire),
+    ("face", NodeKind::Face),
+    ("shell", NodeKind::Shell),
+    ("solid", NodeKind::Solid),
+    ("compsolid", NodeKind::CompSolid),
+    ("compound", NodeKind::Compound),
+];
+
+/// How many distinct sub-shapes of `kind` `shape` has (the shape itself included), as OCCT
+/// counts them: each placement of a sub-shape apart, or with `shared` each TShape once.
+fn count_subshapes(model: &kentron::topology::Model, shape: Shape, kind: NodeKind, shared: bool) -> usize {
+    // (Compounds within compounds count too, as OCCT maps every sub-shape.)
+    let found: Vec<Shape> = if kind == NodeKind::Compound {
+        occt_numbering(model, shape).into_iter().filter(|s| s.kind() == kind).collect()
+    } else {
+        model.unique_subshapes(shape, kind)
+    };
+    if shared {
+        let mut nodes: Vec<_> = found.iter().map(|s| s.node).collect();
+        nodes.sort_unstable();
+        nodes.dedup();
+        nodes.len()
+    } else {
+        found.len()
+    }
+}
+
+/// The report of `lprops`, `sprops` and `vprops`: the mass and the centre of gravity.
+fn mass_report(p: properties::MassProperties) -> String {
+    let c = p.center_of_mass;
+    format!("Mass : {}\n\nCenter of gravity : \nX = {}\nY = {}\nZ = {}\n", format_real(p.mass), format_real(c.x), format_real(c.y), format_real(c.z))
 }
