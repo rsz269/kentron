@@ -579,7 +579,6 @@ tests/bugs/modalg_5/bug25163
 tests/bugs/modalg_5/bug25232_1
 tests/bugs/modalg_5/bug25232_2
 tests/bugs/modalg_5/bug25232_3
-tests/bugs/modalg_5/bug25232_9
 tests/bugs/modalg_5/bug25237
 tests/bugs/modalg_5/bug25298_06
 tests/bugs/modalg_5/bug25298_07

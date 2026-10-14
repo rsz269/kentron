@@ -240,6 +240,8 @@ pub(super) struct Face {
     /// Points of a grid over the face's traced range and their largest spacing, as section
     /// tracing samples it to find the part near another face (made on first use).
     pub samples: std::sync::OnceLock<(Vec<Vec<Point>>, f64)>,
+    /// Its boundary's polylines indexed for telling points inside (made on first use).
+    pub inside_index: std::sync::OnceLock<geom::InsidePolylines>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -282,6 +284,15 @@ impl Face {
         representatives(uv, [self.u_period, self.v_period], self.u_range, self.v_range)
     }
 
+    /// Whether `uv` lies inside the face's boundary polylines ([`geom::inside_polylines`]; a
+    /// long boundary indexed, as a face may be asked about many points).
+    pub fn inside_polylines(&self, uv: Uv) -> bool {
+        if self.polylines.iter().map(Vec::len).sum::<usize>() < 64 {
+            return geom::inside_polylines(&self.polylines, uv);
+        }
+        self.inside_index.get_or_init(|| geom::InsidePolylines::new(&self.polylines)).contains(uv)
+    }
+
     /// Where `p` (on the face's surface) lies with respect to the face: on its boundary
     /// within [`on_tol`], else inside or outside.
     pub fn locate(&self, p: Point, edges: &[Edge], vertices: &Vertices) -> Location {
@@ -296,7 +307,7 @@ impl Face {
         // their size): beyond its edge.
         let reach = 1e-3 * self.extent.0.distance(self.extent.1) + on_tol();
         let Some(uv) = geom::uv_within(&self.surface, p, reach) else { return Location::Outside };
-        let inside_at = |uv: Uv| self.representatives(uv).into_iter().any(|uv| geom::inside_polylines(&self.polylines, uv));
+        let inside_at = |uv: Uv| self.representatives(uv).into_iter().any(|uv| self.inside_polylines(uv));
         if inside_at(uv) {
             return Location::Inside;
         }
@@ -836,6 +847,7 @@ impl Graph {
             seq: 0,
             drift: 0.0,
             samples: Default::default(),
+            inside_index: Default::default(),
         });
     }
 

@@ -643,22 +643,63 @@ pub(super) fn signed_area(points: &[Uv]) -> f64 {
 /// an odd angle, so that it does not pass exactly through polyline vertices at "round"
 /// coordinates (where nearly coincident ends of adjacent polylines would count twice).
 pub(super) fn inside_polylines(polylines: &[Vec<Uv>], p: Uv) -> bool {
-    let (sin, cos) = 0.618_033_988_7_f64.sin_cos();
-    let turn = |q: Uv| [q[0] * cos + q[1] * sin, q[1] * cos - q[0] * sin];
-    let p = turn(p);
+    let p = ray_turn(p);
     let mut inside = false;
     for poly in polylines {
         for w in poly.windows(2) {
-            let (a, b) = (turn(w[0]), turn(w[1]));
-            if (a[1] > p[1]) != (b[1] > p[1]) {
-                let x = a[0] + (p[1] - a[1]) * (b[0] - a[0]) / (b[1] - a[1]);
-                if p[0] < x {
-                    inside = !inside;
-                }
+            if crosses_ray(ray_turn(w[0]), ray_turn(w[1]), p) {
+                inside = !inside;
             }
         }
     }
     inside
+}
+
+/// A point turned so that [`inside_polylines`]' ray, along the turned u, is not along u or v
+/// (where boundaries run).
+fn ray_turn(q: Uv) -> Uv {
+    let (sin, cos) = 0.618_033_988_7_f64.sin_cos();
+    [q[0] * cos + q[1] * sin, q[1] * cos - q[0] * sin]
+}
+
+/// Whether the segment `a`-`b` crosses the ray from `p` along u (all turned).
+fn crosses_ray(a: Uv, b: Uv, p: Uv) -> bool {
+    (a[1] > p[1]) != (b[1] > p[1]) && p[0] < a[0] + (p[1] - a[1]) * (b[0] - a[0]) / (b[1] - a[1])
+}
+
+/// [`inside_polylines`] for many points of the same polylines: their segments (turned) in
+/// strips across the ray, each point testing only those of its strip (the same segments
+/// that can cross its ray, so the same answers).
+pub(super) struct InsidePolylines {
+    low: f64,
+    width: f64,
+    strips: Vec<Vec<(Uv, Uv)>>,
+}
+
+impl InsidePolylines {
+    pub fn new(polylines: &[Vec<Uv>]) -> Self {
+        let segments: Vec<(Uv, Uv)> = polylines.iter().flat_map(|poly| poly.windows(2).map(|w| (ray_turn(w[0]), ray_turn(w[1])))).collect();
+        let (low, high) = segments.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), (a, b)| (lo.min(a[1]).min(b[1]), hi.max(a[1]).max(b[1])));
+        let count = (segments.len() / 2).clamp(1, 4096);
+        let width = if high > low { (high - low) / count as f64 } else { 1.0 };
+        let mut strips = vec![Vec::new(); count];
+        let strip = |y: f64| (((y - low) / width).floor().max(0.0) as usize).min(count - 1);
+        for &(a, b) in &segments {
+            for k in strip(a[1].min(b[1]))..=strip(a[1].max(b[1])) {
+                strips[k].push((a, b));
+            }
+        }
+        InsidePolylines { low, width, strips }
+    }
+
+    pub fn contains(&self, p: Uv) -> bool {
+        let p = ray_turn(p);
+        if self.strips.is_empty() || !(p[1] >= self.low) {
+            return false;
+        }
+        let k = (((p[1] - self.low) / self.width).floor() as usize).min(self.strips.len() - 1);
+        self.strips[k].iter().filter(|(a, b)| crosses_ray(*a, *b, p)).count() % 2 == 1
+    }
 }
 
 /// A point well inside the region bounded by closed polylines: among the middles of the

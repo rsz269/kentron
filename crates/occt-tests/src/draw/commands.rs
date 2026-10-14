@@ -1053,8 +1053,8 @@ impl Draw {
             Some(l) => l.parse().map_err(|_| DrawError::Failed(format!("bopcheck: bad level {l}")))?,
             None => 9,
         };
-        let numbers = occt_numbering(&self.model, shape);
-        let number = |s: Shape| numbers.iter().position(|n| n.node == s.node && n.placement == s.placement).unwrap_or(usize::MAX);
+        let numbers: std::collections::HashMap<NumberingKey, usize> = occt_numbering(&self.model, shape).into_iter().enumerate().map(|(i, s)| (numbering_key(s), i)).collect();
+        let number = |s: Shape| numbers.get(&numbering_key(s)).copied().unwrap_or(usize::MAX);
         let rank = |k: NodeKind| match k {
             NodeKind::Vertex => 0,
             NodeKind::Edge => 1,
@@ -5531,19 +5531,27 @@ impl Draw {
 /// `BOPDS_DS`, whose numbers `bopcheck` names shapes by): the shape, then each child and its
 /// sub-shapes in turn, depth first, each once (a wire's children being its edges).
 fn occt_numbering(model: &kentron::topology::Model, shape: Shape) -> Vec<Shape> {
-    fn visit(model: &kentron::topology::Model, s: Shape, out: &mut Vec<Shape>) {
+    fn visit(model: &kentron::topology::Model, s: Shape, out: &mut Vec<Shape>, seen: &mut std::collections::HashSet<NumberingKey>) {
         let s = if s.kind() == NodeKind::CoEdge { model.explore(s, NodeKind::Edge).next().unwrap_or(s) } else { s };
-        if out.iter().any(|o| o.node == s.node && o.placement == s.placement) {
+        if !seen.insert(numbering_key(s)) {
             return;
         }
         out.push(s);
         for child in model.children(s).collect::<Vec<_>>() {
-            visit(model, child, out);
+            visit(model, child, out, seen);
         }
     }
     let mut out = Vec::new();
-    visit(model, shape, &mut out);
+    visit(model, shape, &mut out, &mut Default::default());
     out
+}
+
+/// A shape's node and placement (what [`occt_numbering`] tells shapes apart by), hashable.
+type NumberingKey = (kentron::topology::NodeId, [[u64; 4]; 3]);
+
+fn numbering_key(s: Shape) -> NumberingKey {
+    // (`+ 0.0`: a negative zero as a zero, as `==` takes it.)
+    (s.node, s.placement.rows().map(|row| row.map(|v| (v + 0.0).to_bits())))
 }
 
 /// DRAW's names of the kinds of shapes, in `nbshapes`' order.

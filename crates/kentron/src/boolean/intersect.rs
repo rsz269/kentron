@@ -1547,8 +1547,22 @@ impl Graph {
     pub fn intersect_edges_on_faces(&mut self) {
         let mut crossings: Vec<(usize, usize, f64, f64)> = Vec::new();
         for face in &self.faces {
+            // (With many edges both ways, the boundary's edges in a tree over their boxes;
+            // those met taken in the boundary's order all the same.)
+            let tree = (face.on_edges.len() * face.boundary.len() > 1024)
+                .then(|| crate::math::Bvh::new(&face.boundary.iter().map(|b| super::graph::to_box(&self.edges[b.edge].bbox)).collect::<Vec<_>>()));
+            let mut near: Vec<usize> = Vec::new();
             for &ei in &face.on_edges {
-                for b in &face.boundary {
+                near.clear();
+                match &tree {
+                    Some(tree) => {
+                        near.extend(tree.overlapping(&super::graph::to_box(&self.edges[ei].bbox)));
+                        near.sort_unstable();
+                    }
+                    None => near.extend(0..face.boundary.len()),
+                }
+                for &k in &near {
+                    let b = &face.boundary[k];
                     let (e1, e2) = (&self.edges[ei], &self.edges[b.edge]);
                     if !geom::boxes_overlap(&e1.bbox, &e2.bbox) {
                         continue;

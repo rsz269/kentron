@@ -256,6 +256,28 @@ fn integrate_face(model: &Model, face: Shape, mut sample: impl FnMut(Point, Vect
         }
     }
     let (u_density, v_density) = densities(surface, angular, &along);
+    // An extrusion of a curve without a density of its own (a parabola, a hyperbola, ...):
+    // pieces along u where its tangent turns, graded (by the parameter, a parabola's turn
+    // is all near its vertex, however long it is).
+    fn turning_basis(surface: &Surface) -> Option<&crate::geometry::curve::Curve> {
+        use crate::geometry::curve::Curve;
+        match surface {
+            Surface::Extrusion(e) => (!matches!(e.basis(), Curve::Line(_) | Curve::Circle(_) | Curve::Ellipse(_) | Curve::Bezier(_) | Curve::BSpline(_))).then(|| e.basis()),
+            Surface::Trimmed(t) => turning_basis(t.basis()),
+            Surface::Offset(o) => turning_basis(o.basis()),
+            _ => None,
+        }
+    }
+    let u_turning = turning_basis(surface);
+    // The angle travelled along u from `a` to `b`.
+    let mut scratch = Vec::new();
+    let mut u_span = |a: f64, b: f64| match u_turning {
+        Some(c) => {
+            scratch.clear();
+            turning_breaks(c, a, b, &mut scratch)
+        }
+        None => (b - a).abs() * u_density * MAX_ANGLE_STEP,
+    };
     // Knots of a B-spline surface where it is at most C1 (as at the joins of a piecewise
     // Bézier surface): no Gauss rule may span one.
     fn kinks(surface: &Surface) -> (Vec<f64>, Vec<f64>) {
@@ -315,7 +337,7 @@ fn integrate_face(model: &Model, face: Shape, mut sample: impl FnMut(Point, Vect
     let inner_rule: &[(f64, f64)] = if planar { &GAUSS_LEGENDRE_2 } else { &GAUSS_LEGENDRE };
     let mut u0 = None;
     // (Buffers reused from node to node.)
-    let (mut ends, mut nodes, mut us): (Vec<f64>, Vec<(f64, f64, f64)>, Vec<f64>) = (Vec::new(), Vec::new(), Vec::new());
+    let (mut ends, mut nodes, mut us, mut graded): (Vec<f64>, Vec<(f64, f64, f64)>, Vec<f64>, Vec<f64>) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
     for &wire_use_id in &record.wires {
         let wire_use = model.get(wire_use_id).expect("wire use");
         let wire = model.get(wire_use.wire).expect("wire in model");
@@ -365,15 +387,13 @@ fn integrate_face(model: &Model, face: Shape, mut sample: impl FnMut(Point, Vect
                     let (a, b) = (pcurve.point(s0), pcurve.point(s1));
                     match pcurve {
                         Curve2::Circle(_) => (s1 - s0).abs(),
-                        Curve2::Line(_) => {
-                            (b.x - a.x).abs() * u_density * MAX_ANGLE_STEP + (b.y - a.y).abs() * v_density * MAX_ANGLE_STEP
-                        }
+                        Curve2::Line(_) => u_span(a.x, b.x) + (b.y - a.y).abs() * v_density * MAX_ANGLE_STEP,
                         _ => {
                             // The angle travelled, from a few samples.
                             (0..8)
                                 .map(|i| {
                                     let (p, q) = (pcurve.point(s0 + (s1 - s0) * i as f64 / 8.0), pcurve.point(s0 + (s1 - s0) * (i + 1) as f64 / 8.0));
-                                    (q.x - p.x).abs() * u_density * MAX_ANGLE_STEP + (q.y - p.y).abs() * v_density * MAX_ANGLE_STEP
+                                    u_span(p.x, q.x) + (q.y - p.y).abs() * v_density * MAX_ANGLE_STEP
                                 })
                                 .sum()
                         }
@@ -406,6 +426,19 @@ fn integrate_face(model: &Model, face: Shape, mut sample: impl FnMut(Point, Vect
                     // The nodes along u at this v (evaluated together on a B-spline).
                     nodes.clear();
                     for e in ends.windows(2) {
+                        if let Some(c) = u_turning {
+                            graded.clear();
+                            turning_breaks(c, e[0], e[1], &mut graded);
+                            let mut s0 = e[0];
+                            for &s1 in &graded {
+                                let inner_step = s1 - s0;
+                                for &(inner_node, inner_w) in inner_rule {
+                                    nodes.push((s0 + inner_step * (inner_node + 1.0) / 2.0, inner_w, inner_step));
+                                }
+                                s0 = s1;
+                            }
+                            continue;
+                        }
                         let inner = pieces((e[1] - e[0]).abs() * u_density * MAX_ANGLE_STEP);
                         let inner_step = (e[1] - e[0]) / inner as f64;
                         for inner_piece in 0..inner {
@@ -436,6 +469,36 @@ fn integrate_face(model: &Model, face: Shape, mut sample: impl FnMut(Point, Vect
 }
 
 /// The longest angular parameter span integrated by one Gauss–Legendre rule.
+/// Splits `a`..`b` (either way) where `curve`'s tangent turns by at most [`MAX_ANGLE_STEP`]
+/// on each piece, the pieces' ends (after `a`, `b` last) pushed to `out`; the angle turned.
+fn turning_breaks(curve: &crate::geometry::curve::Curve, a: f64, b: f64, out: &mut Vec<f64>) -> f64 {
+    let direction = |t: f64| curve.d1(t).1;
+    let angle = |x: Vector, y: Vector| {
+        let (lx, ly) = (x.length(), y.length());
+        if lx > 0.0 && ly > 0.0 { (x.dot(y) / (lx * ly)).clamp(-1.0, 1.0).acos() } else { 0.0 }
+    };
+    // (Halved until the tangents at the ends and the middle turn by at most the step, up to
+    // 4096 pieces.)
+    let mut stack = vec![(b, direction(b), 0u32)];
+    let (mut at, mut d_at) = (a, direction(a));
+    let mut turned = 0.0;
+    while let Some(&(end, d_end, depth)) = stack.last() {
+        let middle = 0.5 * (at + end);
+        let d_middle = direction(middle);
+        let turn = angle(d_at, d_middle) + angle(d_middle, d_end);
+        if turn <= MAX_ANGLE_STEP || depth >= 12 || middle == at || middle == end {
+            stack.pop();
+            out.push(end);
+            turned += turn;
+            (at, d_at) = (end, d_end);
+        } else {
+            stack.last_mut().expect("the piece's end").2 = depth + 1;
+            stack.push((middle, d_middle, depth + 1));
+        }
+    }
+    turned
+}
+
 const MAX_ANGLE_STEP: f64 = std::f64::consts::PI / 8.0;
 
 /// The 2-point Gauss–Legendre rule on [-1, 1] (exact for cubics).
