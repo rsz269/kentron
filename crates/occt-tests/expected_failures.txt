@@ -278,7 +278,6 @@ tests/bugs/mesh/bug24938
 tests/bugs/mesh/bug25042
 tests/bugs/mesh/bug25044_19
 tests/bugs/mesh/bug25044_55
-tests/bugs/mesh/bug25503_2
 tests/bugs/mesh/bug25594
 tests/bugs/mesh/bug26372
 tests/bugs/mesh/bug26532

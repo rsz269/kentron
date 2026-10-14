@@ -68,19 +68,21 @@ pub fn mesh_with(model: &mut Model, shape: Shape, options: MeshOptions) -> Resul
             model.set_edge_polyline(edge, Some(polyline))?;
         }
     }
-    // As OCCT does, a mesh recording no deviation (of a plane, say) is exact.
+    // As OCCT does, a mesh recording no deviation (of a plane, say) is exact. (One made for
+    // this deflection or a finer one is kept too, though it came out coarser: meshing again
+    // makes the same.)
     let faces: Vec<Shape> = model
         .unique_subshapes(local, NodeKind::Face)
         .into_iter()
         .map(unplaced)
-        .filter(|&face| !model.face_mesh(face).is_some_and(|m| m.deflection() <= options.deflection))
+        .filter(|&face| !model.face_mesh(face).is_some_and(|m| m.deflection() <= options.deflection || m.requested().is_some_and(|r| r <= options.deflection)))
         .collect();
     let faces = once_each(faces);
     let model_now: &Model = model;
     let meshes = crate::parallel::map(&faces, |&face| face_mesh(model_now, face, options));
     for (&face, found) in faces.iter().zip(meshes) {
         if let Some((mesh, chains)) = found? {
-            model.set_face_mesh(face, Some(mesh))?;
+            model.set_face_mesh(face, Some(mesh.with_requested(options.deflection)))?;
             for (coedge, nodes) in chains {
                 model.set_coedge_mesh_polyline(coedge, Some(MeshPolyline::new(nodes).with_deflection(options.deflection)))?;
             }

@@ -10,6 +10,8 @@ pub struct TriangleMesh {
     triangles: Vec<[u32; 3]>,
     normals: Option<Vec<Direction>>,
     deflection: f64,
+    /// The deflection it was made for, where known (it may come out coarser).
+    requested: Option<f64>,
 }
 
 impl TriangleMesh {
@@ -19,7 +21,7 @@ impl TriangleMesh {
             triangles.iter().flatten().all(|&i| (i as usize) < nodes.len()),
             "triangle node index out of range"
         );
-        Self { nodes, triangles, normals: None, deflection: 0.0 }
+        Self { nodes, triangles, normals: None, deflection: 0.0, requested: None }
     }
 
     /// Sets one normal per node; panics on a count mismatch.
@@ -56,6 +58,16 @@ impl TriangleMesh {
 
     pub fn deflection(&self) -> f64 {
         self.deflection
+    }
+
+    /// Records the deflection the mesh was made for (which it may not reach).
+    pub fn with_requested(self, deflection: f64) -> Self {
+        Self { requested: Some(deflection), ..self }
+    }
+
+    /// The deflection the mesh was made for, where known.
+    pub fn requested(&self) -> Option<f64> {
+        self.requested
     }
 }
 
@@ -162,6 +174,8 @@ impl AffineTransformable for TriangleMesh {
             triangles,
             normals,
             deflection: self.deflection * t.max_stretch(),
+            // (What it was made for is of the shape it was made on.)
+            requested: None,
         }
     }
 }
