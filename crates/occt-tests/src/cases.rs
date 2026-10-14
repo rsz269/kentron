@@ -828,6 +828,13 @@ impl Env {
                 close.retain(|&s| (measure_of(s) - m).abs() <= 1e-5 * (1.0 + m.abs()));
             }
         }
+        // (A shell or solid, where the shape holds only one, as DRAW's explode takes it: its
+        // centroid need not match OCCT's to the digit; the checks after it measure it.)
+        if close.is_empty() && matches!(kind, NodeKind::Shell | NodeKind::Solid) {
+            if let [only] = self.model.unique_subshapes(of, kind)[..] {
+                close.push(only);
+            }
+        }
         match close[..] {
             [s] => Ok(Value::Shape(s)),
             [] => Err(format!("select: no {kind:?} of {:?} at {target:?}", a["of"])),

@@ -724,6 +724,8 @@ fn extension(model: &mut Model, cut: &EndCut, i: usize, side: &Side, to: VertexI
         if let Some(p) = project::analytic_pcurve(&Curve::BSpline(curve.clone()), &s.surface) {
             return Ok(p);
         }
+        // (From a search of the whole surface, then each from the one before.)
+        s.last.set(None);
         let uv: Vec<Point2> = points.iter().map(|&p| s.uv(p)).collect::<Result<_>>()?;
         Ok(Curve2::BSpline(fit::interpolate_with_parameters(&unwrapped(uv, &s.surface), &ws)?))
     };
