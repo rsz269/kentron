@@ -1028,7 +1028,7 @@ def write_dispatch() -> None:
     (for scripts run by the Tcl interpreter, see `src/draw/tcl.rs`)."""
     methods: set = set()
     for f in (TESTS_CRATE / "src" / "draw").rglob("*.rs"):
-        methods.update(m[0] + m[1] for m in re.findall(r"\bpub fn (r#)?([A-Za-z0-9_]+)\(&mut self, args: &\[&str\]\) -> DrawResult", f.read_text()))
+        methods.update(m[0] + m[1] for m in re.findall(r"\bpub fn (r#)?([A-Za-z0-9_]+)\(&mut self, _?args: &\[&str\]\) -> DrawResult", f.read_text()))
     arms = []
     for m in sorted(methods, key=lambda x: x.replace("r#", "")):
         name = m.replace("r#", "")

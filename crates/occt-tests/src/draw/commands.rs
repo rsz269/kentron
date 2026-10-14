@@ -485,13 +485,78 @@ impl Draw {
     ///
     /// Example: `baddcompound b1`
     pub fn baddcompound(&mut self, args: &[&str]) -> DrawResult {
-        self.not_implemented("baddcompound", args)
+        // `baddcompound c`: the compound's parts as objects for the general fuse.
+        need(args, 1, "baddcompound compound")?;
+        let c = self.shape_var(args[0])?;
+        let parts: Vec<Shape> = self.model.children(c).collect();
+        self.fuse_objects.extend(parts);
+        self.fuse_cells = None;
+        Ok(String::new())
     }
     /// DRAW command `baddctools`: 4 uses in 4 converted scripts.
     ///
     /// Example: `baddctools c_2`
     pub fn baddctools(&mut self, args: &[&str]) -> DrawResult {
-        self.not_implemented("baddctools", args)
+        // `baddctools c`: the compound's parts as tools for the general fuse.
+        need(args, 1, "baddctools compound")?;
+        let c = self.shape_var(args[0])?;
+        let parts: Vec<Shape> = self.model.children(c).collect();
+        self.fuse_tools.extend(parts);
+        self.fuse_cells = None;
+        Ok(String::new())
+    }
+    /// DRAW command `bopcurves`: the curves where two faces meet.
+    ///
+    /// Example: `bopcurves f1 f2 -2d`
+    pub fn bopcurves(&mut self, args: &[&str]) -> DrawResult {
+        // `bopcurves f1 f2 [-2d|-2d1|-2d2] [-p u1 v1 u2 v2] [-v]`: the faces' section, a
+        // curve per connected branch named c_1, c_2, ..., reported as OCCT does with the
+        // farthest the curves stray from the faces' surfaces (at least 1e-7, OCCT's least).
+        // (The pcurves and start points asked for are not needed to find them.)
+        need(args, 2, "bopcurves f1 f2 [-2d|-2d1|-2d2] [-p u1 v1 u2 v2] [-v]")?;
+        let (a, b) = (self.shape_var(args[0])?, self.shape_var(args[1])?);
+        if a.kind() != NodeKind::Face || b.kind() != NodeKind::Face {
+            return Err(DrawError::Failed(" Type mismatch F1".into()));
+        }
+        let section = boolean::section(&mut self.model, a, b)?;
+        let edges: Vec<Shape> = self.model.unique_subshapes(section, NodeKind::Edge);
+        let points: Vec<Shape> = self.model.unique_subshapes(section, NodeKind::Vertex).into_iter().filter(|v| !edges.iter().any(|&e| {
+            let (p, q) = self.model.edge_vertices(e);
+            p.node == v.node || q.node == v.node
+        })).collect();
+        if edges.is_empty() {
+            return Ok(if points.is_empty() { " has no 3d curves\n has no 3d points\n".into() } else { format!(" has no 3d curves\n{} point(s) found.\n", points.len()) });
+        }
+        // The edges in connected chains, each in order.
+        let chains = chain_edges(&self.model, &edges);
+        let surfaces: Vec<Surface> = [a, b].iter().filter_map(|&f| self.model.surface(f).map(|s| s.transformed(&f.placement))).collect();
+        let mut tolerance: f64 = 1e-7;
+        let mut names = Vec::new();
+        for (k, chain) in chains.iter().enumerate() {
+            let mut samples = Vec::new();
+            for &e in chain {
+                let Some((c, first, last)) = self.model.edge_curve(e) else { continue };
+                let (from, to) = if e.orientation == Orientation::Reversed { (last, first) } else { (first, last) };
+                let n = 32;
+                for i in 0..=n {
+                    if i == 0 && !samples.is_empty() {
+                        continue;
+                    }
+                    samples.push(c.point(from + (to - from) * i as f64 / n as f64));
+                }
+            }
+            for p in &samples {
+                for s in &surfaces {
+                    let (u, v, _) = kentron::geometry::extrema::nearest_on_surface(*p, s, None);
+                    tolerance = tolerance.max(kentron::geometry::ParametricSurface::point(s, u, v).distance(*p));
+                }
+            }
+            let curve = chain_curve(&self.model, chain)?;
+            let name = format!("c_{}", k + 1);
+            self.set(&name, DrawObject::Curve(curve));
+            names.push(name);
+        }
+        Ok(format!("Tolerance Reached={}\n{} curve(s) found.\n{}\n", format_real(tolerance), chains.len(), names.join(" ")))
     }
     /// DRAW command `baddobjects`: 269 uses in 255 converted scripts.
     ///
@@ -563,7 +628,15 @@ impl Draw {
             }
             Ok(all)
         };
-        let operation: i32 = args[1].parse().map_err(|_| DrawError::Failed(format!("bbop: bad operation {}", args[1])))?;
+        // (By number, or by name.)
+        let operation: i32 = match args[1].to_ascii_lowercase().as_str() {
+            "common" => 0,
+            "fuse" => 1,
+            "cut" => 2,
+            "tuc" | "cut21" => 3,
+            "section" => 4,
+            n => n.parse().map_err(|_| DrawError::Failed(format!("bbop: bad operation {}", args[1])))?,
+        };
         if operation == 1 {
             let all: Vec<Shape> = self.fuse_objects.iter().chain(&self.fuse_tools).copied().collect();
             let result = together(self, all)?;
@@ -2820,7 +2893,35 @@ impl Draw {
     ///
     /// Example: `intersect result s1 s2`
     pub fn intersect(&mut self, args: &[&str]) -> DrawResult {
-        self.not_implemented("intersect", args)
+        // `intersect name surface1 surface2 [tolerance]`: the curves where the surfaces meet
+        // (over their natural domains, unbounded ones within a large box), named `name` if
+        // one, else `name_1`, `name_2`, ...
+        need(args, 3, "intersect name surface1 surface2 [tolerance]")?;
+        const FAR: f64 = 1e4;
+        let mut faces = Vec::new();
+        for name in &args[1..3] {
+            let s = self.surface_var(name)?;
+            let (mut u0, mut u1, mut v0, mut v1) = kentron::geometry::ParametricSurface::bounds(&s);
+            (u0, u1, v0, v1) = (u0.max(-FAR), u1.min(FAR), v0.max(-FAR), v1.min(FAR));
+            faces.push(make::face_on_domain(&mut self.model, s, u0, u1, v0, v1)?);
+        }
+        let section = boolean::section(&mut self.model, faces[0], faces[1])?;
+        let edges = self.model.unique_subshapes(section, NodeKind::Edge);
+        let chains = chain_edges(&self.model, &edges);
+        // A curve running out to the box stands for an unbounded one, which (as OCCT) fails.
+        for &e in &edges {
+            if let Some((c, first, last)) = self.model.edge_curve(e) {
+                if [first, last].iter().any(|&t| { let p = c.point(t); [p.x, p.y, p.z].iter().any(|x: &f64| x.abs() > FAR / 2.0) }) {
+                    return Err(DrawError::Failed("intersect: an intersection curve is unbounded".into()));
+                }
+            }
+        }
+        for (k, chain) in chains.iter().enumerate() {
+            let curve = chain_curve(&self.model, chain)?;
+            let name = if chains.len() == 1 { args[0].to_string() } else { format!("{}_{}", args[0], k + 1) };
+            self.set(&name, DrawObject::Curve(curve));
+        }
+        Ok(String::new())
     }
     /// DRAW command `invert`: 8 uses in 8 converted scripts.
     ///
@@ -3960,7 +4061,11 @@ impl Draw {
     ///
     /// Example: `removeloc r a …`
     pub fn removeloc(&mut self, args: &[&str]) -> DrawResult {
-        self.not_implemented("removeloc", args)
+        // `removeloc result shape`: a copy with its placement put into its geometry.
+        need(args, 2, "removeloc result shape")?;
+        let shape = self.shape_var(args[1])?;
+        let copy = modify::copy(&mut self.model, shape, false)?;
+        self.set_shape_var(args[0], copy)
     }
     /// DRAW command `renamevar`: 122 uses in 113 converted scripts.
     ///
@@ -5064,4 +5169,56 @@ fn count_subshapes(model: &kentron::topology::Model, shape: Shape, kind: NodeKin
 fn mass_report(p: properties::MassProperties) -> String {
     let c = p.center_of_mass;
     format!("Mass : {}\n\nCenter of gravity : \nX = {}\nY = {}\nZ = {}\n", format_real(p.mass), format_real(c.x), format_real(c.y), format_real(c.z))
+}
+
+/// `edges` in connected chains (through their shared vertices), each in order along it, the
+/// edges oriented along it.
+fn chain_edges(model: &kentron::topology::Model, edges: &[Shape]) -> Vec<Vec<Shape>> {
+    let ends = |e: Shape| {
+        let (a, b) = model.edge_vertices(e);
+        (a.node, b.node)
+    };
+    let mut left: Vec<Shape> = edges.to_vec();
+    let mut chains = Vec::new();
+    while let Some(first) = left.pop() {
+        let mut chain = std::collections::VecDeque::from([first]);
+        loop {
+            let (head, _) = ends(chain[0]);
+            let (_, tail) = ends(chain[chain.len() - 1]);
+            if let Some(k) = left.iter().position(|&e| { let (a, b) = ends(e); a == tail || b == tail }) {
+                let e = left.remove(k);
+                chain.push_back(if ends(e).0 == tail { e } else { e.reversed() });
+            } else if let Some(k) = left.iter().position(|&e| { let (a, b) = ends(e); a == head || b == head }) {
+                let e = left.remove(k);
+                chain.push_front(if ends(e).1 == head { e } else { e.reversed() });
+            } else {
+                break;
+            }
+        }
+        chains.push(chain.into_iter().collect());
+    }
+    chains
+}
+
+/// A chain of edges as one curve: an edge's curve over its range, or for several a curve
+/// interpolated through points along them.
+fn chain_curve(model: &kentron::topology::Model, chain: &[Shape]) -> DrawResult<Curve> {
+    if let [e] = chain {
+        let (c, first, last) = model.edge_curve(*e).ok_or_else(|| DrawError::Failed("an edge without a curve".into()))?;
+        let (first, last) = if e.orientation == Orientation::Reversed { (last, first) } else { (first, last) };
+        return Ok(if first < last { Curve::Trimmed(TrimmedCurve::new(c, first, last)) } else { Curve::Trimmed(TrimmedCurve::new(c, last, first)) });
+    }
+    let mut samples = Vec::new();
+    for &e in chain {
+        let Some((c, first, last)) = model.edge_curve(e) else { continue };
+        let (from, to) = if e.orientation == Orientation::Reversed { (last, first) } else { (first, last) };
+        let n = 32;
+        for i in 0..=n {
+            if i == 0 && !samples.is_empty() {
+                continue;
+            }
+            samples.push(c.point(from + (to - from) * i as f64 / n as f64));
+        }
+    }
+    Ok(Curve::BSpline(kentron::geometry::fit::interpolate(&samples, false, 1e-12)?))
 }

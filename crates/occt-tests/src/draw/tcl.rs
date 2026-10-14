@@ -51,7 +51,7 @@ const IGNORED: &[&str] = &[
     "vaxo", "vfront", "vright", "vleft", "vback", "vbottom", "vremove", "verase", "vzoom", "vrotate", "vsetcolor", "vaspects",
     "vcamera", "vviewparams", "vrenderparams", "vlight", "vdrawparray", "vtrihedron", "vzbufftrihedron", "vfps", "vglinfo",
     "vcaps", "vsetmaterial", "vsettransparency", "vshowfaceboundary", "vdefaults", "vclose", "vraytrace", "vupdate", "vredraw",
-    "vexport", "dtyp", "whatis", "dump", "pick", "checkdisplay", "tclean_display", "checktrinfo_display", "chkfi", "dhistory",
+    "vexport", "dtyp", "dump", "disp", "pick", "checkdisplay", "tclean_display", "checktrinfo_display", "chkfi", "dhistory",
     "dfreemem", "dmalloc", "dputs", "dsetenv", "testgrid", "help",
     // (Boolean operations' history, and fillets' tolerances: kentron keeps no history and
     // uses its own tolerances.)
@@ -151,6 +151,33 @@ fn extra(name: &str, interp: &mut Interp<Session>, argv: &[Value]) -> Option<Mol
                 }
                 _ => return None,
             }
+        }
+        "whatis" => {
+            // DRAW's `whatis name ...`: what each variable is.
+            let session = interp.context_mut();
+            let mut out = Vec::new();
+            for n in &args {
+                use super::DrawObject as O;
+                let what = match session.draw.get(n) {
+                    Some(O::Shape(s)) => format!("is a shape {} {}", format!("{:?}", s.kind()).to_uppercase(), if s.orientation == kentron::topology::Orientation::Reversed { "REVERSED" } else { "FORWARD" }),
+                    Some(O::Curve(_)) => "is a 3d curve".into(),
+                    Some(O::Curve2(_)) => "is a 2d curve".into(),
+                    Some(O::Surface(_)) => "is a surface".into(),
+                    Some(O::Point(_)) => "is a point".into(),
+                    Some(O::Point2(_)) => "is a 2d point".into(),
+                    Some(O::Number(_)) => "is a numeric variable".into(),
+                    Some(_) => "is a variable".into(),
+                    None => "is not a DRAW variable".into(),
+                };
+                out.push(format!("{n} {what}"));
+            }
+            let text = out.join("\n");
+            session.log.extend(out);
+            molt_ok!(text)
+        }
+        "boptions" => {
+            let text = "Fuzzy value : 0\nRunParallel : 0\nNonDestructive : 0\nGlue : 0\nUseOBB : 0\n";
+            molt_ok!(text)
         }
         "directory" => {
             // DRAW's `directory ?pattern?`: the variables' names matching the pattern.

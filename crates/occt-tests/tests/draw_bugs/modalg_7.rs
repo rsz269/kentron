@@ -1089,17 +1089,14 @@ fn bug28248() {
 
 /// `tests/bugs/modalg_7/bug28279`
 #[test]
-#[should_panic]
-fn bug28279() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.restore(&[data_file("bug28279_surface1_draw.draw").as_str(), "s1"])?;
-        d.restore(&[data_file("bug28279_surface2_draw.draw").as_str(), "s2"])?;
-        d.intersect(&["result", "s1", "s2"])?;
-        d.point(&["p121", "-2.20000000000914,", "4.42587047983305,", "2.00000000001213"])?;
-        d.point(&["p11", "-2.20245354854755,", "4.52573922818428,", "1.82990686981508"])?;
-        Ok(())
-    })
+fn bug28279() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.restore(&[data_file("bug28279_surface1_draw.draw").as_str(), "s1"])?;
+    d.restore(&[data_file("bug28279_surface2_draw.draw").as_str(), "s2"])?;
+    d.intersect(&["result", "s1", "s2"])?;
+    d.point(&["p121", "-2.20000000000914,", "4.42587047983305,", "2.00000000001213"])?;
+    d.point(&["p11", "-2.20245354854755,", "4.52573922818428,", "1.82990686981508"])?;
+    Ok(())
 }
 
 /// `tests/bugs/modalg_7/bug28385_11`
