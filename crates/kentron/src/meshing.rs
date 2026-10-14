@@ -313,10 +313,9 @@ fn face_mesh(model: &Model, face: Shape, options: MeshOptions) -> Result<Option<
         let mut all = boundary_points.clone();
         all.extend(inside.iter().map(|&p| scaled(p)));
         triangles = constrained_delaunay(&all, &segments);
-        triangles.retain(|t| {
-            let c = Point2::new((all[t[0]].x + all[t[1]].x + all[t[2]].x) / 3.0, (all[t[0]].y + all[t[1]].y + all[t[2]].y) / 3.0);
-            inside_polygons(&polygons, c)
-        });
+        let inside_face = triangles_inside(&triangles, &all, &polygons, &boundary_edges);
+        let mut keep = inside_face.into_iter();
+        triangles.retain(|_| keep.next().expect("one per triangle"));
         rounds += 1;
         if !curved || rounds > 8 || all.len() > 200_000 {
             break;
@@ -372,6 +371,64 @@ fn face_mesh(model: &Model, face: Shape, options: MeshOptions) -> Result<Option<
     let chains = chains.into_iter().map(|(c, ks)| (c, ks.into_iter().map(&mut index).collect())).collect();
     let _ = id;
     Ok(Some((TriangleMesh::new(nodes, kept).with_deflection(deflection), chains)))
+}
+
+/// Which of `triangles` (over `points`) lie inside `polygons`: by their middles, except that
+/// a flat one (whose middle may come out either side of a boundary it lies along) goes with
+/// a neighbour across a side that is not on the boundary.
+fn triangles_inside(triangles: &[[usize; 3]], points: &[Point2], polygons: &[Vec<Point2>], boundary_edges: &FastSet<(usize, usize)>) -> Vec<bool> {
+    let flat = |t: &[usize; 3]| {
+        let (a, b, c) = (points[t[0]], points[t[1]], points[t[2]]);
+        let longest = a.distance(b).max(b.distance(c)).max(c.distance(a));
+        orient(a, b, c).abs() <= 1e-9 * longest * longest
+    };
+    let mut inside: Vec<Option<bool>> = triangles
+        .iter()
+        .map(|t| {
+            (!flat(t)).then(|| {
+                let c = Point2::new((points[t[0]].x + points[t[1]].x + points[t[2]].x) / 3.0, (points[t[0]].y + points[t[1]].y + points[t[2]].y) / 3.0);
+                inside_polygons(polygons, c)
+            })
+        })
+        .collect();
+    let mut by_side: HashMap<(usize, usize), Vec<usize>> = HashMap::default();
+    for (i, t) in triangles.iter().enumerate() {
+        for k in 0..3 {
+            let (a, b) = (t[k], t[(k + 1) % 3]);
+            if !boundary_edges.contains(&(a, b)) {
+                by_side.entry((a.min(b), a.max(b))).or_default().push(i);
+            }
+        }
+    }
+    // (Flat triangles in a row take it from one to the next.)
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for i in 0..triangles.len() {
+            if inside[i].is_some() {
+                continue;
+            }
+            let t = triangles[i];
+            let found = (0..3).find_map(|k| {
+                let (a, b) = (t[k], t[(k + 1) % 3]);
+                by_side.get(&(a.min(b), a.max(b)))?.iter().find_map(|&j| if j != i { inside[j] } else { None })
+            });
+            if found.is_some() {
+                inside[i] = found;
+                changed = true;
+            }
+        }
+    }
+    inside
+        .into_iter()
+        .zip(triangles)
+        .map(|(known, t)| {
+            known.unwrap_or_else(|| {
+                let c = Point2::new((points[t[0]].x + points[t[1]].x + points[t[2]].x) / 3.0, (points[t[0]].y + points[t[1]].y + points[t[2]].y) / 3.0);
+                inside_polygons(polygons, c)
+            })
+        })
+        .collect()
 }
 
 /// How far a face's triangles stray from its surface: the largest distance between the
@@ -787,6 +844,23 @@ mod tests {
     }
 
     /// Closed: every undirected edge used twice, once each way.
+    #[test]
+    fn a_flat_triangle_along_the_boundary_stays_with_its_neighbour() {
+        // Three boundary nodes on one line but for rounding (from a planar face's side) and
+        // a far one: the flat triangle along the side, whose middle comes out outside, is
+        // inside like the triangle beyond its long side (else the middle node is lost).
+        let points = [
+            Point2::new(11.255670526407464, 1.7026725562320522),
+            Point2::new(11.033938967190913, 1.8031378186724387),
+            Point2::new(10.81220740797436, 1.9036030811128253),
+            Point2::new(7.399999999999999, 0.10000000000000142),
+        ];
+        let polygon = points.to_vec();
+        let boundary: FastSet<(usize, usize)> = (0..4).flat_map(|i| [(i, (i + 1) % 4), ((i + 1) % 4, i)]).collect();
+        let triangles = [[2, 0, 1], [3, 0, 2]];
+        assert_eq!(triangles_inside(&triangles, &points, &[polygon], &boundary), vec![true, true]);
+    }
+
     fn closed(triangles: &[[u32; 3]]) -> bool {
         let mut count: HashMap<(u32, u32), i32> = HashMap::default();
         for t in triangles {
