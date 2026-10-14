@@ -50,17 +50,18 @@ fn enclose(model: &mut Model, shapes: &[Shape], split: bool) -> Result<Shape> {
     };
     let mut fused = first;
     if split {
+        // (Keeping the arcs that bound nothing yet: later sheets may close regions with
+        // them, as if all were fused at once.)
         for &sheet in &sheets[1..] {
-            fused = super::union(model, fused, sheet)?;
+            fused = super::mixed::with_slits(|| super::union(model, fused, sheet))?;
         }
     } else {
         fused = compound(model, &sheets)?;
     }
-    let mut faces: Vec<Shape> = model
-        .unique_subshapes(fused, NodeKind::Face)
-        .into_iter()
-        .map(|f| Shape { orientation: Orientation::Forward, ..f })
-        .collect();
+    let mut faces: Vec<Shape> = Vec::new();
+    for f in model.unique_subshapes(fused, NodeKind::Face) {
+        faces.push(without_slits(model, Shape { orientation: Orientation::Forward, ..f })?);
+    }
     // Shells of half-faces (a face and the side of it the space lies on), dropping faces
     // that bound nothing until none is left.
     let shells = loop {
@@ -118,6 +119,34 @@ fn enclose(model: &mut Model, shapes: &[Shape], split: bool) -> Result<Shape> {
         [(solid, _)] => Ok(*solid),
         _ => compound(model, &solids.iter().map(|s| s.0).collect::<Vec<_>>()),
     }
+}
+
+/// `face` without its slits (loops running along edges and back), as a new face if it had
+/// any.
+fn without_slits(model: &mut Model, face: Shape) -> Result<Shape> {
+    let wires: Vec<Shape> = model.children(face).collect();
+    let slit = |model: &Model, wire: Shape| {
+        let mut uses: std::collections::HashMap<crate::topology::NodeId, i32> = std::collections::HashMap::new();
+        for c in model.children_local(wire) {
+            let id = crate::topology::CoEdgeId::try_from(c.node).expect("a wire holds coedges");
+            let o = if model[id].orientation == Orientation::Reversed { -1 } else { 1 };
+            *uses.entry(model[id].edge.into()).or_default() += o;
+        }
+        !uses.is_empty() && uses.values().all(|&n| n == 0)
+    };
+    if !wires.iter().any(|&w| slit(model, w)) {
+        return Ok(face);
+    }
+    let surface = model.surface(face).ok_or_else(|| Error::InvalidInput("a face without a surface".into()))?.clone();
+    let tolerance = model.tolerance(face);
+    let new = model.new_empty(NodeKind::Face);
+    model.set_face_surface(new, surface, tolerance)?;
+    for w in wires {
+        if !slit(model, w) {
+            model.add(new, w)?;
+        }
+    }
+    Ok(new)
 }
 
 /// How the faces meet around their edges: at each edge, the faces leaving it (a face twice

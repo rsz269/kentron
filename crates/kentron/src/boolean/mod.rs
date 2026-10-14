@@ -358,9 +358,9 @@ fn classified(model: &Model, graph: &mut Graph) -> (Vec<split::Piece>, Vec<Vec<s
         let regions_of_face = match untouched {
             Some(id) => {
                 let fingerprint = model.face_fingerprint(id);
-                (*model.derived(id.into(), fingerprint, || FaceRegions(split::split_face(arcs, &pieces, &face.polylines, scale)))).0.clone()
+                (*model.derived(id.into(), fingerprint, || FaceRegions(split::split_face(arcs, &pieces, &face.polylines, scale, false)))).0.clone()
             }
-            None => split::split_face(arcs, &pieces, &face.polylines, scale),
+            None => split::split_face(arcs, &pieces, &face.polylines, scale, false),
         };
         regions_of_face
             .into_iter()

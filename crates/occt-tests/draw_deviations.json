@@ -1809,5 +1809,10 @@
       "to": "d.checkprops(&[\"result\", \"-s\", \"51078.3\"])?;",
       "reason": "The reference (51928.1) is not what OCCT computes today: its own result (DRAW, at the pinned commit) has area 51078.3, valid; kentron's agrees with it."
     }
+  ],
+  "tests/boolean/volumemaker/D6": [
+    {
+      "note": "kentron's volumes miss separations where four faces meet along an edge inside the slab between the parallel planes at y = -672 and -691: OCCT finds 14 solids, kentron fewer (its total area happened to match OCCT's within 1% before slits were kept while fusing)."
+    }
   ]
 }

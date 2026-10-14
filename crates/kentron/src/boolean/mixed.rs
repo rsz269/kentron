@@ -91,6 +91,21 @@ impl Graph {
     }
 }
 
+thread_local! {
+    /// Whether faces keep the arcs splitting them that bound nothing, as slits.
+    static KEEP_SLITS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// `f` with the faces of operations on shapes other than solids keeping the arcs on them
+/// that bound nothing as slits (loops along the arc and back), for later operations to
+/// split there: shapes fused one after another as if all at once.
+pub(super) fn with_slits<T>(f: impl FnOnce() -> T) -> T {
+    let before = KEEP_SLITS.with(|k| k.replace(true));
+    let result = f();
+    KEEP_SLITS.with(|k| k.set(before));
+    result
+}
+
 /// Splits both operands by each other.
 fn intersect(graph: &mut Graph) -> (Vec<Piece>, Vec<Vec<usize>>) {
     graph.intersect_edges_with_faces();
@@ -153,7 +168,7 @@ pub(super) fn run(model: &mut Model, mut graph: Graph, operation: Operation) -> 
             continue;
         }
         let scale = face.bbox.0.distance(face.bbox.1);
-        for region in split::split_face(arcs, &pieces, &face.polylines, scale) {
+        for region in split::split_face(arcs, &pieces, &face.polylines, scale, KEEP_SLITS.with(|k| k.get())) {
             let p = geom::surface_point(&face.surface, region.interior);
             let place = graph.place(p, 1 - face.operand);
             regions.push((fi, region, place));

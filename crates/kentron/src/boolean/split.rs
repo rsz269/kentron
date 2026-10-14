@@ -272,7 +272,11 @@ impl Graph {
 
 /// Splits a face into the regions bounded by `arcs`, keeping those inside `face_polylines`
 /// (the original boundary).
-pub(super) fn split_face(arcs: &[ArcOnFace], pieces: &[Piece], face_polylines: &[Vec<Uv>], uv_scale: f64) -> Vec<Region> {
+///
+/// With `keep_slits`, arcs that bound nothing (dangling, or with the same region on both
+/// sides) are kept as slits: loops along the arc and back, within the region holding them,
+/// so that a later operation meeting them splits there (as OCCT's internal edges).
+pub(super) fn split_face(arcs: &[ArcOnFace], pieces: &[Piece], face_polylines: &[Vec<Uv>], uv_scale: f64, keep_slits: bool) -> Vec<Region> {
     // Nodes: arc ends, merged when they are the same vertex at the same (u, v).
     let eps = 1e-7 * uv_scale.max(1.0);
     let mut nodes: Vec<(usize, Uv)> = Vec::new();
@@ -303,6 +307,7 @@ pub(super) fn split_face(arcs: &[ArcOnFace], pieces: &[Piece], face_polylines: &
         }
     }
     // Dangling arcs bound nothing.
+    let duplicate: Vec<bool> = alive.iter().map(|a| !a).collect();
     loop {
         let mut degree = vec![0usize; nodes.len()];
         for (i, &(s, e)) in ends.iter().enumerate() {
@@ -356,13 +361,26 @@ pub(super) fn split_face(arcs: &[ArcOnFace], pieces: &[Piece], face_polylines: &
         p
     };
     let mut outers: Vec<(Vec<(usize, bool)>, Vec<Uv>)> = Vec::new();
-    let mut holes: Vec<(Vec<(usize, bool)>, Vec<Uv>)> = Vec::new();
+    let mut holes: Vec<(Vec<(usize, bool)>, Vec<Uv>, Uv)> = Vec::new();
     for cycle in cycles {
         let poly = polygon(&cycle);
         if geom::signed_area(&poly) > 0.0 {
             outers.push((cycle, closed(poly)));
         } else {
-            holes.push((cycle, closed(poly)));
+            let probe = poly[0];
+            holes.push((cycle, closed(poly), probe));
+        }
+    }
+    if keep_slits {
+        for (i, a) in arcs.iter().enumerate() {
+            if alive[i] || duplicate[i] || ends[i].0 == ends[i].1 {
+                continue;
+            }
+            let mut poly = a.uv.clone();
+            poly.extend(a.uv.iter().rev().skip(1));
+            // (Probed between its first two points, clear of where it meets other arcs.)
+            let probe = [0.5 * (a.uv[0][0] + a.uv[1][0]), 0.5 * (a.uv[0][1] + a.uv[1][1])];
+            holes.push((vec![(i, true), (i, false)], poly, probe));
         }
     }
     let mut regions: Vec<Region> = outers
@@ -378,9 +396,8 @@ pub(super) fn split_face(arcs: &[ArcOnFace], pieces: &[Piece], face_polylines: &
             })
         })
         .collect();
-    for (cycle, poly) in holes {
+    for (cycle, poly, probe) in holes {
         // A point of the hole's boundary strictly inside the smallest enclosing region.
-        let probe = poly[0];
         let in_box = |i: usize| {
             let (lo, hi) = boxes[i];
             probe[0] >= lo[0] - eps && probe[0] <= hi[0] + eps && probe[1] >= lo[1] - eps && probe[1] <= hi[1] + eps
