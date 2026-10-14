@@ -42,17 +42,21 @@ fn split_all(model: &mut Model, shapes: &[Shape]) -> Result<Vec<Cell>> {
     // the next shape outside all of them. A shape of lower dimension than a piece (a face
     // across a solid) splits it without taking anything away, its own part inside the
     // piece a cell inside both.
-    let mut pieces: Vec<(Vec<bool>, Shape)> = Vec::new();
+    // (Each piece with its box once found: a piece meets many shapes.)
+    let mut pieces: Vec<(Vec<bool>, Shape, Option<crate::math::BoundingBox>)> = Vec::new();
     for (k, &shape) in shapes.iter().enumerate() {
         let shape_box = crate::properties::bounding_box(model, shape);
         let shape_dimension = dimension(model, shape);
         let mut rest = Some(shape);
         let mut next = Vec::with_capacity(2 * pieces.len() + 1);
-        for (mut inside, piece) in pieces {
-            let piece_box = crate::properties::bounding_box(model, piece);
+        for (mut inside, piece, piece_box) in pieces {
+            let piece_box = piece_box.unwrap_or_else(|| crate::properties::bounding_box(model, piece));
+            // (A part of the piece lies within its box; a part inside the shape too, within
+            // both boxes.)
+            let both = meet(&piece_box, &shape_box).unwrap_or(piece_box);
             if !piece_box.overlaps(&shape_box) {
                 inside.push(false);
-                next.push((inside, piece));
+                next.push((inside, piece, Some(piece_box)));
                 continue;
             }
             let piece_dimension = dimension(model, piece);
@@ -68,13 +72,13 @@ fn split_all(model: &mut Model, shapes: &[Shape]) -> Result<Vec<Cell>> {
                     if !super::is_empty(model, within) {
                         let mut marks = inside.clone();
                         marks.push(true);
-                        next.push((marks, within));
+                        next.push((marks, within, Some(both)));
                     }
                     rest = Some(super::difference(model, r, piece)?).filter(|&r| !super::is_empty(model, r));
                 }
                 inside.push(false);
                 for part in parts {
-                    next.push((inside.clone(), part));
+                    next.push((inside.clone(), part, Some(piece_box)));
                 }
                 continue;
             }
@@ -86,11 +90,11 @@ fn split_all(model: &mut Model, shapes: &[Shape]) -> Result<Vec<Cell>> {
                     if !super::is_empty(model, within) {
                         let mut marks = inside.clone();
                         marks.push(true);
-                        next.push((marks, within));
+                        next.push((marks, within, Some(both)));
                     }
                     if !super::is_empty(model, without) {
                         inside.push(false);
-                        next.push((inside, without));
+                        next.push((inside, without, Some(piece_box)));
                     }
                     continue;
                 }
@@ -110,28 +114,37 @@ fn split_all(model: &mut Model, shapes: &[Shape]) -> Result<Vec<Cell>> {
             if !super::is_empty(model, within) {
                 let mut marks = inside.clone();
                 marks.push(true);
-                next.push((marks, within));
+                next.push((marks, within, Some(both)));
             }
             if !super::is_empty(model, without) {
                 inside.push(false);
-                next.push((inside, without));
+                next.push((inside, without, Some(piece_box)));
             }
         }
         if let Some(r) = rest {
             let mut marks = vec![false; k];
             marks.push(true);
-            next.push((marks, r));
+            next.push((marks, r, Some(shape_box)));
         }
         pieces = next;
     }
     // Each piece's solids (faces, edges) are cells of their own.
     let mut out = Vec::new();
-    for (inside, piece) in pieces {
+    for (inside, piece, _) in pieces {
         for part in parts(model, piece) {
             out.push(Cell { inside: inside.clone(), shape: part });
         }
     }
     Ok(out)
+}
+
+/// The box where two boxes overlap; `None` if they do not.
+fn meet(a: &crate::math::BoundingBox, b: &crate::math::BoundingBox) -> Option<crate::math::BoundingBox> {
+    use crate::math::Point;
+    let lo = Point::new(a.min.x.max(b.min.x), a.min.y.max(b.min.y), a.min.z.max(b.min.z));
+    let hi = Point::new(a.max.x.min(b.max.x), a.max.y.min(b.max.y), a.max.z.min(b.max.z));
+    let m = crate::math::BoundingBox::new(lo, hi);
+    (!m.is_empty()).then_some(m)
 }
 
 /// 3 for a shape with solids, 2 with faces, 1 with edges, 0 otherwise.

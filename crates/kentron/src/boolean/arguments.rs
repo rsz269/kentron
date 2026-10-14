@@ -188,6 +188,13 @@ pub(super) fn glue(model: &mut Model, shapes: &[Shape]) -> Result<()> {
     model.replace_nodes(&merged)?;
     // Faces bounded by the same edges, on one surface.
     let faces = gather(model, NodeKind::Face);
+    // (The shells using each face, found once.)
+    let mut shells_of: FastMap<crate::topology::NodeId, Vec<Shape>> = FastMap::default();
+    for shell in gather(model, NodeKind::Shell) {
+        for f in model.children_local(shell).map(|c| c.node).collect::<crate::hashing::FastSet<_>>() {
+            shells_of.entry(f).or_default().push(shell);
+        }
+    }
     let mut by_edges: FastMap<Vec<crate::topology::NodeId>, Vec<Shape>> = FastMap::default();
     for f in faces {
         let mut key: Vec<_> = model.unique_subshapes(f, NodeKind::Edge).iter().map(|e| e.node).collect();
@@ -205,8 +212,7 @@ pub(super) fn glue(model: &mut Model, shapes: &[Shape]) -> Result<()> {
         let rs = model.surface(r).cloned().expect("checked");
         let opposite = geom::normal_at_point(&surface, p).dot(geom::normal_at_point(&rs, p)) < 0.0;
         // Each shell using the face uses the kept one instead, the same way round.
-        for shell in model.ancestors_of::<crate::topology::entities::Shell>(f.node) {
-            let shell = Shape::from(shell);
+        for &shell in shells_of.get(&f.node).map(Vec::as_slice).unwrap_or_default() {
             let uses: Vec<Shape> = model.children_local(shell).filter(|c| c.node == f.node).collect();
             for old in uses {
                 let flip = |o: Orientation| if opposite { o.reversed() } else { o };
