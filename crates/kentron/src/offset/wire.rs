@@ -56,6 +56,122 @@ pub fn planar_wire(model: &mut Model, wire: Shape, distance: f64, join: Join) ->
     build(model, &plane, &loops)
 }
 
+/// The offset of an open planar wire on one side only, at `distance`: to the right of its
+/// direction of travel (seen along the plane's normal turned towards +z, else +y, else +x)
+/// for a positive distance, to the left for a negative one: an open wire (or several, where
+/// the offset breaks), without the ends going round the wire's ends. A closed wire is offset
+/// as by [`planar_wire`].
+#[doc(alias = "BRepOffsetAPI_MakeOffset::Init")]
+#[doc(alias = "openoffset")]
+pub fn open_planar_wire(model: &mut Model, wire: Shape, distance: f64, join: Join) -> Result<Shape> {
+    let (edges, closed) = read_edges(model, wire)?;
+    if closed {
+        return planar_wire(model, wire, distance, join);
+    }
+    if distance == 0.0 {
+        return Err(Error::InvalidInput("an offset by zero".into()));
+    }
+    let flatness = model.explore(wire, NodeKind::Edge).map(|e| model.tolerance(e)).fold(0.0, f64::max);
+    let plane = plane_of(&edges, flatness)?;
+    let forward: Vec<Piece> = edges.iter().map(|e| e.on_plane(&plane)).collect::<Result<_>>()?;
+    let forward = cut_spine(forward);
+    let scale = forward.iter().map(|p| p.start().distance(p.end())).fold(0.0, f64::max).max(1e-9);
+    let n = forward.len();
+    let gaps = (0..n - 1).map(|i| forward[i].end().distance(forward[i + 1].start())).fold(0.0, f64::max);
+    let tolerance = (1e-7 * scale.max(1.0)).max(gaps);
+    // There and back, as around the wire; then the side wanted, its ends cut off.
+    let mut path = forward.clone();
+    path.extend(forward.iter().rev().map(Piece::reversed));
+    let raw = raw_contour(&path, distance.abs(), tolerance, join);
+    let loops = trim(&raw, &path, distance.abs(), tolerance);
+    let loops: Vec<Vec<Piece>> = if join == Join::Intersection { loops.into_iter().map(join_collinear).collect() } else { loops };
+    let z = Vector::from(plane.normal());
+    let upward = if z.z.abs() > 1e-12 { z.z > 0.0 } else if z.y.abs() > 1e-12 { z.y > 0.0 } else { z.x > 0.0 };
+    let want_right = (distance > 0.0) == upward;
+    let (start, end) = (forward[0].start(), forward[n - 1].end());
+    // Where a point lies: beyond an end of the wire (a cap), or on its right.
+    let place = |p: Point2| -> (bool, bool) {
+        let mut best = (f64::INFINITY, false, false);
+        for (k, piece) in forward.iter().enumerate() {
+            let samples = 64;
+            for i in 0..=samples {
+                let s = i as f64 / samples as f64;
+                let q = piece.at(s);
+                let d = q.distance(p);
+                if d < best.0 {
+                    let t = piece.tangent(piece.first + (piece.last - piece.first) * s);
+                    let at_end = (k == 0 && i == 0) || (k == n - 1 && i == samples);
+                    let beyond = at_end && {
+                        let away = p - q;
+                        let outwards = if k == 0 && i == 0 { t * -1.0 } else { t };
+                        away.dot(outwards) > 1e-6 * away.length()
+                    };
+                    best = (d, beyond, right(t).dot(p - q) > 0.0);
+                }
+            }
+        }
+        let _ = (start, end);
+        (best.1, best.2)
+    };
+    let mut chains: Vec<Vec<Piece>> = Vec::new();
+    for pieces in loops {
+        let keep: Vec<bool> = pieces.iter().map(|p| { let (cap, on_right) = place(p.at(0.5)); !cap && on_right == want_right }).collect();
+        // Runs of kept pieces, round the loop from one that is not.
+        let Some(first_dropped) = keep.iter().position(|k| !k) else {
+            chains.push(pieces);
+            continue;
+        };
+        let m = pieces.len();
+        let mut run: Vec<Piece> = Vec::new();
+        for i in 1..=m {
+            let k = (first_dropped + i) % m;
+            if keep[k] {
+                run.push(pieces[k].clone());
+            } else if !run.is_empty() {
+                chains.push(std::mem::take(&mut run));
+            }
+        }
+    }
+    build_open(model, &plane, &chains)
+}
+
+/// Open wires through `chains` of pieces (each following on from the one before).
+fn build_open(model: &mut Model, plane: &Plane, chains: &[Vec<Piece>]) -> Result<Shape> {
+    let tolerance = crate::tolerance::LINEAR;
+    let mut wires = Vec::new();
+    for pieces in chains {
+        let curves: Vec<Curve> = pieces.iter().map(|p| p.curve.to_3d(plane.frame())).collect();
+        let mut points: Vec<Point> = curves.iter().zip(pieces).map(|(c, p)| c.point(p.first)).collect();
+        points.push(curves[curves.len() - 1].point(pieces[pieces.len() - 1].last));
+        let vertices: Vec<_> = points.iter().map(|&p| model.add_vertex(p, tolerance)).collect();
+        let mut coedges = Vec::with_capacity(pieces.len());
+        for (i, (p, curve)) in pieces.iter().zip(&curves).enumerate() {
+            let (a, b) = (vertices[i], vertices[i + 1]);
+            let reversed = p.last < p.first;
+            let (start, end, first, last) = if reversed { (b, a, p.last, p.first) } else { (a, b, p.first, p.last) };
+            let edge = model.add_edge(start, end, tolerance)?;
+            model.set_edge_curve(edge.into(), curve.clone(), tolerance)?;
+            model.set_edge_range(edge.into(), first, last)?;
+            let gap = curve.point(first).distance(model.point(Shape::from(start))).max(curve.point(last).distance(model.point(Shape::from(end))));
+            if gap > tolerance {
+                model.set_edge_tolerance(edge, gap * 1.5)?;
+            }
+            coedges.push(model.add_coedge(edge, if reversed { Orientation::Reversed } else { Orientation::Forward })?);
+        }
+        wires.push(Shape::from(model.add_wire(&coedges)?));
+    }
+    match wires[..] {
+        [one] => Ok(one),
+        _ => {
+            let compound = model.new_empty(NodeKind::Compound);
+            for w in wires {
+                model.add(compound, w)?;
+            }
+            Ok(compound)
+        }
+    }
+}
+
 /// The wire's pieces cut at their inflections and curvature extrema, as OCCT's
 /// BRepFill_OffsetWire prepares its spine (so the offset has an edge per cut piece); a
 /// wire of one edge is cut even where it has none.

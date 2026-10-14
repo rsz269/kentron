@@ -9,7 +9,7 @@ pub(crate) mod shape;
 mod wire;
 
 pub use shape::{shape, shape_with_faces, thick_solid};
-pub use wire::planar_wire;
+pub use wire::{open_planar_wire, planar_wire};
 
 /// How offsets are joined where they part (at corners of a wire turning away from the offset
 /// side, at edges of a shape between faces whose offsets move apart).

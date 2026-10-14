@@ -234,16 +234,7 @@ tests/bugs/modalg_2/bug22818_2
 tests/bugs/modalg_2/bug22864_3
 tests/bugs/modalg_2/bug23170
 tests/bugs/modalg_2/bug23214
-tests/bugs/modalg_2/bug23367_1
 tests/bugs/modalg_2/bug23367_10
-tests/bugs/modalg_2/bug23367_13
-tests/bugs/modalg_2/bug23367_14
-tests/bugs/modalg_2/bug23367_15
-tests/bugs/modalg_2/bug23367_2
-tests/bugs/modalg_2/bug23367_3
-tests/bugs/modalg_2/bug23367_4
-tests/bugs/modalg_2/bug23367_5
-tests/bugs/modalg_2/bug23367_9
 tests/bugs/modalg_2/bug264_0
 tests/bugs/modalg_2/bug264_6
 tests/bugs/modalg_2/bug264_7
@@ -271,7 +262,6 @@ tests/bugs/modalg_4/bug906
 tests/bugs/modalg_5/bug23706_2
 tests/bugs/modalg_5/bug23706_3
 tests/bugs/modalg_5/bug23706_6
-tests/bugs/modalg_5/bug23706_7
 tests/bugs/modalg_5/bug23706_9
 tests/bugs/modalg_5/bug23952_1
 tests/bugs/modalg_5/bug23952_2
@@ -374,7 +364,6 @@ tests/bugs/modalg_7/bug29580_2
 tests/bugs/modalg_7/bug29861
 tests/bugs/modalg_7/bug29973_2
 tests/bugs/modalg_7/bug30092
-tests/bugs/modalg_7/bug30140
 tests/bugs/modalg_7/bug30154_1
 tests/bugs/modalg_7/bug30204_1
 tests/bugs/modalg_7/bug30391_1
@@ -403,8 +392,6 @@ tests/bugs/modalg_8/bug32942
 tests/bugs/modalg_8/bug32943
 tests/bugs/modalg_8/bug32944
 tests/bugs/modalg_8/bug32945
-tests/bugs/modalg_8/bug32964
-tests/bugs/modalg_8/bug33146
 tests/bugs/modalg_8/bug33361
 tests/bugs/modalg_8/bug33570
 tests/bugs/modalg_8/bug33615
@@ -494,11 +481,6 @@ tests/geometry/circ2d3Tan/CircleCircleLin_11
 tests/geometry/circ2d3Tan/CircleCirclePoint_13
 tests/geometry/circ2d3Tan/CircleLinPoint_11
 tests/geometry/circle/B1
-tests/heal/fix_gaps/A5
-tests/heal/fix_gaps/A6
-tests/heal/fix_gaps/B1
-tests/heal/fix_gaps/B2
-tests/heal/fix_gaps/B3
 tests/heal/fix_shape/E3
 tests/heal/fix_shape/E9
 tests/heal/fix_shape/G2

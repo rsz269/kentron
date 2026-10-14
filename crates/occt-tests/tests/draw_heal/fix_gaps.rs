@@ -48,28 +48,22 @@ fn a4() -> DrawResult<()> {
 
 /// `tests/heal/fix_gaps/A5`
 #[test]
-#[should_panic]
-fn a5() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.restore(&[data_file("CTO900_ger60039a.rle").as_str(), "a"])?;
-        d.fixwgaps(&["result", "a", "0.001"])?;
-        d.checkshape(&["result"])?;
-        Ok(())
-    })
+fn a5() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.restore(&[data_file("CTO900_ger60039a.rle").as_str(), "a"])?;
+    d.fixwgaps(&["result", "a", "0.001"])?;
+    d.checkshape(&["result"])?;
+    Ok(())
 }
 
 /// `tests/heal/fix_gaps/A6`
 #[test]
-#[should_panic]
-fn a6() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.restore(&[data_file("CTO900_ger60041a.rle").as_str(), "a"])?;
-        d.fixwgaps(&["result", "a", "0.001"])?;
-        d.checkshape(&["result"])?;
-        Ok(())
-    })
+fn a6() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.restore(&[data_file("CTO900_ger60041a.rle").as_str(), "a"])?;
+    d.fixwgaps(&["result", "a", "0.001"])?;
+    d.checkshape(&["result"])?;
+    Ok(())
 }
 
 /// `tests/heal/fix_gaps/A7`
@@ -107,39 +101,30 @@ fn a9() -> DrawResult<()> {
 
 /// `tests/heal/fix_gaps/B1`
 #[test]
-#[should_panic]
-fn b1() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.restore(&[data_file("RevolutionFG.rle").as_str(), "a"])?;
-        d.fixwgaps(&["result", "a", "0.001"])?;
-        d.checkshape(&["result"])?;
-        Ok(())
-    })
+fn b1() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.restore(&[data_file("RevolutionFG.rle").as_str(), "a"])?;
+    d.fixwgaps(&["result", "a", "0.001"])?;
+    d.checkshape(&["result"])?;
+    Ok(())
 }
 
 /// `tests/heal/fix_gaps/B2`
 #[test]
-#[should_panic]
-fn b2() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.restore(&[data_file("boxFG.rle").as_str(), "a"])?;
-        d.fixwgaps(&["result", "a", "0.001"])?;
-        d.checkshape(&["result"])?;
-        Ok(())
-    })
+fn b2() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.restore(&[data_file("boxFG.rle").as_str(), "a"])?;
+    d.fixwgaps(&["result", "a", "0.001"])?;
+    d.checkshape(&["result"])?;
+    Ok(())
 }
 
 /// `tests/heal/fix_gaps/B3`
 #[test]
-#[should_panic]
-fn b3() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.restore(&[data_file("pcpc2_FS_FG.rle").as_str(), "a"])?;
-        d.fixwgaps(&["result", "a", "0.001"])?;
-        d.checkshape(&["result"])?;
-        Ok(())
-    })
+fn b3() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.restore(&[data_file("pcpc2_FS_FG.rle").as_str(), "a"])?;
+    d.fixwgaps(&["result", "a", "0.001"])?;
+    d.checkshape(&["result"])?;
+    Ok(())
 }

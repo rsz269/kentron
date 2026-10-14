@@ -3,7 +3,9 @@
 //! The dimension goes up by one: a vertex sweeps an edge, an edge a face, a face a solid.
 
 mod corner;
+mod middle;
 mod pipe;
+pub use middle::middle_path;
 mod pipe_shell;
 
 use std::collections::HashMap;

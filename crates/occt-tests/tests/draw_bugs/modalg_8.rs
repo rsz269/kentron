@@ -240,20 +240,17 @@ fn bug32945() {
 
 /// `tests/bugs/modalg_8/bug32964`
 #[test]
-#[should_panic]
-fn bug32964() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.vertex(&["p1", "-90", "40", "0"])?;
-        d.vertex(&["p2", "40", "40", "0"])?;
-        d.vertex(&["p3", "40", "-90", "0"])?;
-        d.edge(&["e1", "p1", "p2"])?;
-        d.edge(&["e2", "p2", "p3"])?;
-        d.wire(&["w1", "e1", "e2"])?;
-        d.openoffset(&["oo", "w1", "1", "40"])?;
-        d.checknbshapes(&["oo_1", "-vertex", "3", "-edge", "2", "-wire", "1", "-shape", "6"])?;
-        Ok(())
-    })
+fn bug32964() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.vertex(&["p1", "-90", "40", "0"])?;
+    d.vertex(&["p2", "40", "40", "0"])?;
+    d.vertex(&["p3", "40", "-90", "0"])?;
+    d.edge(&["e1", "p1", "p2"])?;
+    d.edge(&["e2", "p2", "p3"])?;
+    d.wire(&["w1", "e1", "e2"])?;
+    d.openoffset(&["oo", "w1", "1", "40"])?;
+    d.checknbshapes(&["oo_1", "-vertex", "3", "-edge", "2", "-wire", "1", "-shape", "6"])?;
+    Ok(())
 }
 
 /// `tests/bugs/modalg_8/bug32973`
@@ -289,15 +286,12 @@ fn bug33113() -> DrawResult<()> {
 
 /// `tests/bugs/modalg_8/bug33146`
 #[test]
-#[should_panic]
-fn bug33146() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.restore(&[data_file("bug33146.brep").as_str(), "a"])?;
-        d.wire(&["a", "a"])?;
-        d.openoffset(&["result", "a", "1", "1.", "-approx"])?;
-        Ok(())
-    })
+fn bug33146() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.restore(&[data_file("bug33146.brep").as_str(), "a"])?;
+    d.wire(&["a", "a"])?;
+    d.openoffset(&["result", "a", "1", "1.", "-approx"])?;
+    Ok(())
 }
 
 /// `tests/bugs/modalg_8/bug33227`

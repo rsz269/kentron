@@ -1598,20 +1598,17 @@ fn bug23170() {
 /// `tests/bugs/modalg_2/bug23367_1`
 /// kentron: sub-shapes named by OCCT's enumeration are selected by position (draw_selectors.json)
 #[test]
-#[should_panic]
-fn bug23367_1() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.r#box(&["b", "10", "100", "10"])?;
-        d.explode(&["b", "f"])?;
-        d.nearest(&["b_3", "b", "F", "5.0", "0.0", "5.0", "100.0"])?;
-        d.nearest(&["b_4", "b", "F", "5.0", "100.0", "5.0", "100.0"])?;
-        d.middlepath(&["result", "b", "b_3", "b_4"])?;
-        d.checkprops(&["result", "-l", "100."])?;
-        d.checkshape(&["result"])?;
-        d.checksection(&["result"])?;
-        Ok(())
-    })
+fn bug23367_1() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.r#box(&["b", "10", "100", "10"])?;
+    d.explode(&["b", "f"])?;
+    d.nearest(&["b_3", "b", "F", "5.0", "0.0", "5.0", "100.0"])?;
+    d.nearest(&["b_4", "b", "F", "5.0", "100.0", "5.0", "100.0"])?;
+    d.middlepath(&["result", "b", "b_3", "b_4"])?;
+    d.checkprops(&["result", "-l", "100."])?;
+    d.checkshape(&["result"])?;
+    d.checksection(&["result"])?;
+    Ok(())
 }
 
 /// `tests/bugs/modalg_2/bug23367_10`
@@ -1678,166 +1675,145 @@ fn bug23367_12() -> DrawResult<()> {
 /// `tests/bugs/modalg_2/bug23367_13`
 /// kentron: sub-shapes named by OCCT's enumeration are selected by position (draw_selectors.json)
 #[test]
-#[should_panic]
-fn bug23367_13() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.polyline(&["pp", "0", "0", "0", "10", "0", "0", "20", "10", "0", "20", "20", "0"])?;
-        d.polyline(&["sp", "0", "0", "0", "0", "0", "100", "-50", "50", "200", "-100", "100", "100"])?;
-        d.mksweep(&["sp"])?;
-        d.addsweep(&["pp"])?;
-        d.buildsweep(&["a", "-R"])?;
-        d.explode(&["a", "e"])?;
-        d.nearest(&["a_2", "a", "E", "5.0", "0.0", "0.0", "10.0"])?;
-        d.nearest(&["a_24", "a", "E", "-99.5412414523", "104.541241452", "102.041241452", "10.0"])?;
-        d.nearest(&["a_27", "a", "E", "-94.0824829046", "114.082482905", "104.082482905", "14.1421356237"])?;
-        d.nearest(&["a_30", "a", "E", "-84.5412414523", "119.541241452", "102.041241452", "10.0"])?;
-        d.nearest(&["a_5", "a", "E", "15.0", "5.0", "0.0", "14.1421356237"])?;
-        d.nearest(&["a_8", "a", "E", "20.0", "15.0", "0.0", "10.0"])?;
-        d.wire(&["w1", "a_2", "a_5", "a_8"])?;
-        d.wire(&["w2", "a_24", "a_27", "a_30"])?;
-        d.middlepath(&["result", "a", "w1", "w2"])?;
-        d.checkprops(&["result", "-l", "352.512"])?;
-        d.checkshape(&["result"])?;
-        d.checksection(&["result"])?;
-        Ok(())
-    })
+fn bug23367_13() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.polyline(&["pp", "0", "0", "0", "10", "0", "0", "20", "10", "0", "20", "20", "0"])?;
+    d.polyline(&["sp", "0", "0", "0", "0", "0", "100", "-50", "50", "200", "-100", "100", "100"])?;
+    d.mksweep(&["sp"])?;
+    d.addsweep(&["pp"])?;
+    d.buildsweep(&["a", "-R"])?;
+    d.explode(&["a", "e"])?;
+    d.nearest(&["a_2", "a", "E", "5.0", "0.0", "0.0", "10.0"])?;
+    d.nearest(&["a_24", "a", "E", "-99.5412414523", "104.541241452", "102.041241452", "10.0"])?;
+    d.nearest(&["a_27", "a", "E", "-94.0824829046", "114.082482905", "104.082482905", "14.1421356237"])?;
+    d.nearest(&["a_30", "a", "E", "-84.5412414523", "119.541241452", "102.041241452", "10.0"])?;
+    d.nearest(&["a_5", "a", "E", "15.0", "5.0", "0.0", "14.1421356237"])?;
+    d.nearest(&["a_8", "a", "E", "20.0", "15.0", "0.0", "10.0"])?;
+    d.wire(&["w1", "a_2", "a_5", "a_8"])?;
+    d.wire(&["w2", "a_24", "a_27", "a_30"])?;
+    d.middlepath(&["result", "a", "w1", "w2"])?;
+    d.checkprops(&["result", "-l", "352.512"])?;
+    d.checkshape(&["result"])?;
+    d.checksection(&["result"])?;
+    Ok(())
 }
 
 /// `tests/bugs/modalg_2/bug23367_14`
 /// kentron: sub-shapes named by OCCT's enumeration are selected by position (draw_selectors.json)
 #[test]
-#[should_panic]
-fn bug23367_14() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.polyline(&["pp", "0", "0", "0", "10", "-10", "0", "20", "0", "0", "10", "10", "0", "0", "0", "0"])?;
-        d.polyline(&["sp", "0", "0", "0", "0", "0", "50", "-100", "0", "0", "-50", "0", "-50", "0", "0", "0"])?;
-        d.mksweep(&["sp"])?;
-        d.addsweep(&["pp"])?;
-        d.buildsweep(&["a", "-R"])?;
-        d.explode(&["a", "e"])?;
-        d.nearest(&["a_11", "a", "E", "5.0", "5.0", "0.0", "14.1421356237"])?;
-        d.nearest(&["a_2", "a", "E", "5.0", "-5.0", "0.0", "14.1421356237"])?;
-        d.nearest(&["a_5", "a", "E", "15.0", "-5.0", "0.0", "14.1421356237"])?;
-        d.nearest(&["a_8", "a", "E", "15.0", "5.0", "0.0", "14.1421356237"])?;
-        d.wire(&["ww", "a_11", "a_8", "a_5", "a_2"])?;
-        d.middlepath(&["result", "a", "ww", "ww"])?;
-        d.checkprops(&["result", "-l", "365.161"])?;
-        d.checkshape(&["result"])?;
-        d.checksection(&["result"])?;
-        Ok(())
-    })
+fn bug23367_14() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.polyline(&["pp", "0", "0", "0", "10", "-10", "0", "20", "0", "0", "10", "10", "0", "0", "0", "0"])?;
+    d.polyline(&["sp", "0", "0", "0", "0", "0", "50", "-100", "0", "0", "-50", "0", "-50", "0", "0", "0"])?;
+    d.mksweep(&["sp"])?;
+    d.addsweep(&["pp"])?;
+    d.buildsweep(&["a", "-R"])?;
+    d.explode(&["a", "e"])?;
+    d.nearest(&["a_11", "a", "E", "5.0", "5.0", "0.0", "14.1421356237"])?;
+    d.nearest(&["a_2", "a", "E", "5.0", "-5.0", "0.0", "14.1421356237"])?;
+    d.nearest(&["a_5", "a", "E", "15.0", "-5.0", "0.0", "14.1421356237"])?;
+    d.nearest(&["a_8", "a", "E", "15.0", "5.0", "0.0", "14.1421356237"])?;
+    d.wire(&["ww", "a_11", "a_8", "a_5", "a_2"])?;
+    d.middlepath(&["result", "a", "ww", "ww"])?;
+    d.checkprops(&["result", "-l", "365.161"])?;
+    d.checkshape(&["result"])?;
+    d.checksection(&["result"])?;
+    Ok(())
 }
 
 /// `tests/bugs/modalg_2/bug23367_15`
 /// kentron: sub-shapes named by OCCT's enumeration are selected by position (draw_selectors.json)
 #[test]
-#[should_panic]
-fn bug23367_15() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.polyline(&["pp", "0", "0", "0", "10", "-10", "0", "20", "0", "0", "10", "10", "0", "0", "0", "0"])?;
-        d.polyline(&["sp", "0", "0", "0", "0", "0", "50", "-100", "0", "0", "-50", "0", "-50"])?;
-        d.mksweep(&["sp"])?;
-        d.addsweep(&["pp"])?;
-        d.buildsweep(&["a", "-R"])?;
-        d.explode(&["a", "e"])?;
-        d.nearest(&["a_11", "a", "E", "5.0", "5.0", "0.0", "14.1421356237"])?;
-        d.nearest(&["a_2", "a", "E", "5.0", "-5.0", "0.0", "14.1421356237"])?;
-        d.nearest(&["a_28", "a", "E", "-53.5355339059", "-5.0", "-53.5355339059", "14.1421356237"])?;
-        d.nearest(&["a_31", "a", "E", "-60.6066017178", "-5.0", "-60.6066017178", "14.1421356237"])?;
-        d.nearest(&["a_34", "a", "E", "-60.6066017178", "5.0", "-60.6066017178", "14.1421356237"])?;
-        d.nearest(&["a_36", "a", "E", "-53.5355339059", "5.0", "-53.5355339059", "14.1421356237"])?;
-        d.nearest(&["a_5", "a", "E", "15.0", "-5.0", "0.0", "14.1421356237"])?;
-        d.nearest(&["a_8", "a", "E", "15.0", "5.0", "0.0", "14.1421356237"])?;
-        d.wire(&["w1", "a_11", "a_8", "a_5", "a_2"])?;
-        d.wire(&["w2", "a_34", "a_36", "a_28", "a_31"])?;
-        d.middlepath(&["result", "a", "w1", "w2"])?;
-        d.checkprops(&["result", "-l", "270.149"])?;
-        d.checkshape(&["result"])?;
-        d.checksection(&["result"])?;
-        Ok(())
-    })
+fn bug23367_15() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.polyline(&["pp", "0", "0", "0", "10", "-10", "0", "20", "0", "0", "10", "10", "0", "0", "0", "0"])?;
+    d.polyline(&["sp", "0", "0", "0", "0", "0", "50", "-100", "0", "0", "-50", "0", "-50"])?;
+    d.mksweep(&["sp"])?;
+    d.addsweep(&["pp"])?;
+    d.buildsweep(&["a", "-R"])?;
+    d.explode(&["a", "e"])?;
+    d.nearest(&["a_11", "a", "E", "5.0", "5.0", "0.0", "14.1421356237"])?;
+    d.nearest(&["a_2", "a", "E", "5.0", "-5.0", "0.0", "14.1421356237"])?;
+    d.nearest(&["a_28", "a", "E", "-53.5355339059", "-5.0", "-53.5355339059", "14.1421356237"])?;
+    d.nearest(&["a_31", "a", "E", "-60.6066017178", "-5.0", "-60.6066017178", "14.1421356237"])?;
+    d.nearest(&["a_34", "a", "E", "-60.6066017178", "5.0", "-60.6066017178", "14.1421356237"])?;
+    d.nearest(&["a_36", "a", "E", "-53.5355339059", "5.0", "-53.5355339059", "14.1421356237"])?;
+    d.nearest(&["a_5", "a", "E", "15.0", "-5.0", "0.0", "14.1421356237"])?;
+    d.nearest(&["a_8", "a", "E", "15.0", "5.0", "0.0", "14.1421356237"])?;
+    d.wire(&["w1", "a_11", "a_8", "a_5", "a_2"])?;
+    d.wire(&["w2", "a_34", "a_36", "a_28", "a_31"])?;
+    d.middlepath(&["result", "a", "w1", "w2"])?;
+    d.checkprops(&["result", "-l", "270.149"])?;
+    d.checkshape(&["result"])?;
+    d.checksection(&["result"])?;
+    Ok(())
 }
 
 /// `tests/bugs/modalg_2/bug23367_2`
 /// kentron: sub-shapes named by OCCT's enumeration are selected by position (draw_selectors.json)
 /// OCCT TODO OCC24156 (MacOS): Error : The length of result shape is
 #[test]
-#[should_panic]
-fn bug23367_2() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.pcylinder(&["a", "10", "30", "180"])?;
-        d.explode(&["a", "f"])?;
-        d.nearest(&["a_2", "a", "F", "5.44095e-16", "4.24413", "30.0", "157.08"])?;
-        d.nearest(&["a_3", "a", "F", "5.44095e-16", "4.24413", "0.0", "157.08"])?;
-        d.middlepath(&["result", "a", "a_2", "a_3"])?;
-        d.checkprops(&["result", "-l", "30.0036"])?;
-        d.checkshape(&["result"])?;
-        d.checksection(&["result"])?;
-        Ok(())
-    })
+fn bug23367_2() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.pcylinder(&["a", "10", "30", "180"])?;
+    d.explode(&["a", "f"])?;
+    d.nearest(&["a_2", "a", "F", "5.44095e-16", "4.24413", "30.0", "157.08"])?;
+    d.nearest(&["a_3", "a", "F", "5.44095e-16", "4.24413", "0.0", "157.08"])?;
+    d.middlepath(&["result", "a", "a_2", "a_3"])?;
+    d.checkprops(&["result", "-l", "30.0036"])?;
+    d.checkshape(&["result"])?;
+    d.checksection(&["result"])?;
+    Ok(())
 }
 
 /// `tests/bugs/modalg_2/bug23367_3`
 /// kentron: sub-shapes named by OCCT's enumeration are selected by position (draw_selectors.json)
 #[test]
-#[should_panic]
-fn bug23367_3() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.polyline(&["pp", "0", "0", "0", "5", "0", "0", "10", "0", "0", "10", "10", "0", "0", "10", "0", "0", "0", "0"])?;
-        d.mkplane(&["ff", "pp"])?;
-        d.prism(&["a", "ff", "0", "0", "50"])?;
-        d.explode(&["a", "f"])?;
-        d.nearest(&["a_6", "a", "F", "5.0", "5.0", "0.0", "100.0"])?;
-        d.nearest(&["a_7", "a", "F", "5.0", "5.0", "50.0", "100.0"])?;
-        d.middlepath(&["result", "a", "a_6", "a_7"])?;
-        d.checkprops(&["result", "-l", "50."])?;
-        d.checkshape(&["result"])?;
-        d.checksection(&["result"])?;
-        Ok(())
-    })
+fn bug23367_3() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.polyline(&["pp", "0", "0", "0", "5", "0", "0", "10", "0", "0", "10", "10", "0", "0", "10", "0", "0", "0", "0"])?;
+    d.mkplane(&["ff", "pp"])?;
+    d.prism(&["a", "ff", "0", "0", "50"])?;
+    d.explode(&["a", "f"])?;
+    d.nearest(&["a_6", "a", "F", "5.0", "5.0", "0.0", "100.0"])?;
+    d.nearest(&["a_7", "a", "F", "5.0", "5.0", "50.0", "100.0"])?;
+    d.middlepath(&["result", "a", "a_6", "a_7"])?;
+    d.checkprops(&["result", "-l", "50."])?;
+    d.checkshape(&["result"])?;
+    d.checksection(&["result"])?;
+    Ok(())
 }
 
 /// `tests/bugs/modalg_2/bug23367_4`
 /// kentron: sub-shapes named by OCCT's enumeration are selected by position (draw_selectors.json)
 #[test]
-#[should_panic]
-fn bug23367_4() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.ptorus(&["a", "50", "10"])?;
-        d.explode(&["a", "e"])?;
-        d.nearest(&["a_2", "a", "E", "50.0", "-1.22464679915e-14", "2.24148371816e-15", "62.8318466122"])?;
-        d.wire(&["ww", "a_2"])?;
-        d.middlepath(&["result", "a", "ww", "ww"])?;
-        d.checkprops(&["result", "-l", "314.159"])?;
-        d.checkshape(&["result"])?;
-        d.checksection(&["result"])?;
-        Ok(())
-    })
+fn bug23367_4() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.ptorus(&["a", "50", "10"])?;
+    d.explode(&["a", "e"])?;
+    d.nearest(&["a_2", "a", "E", "50.0", "-1.22464679915e-14", "2.24148371816e-15", "62.8318466122"])?;
+    d.wire(&["ww", "a_2"])?;
+    d.middlepath(&["result", "a", "ww", "ww"])?;
+    d.checkprops(&["result", "-l", "314.159"])?;
+    d.checkshape(&["result"])?;
+    d.checksection(&["result"])?;
+    Ok(())
 }
 
 /// `tests/bugs/modalg_2/bug23367_5`
 /// kentron: sub-shapes named by OCCT's enumeration are selected by position (draw_selectors.json)
 #[test]
-#[should_panic]
-fn bug23367_5() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.pcylinder(&["a", "10", "50"])?;
-        d.explode(&["a", "f"])?;
-        d.nearest(&["a_2", "a", "F", "1.77636e-15", "-9.90461e-16", "50.0", "314.159"])?;
-        d.nearest(&["a_3", "a", "F", "1.77636e-15", "-9.90461e-16", "0.0", "314.159"])?;
-        d.middlepath(&["result", "a", "a_2", "a_3"])?;
-        d.checkprops(&["result", "-l", "50."])?;
-        d.checkshape(&["result"])?;
-        d.checksection(&["result"])?;
-        Ok(())
-    })
+fn bug23367_5() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.pcylinder(&["a", "10", "50"])?;
+    d.explode(&["a", "f"])?;
+    d.nearest(&["a_2", "a", "F", "1.77636e-15", "-9.90461e-16", "50.0", "314.159"])?;
+    d.nearest(&["a_3", "a", "F", "1.77636e-15", "-9.90461e-16", "0.0", "314.159"])?;
+    d.middlepath(&["result", "a", "a_2", "a_3"])?;
+    d.checkprops(&["result", "-l", "50."])?;
+    d.checkshape(&["result"])?;
+    d.checksection(&["result"])?;
+    Ok(())
 }
 
 /// `tests/bugs/modalg_2/bug23367_6`
@@ -1891,24 +1867,21 @@ fn bug23367_8() -> DrawResult<()> {
 /// `tests/bugs/modalg_2/bug23367_9`
 /// kentron: sub-shapes named by OCCT's enumeration are selected by position (draw_selectors.json)
 #[test]
-#[should_panic]
-fn bug23367_9() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.ptorus(&["a", "50", "10", "0", "180"])?;
-        d.explode(&["a", "f"])?;
-        d.nearest(&["a_1", "a", "F", "-1.42109e-14", "2.39544e-16", "6.3662", "9869.6"])?;
-        d.shape(&["b", "Sh"])?;
-        d.add(&["a_1", "b"])?;
-        d.explode(&["b", "e"])?;
-        d.nearest(&["b_2", "b", "E", "50.0", "-1.22464679915e-14", "6.36619739643", "31.4159257284"])?;
-        d.wire(&["ww", "b_2"])?;
-        d.middlepath(&["result", "b", "ww", "ww"])?;
-        d.checkprops(&["result", "-l", "314.159"])?;
-        d.checkshape(&["result"])?;
-        d.checksection(&["result"])?;
-        Ok(())
-    })
+fn bug23367_9() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.ptorus(&["a", "50", "10", "0", "180"])?;
+    d.explode(&["a", "f"])?;
+    d.nearest(&["a_1", "a", "F", "-1.42109e-14", "2.39544e-16", "6.3662", "9869.6"])?;
+    d.shape(&["b", "Sh"])?;
+    d.add(&["a_1", "b"])?;
+    d.explode(&["b", "e"])?;
+    d.nearest(&["b_2", "b", "E", "50.0", "-1.22464679915e-14", "6.36619739643", "31.4159257284"])?;
+    d.wire(&["ww", "b_2"])?;
+    d.middlepath(&["result", "b", "ww", "ww"])?;
+    d.checkprops(&["result", "-l", "314.159"])?;
+    d.checkshape(&["result"])?;
+    d.checksection(&["result"])?;
+    Ok(())
 }
 
 /// `tests/bugs/modalg_2/bug23394`

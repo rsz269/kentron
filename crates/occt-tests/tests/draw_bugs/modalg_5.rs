@@ -263,16 +263,13 @@ fn bug23706_6() {
 
 /// `tests/bugs/modalg_5/bug23706_7`
 #[test]
-#[should_panic]
-fn bug23706_7() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.bsplinecurve(&["cc", "3", "2", "0", "4", "1", "4", "-1", "-1", "2", "1", "0", "-1", "2", "1", "0", "0", "2", "1", "0", "0", "2", "1"])?;
-        d.point(&["pp", "0", "0", "1"])?;
-        d.offsetcurve(&["o", "cc", ".5", "pp"])?;
-        d.checklength(&["o", "-l", "2.3717833300483151"])?;
-        Ok(())
-    })
+fn bug23706_7() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.bsplinecurve(&["cc", "3", "2", "0", "4", "1", "4", "-1", "-1", "2", "1", "0", "-1", "2", "1", "0", "0", "2", "1", "0", "0", "2", "1"])?;
+    d.point(&["pp", "0", "0", "1"])?;
+    d.offsetcurve(&["o", "cc", ".5", "pp"])?;
+    d.checklength(&["o", "-l", "2.3717833300483151"])?;
+    Ok(())
 }
 
 /// `tests/bugs/modalg_5/bug23706_9`

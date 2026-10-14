@@ -440,11 +440,24 @@ impl Draw {
     /// Example: `addsweep w`
     pub fn addsweep(&mut self, args: &[&str]) -> DrawResult {
         // `addsweep profile [vertex] [-T] [-R]`: a section (moved onto the spine with -T,
-        // turned square to it with -R). A vertex to place it at is not supported.
+        // turned square to it with -R). A vertex of the spine it stands at is taken where
+        // the profile lies there already (it stands where it lies, as without one).
         let options: Vec<&str> = args.iter().copied().filter(|a| a.starts_with('-')).collect();
         let names: Vec<&str> = args.iter().copied().filter(|a| !a.starts_with('-')).collect();
-        if names.len() != 1 || options.iter().any(|o| *o != "-T" && *o != "-R") {
+        if names.is_empty() || names.len() > 2 || options.iter().any(|o| *o != "-T" && *o != "-R") {
             return self.not_implemented("addsweep", args);
+        }
+        if let Some(vertex) = names.get(1) {
+            let (v, profile) = (self.shape_var(vertex)?, self.shape_var(names[0])?);
+            if v.kind() != NodeKind::Vertex {
+                return self.not_implemented("addsweep", args);
+            }
+            let at = self.model.point(v);
+            let gap = self.model.unique_subshapes(profile, NodeKind::Vertex).iter().map(|&w| self.model.point(w).distance(at)).fold(f64::INFINITY, f64::min);
+            let size = properties::bounding_box(&self.model, profile);
+            if !(gap <= (size.max - size.min).length()) {
+                return self.not_implemented("addsweep", args);
+            }
         }
         let profile = self.shape_var(names[0])?;
         self.sweep_profiles.push((profile, options.contains(&"-T"), options.contains(&"-R")));
@@ -2914,7 +2927,12 @@ impl Draw {
     ///
     /// Example: `middlepath result b b_3 b_4`
     pub fn middlepath(&mut self, args: &[&str]) -> DrawResult {
-        self.not_implemented("middlepath", args)
+        // `middlepath result shape start end`: the path through the middle of a pipe-like
+        // shape from one of its sections to another.
+        let [result, shape, start, end] = args else { return self.not_implemented("middlepath", args) };
+        let (shape, start, end) = (self.shape_var(shape)?, self.shape_var(start)?, self.shape_var(end)?);
+        let path = sweep::middle_path(&mut self.model, shape, start, end)?;
+        self.set_shape_var(result, path)
     }
     /// DRAW command `mk2dcurve`: 7 uses in 5 converted scripts.
     ///
@@ -3100,8 +3118,14 @@ impl Draw {
     ///
     /// Example: `mksweep f_1`
     pub fn mksweep(&mut self, args: &[&str]) -> DrawResult {
-        // `mksweep spine [-C tol angle]`: a sweep along the spine begins (OCCT's
+        // `mksweep spine [-C [angle tolerance]]`: a sweep along the spine begins (OCCT's
         // BRepOffsetAPI_MakePipeShell); the corrected Frenet trihedron, no profiles yet.
+        // (`-C` merges the spine's edges that carry on smoothly into one: kentron sweeps
+        // along them as they are, smoothly from one to the next.)
+        let args: &[&str] = match args {
+            [spine, "-C", rest @ ..] if rest.len() <= 2 => std::slice::from_ref(spine),
+            _ => args,
+        };
         if args.len() != 1 {
             return self.not_implemented("mksweep", args);
         }
@@ -3309,7 +3333,20 @@ impl Draw {
     ///
     /// Example: `offsetcurve o cc .5 pp`
     pub fn offsetcurve(&mut self, args: &[&str]) -> DrawResult {
-        self.not_implemented("offsetcurve", args)
+        // `offsetcurve result curve distance direction`: the curve offset by the distance,
+        // square to it and to the direction (a point variable read as a vector), as OCCT's
+        // Geom_OffsetCurve.
+        let [result, curve, distance, direction] = args else { return self.not_implemented("offsetcurve", args) };
+        let basis = self.curve_var(curve)?;
+        let distance = self.number(distance)?;
+        let Some(DrawObject::Point(p)) = self.get(direction).cloned() else {
+            return Err(DrawError::Failed(format!("offsetcurve: {direction} is not a point")));
+        };
+        let direction = kentron::math::Direction::try_from_vector(kentron::math::Vector::new(p.x, p.y, p.z))
+            .ok_or_else(|| DrawError::Failed("offsetcurve: a zero direction".into()))?;
+        let offset = kentron::geometry::curve::Curve::Offset(kentron::geometry::curve::OffsetCurve::new(basis, distance, direction));
+        self.set(result, DrawObject::Curve(offset));
+        Ok(String::new())
     }
     /// DRAW command `offsetload`: 174 uses in 174 converted scripts.
     ///
@@ -3420,7 +3457,23 @@ impl Draw {
     ///
     /// Example: `openoffset res1 ww 1 12.5`
     pub fn openoffset(&mut self, args: &[&str]) -> DrawResult {
-        self.not_implemented("openoffset", args)
+        // `openoffset result wire count step [a|i] [-approx]`: the open wire's offsets on one
+        // side at step, 2 step, ..., named result_1, result_2, ... (`-approx`, approximating
+        // the wire by lines and arcs first, is not needed: its curves are offset as they are).
+        let args: Vec<&str> = args.iter().copied().filter(|a| *a != "-approx").collect();
+        let [result, shape, count, step, rest @ ..] = &args[..] else { return self.not_implemented("openoffset", &args) };
+        let join = match rest {
+            [] | ["a"] => kentron::offset::Join::Arc,
+            ["i"] => kentron::offset::Join::Intersection,
+            _ => return self.not_implemented("openoffset", &args),
+        };
+        let (count, step) = (self.number(count)? as usize, self.number(step)?);
+        let wire = self.shape_var(shape)?;
+        for k in 1..=count {
+            let offset = kentron::offset::open_planar_wire(&mut self.model, wire, step * k as f64, join)?;
+            self.set_shape_var(&format!("{result}_{k}"), offset)?;
+        }
+        Ok(String::new())
     }
     /// DRAW command `orientation`: 49 uses in 31 converted scripts.
     ///
@@ -3527,9 +3580,10 @@ impl Draw {
     ///
     /// Example: `pipe s w profile`
     pub fn pipe(&mut self, args: &[&str]) -> DrawResult {
-        // `pipe name spine profile [mode]`: the profile swept along the spine.
+        // `pipe name spine profile [mode]`: the profile swept along the spine (mode 0, the
+        // default corrected Frenet trihedron, is how kentron sweeps).
         need(args, 3, "pipe name spine profile")?;
-        if args.len() > 3 {
+        if args.len() > 4 || (args.len() == 4 && args[3] != "0") {
             return self.not_implemented("pipe", args);
         }
         let (spine, profile) = (self.shape_var(args[1])?, self.shape_var(args[2])?);
@@ -4839,7 +4893,18 @@ impl Draw {
     ///
     /// Example: `fixwgaps result a 0.001`
     pub fn fixwgaps(&mut self, args: &[&str]) -> DrawResult {
-        self.not_implemented("fixwgaps", args)
+        // `fixwgaps result shape [precision]`: the gaps in the wires covered (OCCT's
+        // ShapeFix_Wireframe::FixWireGaps, which here grows tolerances as far as the gaps
+        // need), on a copy.
+        need(args, 2, "fixwgaps result shape [precision]")?;
+        let shape = self.shape_var(args[1])?;
+        let copy = modify::copy(&mut self.model, shape, false)?;
+        let mut options = kentron::heal::FixOptions { max_tolerance: f64::INFINITY, ..Default::default() };
+        if let Some(p) = args.get(2) {
+            options.precision = self.number(p)?;
+        }
+        let result = kentron::heal::fix_shape(&mut self.model, copy, &options)?;
+        self.set_shape_var(args[0], result)
     }
 }
 

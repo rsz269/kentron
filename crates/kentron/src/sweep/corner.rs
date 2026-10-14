@@ -12,7 +12,8 @@
 //! its own mirror image across it).
 //!
 //! A closed profile is swept as the face it bounds; a shell wanted is the boundary of the
-//! solid swept, less its ends. Round corners ([`Corner::Rounded`]) are not made yet.
+//! solid swept, less its ends. At a round corner ([`Corner::Rounded`]) the profile is turned
+//! about the axis through the corner square to both tangents, joining the pieces' sweeps.
 
 use crate::error::{Error, Result};
 use crate::geometry::curve::Curve;
@@ -51,14 +52,15 @@ pub(super) fn pipe_cornered(model: &mut Model, profile: Shape, pieces: &[SpinePi
         .collect::<Result<_>>()?;
     // A spine closed on itself goes round a corner (or on smoothly) where it closes too.
     let closed = n > 1 && ends[n - 1].2.distance(ends[0].0) <= tolerance::LINEAR;
-    if corner == Corner::Rounded {
-        return Err(Error::Failed("round corners of pipes are not made yet".into()));
-    }
     let wanted_shell = profile.kind() == NodeKind::Wire;
     let face = match profile.kind() {
         NodeKind::Face => profile,
-        NodeKind::Wire => make::planar_face(model, profile)
-            .map_err(|_| Error::InvalidInput("a pipe round corners needs a closed planar profile".into()))?,
+        // (An open wire is swept as it is round round corners.)
+        NodeKind::Wire => match make::planar_face(model, profile) {
+            Ok(face) => face,
+            Err(_) if corner == Corner::Rounded => profile,
+            Err(_) => return Err(Error::InvalidInput("a pipe round corners needs a closed planar profile".into())),
+        },
         kind => return Err(Error::InvalidInput(format!("a pipe round corners sweeps a wire or a face, not a {kind:?}"))),
     };
     // Where the profile stands at the start of each piece.
@@ -77,6 +79,9 @@ pub(super) fn pipe_cornered(model: &mut Model, profile: Shape, pieces: &[SpinePi
         .filter(|&k| k + 1 < n || closed)
         .filter(|&k| ends[k].3.dot(ends[(k + 1) % n].1) < 1.0 - 1e-12)
         .collect();
+    if corner == Corner::Rounded {
+        return rounded(model, face, pieces, &ends, &starts, &corners, closed, wanted_shell);
+    }
     for &k in &corners {
         if ends[k].3.dot(ends[(k + 1) % n].1) <= (std::f64::consts::PI - 0.025).cos() {
             return Err(Error::InvalidInput("a pipe's spine turns back on itself at a corner".into()));
@@ -163,6 +168,65 @@ pub(super) fn pipe_cornered(model: &mut Model, profile: Shape, pieces: &[SpinePi
         }
     }
     Ok(shell)
+}
+
+/// The pipe round its corners (after the pieces `corners`): each piece swept on its own,
+/// and at each corner the profile turned about the axis through it square to both
+/// tangents, as OCCT's round corners are; their faces sewn, with the ends closed for a
+/// solid.
+#[allow(clippy::too_many_arguments)]
+fn rounded(
+    model: &mut Model,
+    face: Shape,
+    pieces: &[SpinePiece],
+    ends: &[(Point, Vector, Point, Vector)],
+    starts: &[Transform],
+    corners: &[usize],
+    closed: bool,
+    wanted_shell: bool,
+) -> Result<Shape> {
+    let n = pieces.len();
+    // (`face` an open wire swept as it is.)
+    let wires: Vec<Shape> = if face.kind() == NodeKind::Wire { vec![face] } else { model.children(face).collect() };
+    let [wire] = wires[..] else {
+        return Err(Error::InvalidInput("round corners of pipes with profiles with holes are not supported yet".into()));
+    };
+    let mut faces: Vec<Shape> = Vec::new();
+    for (k, piece) in pieces.iter().enumerate() {
+        let spine = carried_on_edge(model, piece, 0.0, 0.0)?;
+        let swept = super::pipe(model, wire.moved(&starts[k]), spine)?.shape;
+        faces.extend(model.unique_subshapes(swept, NodeKind::Face));
+        if corners.contains(&k) {
+            let (p, t1, t2) = (ends[k].2, ends[k].3, ends[(k + 1) % n].1);
+            let axis = t1.cross(t2);
+            let angle = axis.length().atan2(t1.dot(t2));
+            let at_end = carried(piece, 0.0, 1.0)? * starts[k];
+            let knee = super::revolve(model, wire.moved(&at_end), Axis::new(p, Direction::from_vector(axis)), angle)?.shape;
+            faces.extend(model.unique_subshapes(knee, NodeKind::Face));
+        }
+    }
+    if !closed && !wanted_shell && face.kind() == NodeKind::Face {
+        let at_end = carried(&pieces[n - 1], 0.0, 1.0)? * starts[n - 1];
+        faces.push(face.moved(&starts[0]));
+        faces.push(face.moved(&at_end));
+    }
+    let faces: Vec<Shape> = faces.into_iter().map(|f| if f.placement == Transform::IDENTITY { f } else { crate::modify::copy(model, f, false).unwrap_or(f) }).collect();
+    let sewn = crate::sew::sew(model, &faces, &Default::default())?;
+    let shells = model.unique_subshapes(sewn, NodeKind::Shell);
+    let [shell] = shells[..] else {
+        return Err(Error::Failed("a pipe round corners whose pieces do not sew".into()));
+    };
+    if wanted_shell || face.kind() == NodeKind::Wire {
+        return Ok(shell);
+    }
+    let solid = model.new_empty(NodeKind::Solid);
+    model.add(solid, shell)?;
+    if properties::volume(model, solid).mass < 0.0 {
+        let turned = model.new_empty(NodeKind::Solid);
+        model.add(turned, shell.reversed())?;
+        return Ok(turned);
+    }
+    Ok(solid)
 }
 
 /// The least rotation at a corner at `p` taking the tangent `t1` onto `t2`.

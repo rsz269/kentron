@@ -2356,24 +2356,21 @@ fn bug30092() {
 
 /// `tests/bugs/modalg_7/bug30140`
 #[test]
-#[should_panic]
-fn bug30140() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.line(&["l_path", "0", "0", "0", "1", "0", "0"])?;
-        d.trim(&["l_path", "l_path", "0", "10"])?;
-        d.circle(&["c_profile", "0", "0", "2", "1", "0", "0", "5"])?;
-        d.mkedge(&["profile", "c_profile"])?;
-        d.wire(&["profile", "profile"])?;
-        d.point(&["dir", "0", "1", "0"])?;
-        d.offsetcurve(&["offset_path", "l_path", "2", "dir"])?;
-        d.mkedge(&["path", "offset_path"])?;
-        d.wire(&["path", "path"])?;
-        d.pipe(&["result", "path", "profile", "0"])?;
-        d.checkshape(&["result"])?;
-        d.checkprops(&["result", "-s", "314.159"])?;
-        Ok(())
-    })
+fn bug30140() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.line(&["l_path", "0", "0", "0", "1", "0", "0"])?;
+    d.trim(&["l_path", "l_path", "0", "10"])?;
+    d.circle(&["c_profile", "0", "0", "2", "1", "0", "0", "5"])?;
+    d.mkedge(&["profile", "c_profile"])?;
+    d.wire(&["profile", "profile"])?;
+    d.point(&["dir", "0", "1", "0"])?;
+    d.offsetcurve(&["offset_path", "l_path", "2", "dir"])?;
+    d.mkedge(&["path", "offset_path"])?;
+    d.wire(&["path", "path"])?;
+    d.pipe(&["result", "path", "profile", "0"])?;
+    d.checkshape(&["result"])?;
+    d.checkprops(&["result", "-s", "314.159"])?;
+    Ok(())
 }
 
 /// `tests/bugs/modalg_7/bug30154_1`
