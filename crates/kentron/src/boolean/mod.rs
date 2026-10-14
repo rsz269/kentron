@@ -394,7 +394,15 @@ fn classified(model: &Model, graph: &mut Graph) -> (Vec<split::Piece>, Vec<Vec<s
     graph.share_vertices();
     graph.intersect_faces();
     let (mut pieces, of_edge) = graph.pieces();
-    let arcs_of: Vec<_> = (0..graph.faces.len()).map(|fi| graph.arcs_on_face(fi, &mut pieces, &of_edge)).collect();
+    // (A face's boundary arcs over whole edges are the same each time: kept in the model
+    // with the face, while their departure step stays the same, as when the face is moved.)
+    let whole: Vec<Option<std::sync::Arc<WholeArcs>>> = crate::parallel::map(&(0..graph.faces.len()).collect::<Vec<_>>(), |&fi| {
+        let id = graph.faces[fi].regions_key?;
+        let step = graph.arcs_step(fi);
+        let kept = model.derived(id.into(), model.face_fingerprint(id), || WholeArcs(step, graph.whole_boundary_arcs(fi)));
+        ((kept.0 - step).abs() <= 1e-9 * step).then_some(kept)
+    });
+    let arcs_of: Vec<_> = (0..graph.faces.len()).map(|fi| graph.arcs_on_face(fi, &mut pieces, &of_edge, whole[fi].as_ref().map(|w| &w.1[..]))).collect();
     // Each face's regions and where they lie, found for all faces at once.
     let faces: Vec<usize> = (0..arcs_of.len()).collect();
     let graph: &Graph = graph;
@@ -523,6 +531,9 @@ pub(crate) fn partition(model: &mut Model, a: Shape, b: Shape) -> Result<[Shape;
 
 /// The regions of a face met by nothing, kept in the model.
 struct FaceRegions(Vec<split::Region>);
+
+/// A face's [`split::WholeArc`]s, kept with it, and their departure step.
+struct WholeArcs(f64, Vec<split::WholeArc>);
 
 /// For each region, its group: regions of one operand joined across a piece of its own
 /// edge that the other operand leaves alone (no section, not shared with it, not on its

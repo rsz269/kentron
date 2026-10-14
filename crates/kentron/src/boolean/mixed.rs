@@ -159,7 +159,7 @@ pub(super) fn run(model: &mut Model, mut graph: Graph, operation: Operation) -> 
     let mut arcs_of: Vec<Vec<ArcOnFace>> = Vec::with_capacity(graph.faces.len());
     for fi in 0..graph.faces.len() {
         let free = !graph.faces[fi].solid;
-        arcs_of.push(if free { graph.arcs_on_face(fi, &mut pieces, &of_edge) } else { Vec::new() });
+        arcs_of.push(if free { graph.arcs_on_face(fi, &mut pieces, &of_edge, None) } else { Vec::new() });
     }
     let mut regions: Vec<(usize, Region, Place)> = Vec::new();
     for (fi, arcs) in arcs_of.iter().enumerate() {

@@ -42,10 +42,13 @@ impl Vertices {
     /// The vertex closest to `p` within `tolerance` (at most a grid cell).
     pub fn find(&self, p: Point, tolerance: f64) -> Option<usize> {
         let c = Self::cell(p);
+        // (Only the cells within `tolerance` of `p`: mostly its own.)
+        let (lo, hi) = (Self::cell(p - Vector::new(tolerance, tolerance, tolerance)), Self::cell(p + Vector::new(tolerance, tolerance, tolerance)));
+        let near = |k: usize| (lo[k].max(c[k] - 1) - c[k])..=(hi[k].min(c[k] + 1) - c[k]);
         let mut best: Option<(usize, f64)> = None;
-        for dx in -1..=1 {
-            for dy in -1..=1 {
-                for dz in -1..=1 {
+        for dx in near(0) {
+            for dy in near(1) {
+                for dz in near(2) {
                     let Some(ids) = self.grid.get(&[c[0] + dx, c[1] + dy, c[2] + dz]) else { continue };
                     for &i in ids {
                         let d = self.points[i].distance(p);
@@ -661,7 +664,11 @@ impl Graph {
                 }
             }
             let origin = FaceId::try_from(face.node).ok().filter(|_| recognized.is_none() && face.placement == Transform::IDENTITY);
-            self.add_face(operand, surface, output, outward, boundary, origin.map(|id| (model, id)));
+            // (Samples kept with the model's face also where it is only moved.)
+            let by = face.placement.translation_part();
+            let moved_only = Transform::translation(by) == face.placement;
+            let cached = FaceId::try_from(face.node).ok().filter(|_| recognized.is_none() && moved_only);
+            self.add_face(operand, surface, output, outward, boundary, cached.map(|id| (model, id, by)));
             let added = self.faces.last_mut().expect("face");
             added.drift = drift;
             (added.solid, added.container) = (solid, if solid { None } else { container });
@@ -765,8 +772,14 @@ impl Graph {
             None => (None, range.0, range.1),
         };
         let start_point = self.vertices.points[start];
+        // (Kept with the model's edge, unplaced, also where it is only moved.)
+        let by = placement.translation_part();
         let bbox = if placement == Transform::IDENTITY {
             model_edge_box(model, id, curve.as_ref(), first, last, start_point)
+        } else if Transform::translation(by) == placement {
+            let unplaced = |model: &Model| model.edge_curve(Shape::from(id)).map(|(c, _, _)| c);
+            let (lo, hi) = model.derived(id.into(), model.edge_fingerprint(id), || EdgeBox(Edge::sampled_box(unplaced(model).as_ref(), first, last, start_point - by))).0;
+            (lo + by, hi + by)
         } else {
             Edge::sampled_box(curve.as_ref(), first, last, start_point)
         };
@@ -783,11 +796,19 @@ impl Graph {
         self.edges.len() - 1
     }
 
-    /// Adds a face; with `cached`, its samples (boundary polylines, ranges, boxes) are kept
-    /// in the model for the model's face while that face is unchanged.
-    fn add_face(&mut self, operand: usize, surface: Surface, output: Surface, outward: f64, boundary: Vec<BoundaryUse>, cached: Option<(&Model, FaceId)>) {
+    /// Adds a face; with `cached` (the model's face, moved by a translation), its samples
+    /// (boundary polylines, ranges, boxes) are kept in the model for the model's face, as
+    /// unplaced, while that face is unchanged, then moved.
+    fn add_face(&mut self, operand: usize, surface: Surface, output: Surface, outward: f64, boundary: Vec<BoundaryUse>, cached: Option<(&Model, FaceId, Vector)>) {
         let sample = match cached {
-            Some((model, id)) => (*model.derived(id.into(), model.face_fingerprint(id), || self.sample_face(&surface, &boundary))).clone(),
+            Some((model, id, by)) => {
+                let kept = model.derived(id.into(), model.face_fingerprint(id), || match unplaced_surface(model, id) {
+                    Some(local) => self.sample_face(&local, &boundary),
+                    None => self.sample_face(&surface.transformed(&Transform::translation(-by)), &boundary),
+                });
+                let moved = |(lo, hi): (Point, Point)| if by == Vector::ZERO { (lo, hi) } else { (lo + by, hi + by) };
+                FaceSample { polylines: kept.polylines.clone(), u_range: kept.u_range, v_range: kept.v_range, bbox: moved(kept.bbox), extent: moved(kept.extent) }
+            }
             None => self.sample_face(&surface, &boundary),
         };
         let FaceSample { polylines, u_range, v_range, bbox, extent } = sample;
@@ -865,6 +886,15 @@ pub(super) fn sample_face(surface: &Surface, boundary: &[(&Curve2, f64, f64)]) -
         let bbox = geom::bounding_box(points, margin);
         FaceSample { polylines, u_range, v_range, bbox, extent }
     }
+}
+
+/// The surface the graph computes with for the model's face `id`, unplaced (as
+/// [`Graph::add_operand`] makes it of the placed one).
+fn unplaced_surface(model: &Model, id: FaceId) -> Option<Surface> {
+    Some(match untrimmed(model.surface(Shape::from(id))?.clone()) {
+        Surface::Torus(t) => torus_as_revolution(&t),
+        s => s,
+    })
 }
 
 /// `surface` without the trimming of a trimmed surface (its basis has the same

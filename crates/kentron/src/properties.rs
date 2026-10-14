@@ -522,42 +522,85 @@ impl Moments {
 #[doc(alias = "BRepBndLib::Add")]
 pub fn bounding_box(model: &Model, shape: Shape) -> BoundingBox {
     let mut b = BoundingBox::EMPTY;
-    // Vertices, enlarged by their tolerances.
-    for v in model.explore(shape, NodeKind::Vertex) {
-        let p = model.point(v);
-        b.add_box(&BoundingBox::new(p, p).enlarged(model.tolerance(v)));
-    }
-    // Edges: points along their curves, enlarged to cover the curve between them (each
-    // found once unplaced, kept with the edge, then placed).
-    struct EdgeBox(Option<BoundingBox>);
-    let edge_box = |b: &mut BoundingBox, edge: Shape| {
-        let Ok(id) = crate::topology::EdgeId::try_from(edge.node) else { return };
-        let local = Shape { orientation: Orientation::Forward, placement: crate::math::Transform::IDENTITY, ..edge };
-        let kept = model.derived(edge.node, model.edge_fingerprint(id), || {
-            EdgeBox(model.edge_curve(local).map(|(curve, first, last)| {
-                let n = if matches!(curve, crate::geometry::curve::Curve::Line(_)) { 1 } else { 64 };
-                let points: Vec<Point> = (0..=n).map(|i| curve.point(first + (last - first) * i as f64 / n as f64)).collect();
-                // A curve bulges from a chord by at most a quarter of it (arcs up to half a turn).
-                let chord = points.windows(2).map(|w| w[0].distance(w[1])).fold(0.0, f64::max);
-                let margin = if n == 1 { 0.0 } else { 0.25 * chord };
-                BoundingBox::from_points(points).enlarged(margin + model.tolerance(local))
-            }))
-        });
-        if let Some(e) = kept.0 {
-            b.add_box(&placed_box(&e, &edge.placement));
+    // A face moved without turning: its whole box (surface, edges and vertices), found once
+    // unplaced and kept with it, then moved. Other faces, edges and vertices each.
+    let mut faces: Vec<Shape> = Vec::new();
+    for s in std::iter::once(shape).chain(model.explore_all(shape).stop_at(NodeKind::Face)) {
+        match s.node.kind {
+            NodeKind::Face => faces.push(s),
+            NodeKind::Vertex => b.add_box(&vertex_box(model, s)),
+            NodeKind::Edge => b.add_box(&edge_box(model, s)),
+            _ => {}
         }
-    };
-    for e in model.explore(shape, NodeKind::Edge) {
-        edge_box(&mut b, e);
     }
-    // Faces: their boundaries, and for curved ones points of the surface over the part of
-    // the parameter space the boundary spans (each face's box found for all at once).
-    let faces: Vec<Shape> = model.explore(shape, NodeKind::Face).collect();
-    let boxes = crate::parallel::map(&faces, |&f| face_box(model, f));
-    for face_box in boxes.into_iter().flatten() {
+    let boxes = crate::parallel::map(&faces, |&f| {
+        let moved_only = crate::math::Transform::translation(f.placement.translation_part()) == f.placement;
+        if moved_only {
+            return whole_face_box(model, f);
+        }
+        let mut b = BoundingBox::EMPTY;
+        for v in model.explore(f, NodeKind::Vertex) {
+            b.add_box(&vertex_box(model, v));
+        }
+        for e in model.explore(f, NodeKind::Edge) {
+            b.add_box(&edge_box(model, e));
+        }
+        if let Some(surface) = face_box(model, f) {
+            b.add_box(&surface);
+        }
+        b
+    });
+    for face_box in boxes {
         b.add_box(&face_box);
     }
     b
+}
+
+/// A vertex's part of [`bounding_box`]: its point, enlarged by its tolerance.
+fn vertex_box(model: &Model, v: Shape) -> BoundingBox {
+    let p = model.point(v);
+    BoundingBox::new(p, p).enlarged(model.tolerance(v))
+}
+
+/// An edge's part of [`bounding_box`]: points along its curve, enlarged to cover the curve
+/// between them (found once unplaced, kept with the edge, then placed).
+fn edge_box(model: &Model, edge: Shape) -> BoundingBox {
+    struct EdgeBox(Option<BoundingBox>);
+    let Ok(id) = crate::topology::EdgeId::try_from(edge.node) else { return BoundingBox::EMPTY };
+    let local = Shape { orientation: Orientation::Forward, placement: crate::math::Transform::IDENTITY, ..edge };
+    let kept = model.derived(edge.node, model.edge_fingerprint(id), || {
+        EdgeBox(model.edge_curve(local).map(|(curve, first, last)| {
+            let n = if matches!(curve, crate::geometry::curve::Curve::Line(_)) { 1 } else { 64 };
+            let points: Vec<Point> = (0..=n).map(|i| curve.point(first + (last - first) * i as f64 / n as f64)).collect();
+            // A curve bulges from a chord by at most a quarter of it (arcs up to half a turn).
+            let chord = points.windows(2).map(|w| w[0].distance(w[1])).fold(0.0, f64::max);
+            let margin = if n == 1 { 0.0 } else { 0.25 * chord };
+            BoundingBox::from_points(points).enlarged(margin + model.tolerance(local))
+        }))
+    });
+    kept.0.map_or(BoundingBox::EMPTY, |e| placed_box(&e, &edge.placement))
+}
+
+/// A face's whole part of [`bounding_box`] (its vertices, edges and, for curved ones, the
+/// surface within them), found once unplaced and kept with the face, then placed.
+fn whole_face_box(model: &Model, f: Shape) -> BoundingBox {
+    struct WholeFaceBox(BoundingBox);
+    let Ok(id) = FaceId::try_from(f.node) else { return BoundingBox::EMPTY };
+    let local = Shape { orientation: Orientation::Forward, placement: crate::math::Transform::IDENTITY, ..f };
+    let kept = model.derived(f.node, model.face_fingerprint(id), || {
+        let mut b = BoundingBox::EMPTY;
+        for v in model.explore(local, NodeKind::Vertex) {
+            b.add_box(&vertex_box(model, v));
+        }
+        for e in model.explore(local, NodeKind::Edge) {
+            b.add_box(&edge_box(model, e));
+        }
+        if let Some(surface) = face_box(model, local) {
+            b.add_box(&surface);
+        }
+        WholeFaceBox(b)
+    });
+    if kept.0.is_empty() { kept.0 } else { placed_box(&kept.0, &f.placement) }
 }
 
 /// A box along axes of its own (an oriented bounding box): `center ± half_sizes[i] *
@@ -765,8 +808,9 @@ pub fn tight_bounding_box(model: &Model, shape: Shape) -> BoundingBox {
         b.add_point(model.point(v));
     }
     for edge in model.unique_subshapes(shape, NodeKind::Edge) {
-        for &p in edge_extreme_points(model, edge).iter() {
-            b.add_point(p);
+        let (points, by) = edge_extreme_points(model, edge);
+        for &p in points.iter() {
+            b.add_point(p + by);
         }
     }
     for f in model.unique_subshapes(shape, NodeKind::Face) {
@@ -779,8 +823,9 @@ pub fn tight_bounding_box(model: &Model, shape: Shape) -> BoundingBox {
         if control_box(&surface).is_some_and(|c| b.contains_box(&c)) {
             continue;
         }
-        for &p in face_extreme_points(model, f, &surface).iter() {
-            b.add_point(p);
+        let (points, by) = face_extreme_points(model, f, &surface);
+        for &p in points.iter() {
+            b.add_point(p + by);
         }
     }
     b
@@ -799,8 +844,9 @@ pub(crate) fn tight_bounding_box_within(model: &Model, shape: Shape, edges: &[Sh
         }
     }
     for &edge in edges {
-        for &p in edge_extreme_points(model, edge).iter() {
-            b.add_point(p);
+        let (points, by) = edge_extreme_points(model, edge);
+        for &p in points.iter() {
+            b.add_point(p + by);
         }
     }
     let faces: Vec<Shape> = model.explore(shape, NodeKind::Face).collect();
@@ -821,45 +867,60 @@ pub(crate) fn tight_bounding_box_within(model: &Model, shape: Shape, edges: &[Sh
         if control_box(&surface).is_some_and(|c| b.contains_box(&c)) {
             continue;
         }
-        for &p in face_extreme_points(model, f, &surface).iter() {
-            b.add_point(p);
+        let (points, by) = face_extreme_points(model, f, &surface);
+        for &p in points.iter() {
+            b.add_point(p + by);
         }
     }
     b
 }
 
 /// An edge's points where a coordinate is extreme (its ends included), kept in the model
-/// for an unplaced edge.
-fn edge_extreme_points(model: &Model, edge: Shape) -> std::sync::Arc<Vec<Point>> {
+/// for an unplaced edge: the points, and the translation to add to them.
+fn edge_extreme_points(model: &Model, edge: Shape) -> (std::sync::Arc<Vec<Point>>, Vector) {
     struct EdgeExtremes(std::sync::Arc<Vec<Point>>);
-    let compute = || {
-        let Some((curve, first, last)) = model.edge_curve(edge) else {
-            let (a, b) = model.edge_vertices(edge);
-            return vec![model.point(a), model.point(b)];
-        };
-        if matches!(curve, crate::geometry::curve::Curve::Line(_)) {
-            return vec![curve.point(first), curve.point(last)];
-        }
-        curve_extremes(&curve, first, last).into_iter().map(|t| curve.point(t)).collect()
-    };
+    // (Found unplaced, kept with the edge, then moved where it is only moved.)
+    let by = edge.placement.translation_part();
     match crate::topology::EdgeId::try_from(edge.node) {
-        Ok(id) if edge.placement == crate::math::Transform::IDENTITY => {
-            model.derived(edge.node, model.edge_fingerprint(id), || EdgeExtremes(std::sync::Arc::new(compute()))).0.clone()
+        Ok(id) if crate::math::Transform::translation(by) == edge.placement => {
+            let local = Shape { placement: crate::math::Transform::IDENTITY, ..edge };
+            (model.derived(edge.node, model.edge_fingerprint(id), || EdgeExtremes(std::sync::Arc::new(edge_extreme_points_of(model, local)))).0.clone(), by)
         }
-        _ => std::sync::Arc::new(compute()),
+        _ => (std::sync::Arc::new(edge_extreme_points_of(model, edge)), Vector::ZERO),
     }
+}
+
+/// [`edge_extreme_points`], found anew.
+fn edge_extreme_points_of(model: &Model, edge: Shape) -> Vec<Point> {
+    let Some((curve, first, last)) = model.edge_curve(edge) else {
+        let (a, b) = model.edge_vertices(edge);
+        return vec![model.point(a), model.point(b)];
+    };
+    if matches!(curve, crate::geometry::curve::Curve::Line(_)) {
+        return vec![curve.point(first), curve.point(last)];
+    }
+    curve_extremes(&curve, first, last).into_iter().map(|t| curve.point(t)).collect()
 }
 
 /// A curved face's points where a coordinate is extreme, kept in the model for an unplaced
 /// face; `surface` is the face's, placed.
-fn face_extreme_points(model: &Model, face: Shape, surface: &Surface) -> std::sync::Arc<Vec<Point>> {
+fn face_extreme_points(model: &Model, face: Shape, surface: &Surface) -> (std::sync::Arc<Vec<Point>>, Vector) {
     struct FaceExtremes(std::sync::Arc<Vec<Point>>);
+    // (Found unplaced, kept with the face, then moved where it is only moved.)
+    let by = face.placement.translation_part();
     match FaceId::try_from(face.node) {
-        Ok(id) if face.placement == crate::math::Transform::IDENTITY => model
-            .derived(face.node, model.face_fingerprint(id), || FaceExtremes(std::sync::Arc::new(face_extremes(model, face, surface))))
-            .0
-            .clone(),
-        _ => std::sync::Arc::new(face_extremes(model, face, surface)),
+        Ok(id) if crate::math::Transform::translation(by) == face.placement => {
+            let local = Shape { placement: crate::math::Transform::IDENTITY, ..face };
+            let kept = model
+                .derived(face.node, model.face_fingerprint(id), || {
+                    let unplaced = if by == Vector::ZERO { surface.clone() } else { model.surface(local).cloned().unwrap_or_else(|| surface.transformed(&crate::math::Transform::translation(-by))) };
+                    FaceExtremes(std::sync::Arc::new(face_extremes(model, local, &unplaced)))
+                })
+                .0
+                .clone();
+            (kept, by)
+        }
+        _ => (std::sync::Arc::new(face_extremes(model, face, surface)), Vector::ZERO),
     }
 }
 

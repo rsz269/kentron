@@ -34,6 +34,15 @@ pub(super) struct ArcOnFace {
     pub leave_end: Uv,
 }
 
+/// A boundary arc of a face over its whole edge, kept with the face (see
+/// [`Graph::whole_boundary_arcs`]).
+pub(super) struct WholeArc {
+    pub range: (f64, f64),
+    pub uv: Vec<Uv>,
+    pub leave_start: Uv,
+    pub leave_end: Uv,
+}
+
 /// The direction from `uv_at(t_end)` to the point a distance `step` along the arc (towards
 /// `t_other`), from the exact parametrization.
 fn departure(uv_at: impl Fn(f64) -> Uv, t_end: f64, t_other: f64, step: f64) -> Uv {
@@ -147,20 +156,20 @@ impl Graph {
 
     /// The pieces lying on face `fi`: its boundary's, the section edges', and those of the
     /// other operand's edges on its surface that are inside it.
-    pub fn arcs_on_face(&self, fi: usize, pieces: &mut Vec<Piece>, of_edge: &[Vec<usize>]) -> Vec<ArcOnFace> {
+    ///
+    /// `whole`, when given, holds [`Self::whole_boundary_arcs`] of the face, used for the
+    /// boundary's edges left whole.
+    pub fn arcs_on_face(&self, fi: usize, pieces: &mut Vec<Piece>, of_edge: &[Vec<usize>], whole: Option<&[WholeArc]>) -> Vec<ArcOnFace> {
         let face = &self.faces[fi];
         let mut arcs = Vec::new();
-        for b in &face.boundary {
+        for (k, b) in face.boundary.iter().enumerate() {
             for &pi in &of_edge[b.edge] {
                 let p = &pieces[pi];
-                let uv = geom::sample_pcurve(&b.pcurve, p.first, p.last);
-                let at = |t: f64| {
-                    let q = b.pcurve.point(t);
-                    [q.x, q.y]
-                };
-                let step = self.departure_step(fi);
-                let (leave_start, leave_end) = (departure(at, p.first, p.last, step), departure(at, p.last, p.first, step));
-                arcs.push(ArcOnFace { piece: pi, uv, pcurve: Some(b.pcurve.clone()), leave_start, leave_end });
+                if let Some(w) = whole.and_then(|w| w.get(k)).filter(|w| w.range == (p.first, p.last)) {
+                    arcs.push(ArcOnFace { piece: pi, uv: w.uv.clone(), pcurve: Some(b.pcurve.clone()), leave_start: w.leave_start, leave_end: w.leave_end });
+                    continue;
+                }
+                arcs.push(self.boundary_arc(fi, b, pi, p.first, p.last));
             }
         }
         // Each piece once (coincident pieces of the two operands are one): those of the
@@ -188,6 +197,37 @@ impl Graph {
         }
         self.split_degenerate_arcs(&mut arcs, pieces);
         arcs
+    }
+
+    /// An arc of the boundary use `b` of face `fi` from `first` to `last`.
+    fn boundary_arc(&self, fi: usize, b: &super::graph::BoundaryUse, piece: usize, first: f64, last: f64) -> ArcOnFace {
+        let uv = geom::sample_pcurve(&b.pcurve, first, last);
+        let at = |t: f64| {
+            let q = b.pcurve.point(t);
+            [q.x, q.y]
+        };
+        let step = self.departure_step(fi);
+        let (leave_start, leave_end) = (departure(at, first, last, step), departure(at, last, first, step));
+        ArcOnFace { piece, uv, pcurve: Some(b.pcurve.clone()), leave_start, leave_end }
+    }
+
+    /// Each boundary use of face `fi` as an arc over its whole edge (which the face keeps
+    /// while the other operand does not cut it), with the edge's range.
+    pub fn whole_boundary_arcs(&self, fi: usize) -> Vec<WholeArc> {
+        let face = &self.faces[fi];
+        face.boundary
+            .iter()
+            .map(|b| {
+                let e = &self.edges[b.edge];
+                let arc = self.boundary_arc(fi, b, 0, e.first, e.last);
+                WholeArc { range: (e.first, e.last), uv: arc.uv, leave_start: arc.leave_start, leave_end: arc.leave_end }
+            })
+            .collect()
+    }
+
+    /// The departure step of face `fi`'s arcs (which [`Self::whole_boundary_arcs`] go by).
+    pub fn arcs_step(&self, fi: usize) -> f64 {
+        self.departure_step(fi)
     }
 
     /// The distance along arcs at which their departure directions are measured.
