@@ -130,7 +130,6 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/bugs/modalg_8/bug33615
-expect: not_done
 build:
   - plane: {plane: {frame: {origin: [-5, 0, 4], z: [-1, 0, 0]}}}
   - cone: {cone: {r1: 3, r2: 1, height: 10, frame: plane}}

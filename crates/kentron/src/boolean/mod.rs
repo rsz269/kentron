@@ -23,6 +23,7 @@
 //!
 //! The result is a compound of solids, as in OCCT; it is empty when nothing remains.
 
+mod arguments;
 mod build;
 mod cells;
 mod classify;
@@ -38,6 +39,7 @@ use crate::error::{Error, Result};
 use crate::math::BoundingBox;
 use crate::topology::{Model, Shape};
 
+pub use arguments::{combine, Combination};
 pub use cells::{cells, Cell};
 pub use volume::{enclosed_solids, enclosed_solids_unsplit};
 
@@ -105,27 +107,39 @@ pub fn difference(model: &mut Model, a: Shape, b: Shape) -> Result<Shape> {
     run(model, a, b, Operation::Difference)
 }
 
-/// For an object `a` made of solids overlapping one another: the operation on each of its
-/// solids, gathered (`None` otherwise). OCCT keeps an object's solids apart too; one run
-/// would take each for inside the others and drop the faces where they overlap.
+thread_local! {
+    /// Set while [`cells`] splits shapes (which itself runs these operations): there an
+    /// operand's solids are taken one by one.
+    static SPLITTING_CELLS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// For operands made of solids meeting one another: the operation by [`combine`], their
+/// solids split by one another (`None` otherwise). (Within [`cells`]: the operation on each
+/// solid of `a`, gathered.)
 fn each_solid_apart(model: &mut Model, a: Shape, b: Shape, operation: Operation) -> Result<Option<Shape>> {
-    let Some(solids) = only_solids(model, a) else { return Ok(None) };
-    if solids.len() < 2 {
-        return Ok(None);
-    }
-    let boxes: Vec<BoundingBox> = solids.iter().map(|&s| crate::properties::tight_bounding_box(model, s).enlarged(geom::on_tol())).collect();
-    let overlap = (0..boxes.len()).any(|i| (i + 1..boxes.len()).any(|j| boxes[i].overlaps(&boxes[j])));
-    if !overlap {
-        return Ok(None);
-    }
-    let gathered = model.new_empty(crate::topology::NodeKind::Compound);
-    for solid in solids {
-        let part = run(model, solid, b, operation)?;
-        for piece in model.explore(part, crate::topology::NodeKind::Solid).collect::<Vec<_>>() {
-            model.add(gathered, piece)?;
+    let meets = |model: &Model, s: Shape| only_solids(model, s).is_some_and(|solids| solids.len() > 1 && arguments::meeting(model, &solids));
+    if SPLITTING_CELLS.with(|f| f.get()) {
+        if !meets(model, a) {
+            return Ok(None);
         }
+        let gathered = model.new_empty(crate::topology::NodeKind::Compound);
+        for solid in only_solids(model, a).expect("checked") {
+            let part = run(model, solid, b, operation)?;
+            for piece in model.explore(part, crate::topology::NodeKind::Solid).collect::<Vec<_>>() {
+                model.add(gathered, piece)?;
+            }
+        }
+        return Ok(Some(gathered));
     }
-    Ok(Some(gathered))
+    if !(meets(model, a) || meets(model, b)) || only_solids(model, a).is_none() || only_solids(model, b).is_none() {
+        return Ok(None);
+    }
+    let combination = match operation {
+        Operation::Intersection => Combination::Intersection,
+        Operation::Difference => Combination::Difference,
+        Operation::Union => return Ok(None),
+    };
+    Ok(Some(combine(model, &[a], &[b], combination)?))
 }
 
 /// [`difference`] built once, at the current tolerances, its shells closed or not: for
@@ -150,6 +164,11 @@ pub fn intersection(model: &mut Model, a: Shape, b: Shape) -> Result<Shape> {
 pub fn section(model: &mut Model, a: Shape, b: Shape) -> Result<Shape> {
     if [a, b].iter().any(|&s| is_empty(model, s)) {
         return Ok(model.new_empty(crate::topology::NodeKind::Compound));
+    }
+    // Operands of solids meeting one another: the edges where any two of their solids meet.
+    let meets = |model: &Model, s: Shape| only_solids(model, s).is_some_and(|solids| solids.len() > 1 && arguments::meeting(model, &solids));
+    if !SPLITTING_CELLS.with(|f| f.get()) && only_solids(model, a).is_some() && only_solids(model, b).is_some() && (meets(model, a) || meets(model, b)) {
+        return combine(model, &[a], &[b], Combination::Section);
     }
     let graph = operands(model, a, b, false)?;
     mixed::section(model, graph)

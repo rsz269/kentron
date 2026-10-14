@@ -25,6 +25,18 @@ pub struct Cell {
 #[doc(alias = "BOPAlgo_CellsBuilder")]
 #[doc(alias = "general fuse")]
 pub fn cells(model: &mut Model, shapes: &[Shape]) -> Result<Vec<Cell>> {
+    let before = super::SPLITTING_CELLS.with(|f| f.replace(true));
+    let found = split_all(model, shapes);
+    super::SPLITTING_CELLS.with(|f| f.set(before));
+    let found = found?;
+    // (Split one after another, cells met by one shape have each their copies of its parts:
+    // made one.)
+    super::arguments::glue(model, &found.iter().map(|c| c.shape).collect::<Vec<_>>())?;
+    Ok(found)
+}
+
+/// [`cells`], the shapes split one after another.
+fn split_all(model: &mut Model, shapes: &[Shape]) -> Result<Vec<Cell>> {
     // Pieces inside the shapes added so far as marked, each split by every shape added
     // after it: by the next, into the part inside it and the part outside; and the part of
     // the next shape outside all of them. A shape of lower dimension than a piece (a face

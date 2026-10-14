@@ -404,6 +404,55 @@ impl Model {
         Ok(())
     }
 
+    /// Redirects every use of each key of `map` to its value (same kind; a value that is
+    /// itself a key followed on), in one pass over the uses. The replaced nodes are left
+    /// unused, not removed. Coedges cannot be replaced so.
+    pub(super) fn replace_nodes_impl(&mut self, map: &HashMap<NodeId, NodeId>) -> Result<()> {
+        let mut resolved: HashMap<NodeId, NodeId> = HashMap::default();
+        for (&old, &new) in map {
+            if old.kind != new.kind || old.kind == NodeKind::CoEdge {
+                return Err(Error::InvalidInput(format!("cannot replace {old:?} by {new:?}")));
+            }
+            let mut target = new;
+            let mut steps = 0;
+            while let Some(&next) = map.get(&target) {
+                target = next;
+                steps += 1;
+                if steps > map.len() {
+                    return Err(Error::InvalidInput("replacements in a cycle".into()));
+                }
+            }
+            if !self.is_live(target) {
+                return Err(Error::InvalidInput(format!("{target:?} is missing")));
+            }
+            resolved.insert(old, target);
+        }
+        let to = |kind: NodeKind, index: u32| resolved.get(&NodeId { kind, index }).map(|n| n.index);
+        macro_rules! redirect {
+            ($table:ident, $field:ident, $kind:expr) => {{
+                let ids: Vec<_> = self.$table.iter().filter_map(|(id, r)| to($kind, r.$field.index()).map(|n| (id, n))).collect();
+                for (id, n) in ids {
+                    self.$table[id].$field = Id::from_index(n);
+                }
+            }};
+        }
+        redirect!(vertex_uses, vertex, NodeKind::Vertex);
+        redirect!(coedges, edge, NodeKind::Edge);
+        redirect!(wire_uses, wire, NodeKind::Wire);
+        redirect!(face_uses, face, NodeKind::Face);
+        redirect!(shell_uses, shell, NodeKind::Shell);
+        redirect!(solid_uses, solid, NodeKind::Solid);
+        let ids: Vec<_> = self.compound_children.iter().filter_map(|(id, c)| resolved.get(&c.child).map(|&n| (id, n))).collect();
+        for (id, n) in ids {
+            self.compound_children[id].child = n;
+        }
+        let ids: Vec<_> = self.instances.iter().filter_map(|(id, i)| resolved.get(&i.target).map(|&n| (id, n))).collect();
+        for (id, n) in ids {
+            self.instances[id].target = n;
+        }
+        Ok(())
+    }
+
     /// A copy of the node `node` of `source` (and everything below it) in this model, with
     /// `copied` mapping nodes already copied.
     pub(super) fn import_node(&mut self, source: &Model, node: NodeId, copied: &mut HashMap<NodeId, NodeId>) -> Result<NodeId> {

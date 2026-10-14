@@ -634,6 +634,12 @@ impl Model {
         self.remove_subtree_impl(node.into());
     }
 
+    /// [`Model::replace_node`] for many nodes at once (each key of `map` by its value), in
+    /// one pass over the uses: the replaced nodes are left unused rather than removed.
+    pub fn replace_nodes(&mut self, map: &std::collections::HashMap<NodeId, NodeId>) -> Result<()> {
+        self.replace_nodes_impl(map)
+    }
+
     /// Redirects every use of `old` to `new` (same kind) and removes `old`. A structural
     /// edit: nothing is recorded in the history.
     #[doc(alias = "BRepGraph::EditorView::GenOps::ReplaceNode")]

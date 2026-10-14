@@ -600,11 +600,7 @@ tests/bugs/modalg_5/bug25398
 tests/bugs/modalg_5/bug25509_4
 tests/bugs/modalg_5/bug25509_5
 tests/bugs/modalg_5/bug25509_6
-tests/bugs/modalg_5/bug25614_common
-tests/bugs/modalg_5/bug25614_cut
-tests/bugs/modalg_5/bug25614_cut21
 tests/bugs/modalg_5/bug25614_genfuse
-tests/bugs/modalg_5/bug25614_section
 tests/bugs/modalg_5/bug25708
 tests/bugs/modalg_5/bug25722
 tests/bugs/modalg_5/bug25886
@@ -669,7 +665,6 @@ tests/bugs/modalg_6/bug26736_1
 tests/bugs/modalg_6/bug26736_2
 tests/bugs/modalg_6/bug26796
 tests/bugs/modalg_6/bug26897
-tests/bugs/modalg_6/bug26910
 tests/bugs/modalg_6/bug26923
 tests/bugs/modalg_6/bug27015
 tests/bugs/modalg_6/bug27045_1
@@ -732,7 +727,6 @@ tests/bugs/modalg_7/bug23378_2
 tests/bugs/modalg_7/bug23386
 tests/bugs/modalg_7/bug23667
 tests/bugs/modalg_7/bug23838
-tests/bugs/modalg_7/bug24632_3
 tests/bugs/modalg_7/bug24905
 tests/bugs/modalg_7/bug25023
 tests/bugs/modalg_7/bug25930
@@ -751,7 +745,6 @@ tests/bugs/modalg_7/bug27711_1
 tests/bugs/modalg_7/bug27711_3
 tests/bugs/modalg_7/bug27928
 tests/bugs/modalg_7/bug27948
-tests/bugs/modalg_7/bug28245
 tests/bugs/modalg_7/bug28248
 tests/bugs/modalg_7/bug28385_11
 tests/bugs/modalg_7/bug28684_1
@@ -886,7 +879,6 @@ tests/bugs/modalg_8/bug33173
 tests/bugs/modalg_8/bug33361
 tests/bugs/modalg_8/bug33570
 tests/bugs/modalg_8/bug33591
-tests/bugs/modalg_8/bug33615
 tests/bugs/modalg_8/bug_gh501
 tests/bugs/moddata_1/buc60652_1
 tests/bugs/moddata_1/buc60652_2

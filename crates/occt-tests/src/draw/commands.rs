@@ -638,18 +638,8 @@ impl Draw {
     /// Example: `bbop result 4`
     pub fn bbop(&mut self, args: &[&str]) -> DrawResult {
         // `bbop result operation`: 0 common, 1 fuse, 2 cut, 3 the tools cut by the objects,
-        // 4 section, of the objects (together) and the tools (together).
+        // 4 section, of the objects and the tools, every argument split by the others.
         need(args, 2, "bbop result operation")?;
-        let together = |draw: &mut Self, shapes: Vec<Shape>| -> DrawResult<Shape> {
-            let Some((&first, rest)) = shapes.split_first() else {
-                return Err(DrawError::Failed("bbop: no arguments".into()));
-            };
-            let mut all = first;
-            for &s in rest {
-                all = boolean::union(&mut draw.model, all, s)?;
-            }
-            Ok(all)
-        };
         // (By number, or by name.)
         let operation: i32 = match args[1].to_ascii_lowercase().as_str() {
             "common" => 0,
@@ -659,20 +649,20 @@ impl Draw {
             "section" => 4,
             n => n.parse().map_err(|_| DrawError::Failed(format!("bbop: bad operation {}", args[1])))?,
         };
-        if operation == 1 {
-            let all: Vec<Shape> = self.fuse_objects.iter().chain(&self.fuse_tools).copied().collect();
-            let result = together(self, all)?;
-            return self.set_shape_var(args[0], result);
-        }
-        let objects = together(self, self.fuse_objects.clone())?;
-        let tools = together(self, self.fuse_tools.clone())?;
-        let result = match operation {
-            0 => boolean::intersection(&mut self.model, objects, tools)?,
-            2 => boolean::difference(&mut self.model, objects, tools)?,
-            3 => boolean::difference(&mut self.model, tools, objects)?,
-            4 => boolean::section(&mut self.model, objects, tools)?,
+        use boolean::Combination as C;
+        let combination = match operation {
+            0 => C::Intersection,
+            1 => C::Union,
+            2 => C::Difference,
+            3 => C::ReversedDifference,
+            4 => C::Section,
             _ => return Err(DrawError::Failed(format!("bbop: bad operation {operation}"))),
         };
+        if self.fuse_objects.is_empty() {
+            return Err(DrawError::Failed("bbop: no arguments".into()));
+        }
+        let (objects, tools) = (self.fuse_objects.clone(), self.fuse_tools.clone());
+        let result = boolean::combine(&mut self.model, &objects, &tools, combination)?;
         self.set_shape_var(args[0], result)
     }
     /// DRAW command `bbuild`: 110 uses in 104 converted scripts.

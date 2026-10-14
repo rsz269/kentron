@@ -110,7 +110,6 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/bugs/modalg_7/bug24632_3
-expect: not_done
 build:
   - b1: {box: {size: [10, 10, 10]}}
   - b2: {box: {corner: [10, 0, 0], size: [10, 10, 10]}}
