@@ -1586,6 +1586,58 @@ impl Draw {
         };
         Ok(if moved.is_some() { String::new() } else { "Not enough degree of freedom increase degree please\n".into() })
     }
+    /// DRAW command `setaxis`.
+    ///
+    /// Example: `setaxis 0 0 0 0 0 1 1 0 0`
+    pub fn setaxis(&mut self, args: &[&str]) -> DrawResult {
+        // `setaxis x y z nx ny nz xx xy xz`: the axis (and x direction) of the helices made.
+        need(args, 9, "setaxis x y z nx ny nz xx xy xz")?;
+        let v = self.numbers(&args[..9])?;
+        self.helix_frame = Some(Self::curve_frame(&v)?);
+        Ok(String::new())
+    }
+    /// DRAW command `helix`.
+    ///
+    /// Example: `helix name np D1 H1 [Hi...] P1 [Pi...] PF1 [PFi...]`
+    pub fn helix(&mut self, args: &[&str]) -> DrawResult {
+        // `helix name np D1 H1 [Hi...] P1 [Pi...] PF1 [PFi...]`.
+        self.helix_command("helix", args)
+    }
+    /// DRAW command `helix2`.
+    ///
+    /// Example: `helix2 name np D1 P1 [Pi...] N1 [Ni...]`
+    pub fn helix2(&mut self, args: &[&str]) -> DrawResult {
+        // `helix2 name np D1 P1 [Pi...] N1 [Ni...]`.
+        self.helix_command("helix2", args)
+    }
+    /// DRAW command `comphelix`.
+    ///
+    /// Example: `comphelix name np D1 [Di...] H1 [Hi...] P1 [Pi...] PF1 [PFi...]`
+    pub fn comphelix(&mut self, args: &[&str]) -> DrawResult {
+        // `comphelix name np D1 [Di...] H1 [Hi...] P1 [Pi...] PF1 [PFi...]`.
+        self.helix_command("comphelix", args)
+    }
+    /// DRAW command `comphelix2`.
+    ///
+    /// Example: `comphelix2 name np D1 [Di...] P1 [Pi...] N1 [Ni...]`
+    pub fn comphelix2(&mut self, args: &[&str]) -> DrawResult {
+        // `comphelix2 name np D1 [Di...] P1 [Pi...] N1 [Ni...]`.
+        self.helix_command("comphelix2", args)
+    }
+    /// DRAW command `spiral`.
+    ///
+    /// Example: `spiral name np D1 D2 H1 [Hi...] P1 [Pi...] PF1 [PFi...]`
+    pub fn spiral(&mut self, args: &[&str]) -> DrawResult {
+        // `spiral name np D1 D2 H1 [Hi...] P1 [Pi...] PF1 [PFi...]`.
+        self.helix_command("spiral", args)
+    }
+    /// DRAW command `spiral2`.
+    ///
+    /// Example: `spiral2 name np D1 D2 P1 [Pi...] N1 [Ni...]`
+    pub fn spiral2(&mut self, args: &[&str]) -> DrawResult {
+        // `spiral2 name np D1 D2 P1 [Pi...] N1 [Ni...]`.
+        self.helix_command("spiral2", args)
+    }
     /// DRAW command `chamf_throat`.
     ///
     /// Example: `chamf_throat result b b_8 2.`
@@ -5676,4 +5728,63 @@ fn fit_through_on_surfaces(points: &[Point], s1: &Surface, s2: &Surface) -> Opti
         return None;
     }
     kentron::geometry::fit::interpolate(&refined, false, 1e-12).ok().map(Curve::BSpline)
+}
+
+impl Draw {
+    /// The helix commands: `helix`, `comphelix` and `spiral` (by heights, and pitches or
+    /// numbers of turns as each PF is 1 or 0) and their `2` forms (by pitches and numbers of
+    /// turns), with one diameter, one each end of each part, or the first and last.
+    fn helix_command(&mut self, command: &str, args: &[&str]) -> DrawResult {
+        use kentron::helix::{helix, HelixOptions, HelixPart};
+        let usage = || DrawError::Failed(format!("{command}: wrong arguments"));
+        need(args, 4, command)?;
+        let n = self.number(args[1])? as usize;
+        let v = self.numbers(&args[2..])?;
+        let by_turns = command.ends_with('2');
+        let diameters_given = match command.trim_end_matches('2') {
+            "helix" => 1,
+            "spiral" => 2,
+            _ => n + 1,
+        };
+        let per_part = if by_turns { 2 } else { 3 };
+        if v.len() != diameters_given + per_part * n || n == 0 {
+            return Err(usage());
+        }
+        let (diameters, rest) = v.split_at(diameters_given);
+        let column = |k: usize| &rest[k * n..(k + 1) * n];
+        // Heights and pitches.
+        let (heights, pitches): (Vec<f64>, Vec<f64>) = if by_turns {
+            (column(0).iter().zip(column(1)).map(|(p, t)| p * t).collect(), column(0).to_vec())
+        } else {
+            let (h, p, is_pitch) = (column(0), column(1), column(2));
+            (h.to_vec(), (0..n).map(|i| if is_pitch[i] != 0.0 { p[i] } else { h[i] / p[i] }).collect())
+        };
+        // The diameter at each part's end.
+        let ends: Vec<f64> = match diameters_given {
+            1 => vec![diameters[0]; n],
+            2 => {
+                let total: f64 = heights.iter().sum();
+                let slope = (diameters[1] - diameters[0]) / total;
+                let mut risen = 0.0;
+                (0..n)
+                    .map(|i| {
+                        risen += heights[i];
+                        if i + 1 == n { diameters[1] } else { diameters[0] + slope * risen }
+                    })
+                    .collect()
+            }
+            _ => diameters[1..].to_vec(),
+        };
+        let parts: Vec<HelixPart> = (0..n).map(|i| HelixPart { height: heights[i], pitch: pitches[i], end_diameter: ends[i] }).collect();
+        let frame = self.helix_frame.unwrap_or(Frame::WORLD);
+        let options = HelixOptions::default();
+        match helix(&mut self.model, &frame, diameters[0], &parts, &options) {
+            Ok(made) => {
+                self.set_shape_var(args[0], made.wire)?;
+                let warning = i32::from(made.tolerance_reached > options.tolerance);
+                Ok(format!("WarningStatus = {warning}\nToleranceReached = {}\n", format_real(made.tolerance_reached)))
+            }
+            Err(e) => Ok(format!("ErrorStatus = 1 ({e})\n")),
+        }
+    }
 }

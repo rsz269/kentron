@@ -263,6 +263,8 @@ pub struct Draw {
     /// The solids flagged closed, as OCCT's builders flag them (`thrusections`'s); `whatis`
     /// reports other shapes closed by their topology.
     pub closed_solids: std::collections::HashSet<kentron::topology::NodeId>,
+    /// The axis of the helices made (`setaxis`; the world's by default).
+    pub(crate) helix_frame: Option<kentron::math::Frame>,
 }
 
 impl Draw {

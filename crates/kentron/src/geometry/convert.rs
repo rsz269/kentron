@@ -299,7 +299,7 @@ pub fn approximate_curve2(
 
 /// Least-squares B-splines on more and more uniform spans (kept apart at the curve's
 /// breaks) until one is within the tolerance.
-fn approximate_parametric<P, C>(curve: &C, options: &CurveApproximationOptions) -> Option<ApproximatedCurve<P>>
+pub(crate) fn approximate_parametric<P, C>(curve: &C, options: &CurveApproximationOptions) -> Option<ApproximatedCurve<P>>
 where
     P: ControlPoint,
     C: ParametricCurve<Point = P, Vector = P::Vector>,
