@@ -258,16 +258,13 @@ fn bug24417() -> DrawResult<()> {
 
 /// `tests/bugs/modalg_6/bug24890`
 #[test]
-#[should_panic]
-fn bug24890() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.restore(&[data_file("bug24890_f0.brep").as_str(), "f0"])?;
-        d.setflags(&["f0", "locked"])?;
-        d.nurbsconvert(&["result", "f0"])?;
-        d.checkshape(&["result"])?;
-        Ok(())
-    })
+fn bug24890() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.restore(&[data_file("bug24890_f0.brep").as_str(), "f0"])?;
+    d.setflags(&["f0", "locked"])?;
+    d.nurbsconvert(&["result", "f0"])?;
+    d.checkshape(&["result"])?;
+    Ok(())
 }
 
 /// `tests/bugs/modalg_6/bug25138`
@@ -513,16 +510,13 @@ fn bug25937_3() -> DrawResult<()> {
 
 /// `tests/bugs/modalg_6/bug25957_1`
 #[test]
-#[should_panic]
-fn bug25957_1() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.psphere(&["s", "10"])?;
-        d.setflags(&["s", "locked"])?;
-        d.nurbsconvert(&["q", "s"])?;
-        d.checkshape(&["s"])?;
-        Ok(())
-    })
+fn bug25957_1() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.psphere(&["s", "10"])?;
+    d.setflags(&["s", "locked"])?;
+    d.nurbsconvert(&["q", "s"])?;
+    d.checkshape(&["s"])?;
+    Ok(())
 }
 
 /// `tests/bugs/modalg_6/bug25957_2`

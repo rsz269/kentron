@@ -546,8 +546,97 @@ pub fn quadrics(a: &Surface, b: &Surface, tolerance: f64) -> QuadricIntersection
                 _ => Q::NotAnalytic,
             }
         }
-        (a, b) => todo!("intersecting a {} and a {}", surface_kind(a), surface_kind(b)),
+        (Surface::Torus(torus), other) | (other, Surface::Torus(torus)) => torus_elementary(torus, other, tol),
+        _ => Q::NotAnalytic,
     }
+}
+
+/// A torus meets a plane across its axis, or a cylinder, cone, sphere or torus about the
+/// same axis, in circles (where its meridian circle meets the other's meridian, in the
+/// plane of distance from the axis and height along it), and a plane through its axis in
+/// two circles. Otherwise not in closed form.
+fn torus_elementary(torus: &crate::geometry::surface::Torus, other: &Surface, tol: f64) -> QuadricIntersection {
+    use QuadricIntersection as Q;
+    let f = torus.frame();
+    let (c, z) = (f.origin(), Vector::from(f.z()));
+    let (big, small) = (torus.major_radius(), torus.minor_radius());
+    let parallel = |u: Vector| u.cross(z).length() <= ANGULAR.sqrt();
+    let height = |p: Point| z.dot(p - c);
+    let on_axis = |p: Point| {
+        let d = p - c;
+        (d - z * d.dot(z)).length() <= tol
+    };
+    // Meridian lines `a ρ + b h = k` and circles (centre, radius) in the (ρ, h) plane.
+    enum Meridian {
+        Line(f64, f64, f64),
+        Circle((f64, f64), f64),
+    }
+    let meridian = match other {
+        Surface::Plane(plane) => {
+            let n = Vector::from(plane.normal());
+            if parallel(n) {
+                Meridian::Line(0.0, 1.0, height(plane.origin()))
+            } else if n.dot(z).abs() <= ANGULAR.sqrt() && n.dot(c - plane.origin()).abs() <= tol {
+                // Through the axis: the meridian circles on either side.
+                let across = Vector::from(plane.normal()).cross(z).normalized();
+                return Q::Circles(
+                    [1.0, -1.0]
+                        .iter()
+                        .map(|&side| Circle::new(Frame::new(c + across * (side * big), plane.normal(), Direction::from_vector(across * side)), small))
+                        .collect(),
+                );
+            } else {
+                return Q::NotAnalytic;
+            }
+        }
+        Surface::Cylinder(cyl) if parallel(Vector::from(cyl.frame().z())) && on_axis(cyl.frame().origin()) => {
+            Meridian::Line(1.0, 0.0, cyl.radius())
+        }
+        Surface::Cone(cone) if parallel(Vector::from(cone.frame().z())) && on_axis(cone.frame().origin()) => {
+            // ρ = R + s (h - h0) tan α.
+            let (sin, cos) = cone.semi_angle_sin_cos();
+            let s = Vector::from(cone.frame().z()).dot(z).signum();
+            let slope = s * sin / cos;
+            Meridian::Line(1.0, -slope, cone.radius() - slope * height(cone.frame().origin()))
+        }
+        Surface::Sphere(sphere) if on_axis(sphere.frame().origin()) => Meridian::Circle((0.0, height(sphere.frame().origin())), sphere.radius()),
+        Surface::Torus(t) if parallel(Vector::from(t.frame().z())) && on_axis(t.frame().origin()) => {
+            Meridian::Circle((t.major_radius(), height(t.frame().origin())), t.minor_radius())
+        }
+        _ => return Q::NotAnalytic,
+    };
+    // Where the torus's meridian circle (centre (R, 0), radius r) meets it.
+    let mut found: Vec<(f64, f64)> = Vec::new();
+    let line = |a: f64, b: f64, k: f64, found: &mut Vec<(f64, f64)>| {
+        let len = (a * a + b * b).sqrt();
+        let (a, b, k) = (a / len, b / len, k / len);
+        let d = a * big - k;
+        let foot = (big - a * d, -b * d);
+        if (d.abs() - small).abs() <= tol {
+            found.push(foot);
+        } else if d.abs() < small {
+            let half = (small * small - d * d).sqrt();
+            found.push((foot.0 - b * half, foot.1 + a * half));
+            found.push((foot.0 + b * half, foot.1 - a * half));
+        }
+    };
+    match meridian {
+        Meridian::Line(a, b, k) => line(a, b, k, &mut found),
+        Meridian::Circle((p, q), radius) => {
+            let gap = ((p - big).powi(2) + q * q).sqrt();
+            if gap <= tol {
+                return if (radius - small).abs() <= tol { Q::Same } else { Q::Empty };
+            }
+            // The radical line: 2(p - R) ρ + 2q h = p² + q² - radius² - R² + r².
+            line(2.0 * (p - big), 2.0 * q, p * p + q * q - radius * radius - big * big + small * small, &mut found);
+        }
+    }
+    let circles: Vec<Circle> = found
+        .into_iter()
+        .filter(|&(rho, _)| rho > tol)
+        .map(|(rho, h)| Circle::new(Frame::new(c + z * h, f.z(), f.x()), rho))
+        .collect();
+    if circles.is_empty() { Q::Empty } else { Q::Circles(circles) }
 }
 
 /// Two cones on one axis meet in circles: where their meridians (lines in the plane of
@@ -1036,6 +1125,344 @@ pub fn ruled_quadric(base: &Surface, other: &Surface, tolerance: f64, v_range: O
     Some(QuadricCurves { curves, next, joins, same: false })
 }
 
+/// Where an extrusion meets a surface unchanged along the extrusion's direction (a plane
+/// or cylinder along it, or another extrusion the same way): lines along it, through the
+/// points where the extrusion's basis curve meets the surface. `None` for another surface
+/// (or where the basis curve runs along the surface, the surfaces overlapping).
+pub fn extrusion_lines(extrusion: &super::surface::ExtrusionSurface, other: &Surface, tolerance: f64) -> Option<Vec<Line>> {
+    let d = extrusion.direction();
+    let along = |u: Vector| u.cross(Vector::from(d)).length() <= ANGULAR.sqrt();
+    let invariant = match other {
+        Surface::Plane(p) => Vector::from(p.normal()).dot(Vector::from(d)).abs() <= ANGULAR.sqrt(),
+        Surface::Cylinder(c) => along(Vector::from(c.frame().z())),
+        Surface::Extrusion(e) => along(Vector::from(e.direction())),
+        _ => false,
+    };
+    if !invariant {
+        return None;
+    }
+    let found = curve_surface(extrusion.basis(), other, tolerance);
+    if !found.segments.is_empty() {
+        return None;
+    }
+    Some(found.points.iter().map(|p| Line::new(p.point, d)).collect())
+}
+
+/// A point where a curve meets a surface.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CurveSurfacePoint {
+    pub point: Point,
+    /// Parameter on the curve.
+    pub t: f64,
+    /// Parameters on the surface.
+    pub u: f64,
+    pub v: f64,
+}
+
+/// Where a curve meets a surface: isolated points, and the stretches of the curve (as
+/// parameter ranges) lying on the surface.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct CurveSurfaceIntersection {
+    pub points: Vec<CurveSurfacePoint>,
+    pub segments: Vec<(f64, f64)>,
+}
+
+/// The points where a curve meets a surface (within its bounds), within `tolerance`, sorted
+/// by parameter on the curve; and the stretches of the curve on the surface. A line meets a
+/// plane, cylinder or sphere in closed form; otherwise the curve is followed in fine steps
+/// (an unbounded one over the extent of a bounded surface, else near the surface's
+/// parametric centre).
+#[doc(alias = "GeomAPI_IntCS")]
+pub fn curve_surface(curve: &super::curve::Curve, surface: &Surface, tolerance: f64) -> CurveSurfaceIntersection {
+    use super::curve::Curve;
+    let tol = tolerance.max(1e-9);
+    let (first, last) = (curve.first_parameter(), curve.last_parameter());
+    let on_surface = |t: f64, start: Option<(f64, f64)>| {
+        let p = curve.point(t);
+        let (u, v, d) = extrema::nearest_on_surface(p, surface, start);
+        (CurveSurfacePoint { point: p, t, u, v }, d)
+    };
+    let mut out = CurveSurfaceIntersection::default();
+    if let Curve::Line(line) = curve {
+        match line_elementary(line, surface, tol) {
+            Some(None) => {
+                out.segments.push((first, last));
+                return out;
+            }
+            Some(Some(ts)) => {
+                let slack = |t: f64| 1e-12 * (1.0 + t.abs());
+                for t in ts.into_iter().filter(|&t| t >= first - slack(t) && t <= last + slack(t)) {
+                    out.points.push(on_surface(t.clamp(first, last), None).0);
+                }
+                return out;
+            }
+            None => {}
+        }
+    }
+    let (lo, hi) = search_range(curve, surface);
+    if !(hi > lo) {
+        return out;
+    }
+    let n = match curve {
+        Curve::BSpline(b) => (32 * b.knots().len()).clamp(512, 8192),
+        _ => 512,
+    };
+    let mut samples: Vec<(CurveSurfacePoint, f64)> = Vec::with_capacity(n + 1);
+    let mut start = None;
+    for i in 0..=n {
+        let t = if i == n { hi } else { lo + (hi - lo) * i as f64 / n as f64 };
+        let s = on_surface(t, start);
+        start = Some((s.0.u, s.0.v));
+        samples.push(s);
+    }
+    // Runs of samples on the surface are stretches of the curve on it.
+    let mut i = 0;
+    let mut in_segment = vec![false; samples.len()];
+    while i < samples.len() {
+        let mut j = i;
+        while j < samples.len() && samples[j].1 <= tol {
+            j += 1;
+        }
+        if j >= i + 3 {
+            out.segments.push((samples[i].0.t, samples[j - 1].0.t));
+            in_segment[i..j].iter_mut().for_each(|x| *x = true);
+        }
+        i = j.max(i + 1);
+    }
+    // Each local minimum of the distance: found by golden sections, then made exact by
+    // Newton steps on curve(t) = surface(u, v).
+    let g = 0.5 * (5f64.sqrt() - 1.0);
+    for i in 0..samples.len() {
+        let d = samples[i].1;
+        let left = if i > 0 { samples[i - 1].1 } else { f64::INFINITY };
+        let right = if i + 1 < samples.len() { samples[i + 1].1 } else { f64::INFINITY };
+        // (Within a step of a crossing the distance is at most the step's length.)
+        let chord = |j: usize, k: usize| samples[j].0.point.distance(samples[k].0.point);
+        let reach = chord(i.saturating_sub(1), i).max(chord(i, (i + 1).min(samples.len() - 1)));
+        if in_segment[i] || !(d <= left && d <= right) || d > reach + 1e3 * tol {
+            continue;
+        }
+        let (mut a, mut b) = (samples[i.saturating_sub(1)].0.t, samples[(i + 1).min(samples.len() - 1)].0.t);
+        let mut best = samples[i];
+        for _ in 0..80 {
+            let (x1, x2) = (b - g * (b - a), a + g * (b - a));
+            let guess = Some((best.0.u, best.0.v));
+            let (f1, f2) = (on_surface(x1, guess), on_surface(x2, guess));
+            if f1.1 < f2.1 {
+                b = x2;
+                if f1.1 < best.1 {
+                    best = f1;
+                }
+            } else {
+                a = x1;
+                if f2.1 < best.1 {
+                    best = f2;
+                }
+            }
+        }
+        let found = polish_curve_surface(curve, surface, best.0, lo, hi);
+        if found.point.distance(surface.point(found.u, found.v)) > tol {
+            continue;
+        }
+        if out.points.iter().any(|q| q.point.distance(found.point) <= tol || (q.t - found.t).abs() <= 1e-9 * (1.0 + found.t.abs())) {
+            continue;
+        }
+        out.points.push(found);
+    }
+    out.points.sort_by(|a, b| a.t.total_cmp(&b.t));
+    out
+}
+
+/// Where a line meets a plane, cylinder or sphere: `Some(None)` if it lies on it,
+/// `Some(Some(parameters))` else; `None` for another surface.
+fn line_elementary(line: &Line, surface: &Surface, tol: f64) -> Option<Option<Vec<f64>>> {
+    let (o, d) = (line.origin, Vector::from(line.direction));
+    // Where a line at `h` from a centre, nearest it at parameter `t0`, meets a circle of
+    // radius `r` about that centre (`speed` the line's parametric speed across it).
+    let circle = |t0: f64, h: f64, r: f64, speed: f64| {
+        if (h - r).abs() <= tol {
+            vec![t0]
+        } else if h < r {
+            let half = (r * r - h * h).sqrt() / speed;
+            vec![t0 - half, t0 + half]
+        } else {
+            Vec::new()
+        }
+    };
+    Some(match surface {
+        Surface::Plane(plane) => {
+            let n = Vector::from(plane.normal());
+            let (along, off) = (n.dot(d), n.dot(o - plane.origin()));
+            if along.abs() <= 1e-12 {
+                return Some(if off.abs() <= tol { None } else { Some(Vec::new()) });
+            }
+            Some(vec![-off / along])
+        }
+        Surface::Sphere(sphere) => {
+            let w = o - sphere.frame().origin();
+            let t0 = -w.dot(d);
+            Some(circle(t0, (w + d * t0).length(), sphere.radius(), 1.0))
+        }
+        Surface::Cylinder(cylinder) => {
+            let f = cylinder.frame();
+            let z = Vector::from(f.z());
+            let across = |v: Vector| v - z * v.dot(z);
+            let (w, dd) = (across(o - f.origin()), across(d));
+            let a = dd.length_squared();
+            if a <= 1e-24 {
+                return Some(if (w.length() - cylinder.radius()).abs() <= tol { None } else { Some(Vec::new()) });
+            }
+            let t0 = -w.dot(dd) / a;
+            Some(circle(t0, (w + dd * t0).length(), cylinder.radius(), a.sqrt()))
+        }
+        _ => return None,
+    })
+}
+
+/// The parameter range of `curve` to search for `surface`: its own where finite; along an
+/// unbounded line, across the extent of a bounded surface (or around its parametric
+/// centre).
+fn search_range(curve: &super::curve::Curve, surface: &Surface) -> (f64, f64) {
+    use super::curve::Curve;
+    let (first, last) = (curve.first_parameter(), curve.last_parameter());
+    let finite = |x: f64| x.abs() < 1e100;
+    if finite(first) && finite(last) {
+        return (first, last);
+    }
+    let Curve::Line(line) = curve else { return (first.max(-1e3), last.min(1e3)) };
+    let (u0, u1, v0, v1) = surface.bounds();
+    let along = |p: Point| (p - line.origin).dot(Vector::from(line.direction));
+    let (lo, hi) = if [u0, u1, v0, v1].into_iter().all(finite) {
+        let n = 16;
+        let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
+        for i in 0..=n {
+            for j in 0..=n {
+                let t = along(surface.point(u0 + (u1 - u0) * i as f64 / n as f64, v0 + (v1 - v0) * j as f64 / n as f64));
+                (lo, hi) = (lo.min(t), hi.max(t));
+            }
+        }
+        let margin = 0.05 * (hi - lo) + 1.0;
+        (lo - margin, hi + margin)
+    } else {
+        let mid = |a: f64, b: f64| if finite(a) && finite(b) { 0.5 * (a + b) } else if finite(a) { a } else if finite(b) { b } else { 0.0 };
+        let t = along(surface.point(mid(u0, u1), mid(v0, v1)));
+        (t - 1e4, t + 1e4)
+    };
+    (lo.max(first), hi.min(last))
+}
+
+/// Newton steps on curve(t) = surface(u, v) from `start` (keeping within the ranges).
+fn polish_curve_surface(curve: &super::curve::Curve, surface: &Surface, start: CurveSurfacePoint, lo: f64, hi: f64) -> CurveSurfacePoint {
+    let (u0, u1, v0, v1) = surface.bounds();
+    let clamp_u = |u: f64| if surface.is_u_periodic() { u } else { u.clamp(u0, u1) };
+    let clamp_v = |v: f64| if surface.is_v_periodic() { v } else { v.clamp(v0, v1) };
+    let (mut t, mut u, mut v) = (start.t, start.u, start.v);
+    let gap = |t: f64, u: f64, v: f64| curve.point(t).distance(surface.point(u, v));
+    let mut best = (gap(t, u, v), t, u, v);
+    for _ in 0..30 {
+        let (c, dc) = curve.d1(t);
+        let (p, du, dv) = surface.d1(u, v);
+        let r = p - c;
+        // dc·dt − du·du_ − dv·dv_ = r
+        let (a, b, e) = (dc, -du, -dv);
+        let det = a.dot(b.cross(e));
+        if det.abs() <= 1e-300 {
+            break;
+        }
+        let (x, y, z) = (r.dot(b.cross(e)) / det, a.dot(r.cross(e)) / det, a.dot(b.cross(r)) / det);
+        (t, u, v) = ((t + x).clamp(lo, hi), clamp_u(u + y), clamp_v(v + z));
+        let g = gap(t, u, v);
+        if g < best.0 {
+            best = (g, t, u, v);
+        } else if g >= best.0 {
+            break;
+        }
+    }
+    let (_, t, u, v) = best;
+    if best.0 < gap(start.t, start.u, start.v) {
+        CurveSurfacePoint { point: curve.point(t), t, u, v }
+    } else {
+        start
+    }
+}
+
+/// The point where two surfaces meet nearest `near`, in the plane through `near` across
+/// their curve of intersection there: Newton steps on `s1(u1, v1) = s2(u2, v2)` from the
+/// points nearest `near` (or the parameters `start`), with the parameters `[u1, v1, u2,
+/// v2]`. `None` where the steps do not converge (the surfaces do not meet near there, or
+/// meet tangentially).
+pub fn surfaces_point(s1: &Surface, s2: &Surface, near: Point, start: Option<[f64; 4]>) -> Option<(Point, [f64; 4])> {
+    let mut x = match start {
+        Some(x) => x,
+        None => {
+            let (u1, v1, _) = extrema::nearest_on_surface(near, s1, None);
+            let (u2, v2, _) = extrema::nearest_on_surface(near, s2, None);
+            [u1, v1, u2, v2]
+        }
+    };
+    let clamp = |s: &Surface, u: f64, v: f64| {
+        let (u0, u1, v0, v1) = s.bounds();
+        (if s.is_u_periodic() { u } else { u.clamp(u0, u1) }, if s.is_v_periodic() { v } else { v.clamp(v0, v1) })
+    };
+    // The direction of the curve, fixed at the start.
+    let (_, a1, b1) = s1.d1(x[0], x[1]);
+    let (_, a2, b2) = s2.d1(x[2], x[3]);
+    let along = a1.cross(b1).cross(a2.cross(b2));
+    if along.length() <= 1e-300 {
+        return None;
+    }
+    let along = along.normalized();
+    let scale = 1.0 + (near - Point::ORIGIN).length();
+    for _ in 0..40 {
+        let (p1, du1, dv1) = s1.d1(x[0], x[1]);
+        let (p2, du2, dv2) = s2.d1(x[2], x[3]);
+        let gap = p1 - p2;
+        let f = [gap.x, gap.y, gap.z, (p1 - near).dot(along)];
+        if f[..3].iter().all(|c| c.abs() <= 1e-14 * scale) && f[3].abs() <= 1e-12 * scale {
+            break;
+        }
+        let m = [
+            [du1.x, dv1.x, -du2.x, -dv2.x],
+            [du1.y, dv1.y, -du2.y, -dv2.y],
+            [du1.z, dv1.z, -du2.z, -dv2.z],
+            [du1.dot(along), dv1.dot(along), 0.0, 0.0],
+        ];
+        let step = solve4(m, [-f[0], -f[1], -f[2], -f[3]])?;
+        let (u1, v1) = clamp(s1, x[0] + step[0], x[1] + step[1]);
+        let (u2, v2) = clamp(s2, x[2] + step[2], x[3] + step[3]);
+        x = [u1, v1, u2, v2];
+    }
+    let (p1, p2) = (s1.point(x[0], x[1]), s2.point(x[2], x[3]));
+    (p1.distance(p2) <= 1e-9 * scale).then(|| (p1 + (p2 - p1) * 0.5, x))
+}
+
+/// The solution of a 4 × 4 linear system (Gaussian elimination with partial pivoting);
+/// `None` if singular.
+fn solve4(mut m: [[f64; 4]; 4], mut b: [f64; 4]) -> Option<[f64; 4]> {
+    let size = m.iter().flatten().fold(0.0f64, |a, x| a.max(x.abs()));
+    for col in 0..4 {
+        let pivot = (col..4).max_by(|&i, &j| m[i][col].abs().total_cmp(&m[j][col].abs()))?;
+        if m[pivot][col].abs() <= 1e-14 * size {
+            return None;
+        }
+        m.swap(col, pivot);
+        b.swap(col, pivot);
+        for row in col + 1..4 {
+            let k = m[row][col] / m[col][col];
+            for c in col..4 {
+                m[row][c] -= k * m[col][c];
+            }
+            b[row] -= k * b[col];
+        }
+    }
+    let mut x = [0.0; 4];
+    for row in (0..4).rev() {
+        let rest: f64 = (row + 1..4).map(|c| m[row][c] * x[c]).sum();
+        x[row] = (b[row] - rest) / m[row][row];
+    }
+    Some(x)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1050,6 +1477,95 @@ mod tests {
 
     fn cylinder(origin: Point, axis: Direction, radius: f64) -> Surface {
         Surface::Cylinder(Cylinder::new(Frame::from_z(origin, axis), radius))
+    }
+
+    #[test]
+    fn lines_and_curves_meeting_surfaces() {
+        use crate::geometry::curve::{Curve, TrimmedCurve};
+        use crate::geometry::surface::Torus;
+        let x_axis = Curve::Line(Line::new(Point::new(-10.0, 0.0, 0.0), Direction::X));
+        // A sphere and a cylinder in closed form.
+        let sphere = Surface::Sphere(Sphere::new(Frame::WORLD, 2.0));
+        let found = curve_surface(&x_axis, &sphere, 1e-7);
+        let xs: Vec<f64> = found.points.iter().map(|p| p.point.x).collect();
+        assert_eq!(xs.len(), 2);
+        assert!((xs[0] + 2.0).abs() < 1e-12 && (xs[1] - 2.0).abs() < 1e-12, "{xs:?}");
+        let along = cylinder(Point::ORIGIN, Direction::X, 1.0);
+        let on = Curve::Line(Line::new(Point::new(0.0, 1.0, 0.0), Direction::X));
+        assert_eq!(curve_surface(&on, &along, 1e-7).segments.len(), 1);
+        // A torus (R 3, r 1) four times along a diameter, followed in steps; a bounded
+        // piece of the line only twice.
+        let torus = Surface::Torus(Torus::new(Frame::WORLD, 3.0, 1.0));
+        let found = curve_surface(&x_axis, &torus, 1e-7);
+        let xs: Vec<f64> = found.points.iter().map(|p| p.point.x).collect();
+        assert_eq!(xs.len(), 4, "{xs:?}");
+        for (x, want) in xs.iter().zip([-4.0, -2.0, 2.0, 4.0]) {
+            assert!((x - want).abs() < 1e-9, "{xs:?}");
+        }
+        for p in &found.points {
+            assert!(torus.point(p.u, p.v).distance(p.point) < 1e-9);
+        }
+        let piece = Curve::Trimmed(TrimmedCurve::new(x_axis.clone(), 5.0, 9.0));
+        assert_eq!(curve_surface(&piece, &torus, 1e-7).points.len(), 2);
+    }
+
+    #[test]
+    fn a_torus_meets_planes_and_coaxial_surfaces_in_circles() {
+        use crate::geometry::surface::Torus;
+        let torus = Surface::Torus(Torus::new(Frame::WORLD, 10.0, 2.0));
+        let radii = |q: QuadricIntersection| match q {
+            QuadricIntersection::Circles(c) => {
+                let mut r: Vec<f64> = c.iter().map(|c| c.radius()).collect();
+                r.sort_by(f64::total_cmp);
+                r
+            }
+            other => panic!("{other:?}"),
+        };
+        // Across the axis at height 1: radii 10 ± √3.
+        let across = Surface::Plane(Plane::new(Point::new(0.0, 0.0, 1.0), Direction::Z));
+        let r = radii(quadrics(&torus, &across, 1e-7));
+        assert!((r[0] - (10.0 - 3f64.sqrt())).abs() < 1e-12 && (r[1] - (10.0 + 3f64.sqrt())).abs() < 1e-12, "{r:?}");
+        // Through the axis: the two meridian circles.
+        let through = Surface::Plane(Plane::new(Point::ORIGIN, Direction::Y));
+        let QuadricIntersection::Circles(c) = quadrics(&torus, &through, 1e-7) else { panic!() };
+        assert_eq!(c.len(), 2);
+        for c in &c {
+            assert!((c.radius() - 2.0).abs() < 1e-12 && (c.center().distance(Point::ORIGIN) - 10.0).abs() < 1e-12);
+        }
+        // A coaxial cylinder of radius 11 at heights ±√3, a sphere about the centre.
+        let r = radii(quadrics(&cylinder(Point::ORIGIN, Direction::Z, 11.0), &torus, 1e-7));
+        assert!(r.len() == 2 && r.iter().all(|r| (r - 11.0).abs() < 1e-12));
+        let ball = Surface::Sphere(Sphere::new(Frame::WORLD, 10.0));
+        let QuadricIntersection::Circles(c) = quadrics(&torus, &ball, 1e-7) else { panic!() };
+        for c in &c {
+            for i in 0..8 {
+                let p = c.point(i as f64);
+                assert!(distance(&torus, p) < 1e-9 && distance(&ball, p) < 1e-9);
+            }
+        }
+        // Off the axis: not in closed form.
+        let off = cylinder(Point::new(1.0, 0.0, 0.0), Direction::Z, 11.0);
+        assert_eq!(quadrics(&torus, &off, 1e-7), QuadricIntersection::NotAnalytic);
+    }
+
+    #[test]
+    fn an_extrusion_meets_a_plane_along_lines_and_points_lie_on_both_surfaces() {
+        use crate::geometry::curve::Curve;
+        use crate::geometry::surface::ExtrusionSurface;
+        let arc = Curve::Circle(Circle::new(Frame::WORLD, 5.0));
+        let tube = ExtrusionSurface::new(arc, Direction::Z);
+        let plane = Surface::Plane(Plane::new(Point::new(3.0, 0.0, 0.0), Direction::X));
+        let lines = extrusion_lines(&tube, &plane, 1e-7).unwrap();
+        assert_eq!(lines.len(), 2);
+        for l in &lines {
+            assert!((l.origin.x - 3.0).abs() < 1e-9 && (l.origin.y.abs() - 4.0).abs() < 1e-9);
+        }
+        let across = Surface::Plane(Plane::new(Point::ORIGIN, Direction::Z));
+        assert!(extrusion_lines(&tube, &across, 1e-7).is_none());
+        // Two crossing cylinders: a point near their curve moved onto it.
+        let (a, b) = (cylinder(Point::ORIGIN, Direction::Z, 2.0), cylinder(Point::ORIGIN, Direction::X, 2.0));
+        let (p, _) = surfaces_point(&a, &b, Point::new(1.0, 1.5, 1.4), None).unwrap();
+        assert!(distance(&a, p) < 1e-12 && distance(&b, p) < 1e-12, "{p:?}");
     }
 
     #[test]

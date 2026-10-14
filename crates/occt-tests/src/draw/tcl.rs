@@ -51,7 +51,7 @@ const IGNORED: &[&str] = &[
     "vaxo", "vfront", "vright", "vleft", "vback", "vbottom", "vremove", "verase", "vzoom", "vrotate", "vsetcolor", "vaspects",
     "vcamera", "vviewparams", "vrenderparams", "vlight", "vdrawparray", "vtrihedron", "vzbufftrihedron", "vfps", "vglinfo",
     "vcaps", "vsetmaterial", "vsettransparency", "vshowfaceboundary", "vdefaults", "vclose", "vraytrace", "vupdate", "vredraw",
-    "vexport", "dtyp", "dump", "disp", "pick", "checkdisplay", "tclean_display", "checktrinfo_display", "chkfi", "dhistory",
+    "vexport", "dtyp", "disp", "pick", "checkdisplay", "tclean_display", "checktrinfo_display", "chkfi", "dhistory",
     "dfreemem", "dmalloc", "dputs", "dsetenv", "testgrid", "help",
     // (Boolean operations' history, and fillets' tolerances: kentron keeps no history and
     // uses its own tolerances.)
@@ -173,6 +173,24 @@ fn extra(name: &str, interp: &mut Interp<Session>, argv: &[Value]) -> Option<Mol
             }
             let text = out.join("\n");
             session.log.extend(out);
+            molt_ok!(text)
+        }
+        "dump" => {
+            // DRAW's `dump name ...`: points and curves as OCCT prints them (in part).
+            let session = interp.context_mut();
+            let mut text = String::new();
+            for n in &args {
+                use super::DrawObject as O;
+                let Some(object) = session.draw.get(n) else { continue };
+                text += &format!("\n\n*********** Dump of {n} *************\n");
+                text += &match object {
+                    O::Point(p) => format!("Point : {:.15e}, {:.15e}, {:.15e}\n", p.x, p.y, p.z),
+                    O::Point2(p) => format!("Point 2d : {:.15e}, {:.15e}\n", p.x, p.y),
+                    O::Curve(c) => describe_curve(c),
+                    O::Number(x) => format!("{x}\n"),
+                    other => format!("{other:?}\n"),
+                };
+            }
             molt_ok!(text)
         }
         "boptions" => {
@@ -690,4 +708,16 @@ pub fn run_script(tests: &Path, group: &str, grid: &str, case: &str) -> Outcome 
         }
     }
     if failures.is_empty() { Outcome::Passed } else { Outcome::Failed(failures) }
+}
+
+/// A curve as DRAW's `dump` begins describing it.
+fn describe_curve(c: &kentron::geometry::curve::Curve) -> String {
+    use kentron::geometry::curve::Curve;
+    match c {
+        Curve::Trimmed(t) => {
+            let (a, b) = t.range();
+            format!("Trimmed curve\nParameters : {a} {b}\nBasis curve :\n{}", describe_curve(t.basis()))
+        }
+        other => format!("{}\n", format!("{other:?}").split(['(', ' ', '{']).next().unwrap_or("Curve")),
+    }
 }

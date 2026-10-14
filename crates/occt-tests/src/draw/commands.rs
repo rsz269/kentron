@@ -889,7 +889,7 @@ impl Draw {
     pub fn bfillds(&mut self, _args: &[&str]) -> DrawResult {
         // `bfillds [-t]`: the arguments are intersected when a result is asked for.
         if self.fuse_objects.is_empty() && self.fuse_tools.is_empty() {
-            return Err(DrawError::Failed("bfillds: no arguments".into()));
+            return Ok("No objects to process\n".into());
         }
         Ok(String::new())
     }
@@ -1237,7 +1237,23 @@ impl Draw {
     ///
     /// Example: `bounds c2d2 u1 u2`
     pub fn bounds(&mut self, args: &[&str]) -> DrawResult {
-        self.not_implemented("bounds", args)
+        // `bounds curve u1 u2` or `bounds surface u1 u2 v1 v2`: the parameter ranges, into
+        // variables (infinite ones as ±2e100, as OCCT's).
+        need(args, 3, "bounds curve|surface u1 u2 [v1 v2]")?;
+        let finite = |x: f64| x.clamp(-2e100, 2e100);
+        let values = match self.get(args[0]).cloned() {
+            Some(DrawObject::Curve(c)) => vec![c.first_parameter(), c.last_parameter()],
+            Some(DrawObject::Curve2(c)) => vec![c.first_parameter(), c.last_parameter()],
+            Some(DrawObject::Surface(s)) => {
+                let (u0, u1, v0, v1) = kentron::geometry::ParametricSurface::bounds(&s);
+                vec![u0, u1, v0, v1]
+            }
+            _ => return Err(DrawError::Failed(format!("bounds: {} is not a curve or surface", args[0]))),
+        };
+        for (name, value) in args[1..].iter().zip(values) {
+            self.set(name, DrawObject::Number(finite(value)));
+        }
+        Ok(String::new())
     }
     /// DRAW command `box`: 2511 uses in 1659 converted scripts.
     ///
@@ -2893,35 +2909,102 @@ impl Draw {
     ///
     /// Example: `intersect result s1 s2`
     pub fn intersect(&mut self, args: &[&str]) -> DrawResult {
-        // `intersect name surface1 surface2 [tolerance]`: the curves where the surfaces meet
-        // (over their natural domains, unbounded ones within a large box), named `name` if
-        // one, else `name_1`, `name_2`, ...
-        need(args, 3, "intersect name surface1 surface2 [tolerance]")?;
+        // `intersect name curve|surface surface [u1 v1 u2 v2] [bounds of both] [tolerance]`:
+        // the curves and points where they meet. Two surfaces' curves are named `name` if
+        // one, else `name_1`, `name_2`, ..., their points `name_p_1`, ...; a curve's segments
+        // and points on a surface `name` if one, else `name_1`, ... Returns the names.
+        use kentron::geometry::intersect as isect;
+        need(args, 3, "intersect name curve|surface surface [u1 v1 u2 v2] [bounds] [tolerance]")?;
+        let n = args.len();
+        if !matches!(n, 3 | 4 | 7 | 8 | 11 | 12 | 15 | 16) {
+            return Err(DrawError::Failed("intersect: incorrect number of arguments".into()));
+        }
+        let tolerance = if n % 2 == 0 { self.number(args[n - 1])? } else { 1e-7 };
+        let name = args[0];
+        let numbered = |count: usize, k: usize| if count == 1 { name.to_string() } else { format!("{name}_{}", k + 1) };
+        if let Some(DrawObject::Curve(curve)) = self.get(args[1]).cloned() {
+            let surface = self.surface_var(args[2])?;
+            let found = isect::curve_surface(&curve, &surface, tolerance);
+            let mut objects: Vec<DrawObject> = found.segments.iter().map(|&(a, b)| DrawObject::Curve(Curve::Trimmed(TrimmedCurve::new(curve.clone(), a, b)))).collect();
+            objects.extend(found.points.iter().map(|p| DrawObject::Point(p.point)));
+            let mut names = Vec::new();
+            for (k, object) in objects.iter().enumerate() {
+                names.push(numbered(objects.len(), k));
+                self.set(names.last().unwrap(), object.clone());
+            }
+            return Ok(names.join(" "));
+        }
+        let (s1, s2) = (self.surface_var(args[1])?, self.surface_var(args[2])?);
+        let bounds = match n {
+            11 | 12 => Some(self.numbers(&args[3..11])?),
+            15 | 16 => Some(self.numbers(&args[7..15])?),
+            _ => None,
+        };
+        let (curves, points) = match bounds {
+            None => match elementary_intersection(&s1, &s2, tolerance) {
+                Some(found) => found,
+                None => (self.intersect_by_section(&s1, &s2, None)?, Vec::new()),
+            },
+            Some(b) => (self.intersect_by_section(&s1, &s2, Some(&b))?, Vec::new()),
+        };
+        let mut names = Vec::new();
+        for (k, curve) in curves.iter().enumerate() {
+            names.push(numbered(curves.len(), k));
+            self.set(names.last().unwrap(), DrawObject::Curve(curve.clone()));
+        }
+        for (k, p) in points.iter().enumerate() {
+            names.push(format!("{name}_p_{}", k + 1));
+            self.set(names.last().unwrap(), DrawObject::Point(*p));
+        }
+        Ok(names.join(" "))
+    }
+
+    /// The curves where two surfaces meet, as a section of faces on their domains (or on
+    /// `bounds`, both surfaces' `u1 u2 v1 v2`), unbounded ones limited to a large box;
+    /// fails if a curve runs out to it (OCCT finds no intersection then).
+    fn intersect_by_section(&mut self, s1: &Surface, s2: &Surface, bounds: Option<&[f64]>) -> DrawResult<Vec<Curve>> {
         const FAR: f64 = 1e4;
         let mut faces = Vec::new();
-        for name in &args[1..3] {
-            let s = self.surface_var(name)?;
-            let (mut u0, mut u1, mut v0, mut v1) = kentron::geometry::ParametricSurface::bounds(&s);
-            (u0, u1, v0, v1) = (u0.max(-FAR), u1.min(FAR), v0.max(-FAR), v1.min(FAR));
-            faces.push(make::face_on_domain(&mut self.model, s, u0, u1, v0, v1)?);
+        for (k, s) in [s1, s2].into_iter().enumerate() {
+            let (mut u0, mut u1, mut v0, mut v1) = kentron::geometry::ParametricSurface::bounds(s);
+            if let Some(b) = bounds {
+                (u0, u1, v0, v1) = (b[4 * k], b[4 * k + 1], b[4 * k + 2], b[4 * k + 3]);
+            }
+            let clamp = |a: f64, b: f64| if a.abs() > 1e100 || b.abs() > 1e100 { (a.max(-FAR), b.min(FAR)) } else { (a, b) };
+            ((u0, u1), (v0, v1)) = (clamp(u0, u1), clamp(v0, v1));
+            faces.push(make::face_on_domain(&mut self.model, s.clone(), u0, u1, v0, v1)?);
         }
         let section = boolean::section(&mut self.model, faces[0], faces[1])?;
         let edges = self.model.unique_subshapes(section, NodeKind::Edge);
-        let chains = chain_edges(&self.model, &edges);
-        // A curve running out to the box stands for an unbounded one, which (as OCCT) fails.
         for &e in &edges {
             if let Some((c, first, last)) = self.model.edge_curve(e) {
-                if [first, last].iter().any(|&t| { let p = c.point(t); [p.x, p.y, p.z].iter().any(|x: &f64| x.abs() > FAR / 2.0) }) {
+                if [first, last].iter().any(|&t| {
+                    let p = c.point(t);
+                    [p.x, p.y, p.z].iter().any(|x: &f64| x.abs() > FAR / 2.0)
+                }) {
                     return Err(DrawError::Failed("intersect: an intersection curve is unbounded".into()));
                 }
             }
         }
-        for (k, chain) in chains.iter().enumerate() {
-            let curve = chain_curve(&self.model, chain)?;
-            let name = if chains.len() == 1 { args[0].to_string() } else { format!("{}_{}", args[0], k + 1) };
-            self.set(&name, DrawObject::Curve(curve));
+        chain_edges(&self.model, &edges).iter().map(|chain| self.fit_on_surfaces(chain, s1, s2)).collect()
+    }
+
+    /// A curve through a chain of section edges, its points moved exactly onto both
+    /// surfaces, and more of them where it bends.
+    fn fit_on_surfaces(&self, chain: &[Shape], s1: &Surface, s2: &Surface) -> DrawResult<Curve> {
+        let mut points: Vec<Point> = Vec::new();
+        for &e in chain {
+            let Some((c, first, last)) = self.model.edge_curve(e) else { continue };
+            let (from, to) = if e.orientation == Orientation::Reversed { (last, first) } else { (first, last) };
+            let n = 32;
+            for i in 0..=n {
+                points.push(c.point(from + (to - from) * i as f64 / n as f64));
+            }
         }
-        Ok(String::new())
+        match fit_through_on_surfaces(&points, s1, s2) {
+            Some(curve) => Ok(curve),
+            None => chain_curve(&self.model, chain),
+        }
     }
     /// DRAW command `invert`: 8 uses in 8 converted scripts.
     ///
@@ -4693,9 +4776,15 @@ impl Draw {
     pub fn trimu(&mut self, args: &[&str]) -> DrawResult {
         // `trimu name surface u1 u2`: the surface trimmed in u only.
         need(args, 4, "trimu name surface u1 u2")?;
+        // (Of an already trimmed surface, its basis keeping the other direction's trim, as
+        // OCCT's.)
         let surface = self.surface_var(args[1])?;
         let (u1, u2) = (self.number(args[2])?, self.number(args[3])?);
         let (_, _, v1, v2) = kentron::geometry::ParametricSurface::bounds(&surface);
+        let surface = match surface {
+            Surface::Trimmed(t) => t.basis().clone(),
+            s => s,
+        };
         self.set(args[0], DrawObject::Surface(Surface::Trimmed(TrimmedSurface::new(surface, u1, u2, v1, v2))));
         Ok(String::new())
     }
@@ -4705,9 +4794,15 @@ impl Draw {
     pub fn trimv(&mut self, args: &[&str]) -> DrawResult {
         // `trimv name surface v1 v2`: the surface trimmed in v only.
         need(args, 4, "trimv name surface v1 v2")?;
+        // (Of an already trimmed surface, its basis keeping the other direction's trim, as
+        // OCCT's.)
         let surface = self.surface_var(args[1])?;
         let (v1, v2) = (self.number(args[2])?, self.number(args[3])?);
         let (u1, u2, _, _) = kentron::geometry::ParametricSurface::bounds(&surface);
+        let surface = match surface {
+            Surface::Trimmed(t) => t.basis().clone(),
+            s => s,
+        };
         self.set(args[0], DrawObject::Surface(Surface::Trimmed(TrimmedSurface::new(surface, u1, u2, v1, v2))));
         Ok(String::new())
     }
@@ -4957,7 +5052,32 @@ impl Draw {
     ///
     /// Example: `xdistcs ii s1 u1 u2 10 2.0e-7`
     pub fn xdistcs(&mut self, args: &[&str]) -> DrawResult {
-        self.not_implemented("xdistcs", args)
+        // `xdistcs curve surface t1 t2 count [tolerance [warning]]`: the distances to the
+        // surface from points along the curve, an error where above the tolerance.
+        need(args, 5, "xdistcs curve surface t1 t2 count [tolerance [warning]]")?;
+        let curve = self.curve_var(args[0])?;
+        let surface = self.surface_var(args[1])?;
+        let (t1, t2) = (self.number(args[2])?, self.number(args[3])?);
+        let count = (self.number(args[4])? as usize).max(2);
+        let error = if args.len() > 5 { self.number(args[5])? } else { f64::INFINITY };
+        let warning = if args.len() > 6 { self.number(args[6])? } else { f64::INFINITY };
+        let mut out = String::new();
+        let (mut max, mut at) = (0.0f64, 0.0);
+        for i in 0..count {
+            let t = if i + 1 == count { t2 } else { t1 + (t2 - t1) * i as f64 / (count - 1) as f64 };
+            let d = kentron::geometry::extrema::nearest_on_surface(curve.point(t), &surface, None).2;
+            if d > error {
+                out += &format!("Error in {}:", args[0]);
+            } else if d > warning {
+                out += "Attention (critical value of tolerance) :";
+            }
+            out += &format!(" T={}\tD={}\n", format_real(t), format_real(d));
+            if d > max {
+                (max, at) = (d, t);
+            }
+        }
+        out += &format!("Max distance = {}\nParam = {}\n", format_real(max), format_real(at));
+        Ok(out)
     }
 }
 
@@ -5220,5 +5340,91 @@ fn chain_curve(model: &kentron::topology::Model, chain: &[Shape]) -> DrawResult<
             samples.push(c.point(from + (to - from) * i as f64 / n as f64));
         }
     }
+    samples.dedup_by(|a, b| a.distance(*b) <= 1e-9);
     Ok(Curve::BSpline(kentron::geometry::fit::interpolate(&samples, false, 1e-12)?))
+}
+
+/// Where two surfaces meet in closed form (elementary ones, an extrusion along lines, or a
+/// cylinder or cone and a quadric along branches made B-splines): the curves and isolated
+/// points; `None` if not.
+fn elementary_intersection(s1: &Surface, s2: &Surface, tolerance: f64) -> Option<(Vec<Curve>, Vec<Point>)> {
+    use kentron::geometry::intersect::{extrusion_lines, quadrics, ruled_quadric, QuadricIntersection as Q};
+    let lines = match (s1, s2) {
+        (Surface::Extrusion(e), other) | (other, Surface::Extrusion(e)) => extrusion_lines(e, other, tolerance.max(1e-7)),
+        _ => None,
+    };
+    if let Some(lines) = lines {
+        return Some((lines.into_iter().map(Curve::Line).collect(), Vec::new()));
+    }
+    let elementary = |s: &Surface| matches!(s, Surface::Plane(_) | Surface::Cylinder(_) | Surface::Cone(_) | Surface::Sphere(_) | Surface::Torus(_));
+    if !elementary(s1) || !elementary(s2) {
+        return None;
+    }
+    let tolerance = tolerance.max(1e-7);
+    Some(match quadrics(s1, s2, tolerance) {
+        // (Coinciding surfaces are left to the general method, failing as OCCT's.)
+        Q::Same => return None,
+        Q::Empty => (Vec::new(), Vec::new()),
+        Q::Points(p) => (Vec::new(), p),
+        Q::Lines(c) => (c.into_iter().map(Curve::Line).collect(), Vec::new()),
+        Q::Circles(c) => (c.into_iter().map(Curve::Circle).collect(), Vec::new()),
+        Q::Ellipses(c) => (c.into_iter().map(Curve::Ellipse).collect(), Vec::new()),
+        Q::Parabolas(c) => (c.into_iter().map(Curve::Parabola).collect(), Vec::new()),
+        Q::Hyperbolas(c) => (c.into_iter().map(Curve::Hyperbola).collect(), Vec::new()),
+        Q::NotAnalytic => {
+            let branches = ruled_quadric(s1, s2, tolerance, None).or_else(|| ruled_quadric(s2, s1, tolerance, None))?;
+            let mut curves = Vec::new();
+            for branch in &branches.curves {
+                let (a, b) = branch.domain();
+                let n = 256;
+                let points: Vec<Point> = (0..=n).map(|i| branch.point_clamped(a + (b - a) * i as f64 / n as f64)).collect();
+                curves.push(fit_through_on_surfaces(&points, s1, s2)?);
+            }
+            (curves, Vec::new())
+        }
+    })
+}
+
+/// A curve through points along where two surfaces meet, moved exactly onto both, with
+/// more of them where it bends. `None` for fewer than two distinct points.
+fn fit_through_on_surfaces(points: &[Point], s1: &Surface, s2: &Surface) -> Option<Curve> {
+    use kentron::geometry::intersect::surfaces_point;
+    // (On the untrimmed surfaces: a curve's ends are on their trimming boundaries.)
+    let untrimmed = |s: &Surface| match s {
+        Surface::Trimmed(t) => t.basis().clone(),
+        s => s.clone(),
+    };
+    let (s1, s2) = (&untrimmed(s1), &untrimmed(s2));
+    let onto = |p: Point| surfaces_point(s1, s2, p, None).map(|(q, _)| q).filter(|q| q.distance(p) <= 1e-2 * (1.0 + (p - Point::ORIGIN).length()));
+    let mut refined: Vec<Point> = points.iter().map(|&p| onto(p).unwrap_or(p)).collect();
+    refined.dedup_by(|a, b| a.distance(*b) <= 1e-9);
+    // Halve the steps where the curve turns by more than about a degree, or a step is
+    // long for the curve.
+    let length: f64 = refined.windows(2).map(|w| w[0].distance(w[1])).sum();
+    for _ in 0..6 {
+        let mut next = vec![refined[0]];
+        let mut split = false;
+        for i in 1..refined.len() {
+            let (a, b) = (refined[i - 1], refined[i]);
+            let turn = |p: Point, q: Point, r: Point| (q - p).angle(r - q);
+            let bent = (i >= 2 && turn(refined[i - 2], a, b) > 0.02) || (i + 1 < refined.len() && turn(a, b, refined[i + 1]) > 0.02);
+            if (bent || a.distance(b) > length / 128.0) && refined.len() < 4096 {
+                if let Some(m) = onto(a + (b - a) * 0.5) {
+                    if m.distance(a) > 1e-9 && m.distance(b) > 1e-9 {
+                        next.push(m);
+                        split = true;
+                    }
+                }
+            }
+            next.push(b);
+        }
+        refined = next;
+        if !split {
+            break;
+        }
+    }
+    if refined.len() < 2 {
+        return None;
+    }
+    kentron::geometry::fit::interpolate(&refined, false, 1e-12).ok().map(Curve::BSpline)
 }

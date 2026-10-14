@@ -689,24 +689,21 @@ fn bug30932() -> DrawResult<()> {
 
 /// `tests/bugs/moddata_3/bug31402_1`
 #[test]
-#[should_panic]
-fn bug31402_1() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.restore(&[data_file("bug31402.brep").as_str(), "face"])?;
-        d.mksurface(&["s", "face"])?;
-        d.segsur(&["s", "0.0,", "1.0,", "0.49999999999999988898,", "0.66666666666666662966"])?;
-        d.bounds(&["s", "u1", "u2", "v1", "v2"])?;
-        let t1 = d.dval(&["u1"])?;
-        d.checkreal(&["U1", t1.as_str(), "0", "0.001", "0.0001"])?;
-        let t2 = d.dval(&["u2"])?;
-        d.checkreal(&["U2", t2.as_str(), "1", "0.001", "0.0001"])?;
-        let t3 = d.dval(&["v1"])?;
-        d.checkreal(&["V1", t3.as_str(), "0.5", "0.001", "0.0001"])?;
-        let t4 = d.dval(&["v2"])?;
-        d.checkreal(&["V2", t4.as_str(), "0.66666667", "0.001", "0.0001"])?;
-        Ok(())
-    })
+fn bug31402_1() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.restore(&[data_file("bug31402.brep").as_str(), "face"])?;
+    d.mksurface(&["s", "face"])?;
+    d.segsur(&["s", "0.0,", "1.0,", "0.49999999999999988898,", "0.66666666666666662966"])?;
+    d.bounds(&["s", "u1", "u2", "v1", "v2"])?;
+    let t1 = d.dval(&["u1"])?;
+    d.checkreal(&["U1", t1.as_str(), "0", "0.001", "0.0001"])?;
+    let t2 = d.dval(&["u2"])?;
+    d.checkreal(&["U2", t2.as_str(), "1", "0.001", "0.0001"])?;
+    let t3 = d.dval(&["v1"])?;
+    d.checkreal(&["V1", t3.as_str(), "0.5", "0.001", "0.0001"])?;
+    let t4 = d.dval(&["v2"])?;
+    d.checkreal(&["V2", t4.as_str(), "0.66666667", "0.001", "0.0001"])?;
+    Ok(())
 }
 
 /// `tests/bugs/moddata_3/bug31402_2`

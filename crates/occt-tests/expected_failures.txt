@@ -394,7 +394,6 @@ tests/bugs/modalg_2/bug22770_3
 tests/bugs/modalg_2/bug22770_4
 tests/bugs/modalg_2/bug22770_5
 tests/bugs/modalg_2/bug22770_7
-tests/bugs/modalg_2/bug22798_1
 tests/bugs/modalg_2/bug22818_1
 tests/bugs/modalg_2/bug22818_2
 tests/bugs/modalg_2/bug22864_3
@@ -567,7 +566,6 @@ tests/bugs/modalg_5/bug23706_59
 tests/bugs/modalg_5/bug23706_6
 tests/bugs/modalg_5/bug23706_60
 tests/bugs/modalg_5/bug23706_61
-tests/bugs/modalg_5/bug23706_8
 tests/bugs/modalg_5/bug23706_9
 tests/bugs/modalg_5/bug23952_1
 tests/bugs/modalg_5/bug23952_2
@@ -644,7 +642,6 @@ tests/bugs/modalg_6/bug23585
 tests/bugs/modalg_6/bug24097
 tests/bugs/modalg_6/bug24161
 tests/bugs/modalg_6/bug24803
-tests/bugs/modalg_6/bug24890
 tests/bugs/modalg_6/bug24932
 tests/bugs/modalg_6/bug25055
 tests/bugs/modalg_6/bug25102
@@ -652,7 +649,6 @@ tests/bugs/modalg_6/bug25152
 tests/bugs/modalg_6/bug25214
 tests/bugs/modalg_6/bug25880
 tests/bugs/modalg_6/bug25908
-tests/bugs/modalg_6/bug25957_1
 tests/bugs/modalg_6/bug26016
 tests/bugs/modalg_6/bug26063
 tests/bugs/modalg_6/bug26075
@@ -973,7 +969,6 @@ tests/bugs/moddata_1/buc60960
 tests/bugs/moddata_1/bug105
 tests/bugs/moddata_1/bug107
 tests/bugs/moddata_1/bug119
-tests/bugs/moddata_1/bug130
 tests/bugs/moddata_1/bug14782
 tests/bugs/moddata_1/bug16
 tests/bugs/moddata_1/bug163
@@ -1040,11 +1035,9 @@ tests/bugs/moddata_2/bug75_1
 tests/bugs/moddata_2/bug75_2
 tests/bugs/moddata_2/bug8169
 tests/bugs/moddata_2/bug9303
-tests/bugs/moddata_2/bug9303_1
 tests/bugs/moddata_2/bug935_1
 tests/bugs/moddata_2/bug935_2
 tests/bugs/moddata_2/bug943_1
-tests/bugs/moddata_2/bug943_2
 tests/bugs/moddata_3/buc60811
 tests/bugs/moddata_3/bug23025
 tests/bugs/moddata_3/bug23683
@@ -1065,7 +1058,6 @@ tests/bugs/moddata_3/bug25892_01
 tests/bugs/moddata_3/bug25892_02
 tests/bugs/moddata_3/bug26560
 tests/bugs/moddata_3/bug26837
-tests/bugs/moddata_3/bug27059
 tests/bugs/moddata_3/bug27457
 tests/bugs/moddata_3/bug27534
 tests/bugs/moddata_3/bug27565
@@ -1081,7 +1073,6 @@ tests/bugs/moddata_3/bug31136_1
 tests/bugs/moddata_3/bug31136_2
 tests/bugs/moddata_3/bug31136_3
 tests/bugs/moddata_3/bug31136_4
-tests/bugs/moddata_3/bug31402_1
 tests/bugs/moddata_3/bug31402_2
 tests/bugs/moddata_3/bug31587_1
 tests/bugs/moddata_3/bug31587_2
@@ -1345,16 +1336,10 @@ tests/lowalgos/intss/bug139
 tests/lowalgos/intss/bug20766
 tests/lowalgos/intss/bug21494_1
 tests/lowalgos/intss/bug21494_2
-tests/lowalgos/intss/bug21750
 tests/lowalgos/intss/bug22766
-tests/lowalgos/intss/bug23166
 tests/lowalgos/intss/bug23176
-tests/lowalgos/intss/bug23177_1
-tests/lowalgos/intss/bug23177_2
 tests/lowalgos/intss/bug23178
 tests/lowalgos/intss/bug23948_1
-tests/lowalgos/intss/bug23948_2
-tests/lowalgos/intss/bug23981
 tests/lowalgos/intss/bug24648
 tests/lowalgos/intss/bug24772
 tests/lowalgos/intss/bug25890
@@ -1377,7 +1362,6 @@ tests/lowalgos/intss/bug27780
 tests/lowalgos/intss/bug27937_2
 tests/lowalgos/intss/bug28222_1
 tests/lowalgos/intss/bug28222_2
-tests/lowalgos/intss/bug28222_3
 tests/lowalgos/intss/bug29807_i1001
 tests/lowalgos/intss/bug29807_i1002
 tests/lowalgos/intss/bug29807_i1003
@@ -1413,13 +1397,7 @@ tests/lowalgos/intss/bug31552
 tests/lowalgos/intss/bug32701
 tests/lowalgos/intss/bug32849
 tests/lowalgos/intss/bug333
-tests/lowalgos/intss/bug370
-tests/lowalgos/intss/bug504
-tests/lowalgos/intss/bug513
-tests/lowalgos/intss/bug531
 tests/lowalgos/intss/bug565
-tests/lowalgos/intss/bug567_2
-tests/lowalgos/intss/bug6474
 tests/mkface/edges_to_faces/A1
 tests/mkface/edges_to_faces/A2
 tests/mkface/edges_to_faces/A3
