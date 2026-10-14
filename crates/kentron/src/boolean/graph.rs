@@ -115,6 +115,8 @@ pub(super) struct Edge {
     pub reversed: bool,
     /// The operand's edge it is (unplaced), which the result may reuse whole.
     pub origin: Option<EdgeId>,
+    /// The operand's edge it is, however placed.
+    pub source: Option<EdgeId>,
     /// Its samples and chords for finding crossings (made on first use; the curve and its
     /// range do not change).
     pub chords: std::sync::OnceLock<Chords>,
@@ -159,7 +161,7 @@ impl Edge {
     }
 
     pub fn with_box(curve: Option<Curve>, first: f64, last: f64, start: usize, end: usize, bbox: (Point, Point), operand: Option<usize>) -> Edge {
-        Edge { curve, first, last, start, end, paves: Vec::new(), bbox, operand, free: false, container: None, reversed: false, origin: None, chords: Default::default() }
+        Edge { curve, first, last, start, end, paves: Vec::new(), bbox, operand, free: false, container: None, reversed: false, origin: None, source: None, chords: Default::default() }
     }
 
     /// The box of the curve's samples (the start point for a degenerate edge).
@@ -226,6 +228,8 @@ pub(super) struct Face {
     /// The operand's face it is (unplaced, with its own surface), which the result may reuse
     /// where it keeps the face whole.
     pub origin: Option<FaceId>,
+    /// The operand's face whose regions (when untouched) it may keep with it, however placed.
+    pub regions_key: Option<FaceId>,
     /// Its place among the operands' faces (far ones included).
     pub seq: usize,
     /// How far its edges may stray from its surface (their tolerances, read from a file).
@@ -405,6 +409,8 @@ pub(super) struct Graph {
     containers: usize,
     /// Trees over the operands' faces and edges, built once both are added.
     index: std::sync::OnceLock<Index>,
+    /// Per operand: its faces' indices, ascending (found once).
+    operand_faces: [std::sync::OnceLock<Vec<usize>>; 2],
 }
 
 /// Bounding volume hierarchies over each operand's faces and edges (those of the operands,
@@ -487,6 +493,13 @@ impl Index {
 }
 
 impl Graph {
+    /// The indices of `operand`'s faces, ascending.
+    pub fn faces_of(&self, operand: usize) -> &[usize] {
+        self.operand_faces[operand].get_or_init(|| (0..self.faces.len()).filter(|&i| self.faces[i].operand == operand).collect())
+    }
+}
+
+impl Graph {
     /// The trees over the operands' faces and edges (built on first use, once both operands
     /// are added).
     pub fn index(&self) -> &Index {
@@ -500,7 +513,7 @@ impl Graph {
             let edge_box = |i: usize| self.edges[i].bbox;
             let far = |k: usize| -> Vec<usize> { (0..self.far.len()).filter(|&i| self.far[i].operand == k).collect() };
             let far_ids = [far(0), far(1)];
-            let far_box = |i: usize| self.far[i].data.sample.bbox;
+            let far_box = |i: usize| self.far[i].placed(self.far[i].data.sample.bbox);
             Index {
                 faces: [tree(&face_ids[0], &face_box), tree(&face_ids[1], &face_box)],
                 edges: [tree(&edge_ids[0], &edge_box), tree(&edge_ids[1], &edge_box)],
@@ -566,15 +579,16 @@ impl Graph {
         let mut known: HashMap<NodeId, Vec<(Transform, usize)>> = HashMap::default();
         let mut on_faces = Seen::default();
         for face in model.explore(shape, NodeKind::Face) {
-            if face.placement == Transform::IDENTITY {
-                if let (Some(data), Ok(id)) = (far.get(&face.node).cloned(), FaceId::try_from(face.node)) {
-                    let outward = if face.orientation == Orientation::Reversed { -1.0 } else { 1.0 };
-                    far_uses.extend(data.edges.iter().filter(|e| e.curve.is_some()).map(|e| Use::Model(e.edge)));
-                    self.face_bounds[operand].push(BoundingBox::new(data.sample.extent.0, data.sample.extent.1));
-                    self.far.push(super::far::FarFace { operand, face: id, outward, data, seq: self.seq });
-                    self.seq += 1;
-                    continue;
-                }
+            // (A far face is unplaced, or placed where the operation only counts it.)
+            if let (Some(data), Ok(id)) = (far.get(&face.node).cloned(), FaceId::try_from(face.node)) {
+                let outward = if face.orientation == Orientation::Reversed { -1.0 } else { 1.0 };
+                far_uses.extend(data.edges.iter().filter(|e| e.curve.is_some()).map(|e| Use::Model(e.edge)));
+                let far_face = super::far::FarFace { operand, face: id, placement: face.placement, outward, data, seq: self.seq };
+                let extent = far_face.placed(far_face.data.sample.extent);
+                self.face_bounds[operand].push(BoundingBox::new(extent.0, extent.1));
+                self.far.push(far_face);
+                self.seq += 1;
+                continue;
             }
             for edge in model.explore(face, NodeKind::Edge) {
                 on_faces.add(&edge);
@@ -652,6 +666,8 @@ impl Graph {
             added.drift = drift;
             (added.solid, added.container) = (solid, if solid { None } else { container });
             added.origin = origin;
+            // (Its regions, in its own parameters, are the same wherever it is placed.)
+            added.regions_key = FaceId::try_from(face.node).ok().filter(|_| recognized.is_none());
             added.seq = self.seq;
             self.seq += 1;
             let extent = BoundingBox::new(added.extent.0, added.extent.1);
@@ -712,7 +728,7 @@ impl Graph {
             for b in &face.boundary {
                 let e = &self.edges[b.edge];
                 if e.curve.is_some() {
-                    *uses.entry(e.origin.map_or(Use::Graph(b.edge), Use::Model)).or_default() += 1;
+                    *uses.entry(e.source.map_or(Use::Graph(b.edge), Use::Model)).or_default() += 1;
                 }
             }
         }
@@ -755,6 +771,7 @@ impl Graph {
             Edge::sampled_box(curve.as_ref(), first, last, start_point)
         };
         self.edges.push(Edge::with_box(curve, first, last, start, end, bbox, Some(operand)));
+        self.edges.last_mut().expect("edge").source = Some(id);
         if placement == Transform::IDENTITY {
             self.edges.last_mut().expect("edge").origin = Some(id);
             for (v, shape) in [(start, start_vertex), (end, end_vertex)] {
@@ -794,6 +811,7 @@ impl Graph {
             sections: Vec::new(),
             on_edges: Vec::new(),
             origin: None,
+            regions_key: None,
             seq: 0,
             drift: 0.0,
             samples: Default::default(),

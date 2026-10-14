@@ -235,7 +235,7 @@ fn is_empty(model: &Model, s: Shape) -> bool {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Operation {
+pub(super) enum Operation {
     Union,
     Difference,
     Intersection,
@@ -257,16 +257,44 @@ impl Operation {
     }
 }
 
-fn run(model: &mut Model, a: Shape, b: Shape, operation: Operation) -> Result<Shape> {
+pub(super) fn run(model: &mut Model, a: Shape, b: Shape, operation: Operation) -> Result<Shape> {
+    // An intersection of solids, one placed (the larger, moved about, as when checks slide
+    // one shape along another): done where it is unplaced, the other moved to it, the
+    // result placed back. Its faces' kept data (far faces, regions, boxes) then serve each
+    // time.
+    let rigid = |t: &crate::math::Transform| !t.is_identity() && (t.scale_factor() - 1.0).abs() <= 1e-12 && !t.is_negative();
+    let faces = |s: Shape| model.explore(s, crate::topology::NodeKind::Face).count();
+    let (fa, fb) = (faces(a), faces(b));
+    let solids = |s: Shape| only_solids(model, s).is_some();
+    let local = if operation != Operation::Intersection || !solids(a) || !solids(b) {
+        None
+    } else if rigid(&a.placement) && fa >= fb {
+        Some((a.placement, Shape { placement: crate::math::Transform::IDENTITY, ..a }, b.moved(&a.placement.inverse())))
+    } else if rigid(&b.placement) && fb > fa {
+        Some((b.placement, a.moved(&b.placement.inverse()), Shape { placement: crate::math::Transform::IDENTITY, ..b }))
+    } else {
+        None
+    };
+    if let Some((t, a, b)) = local {
+        let result = run_with_sections(model, a, b, operation)?.0;
+        return Ok(result.moved(&t));
+    }
     Ok(run_with_sections(model, a, b, operation)?.0)
 }
 
 fn operands(model: &Model, a: Shape, b: Shape, use_far: bool) -> Result<Graph> {
+    operands_placed(model, a, b, use_far, [false, false])
+}
+
+/// [`operands`]; with `placed_far[k]`, faces of operand `k` placed (moved) may be left out
+/// as far ones too (where the operation keeps nothing outside the other operand of `k`:
+/// they are only counted, never built into the result).
+fn operands_placed(model: &Model, a: Shape, b: Shape, use_far: bool, placed_far: [bool; 2]) -> Result<Graph> {
     let mut graph = Graph::default();
     // The operands' edges, found once for the steps that go through them all.
     let edges = [a, b].map(|s| model.unique_subshapes(s, crate::topology::NodeKind::Edge));
     let prepared = far::prepare(model, [a, b], [&edges[0], &edges[1]]);
-    let far = if use_far { far::choose(model, a, b, &prepared) } else { Default::default() };
+    let far = if use_far { far::choose(model, a, b, &prepared, placed_far) } else { Default::default() };
     graph.add_operand(model, a, 0, &far[0])?;
     graph.add_operand(model, b, 1, &far[1])?;
     for k in 0..2 {
@@ -274,6 +302,14 @@ fn operands(model: &Model, a: Shape, b: Shape, use_far: bool) -> Result<Graph> {
         let freeform = graph.faces.iter().filter(|f| f.operand == k).any(|f| geom::freeform(&f.surface))
             || graph.far.iter().filter(|f| f.operand == k).any(|f| geom::freeform(&f.data.surface));
         if freeform {
+            // (A box holding its faces: enough to tell points far outside it.)
+            let mut held = crate::math::BoundingBox::EMPTY;
+            for b in &graph.face_bounds[k] {
+                held.add_box(b);
+            }
+            if !held.is_empty() && held.is_bounded() {
+                graph.tight_boxes[k] = Some((held.min, held.max));
+            }
             continue;
         }
         // The faces' grid boxes (holding them) spare finding the extremes of faces that
@@ -322,7 +358,8 @@ fn run_tolerant(model: &mut Model, a: Shape, b: Shape, operation: Operation) -> 
 /// The operation on the operands' graph; `None` if far faces (with `use_far`) cannot be
 /// left out after all.
 fn run_graph(model: &mut Model, a: Shape, b: Shape, operation: Operation, use_far: bool) -> Result<Option<(Shape, Vec<Shape>, bool)>> {
-    let mut graph = operands(model, a, b, use_far)?;
+    let placed_far = [0, 1].map(|k| operation.keeps(k, State::Outside).is_none());
+    let mut graph = operands_placed(model, a, b, use_far, placed_far)?;
     if !graph.far.is_empty() && (graph.open != [false, false] || graph.dimension != [3, 3] || !graph.only_solids()) {
         return Ok(None);
     }
@@ -367,7 +404,7 @@ fn classified(model: &Model, graph: &mut Graph) -> (Vec<split::Piece>, Vec<Vec<s
         let scale = face.bbox.0.distance(face.bbox.1);
         // A face met by nothing (its arcs its own edges, each whole, in order) is one region,
         // the same each time: kept in the model with the face.
-        let untouched = face.origin.filter(|_| {
+        let untouched = face.regions_key.filter(|_| {
             arcs.len() == face.boundary.len()
                 && arcs.iter().zip(&face.boundary).all(|(a, b)| {
                     let (p, e) = (&pieces[a.piece], &graph.edges[b.edge]);
@@ -381,19 +418,65 @@ fn classified(model: &Model, graph: &mut Graph) -> (Vec<split::Piece>, Vec<Vec<s
             }
             None => split::split_face(arcs, &pieces, &face.polylines, scale, false),
         };
-        regions_of_face
-            .into_iter()
-            .map(|region| {
-                let uv = region.interior;
-                let p = geom::surface_point(&face.surface, uv);
-                let outward = geom::normal_at(&face.surface, uv) * face.outward;
-                let state = graph.classify(p, outward, 1 - face.operand);
-                (fi, region, state)
-            })
-            .collect::<Vec<_>>()
+        regions_of_face.into_iter().map(|region| (fi, region, State::Outside)).collect::<Vec<_>>()
     });
     let mut regions: Vec<(usize, split::Region, State)> = found.into_iter().flatten().collect();
-    agree_across_clean_edges(graph, &pieces, &arcs_of, &mut regions);
+    // Where each region lies: regions joined across edges the other operand does not touch
+    // lie alike, so of a large group of them only some are classified (a spread of them),
+    // unless they disagree or one lies on the other operand (then all are).
+    let roots = clean_components(graph, &pieces, &arcs_of, &regions);
+    let mut groups: crate::hashing::FastMap<usize, Vec<usize>> = Default::default();
+    for (ri, &root) in roots.iter().enumerate() {
+        groups.entry(root).or_default().push(ri);
+    }
+    let classify = |ri: usize| {
+        let (fi, region, _) = &regions[ri];
+        let face = &graph.faces[*fi];
+        let uv = region.interior;
+        let p = geom::surface_point(&face.surface, uv);
+        let outward = geom::normal_at(&face.surface, uv) * face.outward;
+        graph.classify(p, outward, 1 - face.operand)
+    };
+    const SAMPLES: usize = 7;
+    let sample = |g: &[usize]| -> Vec<usize> {
+        if g.len() <= SAMPLES { g.to_vec() } else { (0..SAMPLES).map(|k| g[k * g.len() / SAMPLES]).collect() }
+    };
+    let sampled: Vec<usize> = groups.values().flat_map(|g| sample(g)).collect();
+    let states = crate::parallel::map(&sampled, |&ri| classify(ri));
+    let mut known: crate::hashing::FastMap<usize, State> = sampled.iter().copied().zip(states).collect();
+    let mut rest: Vec<usize> = Vec::new();
+    for g in groups.values() {
+        // (Unless the sample agrees, all: a region lying on the other operand, or a group
+        // not all on one side after all.)
+        let s = sample(g);
+        let unanimous = s.iter().all(|ri| known[ri] == known[&s[0]]) && matches!(known[&s[0]], State::Inside | State::Outside);
+        if g.len() > SAMPLES && !unanimous {
+            rest.extend(g.iter().filter(|ri| !known.contains_key(ri)));
+        }
+    }
+    let states = crate::parallel::map(&rest, |&ri| classify(ri));
+    known.extend(rest.iter().copied().zip(states));
+    // Each group's regions as most of those classified (those lying on the other operand
+    // apart).
+    for g in groups.values() {
+        let (mut inside, mut outside) = (0, 0);
+        for ri in g {
+            match known.get(ri) {
+                Some(State::Inside) => inside += 1,
+                Some(State::Outside) => outside += 1,
+                _ => {}
+            }
+        }
+        let majority = (inside != outside).then(|| if inside > outside { State::Inside } else { State::Outside });
+        for &ri in g {
+            regions[ri].2 = match (known.get(&ri), majority) {
+                (Some(&s), _) if !matches!(s, State::Inside | State::Outside) => s,
+                (_, Some(m)) => m,
+                (Some(&s), None) => s,
+                (None, None) => State::Outside,
+            };
+        }
+    }
     (pieces, arcs_of, regions)
 }
 
@@ -441,12 +524,12 @@ pub(crate) fn partition(model: &mut Model, a: Shape, b: Shape) -> Result<[Shape;
 /// The regions of a face met by nothing, kept in the model.
 struct FaceRegions(Vec<split::Region>);
 
-/// Regions of one operand joined across a piece of its own edge that the other operand
-/// leaves alone (no section, not shared with it, not on its faces) lie on the same side
-/// of it: each such group of regions found inside or outside takes its majority, so
-/// that one region classified wrongly (a ray miscounting near a thin feature) follows its
-/// neighbours.
-fn agree_across_clean_edges(graph: &Graph, pieces: &[split::Piece], arcs_of: &[Vec<split::ArcOnFace>], regions: &mut [(usize, split::Region, State)]) {
+/// For each region, its group: regions of one operand joined across a piece of its own
+/// edge that the other operand leaves alone (no section, not shared with it, not on its
+/// faces) lie on the same side of it (each group then takes its majority, so that one
+/// region classified wrongly, a ray miscounting near a thin feature, follows its
+/// neighbours; and a large group needs only some of its regions classified).
+fn clean_components(graph: &Graph, pieces: &[split::Piece], arcs_of: &[Vec<split::ArcOnFace>], regions: &[(usize, split::Region, State)]) -> Vec<usize> {
     use crate::hashing::{FastMap as HashMap, FastSet as HashSet};
     // Pieces touched by the other operand: shared with its pieces, or of edges on its faces.
     let mut by_rep: HashMap<usize, HashSet<Option<usize>>> = HashMap::default();
@@ -525,23 +608,7 @@ fn agree_across_clean_edges(graph: &Graph, pieces: &[split::Piece], arcs_of: &[V
             }
         }
     }
-    let mut votes: HashMap<usize, (usize, usize)> = HashMap::default();
-    for ri in 0..regions.len() {
-        let root = find(&mut parent, ri);
-        let v = votes.entry(root).or_default();
-        match regions[ri].2 {
-            State::Inside => v.0 += 1,
-            State::Outside => v.1 += 1,
-            _ => {}
-        }
-    }
-    for ri in 0..regions.len() {
-        let root = find(&mut parent, ri);
-        let (inside, outside) = votes[&root];
-        if matches!(regions[ri].2, State::Inside | State::Outside) && inside != outside {
-            regions[ri].2 = if inside > outside { State::Inside } else { State::Outside };
-        }
-    }
+    (0..regions.len()).map(|ri| find(&mut parent, ri)).collect()
 }
 
 #[cfg(test)]

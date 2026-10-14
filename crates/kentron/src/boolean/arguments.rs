@@ -68,6 +68,14 @@ pub fn combine(model: &mut Model, objects: &[Shape], tools: &[Shape], combinatio
     let mixed = od.iter().chain(&td).any(|&d| Some(d) != od.first().copied());
     let all_solids = od.iter().chain(&td).all(|&d| d == 3);
     if combination != Combination::Union && !os.is_empty() && !ts.is_empty() && (mixed || (all_solids && (meeting(model, &os) || meeting(model, &ts)))) {
+        // An intersection whose pieces (each object's with each tool) lie apart: they are its
+        // cells (another argument's boundary splits none: it would have to pass through the
+        // inside of both).
+        if combination == Combination::Intersection && all_solids {
+            if let Some(apart) = pieces_apart(model, &os, &ts)? {
+                return Ok(apart);
+            }
+        }
         return split_together(model, &os, &ts, combination);
     }
     // A section of objects alone: where they meet one another.
@@ -97,6 +105,34 @@ pub fn combine(model: &mut Model, objects: &[Shape], tools: &[Shape], combinatio
         Combination::Section => super::section(model, o, t),
         Combination::Union => unreachable!("handled above"),
     }
+}
+
+/// The intersections of each of `objects` with each of `tools` (solids), gathered, when
+/// they lie apart from one another; `None` if two of them meet.
+fn pieces_apart(model: &mut Model, objects: &[Shape], tools: &[Shape]) -> Result<Option<Shape>> {
+    let boxes = |model: &Model, list: &[Shape]| -> Vec<BoundingBox> { list.iter().map(|&s| crate::properties::bounding_box(model, s).enlarged(geom::on_tol())).collect() };
+    let (ob, tb) = (boxes(model, objects), boxes(model, tools));
+    let mut pieces: Vec<(Shape, BoundingBox)> = Vec::new();
+    for (i, &o) in objects.iter().enumerate() {
+        for (j, &t) in tools.iter().enumerate() {
+            if !ob[i].overlaps(&tb[j]) {
+                continue;
+            }
+            let common = super::run(model, o, t, super::Operation::Intersection)?;
+            for solid in model.explore(common, NodeKind::Solid).collect::<Vec<_>>() {
+                let b = crate::properties::bounding_box(model, solid).enlarged(geom::on_tol());
+                if pieces.iter().any(|(_, other)| other.overlaps(&b)) {
+                    return Ok(None);
+                }
+                pieces.push((solid, b));
+            }
+        }
+    }
+    let result = model.new_empty(NodeKind::Compound);
+    for (solid, _) in pieces {
+        model.add(result, solid)?;
+    }
+    Ok(Some(result))
 }
 
 /// Whether two of `solids` meet (their boxes, touching included, overlap).

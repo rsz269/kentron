@@ -48,11 +48,27 @@ pub(super) struct FaceData {
 pub(super) struct FarFace {
     pub operand: usize,
     pub face: FaceId,
+    /// Where the face is placed (its data is unplaced).
+    pub placement: crate::math::Transform,
     /// +1 if `∂u × ∂v` points out of the operand, -1 if into it.
     pub outward: f64,
     pub data: Arc<FaceData>,
     /// Its place among the operands' faces.
     pub seq: usize,
+}
+
+impl FarFace {
+    /// `b` (a box of the unplaced face) placed with the face.
+    pub fn placed(&self, b: (Point, Point)) -> (Point, Point) {
+        if self.placement == crate::math::Transform::IDENTITY {
+            return b;
+        }
+        use crate::math::Transformable;
+        let placed = BoundingBox::from_points((0..8).map(|i| {
+            Point::new(if i & 1 == 0 { b.0.x } else { b.1.x }, if i & 2 == 0 { b.0.y } else { b.1.y }, if i & 4 == 0 { b.0.z } else { b.1.z }).transformed(&self.placement)
+        }));
+        (placed.min, placed.max)
+    }
 }
 
 impl FaceData {
@@ -196,24 +212,50 @@ pub(super) type FarData = crate::hashing::FastMap<NodeId, Arc<FaceData>>;
 
 /// The faces of `a` and of `b` (unplaced, by node) far from the other operand: only between
 /// operands made of solids whose every face has a sure box.
-pub(super) fn choose(model: &Model, a: Shape, b: Shape, prepared: &Prepared) -> [FarData; 2] {
+pub(super) fn choose(model: &Model, a: Shape, b: Shape, prepared: &Prepared, placed_ok: [bool; 2]) -> [FarData; 2] {
     let none = || [FarData::default(), FarData::default()];
     if !graph::made_of_solids(model, a) || !graph::made_of_solids(model, b) {
         return none();
     }
+    // Each face's box (a placed face's, its unplaced one's placed: placed faces are left out
+    // only where `placed_ok`, but all bound where the operands meet).
     let mut hulls: Vec<Vec<(NodeId, BoundingBox)>> = Vec::new();
+    let mut placed: Vec<HashSet<NodeId>> = Vec::new();
+    // (A face used more than once is not left out: far faces are known by node.)
+    let mut repeated: Vec<HashSet<NodeId>> = Vec::new();
     let mut edges: Vec<HashSet<EdgeId>> = Vec::new();
     let mut boundaries: Vec<Vec<Arc<FaceData>>> = Vec::new();
     for shape in [a, b] {
-        let (mut list, mut own, mut data) = (Vec::new(), HashSet::default(), Vec::new());
+        let (mut list, mut moved, mut own, mut data) = (Vec::new(), HashSet::default(), HashSet::default(), Vec::new());
+        let (mut seen, mut again) = (HashSet::default(), HashSet::default());
         for face in model.explore(shape, NodeKind::Face) {
-            let Some(d) = face_data_in(model, face, prepared) else { return none() };
+            if !seen.insert(face.node) {
+                again.insert(face.node);
+            }
+            let unplaced = Shape { placement: crate::math::Transform::IDENTITY, ..face };
+            let Some(d) = face_data_in(model, unplaced, prepared) else { return none() };
             let Some(hull) = d.hull else { return none() };
+            let hull = if face.placement == crate::math::Transform::IDENTITY {
+                hull
+            } else {
+                moved.insert(face.node);
+                BoundingBox::from_points((0..8).map(|i| {
+                    use crate::math::Transformable;
+                    Point::new(
+                        if i & 1 == 0 { hull.min.x } else { hull.max.x },
+                        if i & 2 == 0 { hull.min.y } else { hull.max.y },
+                        if i & 4 == 0 { hull.min.z } else { hull.max.z },
+                    )
+                    .transformed(&face.placement)
+                }))
+            };
             own.extend(d.edges.iter().map(|e| e.edge));
             list.push((face.node, hull));
             data.push(d);
         }
         hulls.push(list);
+        placed.push(moved);
+        repeated.push(again);
         edges.push(own);
         boundaries.push(data);
     }
@@ -240,7 +282,7 @@ pub(super) fn choose(model: &Model, a: Shape, b: Shape, prepared: &Prepared) -> 
         hulls[k]
             .iter()
             .zip(&boundaries[k])
-            .filter(|((_, h), d)| common.is_none_or(|c| !c.overlaps(h)) && !d.edges.iter().any(|e| edges[1 - k].contains(&e.edge)))
+            .filter(|((n, h), d)| (placed_ok[k] || !placed[k].contains(n)) && !repeated[k].contains(n) && common.is_none_or(|c| !c.overlaps(h)) && !d.edges.iter().any(|e| edges[1 - k].contains(&e.edge)))
             .map(|((n, _), d)| (*n, d.clone()))
             .collect()
     };

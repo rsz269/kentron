@@ -33,7 +33,7 @@ impl Graph {
     /// Where `p`, inside a piece with outward normal `outward`, lies with respect to
     /// operand `operand`.
     pub fn classify(&self, p: Point, outward: Vector, operand: usize) -> State {
-        let faces: Vec<usize> = (0..self.faces.len()).filter(|&i| self.faces[i].operand == operand).collect();
+        let faces = self.faces_of(operand);
         for g in self.index().faces_containing(operand, p) {
             let face = &self.faces[g];
             if geom::signed_distance(&face.surface, p).abs() <= on_tol()
@@ -42,7 +42,7 @@ impl Graph {
                 return if outward.dot(face.outward_normal(p)) > 0.0 { State::OnSame } else { State::OnOpposite };
             }
         }
-        let inside = if self.open[operand] { self.behind(&faces, p) } else { self.contains(operand, &faces, p) };
+        let inside = if self.open[operand] { self.behind(faces, p) } else { self.contains(operand, faces, p) };
         if inside { State::Inside } else { State::Outside }
     }
 
@@ -96,7 +96,16 @@ impl Graph {
             }
             // The operand's faces left out of the graph count too.
             for g in self.index().far_along_ray(operand, p, d) {
-                let data = &self.far[g].data;
+                let far = &self.far[g];
+                let data = &far.data;
+                // (The ray where the face is unplaced: a placed far face's data is unplaced.)
+                let (p, d) = if far.placement == crate::math::Transform::IDENTITY {
+                    (p, d)
+                } else {
+                    use crate::math::Transformable;
+                    let inverse = far.placement.inverse();
+                    (p.transformed(&inverse), d.transformed(&inverse))
+                };
                 let Some(hits) = geom::ray_hits(&data.surface, p, d, &data.sample.bbox) else { continue 'rays };
                 for t in hits {
                     match data.locate(p + d * t) {

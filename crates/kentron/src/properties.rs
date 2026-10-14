@@ -527,15 +527,25 @@ pub fn bounding_box(model: &Model, shape: Shape) -> BoundingBox {
         let p = model.point(v);
         b.add_box(&BoundingBox::new(p, p).enlarged(model.tolerance(v)));
     }
-    // Edges: points along their curves, enlarged to cover the curve between them.
+    // Edges: points along their curves, enlarged to cover the curve between them (each
+    // found once unplaced, kept with the edge, then placed).
+    struct EdgeBox(Option<BoundingBox>);
     let edge_box = |b: &mut BoundingBox, edge: Shape| {
-        let Some((curve, first, last)) = model.edge_curve(edge) else { return };
-        let n = if matches!(curve, crate::geometry::curve::Curve::Line(_)) { 1 } else { 64 };
-        let points: Vec<Point> = (0..=n).map(|i| curve.point(first + (last - first) * i as f64 / n as f64)).collect();
-        // A curve bulges from a chord by at most a quarter of it (arcs up to half a turn).
-        let chord = points.windows(2).map(|w| w[0].distance(w[1])).fold(0.0, f64::max);
-        let margin = if n == 1 { 0.0 } else { 0.25 * chord };
-        b.add_box(&BoundingBox::from_points(points).enlarged(margin + model.tolerance(edge)));
+        let Ok(id) = crate::topology::EdgeId::try_from(edge.node) else { return };
+        let local = Shape { orientation: Orientation::Forward, placement: crate::math::Transform::IDENTITY, ..edge };
+        let kept = model.derived(edge.node, model.edge_fingerprint(id), || {
+            EdgeBox(model.edge_curve(local).map(|(curve, first, last)| {
+                let n = if matches!(curve, crate::geometry::curve::Curve::Line(_)) { 1 } else { 64 };
+                let points: Vec<Point> = (0..=n).map(|i| curve.point(first + (last - first) * i as f64 / n as f64)).collect();
+                // A curve bulges from a chord by at most a quarter of it (arcs up to half a turn).
+                let chord = points.windows(2).map(|w| w[0].distance(w[1])).fold(0.0, f64::max);
+                let margin = if n == 1 { 0.0 } else { 0.25 * chord };
+                BoundingBox::from_points(points).enlarged(margin + model.tolerance(local))
+            }))
+        });
+        if let Some(e) = kept.0 {
+            b.add_box(&placed_box(&e, &edge.placement));
+        }
     };
     for e in model.explore(shape, NodeKind::Edge) {
         edge_box(&mut b, e);
@@ -668,6 +678,32 @@ pub fn oriented_bounding_box(model: &Model, shape: Shape) -> OrientedBox {
 /// A curved face's part of [`bounding_box`]: points of its surface over the part of the
 /// parameter space its boundary spans, enlarged to cover the surface between them.
 fn face_box(model: &Model, f: Shape) -> Option<BoundingBox> {
+    // (Found once in the face's own coordinates, kept with it, then placed: a shape moved
+    // about keeps its faces.)
+    struct FaceBox(Option<BoundingBox>);
+    let id = FaceId::try_from(f.node).ok()?;
+    let local = Shape { orientation: Orientation::Forward, placement: crate::math::Transform::IDENTITY, ..f };
+    let kept = model.derived(f.node, model.face_fingerprint(id), || FaceBox(local_face_box(model, local)));
+    kept.0.map(|b| placed_box(&b, &f.placement))
+}
+
+/// The box of `b`'s corners placed by `t` (exact under a translation, around it otherwise).
+fn placed_box(b: &BoundingBox, t: &crate::math::Transform) -> BoundingBox {
+    if t.is_identity() {
+        return *b;
+    }
+    BoundingBox::from_points((0..8).map(|i| {
+        Point::new(
+            if i & 1 == 0 { b.min.x } else { b.max.x },
+            if i & 2 == 0 { b.min.y } else { b.max.y },
+            if i & 4 == 0 { b.min.z } else { b.max.z },
+        )
+        .transformed(t)
+    }))
+}
+
+/// [`face_box`] of an unplaced face.
+fn local_face_box(model: &Model, f: Shape) -> Option<BoundingBox> {
     let surface = model.surface(f)?;
     let surface = surface.transformed(&f.placement);
     if matches!(surface, Surface::Plane(_)) {
