@@ -14,9 +14,10 @@
 //! or where the surfaces turn tangent (where the direction is lost). Both are followed a
 //! little past their bounds, so that a section leaving a face crosses its boundary first.
 //!
-//! Where the surfaces meet nearly tangent along a branch (a fillet and the face it rolls
-//! on), or a branch cannot be followed, the sections are not traced here: the caller traces
-//! them on its grid.
+//! Where the surfaces meet nearly tangent along a branch, it is kept where they cross there
+//! (at a shallow angle) and left out where they only touch (a fillet and the face it rolls
+//! on: no section splits the faces there). Where it is both, or a branch cannot be
+//! followed, the sections are not traced here: the caller traces them on its grid.
 
 use crate::geometry::ParametricSurface;
 use crate::geometry::surface::Surface;
@@ -136,9 +137,12 @@ pub(super) fn trace(base: &Surface, other: &Surface, range: Range, (nu, nv): (us
     };
     let tracer = Tracer { base, other, range, bounds, own, step: leaf, stopped: std::cell::Cell::new(false) };
     let mut chains: Vec<(Vec<Both>, bool)> = Vec::new();
+    // (Branches followed but left out, where the surfaces only touch.)
+    let mut touching: Vec<(Vec<Both>, bool)> = Vec::new();
+    let traced = |chains: &[(Vec<Both>, bool)], touching: &[(Vec<Both>, bool)], p: Point| chains.iter().chain(touching).any(|(points, closed)| near_polyline(points, *closed, p, 0.75 * leaf));
     for (k, seed) in seeds.into_iter().enumerate() {
         // (Seeds on a branch traced already are passed over.)
-        if chains.iter().any(|(points, closed)| near_polyline(points, *closed, seed.p, 0.75 * leaf)) {
+        if traced(&chains, &touching, seed.p) {
             continue;
         }
         // (A crossing's point on both surfaces square to the curve from it, so as not to
@@ -172,7 +176,7 @@ pub(super) fn trace(base: &Surface, other: &Surface, range: Range, (nu, nv): (us
             }
             continue;
         };
-        if chains.iter().any(|(points, closed)| near_polyline(points, *closed, start.p, 0.75 * leaf)) {
+        if traced(&chains, &touching, start.p) {
             continue;
         }
         let (ahead, closed) = tracer.march(start, 1.0);
@@ -194,15 +198,27 @@ pub(super) fn trace(base: &Surface, other: &Surface, range: Range, (nu, nv): (us
         if tracer.stopped.get() {
             return None;
         }
-        // (Nor where the surfaces meet nearly tangent anywhere along it, as a fillet the face
-        // it rolls on: where they only touch, or cross at a shallow angle, the sections the
-        // grid finds are the ones the faces are split by.)
-        if chain.0.iter().any(|b| tracer.sine(b) < TANGENT) {
-            return None;
+        // (A single point, where the surfaces touch: no branch.)
+        if chain.0.len() < 2 {
+            continue;
         }
-        if chain.0.len() >= 2 {
-            chains.push(chain);
+        // Where the surfaces meet nearly tangent along it: whether they cross there (the
+        // distance from one to the other changing sign across the curve) or only touch, as a
+        // fillet the face it rolls on. Where they only touch all along, there is no section
+        // (none splits the faces, as with no change of sign to find); where they cross, it
+        // is one; where it is both, the sections are not traced here.
+        let tangent: Vec<usize> = (0..chain.0.len()).filter(|&i| tracer.sine(&chain.0[i]) < TANGENT).collect();
+        if !tangent.is_empty() {
+            let crossing: Vec<bool> = tangent.iter().map(|&i| tracer.crosses(&chain.0, i, 0.1 * leaf)).collect();
+            if crossing.iter().all(|&c| !c) {
+                touching.push(chain);
+                continue;
+            }
+            if !crossing.iter().all(|&c| c) {
+                return None;
+            }
         }
+        chains.push(chain);
     }
     Some(
         chains
@@ -415,6 +431,56 @@ impl Tracer<'_> {
         self.on_bound(&Both { u, v, ..b }, if u != b.u { 0 } else { 1 }, if u != b.u { u } else { v })
     }
 
+    /// Whether the surfaces cross at the `i`th of `points` (rather than only touch): the
+    /// signed distance to the other from points of the base `w` to either side of the curve
+    /// there differing in sign.
+    fn crosses(&self, points: &[Both], i: usize, w: f64) -> bool {
+        let n = points.len();
+        let along = points[(i + 1).min(n - 1)].p - points[i.saturating_sub(1)].p;
+        let b = &points[i];
+        let (_, su, sv) = self.base.d1(b.u, b.v);
+        let side = su.cross(sv).cross(along);
+        if !(side.length() > 0.0) {
+            return false;
+        }
+        let side = side.normalized() * w;
+        // The base's parameters `side` away (in its tangent plane).
+        let (aa, ab, bb) = (su.dot(su), su.dot(sv), sv.dot(sv));
+        let det = aa * bb - ab * ab;
+        if !(det.abs() > 0.0) {
+            return false;
+        }
+        let (ra, rb) = (side.dot(su), side.dot(sv));
+        let (du, dv) = ((ra * bb - rb * ab) / det, (rb * aa - ra * ab) / det);
+        let at = |k: f64| self.distance_to_other(self.base.point(b.u + k * du, b.v + k * dv), (b.s, b.t));
+        let (plus, minus) = (at(1.0), at(-1.0));
+        let tol = geom::on_tol();
+        (plus > tol && minus < -tol) || (plus < -tol && minus > tol)
+    }
+
+    /// The signed distance from `x` to the other surface (carried on past its bounds), along
+    /// its normal, by Newton steps for the foot from `(s, t)`.
+    fn distance_to_other(&self, x: Point, (mut s, mut t): (f64, f64)) -> f64 {
+        for _ in 0..30 {
+            let (q, qs, qt) = self.other_d1(s, t);
+            let f = q - x;
+            let (a, b, c) = (qs.dot(qs), qs.dot(qt), qt.dot(qt));
+            let det = a * c - b * b;
+            if !(det.abs() > 1e-300) {
+                break;
+            }
+            let (rs, rt) = (f.dot(qs), f.dot(qt));
+            let (ds, dt) = ((rs * c - rt * b) / det, (rt * a - rs * b) / det);
+            (s, t) = (s - ds, t - dt);
+            if ds.abs() + dt.abs() <= 1e-14 * (1.0 + s.abs() + t.abs()) {
+                break;
+            }
+        }
+        let (q, qs, qt) = self.other_d1(s, t);
+        let normal = qs.cross(qt);
+        (x - q).dot(normal) / normal.length().max(1e-300)
+    }
+
     /// The sine of the angle between the surfaces' normals at a point.
     fn sine(&self, b: &Both) -> f64 {
         let (_, pu, pv) = self.base.d1(b.u, b.v);
@@ -513,15 +579,10 @@ impl Tracer<'_> {
                 h *= 0.5;
                 continue;
             }
-            // And where its middle is not found near the chord's (as the curve is evaluated
-            // between its samples, square to the chord): where the surfaces turn tangent, as
-            // the point found in a plane slides along them.
-            let chord = next.p - at.p;
-            let middle = at.p + chord * 0.5;
-            let mid_guess = Both { u: 0.5 * (at.u + next.u), v: 0.5 * (at.v + next.v), s: 0.5 * (at.s + next.s), t: 0.5 * (at.t + next.t), p: middle };
-            let across = chord.normalized();
-            let true_middle = self.stepped(&Both { p: middle, ..at }, across, 0.0, mid_guess);
-            if h > smallest && !true_middle.is_some_and(|m| m.p.distance(middle) <= 0.1 * chord.length()) {
+            // And where its points between are not found near the chord (as the curve is
+            // evaluated between its samples, square to the chord): where the surfaces turn
+            // tangent between them, or it bends back.
+            if h > smallest && !self.follows_chord(&at, &next) {
                 h *= 0.5;
                 continue;
             }
@@ -557,6 +618,22 @@ impl Tracer<'_> {
             }
         }
         (out, false)
+    }
+
+    /// Whether the curve between `a` and `b` (points on it) follows the chord between them:
+    /// its points in planes square to the chord a quarter, half and three quarters along it
+    /// near the chord.
+    fn follows_chord(&self, a: &Both, b: &Both) -> bool {
+        let chord = b.p - a.p;
+        if !(chord.length() > 0.0) {
+            return true;
+        }
+        let across = chord.normalized();
+        [0.25, 0.5, 0.75].iter().all(|&f| {
+            let on_chord = a.p + chord * f;
+            let guess = Both { u: a.u + (b.u - a.u) * f, v: a.v + (b.v - a.v) * f, s: a.s + (b.s - a.s) * f, t: a.t + (b.t - a.t) * f, p: on_chord };
+            self.stepped(&Both { p: on_chord, ..*a }, across, 0.0, guess).is_some_and(|m| m.p.distance(on_chord) <= 0.1 * chord.length())
+        })
     }
 
     /// A guess at the parameters of the point on both surfaces near `p`, from those at
@@ -630,7 +707,7 @@ impl Tracer<'_> {
         };
         for (which, bound) in candidates {
             let Some(bound) = bound else { continue };
-            if let Some(end) = self.on_bound(at, which, bound).filter(|e| e.p.distance(at.p) <= 2.0 * h + 1e-9) {
+            if let Some(end) = self.on_bound(at, which, bound).filter(|e| e.p.distance(at.p) <= 2.0 * h + 1e-9 && self.follows_chord(at, e)) {
                 return Some(cornered(end));
             }
         }

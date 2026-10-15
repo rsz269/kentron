@@ -468,17 +468,21 @@ impl Traced {
     /// The base's parameters of the curve's point in the plane through `origin` square to
     /// `dir`, by Newton steps on both surfaces from `(u, v)` and `(s, t)` (as the curve was
     /// marched); `None` where they do not converge.
-    fn across_chord(&self, (mut u, mut v): (f64, f64), (mut s, mut t): (f64, f64), origin: Point, dir: Vector) -> Option<(f64, f64)> {
+    fn across_chord(&self, (u, v): (f64, f64), (s, t): (f64, f64), origin: Point, dir: Vector) -> Option<(f64, f64)> {
         use crate::geometry::ParametricSurface;
-        for _ in 0..20 {
-            let (p, pu, pv) = self.base.d1(u, v);
-            let (q, qs, qt) = self.other_extended(s, t);
-            let f = p - q;
-            let g = (p - origin).dot(dir);
+        let residual = |x: [f64; 4]| {
+            let (p, pu, pv) = self.base.d1(x[0], x[1]);
+            let (q, qs, qt) = self.other_extended(x[2], x[3]);
+            (p - q, (p - origin).dot(dir), p, [pu, pv, qs, qt])
+        };
+        let mut x = [u, v, s, t];
+        let (mut f, mut g, mut p, mut d) = residual(x);
+        for _ in 0..30 {
             let scale = 1e-12 * (1.0 + (p - Point::ORIGIN).length());
             if f.length() <= scale && g.abs() <= scale {
-                return Some((u, v));
+                return Some((x[0], x[1]));
             }
+            let [pu, pv, qs, qt] = d;
             let m = [
                 [pu.x, pv.x, -qs.x, -qt.x],
                 [pu.y, pv.y, -qs.y, -qt.y],
@@ -486,9 +490,21 @@ impl Traced {
                 [pu.dot(dir), pv.dot(dir), 0.0, 0.0],
             ];
             let step = super::march::solve4(m, [-f.x, -f.y, -f.z, -g])?;
-            (u, v, s, t) = (u + step[0], v + step[1], s + step[2], t + step[3]);
-            if ![u, v, s, t].iter().all(|x| x.is_finite()) {
-                return None;
+            // (The step shortened until it comes nearer: from a guess off the curve, where the
+            // surfaces' parameters bend, a whole step may lead far away.)
+            let size = (f.length_squared() + g * g).sqrt();
+            let mut k = 1.0;
+            loop {
+                let y = [x[0] + k * step[0], x[1] + k * step[1], x[2] + k * step[2], x[3] + k * step[3]];
+                if !y.iter().all(|v| v.is_finite()) {
+                    return None;
+                }
+                let (f2, g2, p2, d2) = residual(y);
+                if (f2.length_squared() + g2 * g2).sqrt() < size || k < 1e-3 {
+                    (x, f, g, p, d) = (y, f2, g2, p2, d2);
+                    break;
+                }
+                k *= 0.5;
             }
         }
         None
