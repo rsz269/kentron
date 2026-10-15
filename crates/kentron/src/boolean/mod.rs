@@ -28,6 +28,7 @@ mod build;
 mod cells;
 mod classify;
 mod far;
+mod fuse;
 mod geom;
 mod graph;
 mod intersect;

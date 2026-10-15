@@ -32,18 +32,58 @@ pub fn cells(model: &mut Model, shapes: &[Shape]) -> Result<Vec<Cell>> {
 /// [`cells`]; without `split_higher`, a piece crossed by a shape of lower dimension (a solid
 /// by a face) is left whole (the shape still split by it): enough for where they meet.
 pub(super) fn cells_with(model: &mut Model, shapes: &[Shape], split_higher: bool) -> Result<Vec<Cell>> {
+    // Shapes without solids: all split in one graph, where that can be done.
+    let check = std::env::var("KENTRON_CELLS_CHECK").ok();
+    let shared = super::fuse::cells(model, shapes).ok().flatten();
+    if let (Some(shared), None) = (&shared, &check) {
+        return Ok(shared.clone());
+    }
     let before = super::SPLITTING_CELLS.with(|f| f.replace(true));
-    let t0 = std::time::Instant::now();
     let found = split_all(model, shapes, split_higher);
-    if std::env::var("CDBG").is_ok() { eprintln!("PHASE split_all {:?}", t0.elapsed()); }
     super::SPLITTING_CELLS.with(|f| f.set(before));
     let found = found?;
     // (Split one after another, cells met by one shape have each their copies of its parts:
     // made one.)
-    let t0 = std::time::Instant::now();
     super::arguments::glue(model, &found.iter().map(|c| c.shape).collect::<Vec<_>>())?;
-    if std::env::var("CDBG").is_ok() { eprintln!("PHASE glue {:?}", t0.elapsed()); }
+    if let (Some(shared), Some(file)) = (&shared, &check) {
+        compare(model, shapes, shared, &found, file);
+    }
     Ok(found)
+}
+
+/// (Checking [`super::fuse::cells`]: the cells by their marks, their numbers and measures
+/// in both, differences written to `file`.)
+fn compare(model: &Model, shapes: &[Shape], shared: &[Cell], pairwise: &[Cell], file: &str) {
+    use std::io::Write;
+    let summary = |cells: &[Cell]| -> std::collections::BTreeMap<String, (usize, f64)> {
+        let mut out = std::collections::BTreeMap::new();
+        for c in cells {
+            let marks: String = c.inside.iter().map(|&b| if b { '1' } else { '0' }).collect();
+            let kind = format!("{:?}", c.shape.kind());
+            let measure = match c.shape.kind() {
+                NodeKind::Face => crate::properties::area(model, c.shape).mass,
+                NodeKind::Edge => crate::properties::length(model, c.shape).mass,
+                _ => 0.0,
+            };
+            let e = out.entry(format!("{kind} {marks}")).or_insert((0, 0.0));
+            e.0 += 1;
+            e.1 += measure;
+        }
+        out
+    };
+    let (a, b) = (summary(shared), summary(pairwise));
+    let mut lines = Vec::new();
+    for key in a.keys().chain(b.keys()).collect::<std::collections::BTreeSet<_>>() {
+        let (x, y) = (a.get(key).copied().unwrap_or((0, 0.0)), b.get(key).copied().unwrap_or((0, 0.0)));
+        if x.0 != y.0 || (x.1 - y.1).abs() > 1e-6 * (1.0 + x.1.abs().max(y.1.abs())) {
+            lines.push(format!("  {key}: shared {} {:.6} pairwise {} {:.6}", x.0, x.1, y.0, y.1));
+        }
+    }
+    let mut f = std::fs::OpenOptions::new().create(true).append(true).open(file).expect("check file");
+    let _ = writeln!(f, "{} shapes {} cells shared {} pairwise {}", if lines.is_empty() { "SAME" } else { "DIFF" }, shapes.len(), shared.len(), pairwise.len());
+    for l in lines.iter().take(12) {
+        let _ = writeln!(f, "{l}");
+    }
 }
 
 /// [`cells`], the shapes split one after another.

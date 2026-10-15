@@ -85,6 +85,16 @@ impl Graph {
             .collect()
     }
 
+    /// Whether `p` lies on operand `k` or inside a solid of it.
+    pub(super) fn is_on(&self, p: Point, k: usize) -> bool {
+        self.place(p, k) != Place::Out
+    }
+
+    /// A point in the middle of a piece.
+    pub(super) fn piece_point(&self, piece: &Piece) -> Point {
+        self.piece_middle(piece)
+    }
+
     /// A point in the middle of a piece.
     fn piece_middle(&self, piece: &Piece) -> Point {
         self.edges[piece.edge].point(0.5 * (piece.first + piece.last), &self.vertices)
@@ -118,7 +128,7 @@ fn intersect(graph: &mut Graph) -> (Vec<Piece>, Vec<Vec<usize>>) {
 
 /// The boolean operation on operands not both solids (already added to `graph`).
 pub(super) fn run(model: &mut Model, mut graph: Graph, operation: Operation) -> Result<Shape> {
-    let dims = graph.dimension;
+    let dims = [graph.dimension[0], graph.dimension[1]];
     match operation {
         Operation::Union if dims[0] != dims[1] => {
             return Err(Error::InvalidInput(format!(

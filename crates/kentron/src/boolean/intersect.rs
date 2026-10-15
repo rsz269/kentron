@@ -1435,7 +1435,7 @@ impl Graph {
             let edge = &self.edges[ei];
             let operand = edge.operand.expect("an operand's edge");
             let mut meetings = Vec::new();
-            for fi in self.index().faces_overlapping(1 - operand, &edge.bbox) {
+            for fi in self.index().faces_overlapping_others(operand, &edge.bbox) {
                 let face = &self.faces[fi];
                 let Some(curve) = &edge.curve else {
                     let p = self.vertices.points[edge.start];
@@ -1614,6 +1614,40 @@ impl Graph {
             for (t, v) in found {
                 self.add_pave(ei, t, v);
             }
+        }
+    }
+
+    /// Section edges on a face, where it meets faces of two other operands, cross where all
+    /// three meet: splits them there (with more than two operands; with two, such points
+    /// lie on an operand's edge, found from it).
+    pub fn intersect_sections(&mut self) {
+        let mut owners: Vec<Vec<usize>> = vec![Vec::new(); self.edges.len()];
+        for (fi, face) in self.faces.iter().enumerate() {
+            for &e in &face.sections {
+                owners[e].push(fi);
+            }
+        }
+        let partner = |e: usize, fi: usize| owners[e].iter().copied().find(|&g| g != fi);
+        let mut crossings: Vec<(usize, usize, f64, f64)> = Vec::new();
+        for (fi, face) in self.faces.iter().enumerate() {
+            for (a, &e1) in face.sections.iter().enumerate() {
+                for &e2 in &face.sections[a + 1..] {
+                    let (Some(g1), Some(g2)) = (partner(e1, fi), partner(e2, fi)) else { continue };
+                    if self.faces[g1].operand == self.faces[g2].operand {
+                        continue;
+                    }
+                    let (x, y) = (&self.edges[e1], &self.edges[e2]);
+                    if !geom::boxes_overlap(&x.bbox, &y.bbox) {
+                        continue;
+                    }
+                    for (t, u) in edge_crossings(x, y, on_tol()) {
+                        crossings.push((e1, e2, t, u));
+                    }
+                }
+            }
+        }
+        for (e1, e2, t, u) in crossings {
+            self.add_crossing(e1, t, e2, u);
         }
     }
 
@@ -2125,7 +2159,11 @@ fn edge_crossings(e1: &Edge, e2: &Edge, tolerance: f64) -> Vec<(f64, f64)> {
                 let s = ((bb * ee - cc * dd) / den).clamp(0.0, 1.0);
                 let r = ((aa * ee - bb * dd) / den).clamp(0.0, 1.0);
                 let gap = (a + u * s).distance(c + v * r);
-                let reach = 0.5 * (u.length() + v.length());
+                // (Curves stray from their chords by less than half a chord; a line's chord is
+                // the line.)
+                let straight = |c: &Curve| matches!(c, Curve::Line(_));
+                let half = |c: &Curve, chord: Vector| if straight(c) { 0.0 } else { 0.5 * chord.length() };
+                let reach = if straight(c1) || straight(c2) { half(c1, u) + half(c2, v) + tolerance } else { 0.5 * (u.length() + v.length()) };
                 if gap > reach {
                     continue;
                 }

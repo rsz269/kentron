@@ -395,19 +395,18 @@ fn shift(x: f64, period: Option<f64>, (lo, hi): (f64, f64)) -> f64 {
     }
 }
 
-/// Both operands' vertices, edges and faces.
-#[derive(Default)]
+/// The operands' vertices, edges and faces (two operands, or more for a general fuse).
 pub(super) struct Graph {
     pub vertices: Vertices,
     pub edges: Vec<Edge>,
     pub faces: Vec<Face>,
     /// Per operand: whether its shell is open (a half-space bounded by its faces).
-    pub open: [bool; 2],
+    pub open: Vec<bool>,
     /// Per operand: its tight bounding box.
-    pub tight_boxes: [Option<(Point, Point)>; 2],
+    pub tight_boxes: Vec<Option<(Point, Point)>>,
     /// Per operand: its dimension (3 with solids, 2 with faces, 1 with edges, 0 with
     /// vertices only), as OCCT's boolean operations define it.
-    pub dimension: [u8; 2],
+    pub dimension: Vec<u8>,
     /// Vertex arguments: (operand, vertex).
     pub free_vertices: Vec<(usize, usize)>,
     /// The operands' vertices (unplaced) the graph's vertices are, which the result reuses.
@@ -416,7 +415,7 @@ pub(super) struct Graph {
     pub far: Vec<super::far::FarFace>,
     /// Per operand: a box holding each of its faces, in the order `Model::explore` lists
     /// them (graph faces and far faces alike).
-    pub face_bounds: [Vec<BoundingBox>; 2],
+    pub face_bounds: Vec<Vec<BoundingBox>>,
     /// The number of the operands' faces met so far.
     seq: usize,
     /// The number of wire and shell arguments seen.
@@ -424,18 +423,57 @@ pub(super) struct Graph {
     /// Trees over the operands' faces and edges, built once both are added.
     index: std::sync::OnceLock<Index>,
     /// Per operand: its faces' indices, ascending (found once).
-    operand_faces: [std::sync::OnceLock<Vec<usize>>; 2],
+    operand_faces: Vec<std::sync::OnceLock<Vec<usize>>>,
+}
+
+impl Default for Graph {
+    fn default() -> Graph {
+        Graph::with_operands(2)
+    }
+}
+
+impl Graph {
+    /// An empty graph for `n` operands.
+    pub fn with_operands(n: usize) -> Graph {
+        Graph {
+            vertices: Vertices::default(),
+            edges: Vec::new(),
+            faces: Vec::new(),
+            open: vec![false; n],
+            tight_boxes: vec![None; n],
+            dimension: vec![0; n],
+            free_vertices: Vec::new(),
+            vertex_origin: HashMap::default(),
+            far: Vec::new(),
+            face_bounds: vec![Vec::new(); n],
+            seq: 0,
+            containers: 0,
+            index: std::sync::OnceLock::new(),
+            operand_faces: (0..n).map(|_| std::sync::OnceLock::new()).collect(),
+        }
+    }
+
+    /// The number of operands.
+    pub fn operands(&self) -> usize {
+        self.open.len()
+    }
 }
 
 /// Bounding volume hierarchies over each operand's faces and edges (those of the operands,
-/// not section edges), for finding candidates without testing every face or edge.
+/// not section edges), for finding candidates without testing every face or edge; with more
+/// than two operands, over all of them too.
 pub(super) struct Index {
-    faces: [Bvh; 2],
-    face_ids: [Vec<usize>; 2],
-    edges: [Bvh; 2],
-    edge_ids: [Vec<usize>; 2],
-    far: [Bvh; 2],
-    far_ids: [Vec<usize>; 2],
+    faces: Vec<Bvh>,
+    face_ids: Vec<Vec<usize>>,
+    edges: Vec<Bvh>,
+    edge_ids: Vec<Vec<usize>>,
+    far: Vec<Bvh>,
+    far_ids: Vec<Vec<usize>>,
+    /// (More than two operands: all faces and edges, with each one's operand.)
+    all_faces: Option<(Bvh, Vec<usize>)>,
+    all_edges: Option<(Bvh, Vec<usize>)>,
+    face_operand: Vec<usize>,
+    edge_operand: Vec<Option<usize>>,
 }
 
 /// True if `shape` is a solid, or a compound of nothing but solids (so all its edges and
@@ -489,18 +527,70 @@ impl Index {
         Self::ids(&self.edge_ids[k], self.edges[k].containing(p))
     }
 
-    /// Pairs of a face of each operand with overlapping boxes, in increasing order.
+    /// Faces of operands other than `k` whose box overlaps `b`, in increasing order.
+    pub fn faces_overlapping_others(&self, k: usize, b: &(Point, Point)) -> Vec<usize> {
+        match &self.all_faces {
+            None => self.faces_overlapping(1 - k, b),
+            Some((tree, ids)) => {
+                let mut found: Vec<usize> = tree.overlapping(&to_box(b)).into_iter().map(|i| ids[i]).filter(|&f| self.face_operand[f] != k).collect();
+                found.sort_unstable();
+                found
+            }
+        }
+    }
+
+    /// Faces of operands other than `k` whose box contains `p`, in increasing order.
+    pub fn faces_containing_others(&self, k: usize, p: Point) -> Vec<usize> {
+        match &self.all_faces {
+            None => self.faces_containing(1 - k, p),
+            Some((tree, ids)) => {
+                let mut found: Vec<usize> = tree.containing(p).into_iter().map(|i| ids[i]).filter(|&f| self.face_operand[f] != k).collect();
+                found.sort_unstable();
+                found
+            }
+        }
+    }
+
+    /// Edges of operands other than `k` whose box contains `p`, in increasing order.
+    pub fn edges_containing_others(&self, k: usize, p: Point) -> Vec<usize> {
+        match &self.all_edges {
+            None => self.edges_containing(1 - k, p),
+            Some((tree, ids)) => {
+                let mut found: Vec<usize> = tree.containing(p).into_iter().map(|i| ids[i]).filter(|&e| self.edge_operand[e] != Some(k)).collect();
+                found.sort_unstable();
+                found
+            }
+        }
+    }
+
+    /// Pairs of faces of different operands with overlapping boxes (the one of the lower
+    /// operand first), in increasing order.
     pub fn face_pairs(&self) -> Vec<(usize, usize)> {
-        let mut pairs: Vec<(usize, usize)> =
-            self.faces[0].overlapping_pairs(&self.faces[1]).into_iter().map(|(a, b)| (self.face_ids[0][a], self.face_ids[1][b])).collect();
+        let mut pairs: Vec<(usize, usize)> = match &self.all_faces {
+            None => self.faces[0].overlapping_pairs(&self.faces[1]).into_iter().map(|(a, b)| (self.face_ids[0][a], self.face_ids[1][b])).collect(),
+            Some((tree, ids)) => tree
+                .overlapping_pairs(tree)
+                .into_iter()
+                .map(|(a, b)| (ids[a], ids[b]))
+                .filter(|&(a, b)| self.face_operand[a] < self.face_operand[b])
+                .collect(),
+        };
         pairs.sort_unstable();
         pairs
     }
 
-    /// Pairs of an edge of each operand with overlapping boxes, in increasing order.
+    /// Pairs of edges of different operands with overlapping boxes (the one of the lower
+    /// operand first), in increasing order.
     pub fn edge_pairs(&self) -> Vec<(usize, usize)> {
-        let mut pairs: Vec<(usize, usize)> =
-            self.edges[0].overlapping_pairs(&self.edges[1]).into_iter().map(|(a, b)| (self.edge_ids[0][a], self.edge_ids[1][b])).collect();
+        let mut pairs: Vec<(usize, usize)> = match &self.all_edges {
+            None => self.edges[0].overlapping_pairs(&self.edges[1]).into_iter().map(|(a, b)| (self.edge_ids[0][a], self.edge_ids[1][b])).collect(),
+            Some((tree, ids)) => tree
+                .overlapping_pairs(tree)
+                .into_iter()
+                .map(|(a, b)| (ids[a], ids[b]))
+                .filter(|&(a, b)| matches!((self.edge_operand[a], self.edge_operand[b]), (Some(x), Some(y)) if x < y))
+                .collect(),
+        };
         pairs.sort_unstable();
         pairs
     }
@@ -518,23 +608,44 @@ impl Graph {
     /// are added).
     pub fn index(&self) -> &Index {
         self.index.get_or_init(|| {
-            let faces = |k: usize| -> Vec<usize> { (0..self.faces.len()).filter(|&i| self.faces[i].operand == k).collect() };
-            let edges = |k: usize| -> Vec<usize> { (0..self.edges.len()).filter(|&i| self.edges[i].operand == Some(k)).collect() };
-            let face_ids = [faces(0), faces(1)];
-            let edge_ids = [edges(0), edges(1)];
+            let n = self.operands();
+            // Each operand's faces, edges and far faces, in increasing order.
+            let mut face_ids: Vec<Vec<usize>> = vec![Vec::new(); n];
+            for (i, f) in self.faces.iter().enumerate() {
+                face_ids[f.operand].push(i);
+            }
+            let mut edge_ids: Vec<Vec<usize>> = vec![Vec::new(); n];
+            for (i, e) in self.edges.iter().enumerate() {
+                if let Some(k) = e.operand {
+                    edge_ids[k].push(i);
+                }
+            }
+            let mut far_ids: Vec<Vec<usize>> = vec![Vec::new(); n];
+            for (i, f) in self.far.iter().enumerate() {
+                far_ids[f.operand].push(i);
+            }
             let tree = |ids: &[usize], bbox: &dyn Fn(usize) -> (Point, Point)| Bvh::new(&ids.iter().map(|&i| to_box(&bbox(i))).collect::<Vec<_>>());
             let face_box = |i: usize| self.faces[i].bbox;
             let edge_box = |i: usize| self.edges[i].bbox;
-            let far = |k: usize| -> Vec<usize> { (0..self.far.len()).filter(|&i| self.far[i].operand == k).collect() };
-            let far_ids = [far(0), far(1)];
             let far_box = |i: usize| self.far[i].placed(self.far[i].data.sample.bbox);
+            let (all_faces, all_edges) = if n > 2 {
+                let faces: Vec<usize> = (0..self.faces.len()).collect();
+                let edges: Vec<usize> = (0..self.edges.len()).filter(|&i| self.edges[i].operand.is_some()).collect();
+                (Some((tree(&faces, &face_box), faces)), Some((tree(&edges, &edge_box), edges)))
+            } else {
+                (None, None)
+            };
             Index {
-                faces: [tree(&face_ids[0], &face_box), tree(&face_ids[1], &face_box)],
-                edges: [tree(&edge_ids[0], &edge_box), tree(&edge_ids[1], &edge_box)],
-                far: [tree(&far_ids[0], &far_box), tree(&far_ids[1], &far_box)],
+                faces: face_ids.iter().map(|ids| tree(ids, &face_box)).collect(),
+                edges: edge_ids.iter().map(|ids| tree(ids, &edge_box)).collect(),
+                far: far_ids.iter().map(|ids| tree(ids, &far_box)).collect(),
                 face_ids,
                 edge_ids,
                 far_ids,
+                all_faces,
+                all_edges,
+                face_operand: self.faces.iter().map(|f| f.operand).collect(),
+                edge_operand: self.edges.iter().map(|e| e.operand).collect(),
             }
         })
     }
