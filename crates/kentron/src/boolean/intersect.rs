@@ -22,7 +22,7 @@ enum Contact {
     At(Vec<f64>),
 }
 
-fn surface_contact(curve: &Curve, first: f64, last: f64, surface: &Surface) -> Contact {
+fn surface_contact(curve: &Curve, first: f64, last: f64, surface: &Surface, tolerance: f64) -> Contact {
     if let Some(contact) = plane_contact(curve, first, last, surface).or_else(|| coaxial_contact(curve, first, last, surface)) {
         return contact;
     }
@@ -32,7 +32,12 @@ fn surface_contact(curve: &Curve, first: f64, last: f64, surface: &Surface) -> C
     let values: Vec<f64> = ts.iter().map(|&t| g(t)).collect();
     // Lying on the surface within the tolerance of meeting points (shapes made by earlier
     // operations put edges on surfaces only that closely).
-    let on = values.iter().all(|v| v.abs() <= on_tol()) && ts.windows(2).all(|w| g(0.5 * (w[0] + w[1])).abs() <= on_tol());
+    let within = |bound: f64| values.iter().all(|v| v.abs() <= bound) && ts.windows(2).all(|w| g(0.5 * (w[0] + w[1])).abs() <= bound);
+    // (Or within its own tolerance all along, crossing the surface to and fro: an edge made
+    // only that close to a surface it lies on, as a fillet's along the face it rolls on.
+    // Not one merely near it, as an edge of a neighbouring face may be.)
+    let weaving = values.windows(2).filter(|w| w[0] * w[1] < 0.0).count() >= 4;
+    let on = within(on_tol()) || (tolerance > on_tol() && weaving && within(tolerance));
     if on {
         return Contact::On;
     }
@@ -321,6 +326,8 @@ struct Traced {
     /// The periods of the base's `u` and `v`, if the curve may cross their seams.
     u_period: Option<f64>,
     v_period: Option<f64>,
+    /// The other surface's parameters at the samples, where known (marched along both).
+    st: Option<Vec<(f64, f64)>>,
     base: Surface,
     other: Surface,
     /// The point last found by [`Section::point`] and its parameter's bits (asked for again
@@ -410,36 +417,93 @@ impl Traced {
     /// surfaces share, `base(u, v) = other(s, t)` (each step moving `(u, v)` the least,
     /// `(s, t)` taking up the rest), from the other's foot of the start; `None` where they
     /// do not converge.
-    fn on_both(&self, (mut u, mut v): (f64, f64)) -> Option<(f64, f64)> {
+    fn on_both(&self, (u, v): (f64, f64)) -> Option<(f64, f64)> {
         use crate::geometry::ParametricSurface;
         let foot = geom::foot_on(&self.other, self.base.point(u, v));
-        let (mut s, mut t) = (foot.u, foot.v);
+        self.on_both_from((u, v), (foot.u, foot.v))
+    }
+
+    /// Whether the curve at parameter `t` (by its samples, as [`Section::point`]) was
+    /// followed past either surface's bounds (where it was marched).
+    fn beyond_bounds(&self, t: f64) -> bool {
+        use crate::geometry::ParametricSurface;
+        let Some(st) = &self.st else { return false };
+        let n = st.len();
+        let (i, f) = ((t.floor() as usize) % n, t - t.floor());
+        let at = |values: &[(f64, f64)]| {
+            let (c, d) = (values[i], values[(i + 1) % n]);
+            (c.0 + (d.0 - c.0) * f, c.1 + (d.1 - c.1) * f)
+        };
+        let past = |x: f64, lo: f64, hi: f64, periodic: bool| {
+            let hair = 1e-7 * (hi - lo).abs().min(1e100).max(1.0);
+            !periodic && (x < lo - hair || x > hi + hair)
+        };
+        let off = |surface: &Surface, (x, y): (f64, f64)| {
+            let (x0, x1, y0, y1) = surface.bounds();
+            past(x, x0, x1, surface.is_u_periodic()) || past(y, y0, y1, surface.is_v_periodic())
+        };
+        off(&self.base, at(&self.uv)) || off(&self.other, at(st))
+    }
+
+    /// The other surface's point and derivatives at `(s, t)`; beyond its bounds carried on
+    /// across its edge in its tangent plane (square to the edge): where its distance, from
+    /// the nearest point of the edge along the normal there, is 0.
+    fn other_extended(&self, s: f64, t: f64) -> (Point, Vector, Vector) {
+        use crate::geometry::ParametricSurface;
         let (s0, s1, t0, t1) = self.other.bounds();
+        let (sc, tc) = (if self.other.is_u_periodic() { s } else { s.clamp(s0, s1) }, if self.other.is_v_periodic() { t } else { t.clamp(t0, t1) });
+        let (q, qs, qt) = self.other.d1(sc, tc);
+        let (ds, dt) = (s - sc, t - tc);
+        if ds == 0.0 && dt == 0.0 {
+            return (q, qs, qt);
+        }
+        let across = |a: Vector, b: Vector| {
+            let bb = b.dot(b);
+            if bb > 0.0 { a - b * (a.dot(b) / bb) } else { a }
+        };
+        let (es, et) = (if ds != 0.0 { across(qs, qt) } else { qs }, if dt != 0.0 { across(qt, qs) } else { qt });
+        (q + es * ds + et * dt, es, et)
+    }
+
+    /// The base's parameters of the curve's point in the plane through `origin` square to
+    /// `dir`, by Newton steps on both surfaces from `(u, v)` and `(s, t)` (as the curve was
+    /// marched); `None` where they do not converge.
+    fn across_chord(&self, (mut u, mut v): (f64, f64), (mut s, mut t): (f64, f64), origin: Point, dir: Vector) -> Option<(f64, f64)> {
+        use crate::geometry::ParametricSurface;
+        for _ in 0..20 {
+            let (p, pu, pv) = self.base.d1(u, v);
+            let (q, qs, qt) = self.other_extended(s, t);
+            let f = p - q;
+            let g = (p - origin).dot(dir);
+            let scale = 1e-12 * (1.0 + (p - Point::ORIGIN).length());
+            if f.length() <= scale && g.abs() <= scale {
+                return Some((u, v));
+            }
+            let m = [
+                [pu.x, pv.x, -qs.x, -qt.x],
+                [pu.y, pv.y, -qs.y, -qt.y],
+                [pu.z, pv.z, -qs.z, -qt.z],
+                [pu.dot(dir), pv.dot(dir), 0.0, 0.0],
+            ];
+            let step = super::march::solve4(m, [-f.x, -f.y, -f.z, -g])?;
+            (u, v, s, t) = (u + step[0], v + step[1], s + step[2], t + step[3]);
+            if ![u, v, s, t].iter().all(|x| x.is_finite()) {
+                return None;
+            }
+        }
+        None
+    }
+
+    /// [`Self::on_both`] from `(s, t)` on the other surface.
+    fn on_both_from(&self, (mut u, mut v): (f64, f64), (mut s, mut t): (f64, f64)) -> Option<(f64, f64)> {
+        use crate::geometry::ParametricSurface;
         let (bu0, bu1, bv0, bv1) = self.base.bounds();
-        let (s_periodic, t_periodic) = (self.other.is_u_periodic(), self.other.is_v_periodic());
         // (u, v) weighed against (s, t): steps of the other's parameters a million times
         // cheaper.
         const FREE: f64 = 1e6;
-        // The other surface, beyond its bounds carried on across its edge in its tangent
-        // plane (square to the edge): where its distance, from the nearest point of the
-        // edge along the normal there, is 0.
-        let extended = |s: f64, t: f64| {
-            let (sc, tc) = (if s_periodic { s } else { s.clamp(s0, s1) }, if t_periodic { t } else { t.clamp(t0, t1) });
-            let (q, qs, qt) = self.other.d1(sc, tc);
-            let (ds, dt) = (s - sc, t - tc);
-            if ds == 0.0 && dt == 0.0 {
-                return (q, qs, qt);
-            }
-            let across = |a: Vector, b: Vector| {
-                let bb = b.dot(b);
-                if bb > 0.0 { a - b * (a.dot(b) / bb) } else { a }
-            };
-            let (es, et) = (if ds != 0.0 { across(qs, qt) } else { qs }, if dt != 0.0 { across(qt, qs) } else { qt });
-            (q + es * ds + et * dt, es, et)
-        };
         for _ in 0..20 {
             let (p, pu, pv) = self.base.d1(u, v);
-            let (q, qs, qt) = extended(s, t);
+            let (q, qs, qt) = self.other_extended(s, t);
             let f = p - q;
             if f.length() <= 1e-12 * (1.0 + (p - Point::ORIGIN).length()) {
                 return Some((u, v));
@@ -477,8 +541,10 @@ impl Traced {
             if !(u.is_finite() && v.is_finite() && s.is_finite() && t.is_finite()) {
                 return None;
             }
-            // (Not off the base, where it is extrapolated.)
-            let off = |x: f64, lo: f64, hi: f64, periodic: bool| !periodic && (x < lo || x > hi);
+            // (Not off the base, where it is extrapolated; but a little, where the section was
+            // marched, which follows them a little past its bounds.)
+            let past = if self.st.is_some() { 0.05 } else { 0.0 };
+            let off = |x: f64, lo: f64, hi: f64, periodic: bool| !periodic && (x < lo - past * (hi - lo) || x > hi + past * (hi - lo));
             if off(u, bu0, bu1, self.base.is_u_periodic()) || off(v, bv0, bv1, self.base.is_v_periodic()) {
                 return None;
             }
@@ -583,7 +649,36 @@ impl Section {
                     None => d,
                 };
                 let (du, dv) = (across(b.0 - a.0, traced.u_period), across(b.1 - a.1, traced.v_period));
-                let p = traced.point((a.0 + du * s, a.1 + dv * s));
+                let uv = (a.0 + du * s, a.1 + dv * s);
+                // (Where the curve was marched along both surfaces, as it was marched: on both,
+                // in the plane square to the chord between the samples through the point
+                // interpolated, from the parameters on both interpolated likewise. Elsewhere,
+                // or where that does not converge, from the other's foot point.)
+                let across_chord = || {
+                    use crate::geometry::ParametricSurface;
+                    let st = traced.st.as_ref()?;
+                    let (c, d) = (st[i], st[(i + 1) % n]);
+                    let (ds, dt) = (across(d.0 - c.0, traced.other.u_period()), across(d.1 - c.1, traced.other.v_period()));
+                    let (pa, pb) = (points[i], points[(i + 1) % n]);
+                    let chord = pb - pa;
+                    if !(chord.length() > 0.0) {
+                        return None;
+                    }
+                    let dir = chord * (1.0 / chord.length());
+                    // (Not on another branch crossing the plane.)
+                    let (u, v) = traced.across_chord(uv, (c.0 + ds * s, c.1 + dt * s), pa + chord * s, dir)?;
+                    // (The curve strays from its chords by far less: the samples are spaced
+                    // for that.)
+                    (traced.base.point(u, v).distance(pa + chord * s) <= 0.25 * chord.length()).then_some((u, v))
+                };
+                let found = if traced.st.is_some() { across_chord().or_else(|| traced.on_both(uv)) } else { None };
+                let p = match found {
+                    Some((u, v)) => {
+                        use crate::geometry::ParametricSurface;
+                        traced.base.point(u, v)
+                    }
+                    None => traced.point(uv),
+                };
                 *last() = Some((t.to_bits(), p));
                 p
             }
@@ -809,6 +904,39 @@ impl Section {
 
     /// The edge geometry from `t0` to `t1` (wrapped past `t0` for closed curves), between
     /// the given end points.
+    /// For a marched section, the parameter a fraction of the way along it from `t0` to
+    /// `t1` (by the lengths between its samples).
+    fn even_parameters(&self, t0: f64, t1: f64) -> Option<impl Fn(f64) -> f64> {
+        let Section::Sampled(points, _, traced) = self else { return None };
+        traced.st.as_ref()?;
+        let n = points.len();
+        let at = |t: f64| self.point(t);
+        // The breaks: the ends and the samples between them, with the lengths to each.
+        let mut ts = vec![t0];
+        let mut k = t0.floor() + 1.0;
+        while k < t1 {
+            ts.push(k);
+            k += 1.0;
+        }
+        ts.push(t1);
+        let ps: Vec<Point> = ts.iter().map(|&t| if t.fract() == 0.0 { points[(t as usize) % n] } else { at(t) }).collect();
+        let mut lengths = vec![0.0];
+        for w in ps.windows(2) {
+            lengths.push(lengths.last().expect("a length") + w[0].distance(w[1]));
+        }
+        let total = *lengths.last().expect("a length");
+        if !(total > 0.0) {
+            return None;
+        }
+        Some(move |f: f64| {
+            let target = f * total;
+            let i = lengths.partition_point(|&l| l < target).clamp(1, lengths.len() - 1);
+            let (l0, l1) = (lengths[i - 1], lengths[i]);
+            let w = if l1 > l0 { (target - l0) / (l1 - l0) } else { 0.0 };
+            ts[i - 1] + (ts[i] - ts[i - 1]) * w
+        })
+    }
+
     fn edge_curve(&self, t0: f64, t1: f64, a: Point, b: Point) -> (Curve, f64, f64) {
         match self {
             Section::Open(c, ..) | Section::Closed(c) => (c.clone(), t0, t1),
@@ -817,8 +945,11 @@ impl Section {
                 // curve follows the section between them (to 1e-9 of its size).
                 let size = 1.0 + a.distance(b) + a.distance(self.point(0.5 * (t0 + t1)));
                 let mut n = 48;
+                // (A marched section's samples are spaced as its steps were, unevenly: its
+                // points taken evenly along it instead, by the lengths between the samples.)
+                let along = self.even_parameters(t0, t1);
                 let curve = loop {
-                    let mut params: Vec<f64> = (0..=n).map(|i| t0 + (t1 - t0) * i as f64 / n as f64).collect();
+                    let mut params: Vec<f64> = (0..=n).map(|i| along.as_ref().map_or(t0 + (t1 - t0) * i as f64 / n as f64, |f| f(i as f64 / n as f64))).collect();
                     let mut points: Vec<Point> = params.iter().map(|&t| self.point(t)).collect();
                     points[0] = a;
                     points[n] = b;
@@ -882,7 +1013,7 @@ fn size(face: &Face) -> f64 {
     face.bbox.0.distance(face.bbox.1)
 }
 
-fn sections(fa: &Face, fb: &Face) -> Vec<Section> {
+fn sections(fa: &Face, fb: &Face, crossings: &[Point]) -> Vec<Section> {
     let (a, b) = (&fa.surface, &fb.surface);
     let boxes = [&fa.bbox, &fb.bbox];
     if let Some(section) = plane_across_extrusion(a, b).or_else(|| plane_across_extrusion(b, a)) {
@@ -894,17 +1025,17 @@ fn sections(fa: &Face, fb: &Face) -> Vec<Section> {
         // (A free-form face smaller than the swept one it meets: the free-form one traced,
         // against the swept one's distance, a projection onto a curve rather than onto a
         // patch. The smaller face, for the grid it is traced on to be fine enough.)
-        (Surface::Revolution(_) | Surface::Extrusion(_), s) if geom::freeform(s) && size(fb) < size(fa) => return sliced(fb, fa),
-        (s, Surface::Revolution(_) | Surface::Extrusion(_)) if geom::freeform(s) && size(fa) < size(fb) => return sliced(fa, fb),
-        (Surface::Revolution(_) | Surface::Extrusion(_), _) => return sliced(fa, fb),
-        (_, Surface::Revolution(_) | Surface::Extrusion(_)) => return sliced(fb, fa),
+        (Surface::Revolution(_) | Surface::Extrusion(_), s) if geom::freeform(s) && size(fb) < size(fa) => return sliced(fb, fa, crossings),
+        (s, Surface::Revolution(_) | Surface::Extrusion(_)) if geom::freeform(s) && size(fa) < size(fb) => return sliced(fa, fb, crossings),
+        (Surface::Revolution(_) | Surface::Extrusion(_), _) => return sliced(fa, fb, crossings),
+        (_, Surface::Revolution(_) | Surface::Extrusion(_)) => return sliced(fb, fa, crossings),
         // The same free-form surface twice (pieces of one loft made twice) meets itself
         // everywhere: no section curves, like coincident quadrics.
         (s, t) if geom::freeform(s) && geom::freeform(t) && same_freeform(s, t) => return Vec::new(),
         // A free-form surface is traced in its parameters against the other's signed
         // distance (the cheaper one when both are free-form).
-        (s, _) if geom::freeform(s) => return sliced(fa, fb),
-        (_, s) if geom::freeform(s) => return sliced(fb, fa),
+        (s, _) if geom::freeform(s) => return sliced(fa, fb, crossings),
+        (_, s) if geom::freeform(s) => return sliced(fb, fa, crossings),
         _ => {}
     }
     // The stretch of a line within both faces' boxes (where the section can be).
@@ -1172,7 +1303,18 @@ fn grid_size(s: &Surface) -> (usize, usize) {
     }
 }
 
-fn sliced(base: &Face, other: &Face) -> Vec<Section> {
+/// Whether sections of free-form surfaces are traced by marching along them (else on a grid
+/// of signed distances): set by the environment variable `KENTRON_MARCH` (`1`, `on` or
+/// `true` to march; `0`, `off`, `false` or unset for the grid), read once.
+fn marching() -> bool {
+    static MARCHING: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *MARCHING.get_or_init(|| match std::env::var("KENTRON_MARCH") {
+        Ok(value) => matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "on" | "true" | "yes"),
+        Err(_) => false,
+    })
+}
+
+fn sliced(base: &Face, other: &Face, crossings: &[Point]) -> Vec<Section> {
     use crate::geometry::ParametricSurface;
     let (s, q) = (&base.surface, &other.surface);
     if misses(s, q) {
@@ -1243,6 +1385,25 @@ fn sliced(base: &Face, other: &Face) -> Vec<Section> {
             (at(u0, u1, iu), at(u0, u1, ju), at(v0, v1, iv), at(v0, v1, jv))
         }
     };
+    // Traced by marching along the curves, where that is done: seeds sought on the grid's
+    // lattice, steps no longer than its cells.
+    let marched = || {
+        let spacing = base.samples.get().map_or(0.0, |s| s.1);
+        let range = super::march::Range { u: (u0, u1), v: (v0, v1), u_period: if periodic { base.u_period } else { None }, v_period: v_periodic, u_wrap: base.u_period, v_wrap: base.v_period };
+        super::march::trace(s, q, range, (nu, nv), spacing * 64.0 / nu.max(nv) as f64, crossings, 10.0 * (base.drift.max(other.drift) + on_tol()), (other.u_range, other.v_range))
+    };
+    // (Where either surface is free-form.)
+    if marching() && (geom::freeform(s) || geom::freeform(q)) {
+        if let Some(chains) = marched() {
+            let mut out = Vec::new();
+            for super::march::Chain { uv, st, closed } in chains {
+                let traced = Traced { uv, u_period: base.u_period, v_period: v_periodic, st: Some(st), base: s.clone(), other: q.clone(), last: Default::default() };
+                let points: Vec<Point> = traced.uv.iter().map(|&(u, v)| s.point(u, v)).collect();
+                out.push(Section::Sampled(points, closed, Box::new(traced)));
+            }
+            return out;
+        }
+    }
     // Along the grid, each foot point on a free-form other surface starts the next search.
     let last_foot = std::cell::Cell::new(None);
     let f = |u: f64, v: f64| {
@@ -1376,7 +1537,7 @@ fn sliced(base: &Face, other: &Face) -> Vec<Section> {
             }
         }
         if uv.len() >= 2 {
-            let mut traced = Traced { uv, u_period: base.u_period, v_period: v_periodic, base: s.clone(), other: q.clone(), last: Default::default() };
+            let mut traced = Traced { uv, u_period: base.u_period, v_period: v_periodic, st: None, base: s.clone(), other: q.clone(), last: Default::default() };
             // (Where it strays from the samples' chords by more than a few ten-thousandths of
             // the other face. The factor is tuned on the tests: finer, a section running along
             // an edge two faces share moves across it, where telling which face it lies in
@@ -1527,7 +1688,7 @@ impl Graph {
                     }
                     continue;
                 };
-                match surface_contact(curve, edge.first, edge.last, &face.surface) {
+                match surface_contact(curve, edge.first, edge.last, &face.surface, edge.tolerance) {
                     Contact::On => meetings.push((fi, Meeting::On)),
                     Contact::At(ts) => {
                         let ts = if edge.free { stretch_ends(curve, edge.first, edge.last, &face.surface, ts) } else { ts };
@@ -1740,7 +1901,10 @@ impl Graph {
         // Each pair's section curves, and where they cross each other (two ellipses of equal
         // cylinders), found for all pairs at once; then added in order.
         let found = crate::parallel::map(&pairs, |&(fa, fb)| {
-            let curves = sections(&self.faces[fa], &self.faces[fb]);
+            // (Where edges of either meet the other, in both boxes: points the sections pass.)
+            let (x, y) = (&self.faces[fa], &self.faces[fb]);
+            let crossings: Vec<Point> = x.vertices_on.iter().chain(&y.vertices_on).map(|&v| self.vertices.points[v]).filter(|&p| geom::box_contains(&x.bbox, p) && geom::box_contains(&y.bbox, p)).collect();
+            let curves = sections(x, y, &crossings);
             // Each curve's box (from samples, grown by their spacing): curves whose boxes are
             // apart do not cross (nearly tangent surfaces can give many short curves).
             let boxes: Vec<crate::math::BoundingBox> = curves
@@ -1899,6 +2063,33 @@ impl Graph {
 
     /// The pieces of `section` between the vertices `on` it (at their parameters) inside
     /// both faces, as section edges of both.
+    /// Whether the piece of `section` from `t0` to `t1` runs along an edge of one face lying
+    /// on the other, within the faces' tolerance over the sine of the angle between their
+    /// surfaces: points that far from where they meet are on both (where they meet nearly
+    /// tangent, as a fillet the face it rolls on, far), and the section traced among them is
+    /// that edge (made of it, the faces would be split twice, by two curves a little apart).
+    fn along_edge_on_both(&self, fa: usize, fb: usize, section: &Section, t0: f64, t1: f64) -> bool {
+        let (a, b) = (&self.faces[fa], &self.faces[fb]);
+        let lying = |f: &Face, other: &Face| f.boundary.iter().map(|u| u.edge).filter(|e| other.on_edges.contains(e)).collect::<Vec<usize>>();
+        let mut edges = lying(a, b);
+        edges.extend(lying(b, a));
+        if edges.is_empty() {
+            return false;
+        }
+        let tolerance = a.drift.max(b.drift) + 10.0 * on_tol();
+        let scale = a.bbox.0.distance(a.bbox.1).min(b.bbox.0.distance(b.bbox.1));
+        (0..=8).all(|i| {
+            let p = section.point(t0 + (t1 - t0) * i as f64 / 8.0);
+            let sine = geom::normal_at_point(&a.surface, p).cross(geom::normal_at_point(&b.surface, p)).length();
+            let reach = (tolerance / sine.max(1e-12)).min(1e-3 * scale).max(tolerance);
+            edges.iter().any(|&e| {
+                let edge = &self.edges[e];
+                let Some(curve) = &edge.curve else { return false };
+                geom::box_contains(&(edge.bbox.0 - Vector::new(reach, reach, reach), edge.bbox.1 + Vector::new(reach, reach, reach)), p) && geom::project(curve, edge.first, edge.last, p).1 <= reach
+            })
+        })
+    }
+
     fn add_section(&mut self, fa: usize, fb: usize, section: &Section, mut on: Vec<(f64, usize)>) {
         let (lo, hi) = section.range();
         let period = hi - lo;
@@ -1926,7 +2117,25 @@ impl Graph {
             if t1 - t0 <= 1e-12 * period.max(1.0) {
                 continue;
             }
-            if !inside_both(self, section.point(0.5 * (t0 + t1))) {
+            if self.along_edge_on_both(fa, fb, section, t0, t1) {
+                continue;
+            }
+            // (A marched section, followed a little past the surfaces' bounds: there off them,
+            // not inside the faces even where locating it on them puts it so.)
+            let marched = matches!(section, Section::Sampled(_, _, traced) if traced.st.is_some());
+            let near = 10.0 * (self.faces[fa].drift.max(self.faces[fb].drift) + on_tol());
+            let off_surfaces = |graph: &Graph, p: Point| marched && [fa, fb].iter().any(|&f| geom::signed_distance(&graph.faces[f].surface, p).abs() > near);
+            // (Nor where it was followed past either surface's bounds: there the surfaces do
+            // not meet. Unless only as far as the faces' tolerance: across a corner of a face
+            // whose edges stray by that much.)
+            if let Section::Sampled(_, _, traced) = section {
+                let (a, b) = (self.vertices.points[v0], self.vertices.points[v1]);
+                if a.distance(b) > near && [0.25, 0.5, 0.75].iter().all(|&f| traced.beyond_bounds(t0 + (t1 - t0) * f)) {
+                    continue;
+                }
+            }
+            let middle = section.point(0.5 * (t0 + t1));
+            if off_surfaces(self, middle) || !inside_both(self, middle) {
                 continue;
             }
             let (a, b) = (self.vertices.points[v0], self.vertices.points[v1]);

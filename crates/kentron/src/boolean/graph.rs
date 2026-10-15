@@ -120,6 +120,9 @@ pub(super) struct Edge {
     pub origin: Option<EdgeId>,
     /// The operand's edge it is, however placed.
     pub source: Option<EdgeId>,
+    /// How far it may stray from the surfaces of its faces: its tolerance in the model (0
+    /// for section edges).
+    pub tolerance: f64,
     /// Its samples and chords for finding crossings (made on first use; the curve and its
     /// range do not change).
     pub chords: std::sync::OnceLock<Chords>,
@@ -164,7 +167,7 @@ impl Edge {
     }
 
     pub fn with_box(curve: Option<Curve>, first: f64, last: f64, start: usize, end: usize, bbox: (Point, Point), operand: Option<usize>) -> Edge {
-        Edge { curve, first, last, start, end, paves: Vec::new(), bbox, operand, free: false, container: None, reversed: false, origin: None, source: None, chords: Default::default() }
+        Edge { curve, first, last, start, end, paves: Vec::new(), bbox, operand, free: false, container: None, reversed: false, origin: None, source: None, tolerance: 0.0, chords: Default::default() }
     }
 
     /// The box of the curve's samples (the start point for a degenerate edge).
@@ -923,6 +926,7 @@ impl Graph {
         };
         self.edges.push(Edge::with_box(curve, first, last, start, end, bbox, Some(operand)));
         self.edges.last_mut().expect("edge").source = Some(id);
+        self.edges.last_mut().expect("edge").tolerance = model.tolerance(Shape::from(id));
         if placement == Transform::IDENTITY {
             self.edges.last_mut().expect("edge").origin = Some(id);
             for (v, shape) in [(start, start_vertex), (end, end_vertex)] {

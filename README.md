@@ -98,6 +98,19 @@ allocator it uses, is chosen with `PYKENTRON_PROFILE`:
 Rust programs using kentron directly make the same choice by declaring their allocator and
 passing `CollectOptions` to `Model::collect_garbage_with`.
 
+## Tracing sections of free-form surfaces
+
+Where a boolean operation meets a B-spline, Bezier or offset surface, the curves where the
+faces meet are traced numerically. `KENTRON_MARCH` chooses how; it is read once per process:
+
+| value | how sections are traced |
+|---|---|
+| unset, `0`, `off` (default) | on a grid over one surface, where the other's signed distance changes sign |
+| `1`, `on` | by marching along both surfaces at once from seeds found on a coarse grid, falling back to the grid where a branch cannot be followed |
+
+Marching is several times faster on large free-form faces and is meant to become the
+default.
+
 ## Installing
 
 - Rust: `cargo add kentron`.

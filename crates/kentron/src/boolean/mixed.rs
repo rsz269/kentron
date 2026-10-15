@@ -346,12 +346,24 @@ pub(super) fn section(model: &mut Model, mut graph: Graph) -> Result<Shape> {
     let (pieces, of_edge) = intersect(&mut graph);
     let mut taken: HashSet<usize> = HashSet::default();
     let mut chosen: Vec<usize> = Vec::new();
+    // The faces each edge was found lying on (within its tolerance, which may be looser than
+    // where points are placed on a face).
+    let mut lying_on: HashMap<usize, Vec<usize>> = HashMap::default();
+    for (fi, face) in graph.faces.iter().enumerate() {
+        for &e in &face.on_edges {
+            lying_on.entry(e).or_default().push(fi);
+        }
+    }
     for (ei, e) in graph.edges.iter().enumerate() {
         for &pi in &of_edge[ei] {
             let piece = &pieces[pi];
             let meets = match e.operand {
                 None => true,
-                Some(k) => e.curve.is_some() && graph.place(graph.piece_middle(piece), 1 - k) == Place::On,
+                Some(k) => {
+                    let p = graph.piece_middle(piece);
+                    let on_face = || lying_on.get(&ei).is_some_and(|faces| faces.iter().any(|&g| graph.faces[g].locate(p, &graph.edges, &graph.vertices) != Location::Outside));
+                    e.curve.is_some() && (graph.place(p, 1 - k) == Place::On || on_face())
+                }
             };
             if meets && taken.insert(piece.rep) {
                 chosen.push(pi);

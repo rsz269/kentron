@@ -1189,7 +1189,6 @@ tests/lowalgos/intss/bug23948_1
 tests/lowalgos/intss/bug24648
 tests/lowalgos/intss/bug24772
 tests/lowalgos/intss/bug25890
-tests/lowalgos/intss/bug25898
 tests/lowalgos/intss/bug26509_1
 tests/lowalgos/intss/bug26509_2
 tests/lowalgos/intss/bug26509_3
