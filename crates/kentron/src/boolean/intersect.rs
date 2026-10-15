@@ -323,6 +323,9 @@ struct Traced {
     v_period: Option<f64>,
     base: Surface,
     other: Surface,
+    /// The point last found by [`Section::point`] and its parameter's bits (asked for again
+    /// as often as not: the point a projection onto the curve ends at).
+    last: std::sync::Mutex<Option<(u64, Point)>>,
 }
 
 impl Traced {
@@ -479,6 +482,12 @@ impl Section {
                 branch.point_clamped(angle)
             }
             Section::Sampled(points, closed, traced) => {
+                let last = || traced.last.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                if let Some((bits, p)) = *last() {
+                    if bits == t.to_bits() {
+                        return p;
+                    }
+                }
                 let n = points.len();
                 let (_, len) = self.range();
                 let t = if *closed { t.rem_euclid(len) } else { t.clamp(0.0, len) };
@@ -491,7 +500,9 @@ impl Section {
                     None => d,
                 };
                 let (du, dv) = (across(b.0 - a.0, traced.u_period), across(b.1 - a.1, traced.v_period));
-                traced.point((a.0 + du * s, a.1 + dv * s))
+                let p = traced.point((a.0 + du * s, a.1 + dv * s));
+                *last() = Some((t.to_bits(), p));
+                p
             }
         }
     }
@@ -1282,7 +1293,7 @@ fn sliced(base: &Face, other: &Face) -> Vec<Section> {
             }
         }
         if uv.len() >= 2 {
-            let mut traced = Traced { uv, u_period: base.u_period, v_period: v_periodic, base: s.clone(), other: q.clone() };
+            let mut traced = Traced { uv, u_period: base.u_period, v_period: v_periodic, base: s.clone(), other: q.clone(), last: Default::default() };
             // (Where it strays from the samples' chords by more than a few ten-thousandths of
             // the other face. The factor is tuned on the tests: finer, a section running along
             // an edge two faces share moves across it, where telling which face it lies in
@@ -1905,11 +1916,17 @@ fn section_crossings(a: &Section, b: &Section) -> Vec<Point> {
                 }
                 let (ta, tb) = (i as f64 + 0.5, j as f64 + 0.5);
                 let (mut q, mut sa, mut sb) = (a.point(ta), ta, tb);
+                // (Done where a round leaves everything as it was: so would the next.)
+                let state = |q: Point, sa: f64, sb: f64| [q.x, q.y, q.z, sa, sb].map(f64::to_bits);
                 for _ in 0..8 {
+                    let before = state(q, sa, sb);
                     (sb, _) = b.project_near(q, sb);
                     q = b.point(sb);
                     (sa, _) = a.project_near(q, sa);
                     q = a.point(sa);
+                    if state(q, sa, sb) == before {
+                        break;
+                    }
                 }
                 // Only crossings within this pair of stretches.
                 if (sa - ta).abs() <= 0.5 + 1e-9 && (sb - tb).abs() <= 0.5 + 1e-9 && b.point(sb).distance(q) <= on_tol() && !out.iter().any(|x| x.distance(q) <= on_tol()) {

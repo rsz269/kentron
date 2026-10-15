@@ -203,8 +203,8 @@ pub(super) fn freeform(surface: &Surface) -> bool {
 /// (shared by the threads of an operation).
 static SAMPLES: std::sync::Mutex<Vec<(SampleKey, std::sync::Arc<Vec<(f64, f64, Point)>>)>> = std::sync::Mutex::new(Vec::new());
 
-/// What stands for a surface in the cache of sample grids: a B-spline surface's identity,
-/// else three of its points.
+/// What stands for a surface in the cache of sample grids: a B-spline or Bézier surface's
+/// identity, else three of its points.
 #[derive(PartialEq)]
 enum SampleKey {
     Shared(crate::geometry::SurfaceId),
@@ -212,9 +212,9 @@ enum SampleKey {
 }
 
 fn sample_key(surface: &Surface) -> SampleKey {
-    match surface {
-        Surface::BSpline(b) => SampleKey::Shared(b.id()),
-        other => SampleKey::Points(fingerprint(other)),
+    match surface.shared_id() {
+        Some(id) => SampleKey::Shared(id),
+        None => SampleKey::Points(fingerprint(surface)),
     }
 }
 

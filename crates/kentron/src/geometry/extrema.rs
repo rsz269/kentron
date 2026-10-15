@@ -1256,11 +1256,12 @@ pub fn nearest_on_surface(p: Point, surface: &Surface, start: Option<(f64, f64)>
         Surface::BSpline(b) => ((2 * b.u_knots().len()).clamp(16, 64), (2 * b.v_knots().len()).clamp(16, 64)),
         _ => (16, 16),
     };
+    let points = grid_points(surface, (u0, u1, v0, v1), nu, nv);
     let mut grid: Vec<(f64, f64, f64)> = Vec::with_capacity((nu + 1) * (nv + 1));
     for i in 0..=nu {
         for j in 0..=nv {
             let (u, v) = (u0 + (u1 - u0) * i as f64 / nu as f64, v0 + (v1 - v0) * j as f64 / nv as f64);
-            grid.push((u, v, surface.point(u, v).distance(p)));
+            grid.push((u, v, points[i * (nv + 1) + j].distance(p)));
         }
     }
     // By distance, ties in grid order (as a stable sort): only the nearest few are sorted,
@@ -1302,6 +1303,55 @@ pub fn nearest_on_surface(p: Point, surface: &Surface, start: Option<(f64, f64)>
         }
     }
     best
+}
+
+/// What stands for a surface in the cache of grids: a B-spline or Bézier surface's
+/// identity, else three of its points (by their bits); with the grid's steps.
+#[derive(PartialEq)]
+enum GridKey {
+    Shared(super::SurfaceId, usize, usize),
+    Points([u64; 9], usize, usize),
+}
+
+/// Grids of points of the surfaces searched lately (shared by the threads of an
+/// operation): a search from scratch evaluates many.
+static GRIDS: std::sync::Mutex<Vec<(GridKey, std::sync::Arc<Vec<Point>>)>> = std::sync::Mutex::new(Vec::new());
+
+/// The points of `surface` at the `(nu + 1) × (nv + 1)` grid over the bounds given, row by
+/// row along u (cached).
+fn grid_points(surface: &Surface, (u0, u1, v0, v1): (f64, f64, f64, f64), nu: usize, nv: usize) -> std::sync::Arc<Vec<Point>> {
+    use super::parametric::ParametricSurface;
+    let key = match surface.shared_id() {
+        Some(id) => GridKey::Shared(id, nu, nv),
+        None => {
+            let mut bits = [0; 9];
+            for (k, (a, b)) in [(0.31, 0.27), (0.5, 0.5), (0.77, 0.69)].into_iter().enumerate() {
+                let q = surface.point(u0 + (u1 - u0) * a, v0 + (v1 - v0) * b);
+                bits[3 * k..3 * k + 3].copy_from_slice(&[q.x.to_bits(), q.y.to_bits(), q.z.to_bits()]);
+            }
+            GridKey::Points(bits, nu, nv)
+        }
+    };
+    let lock = || GRIDS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some((_, grid)) = lock().iter().find(|(k, _)| *k == key) {
+        return grid.clone();
+    }
+    // (Made outside the lock; another thread may make it too.)
+    let mut points = Vec::with_capacity((nu + 1) * (nv + 1));
+    for i in 0..=nu {
+        for j in 0..=nv {
+            points.push(surface.point(u0 + (u1 - u0) * i as f64 / nu as f64, v0 + (v1 - v0) * j as f64 / nv as f64));
+        }
+    }
+    let grid = std::sync::Arc::new(points);
+    let mut cache = lock();
+    if !cache.iter().any(|(k, _)| *k == key) {
+        if cache.len() >= 64 {
+            cache.remove(0);
+        }
+        cache.push((key, grid.clone()));
+    }
+    grid
 }
 
 /// The point of `curve` over `[first, last]` closest to `p` (its ends included).

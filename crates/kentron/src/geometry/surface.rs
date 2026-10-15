@@ -27,6 +27,16 @@ pub enum Surface {
 // The `ParametricSurface` impl of `Surface` is in eval.rs.
 
 impl Surface {
+    /// What identifies a B-spline or Bézier surface and its unchanged clones (for caches
+    /// keyed by surface); `None` for others.
+    pub(crate) fn shared_id(&self) -> Option<super::SurfaceId> {
+        match self {
+            Surface::BSpline(b) => Some(b.id()),
+            Surface::Bezier(b) => Some(b.id()),
+            _ => None,
+        }
+    }
+
     /// The point and first derivatives at `(u, v)` for each `u` of `us` (best ascending), as
     /// `d1` gives them one by one; at once (for less work) on a B-spline surface.
     pub fn d1_along_u(&self, us: &[f64], v: f64) -> Vec<(Point, Vector, Vector)> {
@@ -607,11 +617,13 @@ impl Transformable for Torus {
 pub struct ExtrusionSurface {
     basis: Box<Curve>,
     direction: Direction,
+    /// The points of a bounded basis that [`Self::parameters`] scans (made on first use).
+    scan: super::patches::Shared<Vec<Point>>,
 }
 
 impl ExtrusionSurface {
     pub fn new(basis: Curve, direction: Direction) -> Self {
-        Self { basis: Box::new(basis), direction }
+        Self { basis: Box::new(basis), direction, scan: Default::default() }
     }
 
     pub fn basis(&self) -> &Curve {
@@ -636,7 +648,8 @@ impl ExtrusionSurface {
         let flat = |v: Vector| v - d * v.dot(d);
         let gap = |u: f64| flat(self.basis.point(u) - p).length_squared();
         let (mut a, mut b) = (self.basis.first_parameter(), self.basis.last_parameter());
-        if a <= -crate::tolerance::INFINITE || b >= crate::tolerance::INFINITE {
+        let bounded = !(a <= -crate::tolerance::INFINITE || b >= crate::tolerance::INFINITE);
+        if !bounded {
             // An unbounded basis: around the parameter of its point nearest to p's shadow.
             let t0 = match &*self.basis {
                 super::curve::Curve::Line(l) => (p - l.origin).dot(Vector::from(l.direction)),
@@ -648,7 +661,13 @@ impl ExtrusionSurface {
         // A coarse scan, then Newton steps on the derivative of the squared gap.
         let n = 64;
         let step = (b - a) / n as f64;
-        let (i, scanned) = (0..=n).map(|i| (i, gap(a + step * i as f64))).min_by(|x, y| x.1.total_cmp(&y.1)).expect("samples");
+        // (A bounded basis's points scanned are the same each time: kept.)
+        let scan = bounded.then(|| self.scan.get(|| Some((0..=n).map(|i| self.basis.point(a + step * i as f64)).collect()))).flatten();
+        let (i, scanned) = match scan {
+            Some(points) => points.iter().enumerate().map(|(i, &q)| (i, flat(q - p).length_squared())).min_by(|x, y| x.1.total_cmp(&y.1)),
+            None => (0..=n).map(|i| (i, gap(a + step * i as f64))).min_by(|x, y| x.1.total_cmp(&y.1)),
+        }
+        .expect("samples");
         let start = a + step * i as f64;
         let mut u = start;
         let (lo, hi) = (u - step, u + step);

@@ -548,6 +548,12 @@ impl BezierSurface {
         s
     }
 
+    /// What identifies this surface and its unchanged clones (for caches keyed by surface):
+    /// that of the B-spline form they share.
+    pub(crate) fn id(&self) -> super::SurfaceId {
+        self.evaluated().id()
+    }
+
     /// The B-spline form the surface is evaluated as (made once, shared by clones).
     fn evaluated(&self) -> &super::bspline::BSplineSurface {
         self.bspline.get(|| Some(self.to_bspline())).expect("a B-spline form")
