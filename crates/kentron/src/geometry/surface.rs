@@ -708,11 +708,14 @@ impl Transformable for ExtrusionSurface {
 pub struct RevolutionSurface {
     basis: Box<Curve>,
     axis: Axis,
+    /// The meridian points (radius, height) that [`Self::parameters`] scans over the
+    /// basis's whole range (made on first use).
+    scan: super::patches::Shared<Vec<(f64, f64)>>,
 }
 
 impl RevolutionSurface {
     pub fn new(basis: Curve, axis: Axis) -> Self {
-        Self { basis: Box::new(basis), axis }
+        Self { basis: Box::new(basis), axis, scan: Default::default() }
     }
 
     pub fn basis(&self) -> &Curve {
@@ -794,7 +797,14 @@ impl RevolutionSurface {
         // A coarse scan, then Newton steps on the derivative of the squared gap.
         let n = 48;
         let step = (b - a) / n as f64;
-        let (i, scanned) = (0..=n).map(|i| (i, gap(a + step * i as f64))).min_by(|x, y| x.1.total_cmp(&y.1)).expect("samples");
+        // (Over the basis's whole range, the points scanned are the same each time: kept.)
+        let whole = a == self.basis.first_parameter() && b == self.basis.last_parameter();
+        let scan = whole.then(|| self.scan.get(|| Some((0..=n).map(|i| meridian(self.basis.point(a + step * i as f64))).collect()))).flatten();
+        let (i, scanned) = match scan {
+            Some(points) => points.iter().enumerate().map(|(i, &(r, h))| (i, (r - rp).powi(2) + (h - hp).powi(2))).min_by(|x, y| x.1.total_cmp(&y.1)),
+            None => (0..=n).map(|i| (i, gap(a + step * i as f64))).min_by(|x, y| x.1.total_cmp(&y.1)),
+        }
+        .expect("samples");
         let mut v = a + step * i as f64;
         let (lo, hi) = (v - step, v + step);
         let mut converged = false;
