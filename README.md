@@ -105,11 +105,12 @@ faces meet are traced numerically. `KENTRON_MARCH` chooses how; it is read once 
 
 | value | how sections are traced |
 |---|---|
-| unset, `0`, `off` (default) | on a grid over one surface, where the other's signed distance changes sign |
-| `1`, `on` | by marching along both surfaces at once from seeds found on a coarse grid, falling back to the grid where a branch cannot be followed |
+| unset, `1`, `on` (default) | by marching along both surfaces at once from seeds found on a coarse grid, falling back to the grid where a branch cannot be followed |
+| `0`, `off` | on a grid over one surface, where the other's signed distance changes sign |
 
-Marching is several times faster on large free-form faces and is meant to become the
-default.
+Marching is several times faster on large free-form faces (a boolean from the OCCT suite,
+`bugs/modalg_7/bug29038`: 16.6 s on the grid, 4.0 s marching); the grid is kept for
+comparison.
 
 ## Installing
 

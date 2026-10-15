@@ -700,20 +700,17 @@ fn bug23958() -> DrawResult<()> {
 
 /// `tests/bugs/modalg_5/bug23998`
 #[test]
-#[should_panic]
-fn bug23998() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.restore(&[data_file("bug23998_m1s.brep").as_str(), "b"])?;
-        d.explode(&["b"])?;
-        d.bop(&["b_1", "b_2"])?;
-        d.bopsection(&["result", "b_1", "b_2"])?;
-        d.checkshape(&["result"])?;
-        d.checkprops(&["result", "-l", "67.026"])?;
-        d.checksection(&["result"])?;
-        d.checknbshapes(&["result", "-vertex", "1", "-edge", "1", "-wire", "0", "-face", "0", "-shell", "0", "-solid", "0", "-compsolid", "0", "-compound", "1", "-shape", "3"])?;
-        Ok(())
-    })
+fn bug23998() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.restore(&[data_file("bug23998_m1s.brep").as_str(), "b"])?;
+    d.explode(&["b"])?;
+    d.bop(&["b_1", "b_2"])?;
+    d.bopsection(&["result", "b_1", "b_2"])?;
+    d.checkshape(&["result"])?;
+    d.checkprops(&["result", "-l", "67.026"])?;
+    d.checksection(&["result"])?;
+    d.checknbshapes(&["result", "-vertex", "1", "-edge", "1", "-wire", "0", "-face", "0", "-shell", "0", "-solid", "0", "-compsolid", "0", "-compound", "1", "-shape", "3"])?;
+    Ok(())
 }
 
 /// `tests/bugs/modalg_5/bug24036`

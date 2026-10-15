@@ -223,19 +223,16 @@ fn bug32944() {
 
 /// `tests/bugs/modalg_8/bug32945`
 #[test]
-#[should_panic]
-fn bug32945() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.restore(&[data_file("bug32945.brep").as_str(), "a"])?;
-        d.explode(&["a"])?;
-        d.bcommon(&["result", "a_1", "a_2"])?;
-        d.checkshape(&["result"])?;
-        d.checknbshapes(&["result", "-vertex", "8", "-edge", "12", "-wire", "6", "-face", "6", "-shell", "1", "-solid", "1"])?;
-        d.checkmaxtol(&["result", "-min_tol", "1.e-5"])?;
-        d.checkprops(&["result", "-s", "83754.8"])?;
-        Ok(())
-    })
+fn bug32945() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.restore(&[data_file("bug32945.brep").as_str(), "a"])?;
+    d.explode(&["a"])?;
+    d.bcommon(&["result", "a_1", "a_2"])?;
+    d.checkshape(&["result"])?;
+    d.checknbshapes(&["result", "-vertex", "8", "-edge", "12", "-wire", "6", "-face", "6", "-shell", "1", "-solid", "1"])?;
+    d.checkmaxtol(&["result", "-min_tol", "1.e-5"])?;
+    d.checkprops(&["result", "-s", "83754.8"])?;
+    Ok(())
 }
 
 /// `tests/bugs/modalg_8/bug32964`

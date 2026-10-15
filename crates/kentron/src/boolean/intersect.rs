@@ -1320,13 +1320,13 @@ fn grid_size(s: &Surface) -> (usize, usize) {
 }
 
 /// Whether sections of free-form surfaces are traced by marching along them (else on a grid
-/// of signed distances): set by the environment variable `KENTRON_MARCH` (`1`, `on` or
-/// `true` to march; `0`, `off`, `false` or unset for the grid), read once.
+/// of signed distances): by default, unless the environment variable `KENTRON_MARCH` says
+/// otherwise (`0`, `off`, `false` or `no` for the grid), read once.
 fn marching() -> bool {
     static MARCHING: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *MARCHING.get_or_init(|| match std::env::var("KENTRON_MARCH") {
-        Ok(value) => matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "on" | "true" | "yes"),
-        Err(_) => false,
+        Ok(value) => !matches!(value.trim().to_ascii_lowercase().as_str(), "0" | "off" | "false" | "no"),
+        Err(_) => true,
     })
 }
 

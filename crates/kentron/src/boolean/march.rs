@@ -117,9 +117,10 @@ pub(super) fn trace(base: &Surface, other: &Surface, range: Range, (nu, nv): (us
         }
     }
     // Followed a little past the base's bounds too, where the range reaches them (as far as
-    // points on both surfaces may lie off them, by `slack`): a section there (across a
-    // narrow face, at a corner of the base where edges of the other meet it only within
-    // their tolerance) is followed past them rather than missed.
+    // points on both surfaces may lie off them, by `slack`, or a thousandth of a step): a
+    // section there (across a narrow face, at a corner of the base where edges of the other
+    // meet it only within their tolerance, or running on past the base's edge to where
+    // edges of the faces beyond meet it) is followed past them rather than missed.
     let range = {
         let (bu0, bu1, bv0, bv1) = base.bounds();
         let (um, vm) = (0.5 * (range.u.0 + range.u.1), 0.5 * (range.v.0 + range.v.1));
@@ -127,7 +128,8 @@ pub(super) fn trace(base: &Surface, other: &Surface, range: Range, (nu, nv): (us
             if periodic {
                 return (lo, hi);
             }
-            let margin = |at: f64| (2.0 * slack / speed(at).max(1e-300)).min(0.05 * (hi - lo).abs());
+            let reach = (2.0 * slack).max(1e-3 * leaf);
+            let margin = |at: f64| (reach / speed(at).max(1e-300)).min(0.05 * (hi - lo).abs());
             let at = |x: f64, b: f64| (x - b).abs() <= 1e-12 * (b1 - b0).abs().max(1.0);
             (if at(lo, b0) { lo - margin(lo) } else { lo }, if at(hi, b1) { hi + margin(hi) } else { hi })
         };

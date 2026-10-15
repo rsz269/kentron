@@ -93,7 +93,6 @@ tests/blend/tolblend_simple/C5
 tests/blend/tolblend_simple/C6
 tests/blend/tolblend_simple/D2
 tests/blend/tolblend_simple/D6
-tests/blend/tolblend_simple/D7
 tests/blend/tolblend_simple/D8
 tests/blend/tolblend_simple/D9
 tests/blend/tolblend_simple/E1
@@ -306,7 +305,6 @@ tests/bugs/modalg_1/buc60462_1
 tests/bugs/modalg_1/buc60532
 tests/bugs/modalg_1/buc60532_1
 tests/bugs/modalg_1/buc60532_2
-tests/bugs/modalg_1/buc60555_1
 tests/bugs/modalg_1/buc60555_2
 tests/bugs/modalg_1/buc60555_3
 tests/bugs/modalg_1/buc60585_2
@@ -319,7 +317,6 @@ tests/bugs/modalg_1/buc60703_3
 tests/bugs/modalg_1/buc60703_4
 tests/bugs/modalg_1/buc60714
 tests/bugs/modalg_1/buc60728
-tests/bugs/modalg_1/buc60744
 tests/bugs/modalg_1/buc60776_1
 tests/bugs/modalg_1/buc60782_1
 tests/bugs/modalg_1/buc60830_2
@@ -429,8 +426,6 @@ tests/bugs/modalg_2/bug497_5
 tests/bugs/modalg_2/bug500
 tests/bugs/modalg_2/bug526
 tests/bugs/modalg_2/bug548
-tests/bugs/modalg_2/bug578_1
-tests/bugs/modalg_2/bug578_2
 tests/bugs/modalg_2/bug5805_1
 tests/bugs/modalg_2/bug5805_10
 tests/bugs/modalg_2/bug5805_11
@@ -545,7 +540,6 @@ tests/bugs/modalg_5/bug23706_61
 tests/bugs/modalg_5/bug23706_9
 tests/bugs/modalg_5/bug23952_1
 tests/bugs/modalg_5/bug23952_2
-tests/bugs/modalg_5/bug23998
 tests/bugs/modalg_5/bug24086
 tests/bugs/modalg_5/bug24157_4
 tests/bugs/modalg_5/bug24220
@@ -865,7 +859,6 @@ tests/bugs/modalg_8/bug32929
 tests/bugs/modalg_8/bug32942
 tests/bugs/modalg_8/bug32943
 tests/bugs/modalg_8/bug32944
-tests/bugs/modalg_8/bug32945
 tests/bugs/modalg_8/bug33104
 tests/bugs/modalg_8/bug33156_2
 tests/bugs/modalg_8/bug33173
