@@ -69,7 +69,7 @@ and no change may make a passing test fail.
 - **44 CadQuery models from a private project** build on pykentron; for the 42 that return
   their parts, every part is valid and within 0.1% of CadQuery's volume.
 
-About 10,300 tests run (with OCCT's dataset). About 1,800 of them are known gaps, marked as
+About 10,300 tests run (with OCCT's dataset). About 1,700 of them are known gaps, marked as
 expected failures (`crates/occt-tests/expected_failures.txt` for OCCT's scripts): they pass
 while they fail, so `cargo test` is green, and fail once they pass, so a fix is noticed
 as surely as a regression.
@@ -80,9 +80,9 @@ A complex five-part CadQuery model, built on pykentron and on CadQuery 2.8 (OCCT
 
 | | wall time | CPU time | peak memory |
 |---|---|---|---|
-| pykentron (`fast` profile) | 4.2 s | 5.3 s | 438 MB |
-| CadQuery 2.8 / OCCT | 41.7 s | 129.7 s | 1,095 MB |
-| | **10× faster** | **25× less** | **2.5× less** |
+| pykentron (`fast` profile) | 4.9 s | 5.9 s | 460 MB |
+| CadQuery 2.8 / OCCT | 41.8 s | 122.4 s | 1,097 MB |
+| | **8.5× faster** | **21× less** | **2.4× less** |
 
 ## Memory or speed: profiles
 
@@ -91,9 +91,9 @@ allocator it uses, is chosen with `PYKENTRON_PROFILE`:
 
 | profile | what it does | the same model, against no collection |
 |---|---|---|
-| `low-memory` | also drops cached data of removed shapes | 62% of the peak memory, ~5–10% slower |
-| `balanced` (default) | removes unreachable shapes | 72% of the peak memory, ~3% slower |
-| `fast` | as `balanced`, with mimalloc as allocator | the same peak memory, ~17% faster |
+| `low-memory` | also drops cached data of removed shapes | 58% of the peak memory, ~3% slower |
+| `balanced` (default) | removes unreachable shapes | 68% of the peak memory, ~2% slower |
+| `fast` | as `balanced`, with mimalloc as allocator | 89% of the peak memory, ~14% faster |
 
 Rust programs using kentron directly make the same choice by declaring their allocator and
 passing `CollectOptions` to `Model::collect_garbage_with`.
