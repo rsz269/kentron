@@ -145,7 +145,7 @@ pub(super) fn uv_within(surface: &Surface, p: Point, reach: f64) -> Option<Uv> {
 
 /// The foot of `p` on a free-form surface: Newton steps from the nearest of a grid of the
 /// surface's points.
-fn foot_on(surface: &Surface, p: Point) -> crate::geometry::extrema::SurfaceFoot {
+pub(super) fn foot_on(surface: &Surface, p: Point) -> crate::geometry::extrema::SurfaceFoot {
     let start = with_samples(surface, |grid| {
         let mut best = (f64::INFINITY, 0);
         for (k, &(_, _, q)) in grid.iter().enumerate() {

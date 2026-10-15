@@ -341,6 +341,9 @@ impl Traced {
     fn uv_at(&self, (mut u, mut v): (f64, f64)) -> (f64, f64) {
         use crate::geometry::ParametricSurface;
         if geom::freeform(&self.other) {
+            if let Some(found) = self.on_both((u, v)) {
+                return found;
+            }
             // The gradient in closed form: the other surface's normal at the foot point
             // along the base's derivatives (one inversion per step).
             let mut last = None;
@@ -401,6 +404,86 @@ impl Traced {
             v -= value * fv / norm;
         }
         (u, v)
+    }
+
+    /// [`Self::uv_at`] on a free-form other surface by Newton steps on the point both
+    /// surfaces share, `base(u, v) = other(s, t)` (each step moving `(u, v)` the least,
+    /// `(s, t)` taking up the rest), from the other's foot of the start; `None` where they
+    /// do not converge.
+    fn on_both(&self, (mut u, mut v): (f64, f64)) -> Option<(f64, f64)> {
+        use crate::geometry::ParametricSurface;
+        let foot = geom::foot_on(&self.other, self.base.point(u, v));
+        let (mut s, mut t) = (foot.u, foot.v);
+        let (s0, s1, t0, t1) = self.other.bounds();
+        let (bu0, bu1, bv0, bv1) = self.base.bounds();
+        let (s_periodic, t_periodic) = (self.other.is_u_periodic(), self.other.is_v_periodic());
+        // (u, v) weighed against (s, t): steps of the other's parameters a million times
+        // cheaper.
+        const FREE: f64 = 1e6;
+        // The other surface, beyond its bounds carried on across its edge in its tangent
+        // plane (square to the edge): where its distance, from the nearest point of the
+        // edge along the normal there, is 0.
+        let extended = |s: f64, t: f64| {
+            let (sc, tc) = (if s_periodic { s } else { s.clamp(s0, s1) }, if t_periodic { t } else { t.clamp(t0, t1) });
+            let (q, qs, qt) = self.other.d1(sc, tc);
+            let (ds, dt) = (s - sc, t - tc);
+            if ds == 0.0 && dt == 0.0 {
+                return (q, qs, qt);
+            }
+            let across = |a: Vector, b: Vector| {
+                let bb = b.dot(b);
+                if bb > 0.0 { a - b * (a.dot(b) / bb) } else { a }
+            };
+            let (es, et) = (if ds != 0.0 { across(qs, qt) } else { qs }, if dt != 0.0 { across(qt, qs) } else { qt });
+            (q + es * ds + et * dt, es, et)
+        };
+        for _ in 0..20 {
+            let (p, pu, pv) = self.base.d1(u, v);
+            let (q, qs, qt) = extended(s, t);
+            let f = p - q;
+            if f.length() <= 1e-12 * (1.0 + (p - Point::ORIGIN).length()) {
+                return Some((u, v));
+            }
+            // J = [pu pv -qs -qt], the step -W J^T (J W J^T)^-1 f with W = diag(1, 1, FREE, FREE).
+            let m = |a: Vector, b: Vector| a.x * b.x + a.y * b.y + a.z * b.z;
+            let col = [pu, pv, qs * -1.0, qt * -1.0];
+            let w = [1.0, 1.0, FREE, FREE];
+            let mut mm = [[0.0; 3]; 3];
+            for k in 0..4 {
+                let c = [col[k].x, col[k].y, col[k].z];
+                for r in 0..3 {
+                    for cc in 0..3 {
+                        mm[r][cc] += w[k] * c[r] * c[cc];
+                    }
+                }
+            }
+            let det = mm[0][0] * (mm[1][1] * mm[2][2] - mm[1][2] * mm[2][1]) - mm[0][1] * (mm[1][0] * mm[2][2] - mm[1][2] * mm[2][0]) + mm[0][2] * (mm[1][0] * mm[2][1] - mm[1][1] * mm[2][0]);
+            let scale = mm[0][0].abs().max(mm[1][1].abs()).max(mm[2][2].abs());
+            if !(det.abs() > 1e-24 * scale * scale * scale) {
+                return None;
+            }
+            // y = M^-1 f by Cramer's rule.
+            let fv = [f.x, f.y, f.z];
+            let solve = |k: usize| {
+                let mut a = mm;
+                for r in 0..3 {
+                    a[r][k] = fv[r];
+                }
+                (a[0][0] * (a[1][1] * a[2][2] - a[1][2] * a[2][1]) - a[0][1] * (a[1][0] * a[2][2] - a[1][2] * a[2][0]) + a[0][2] * (a[1][0] * a[2][1] - a[1][1] * a[2][0])) / det
+            };
+            let y = Vector::new(solve(0), solve(1), solve(2));
+            let step: Vec<f64> = (0..4).map(|k| -w[k] * m(col[k], y)).collect();
+            (u, v, s, t) = (u + step[0], v + step[1], s + step[2], t + step[3]);
+            if !(u.is_finite() && v.is_finite() && s.is_finite() && t.is_finite()) {
+                return None;
+            }
+            // (Not off the base, where it is extrapolated.)
+            let off = |x: f64, lo: f64, hi: f64, periodic: bool| !periodic && (x < lo || x > hi);
+            if off(u, bu0, bu1, self.base.is_u_periodic()) || off(v, bv0, bv1, self.base.is_v_periodic()) {
+                return None;
+            }
+        }
+        None
     }
 
     /// The parameters a fraction `s` of the way from `a` to `b` (the short way round a
