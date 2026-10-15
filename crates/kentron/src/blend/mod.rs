@@ -185,16 +185,30 @@ fn fillet_solid_edges(model: &mut Model, shape: Shape, edges: &[(Shape, f64)]) -
         }
     }
     let mut result = shape;
+    // (A step leaving the solid's shells open, where they were closed, and the solid in
+    // pieces: the steps after it split those pieces by one another, and by the open edges
+    // ever further, and the fillet fails there. A step only leaving them open may be undone
+    // by the next, which takes the open part away.)
+    let closed = boolean::closed_shells(model, shape);
+    let keep = |model: &Model, result: Shape| -> Result<Shape> {
+        if closed && model.explore(result, NodeKind::Solid).nth(1).is_some() && !boolean::closed_shells(model, result) {
+            return Err(Error::Failed("a fillet's tool left the solid's shells open".into()));
+        }
+        Ok(result)
+    };
     for ((corner, radius), extend) in corners.iter().zip(extensions(model, shape, &corners)) {
         let tool = corner.tool(model, *radius, extend)?;
         result = if corner.convex { boolean::difference(model, result, tool)? } else { boolean::union(model, result, tool)? };
+        result = keep(model, result)?;
     }
     for (tool, convex) in rolling_tools {
         result = if convex { boolean::difference(model, result, tool)? } else { boolean::union(model, result, tool)? };
+        result = keep(model, result)?;
     }
     for patch in patches {
         let tool = patch.tool(model)?;
         result = boolean::difference(model, result, tool)?;
+        result = keep(model, result)?;
     }
     Ok(result)
 }
