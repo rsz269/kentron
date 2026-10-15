@@ -1,6 +1,7 @@
 //! Shapes split by one another into cells.
 
 use crate::error::Result;
+use crate::math::{Point, Transformable, Vector};
 use crate::topology::{Model, NodeKind, Shape};
 
 /// A piece of a set of shapes split by one another: a solid (a face, an edge, for shapes
@@ -32,12 +33,16 @@ pub fn cells(model: &mut Model, shapes: &[Shape]) -> Result<Vec<Cell>> {
 /// by a face) is left whole (the shape still split by it): enough for where they meet.
 pub(super) fn cells_with(model: &mut Model, shapes: &[Shape], split_higher: bool) -> Result<Vec<Cell>> {
     let before = super::SPLITTING_CELLS.with(|f| f.replace(true));
+    let t0 = std::time::Instant::now();
     let found = split_all(model, shapes, split_higher);
+    if std::env::var("CDBG").is_ok() { eprintln!("PHASE split_all {:?}", t0.elapsed()); }
     super::SPLITTING_CELLS.with(|f| f.set(before));
     let found = found?;
     // (Split one after another, cells met by one shape have each their copies of its parts:
     // made one.)
+    let t0 = std::time::Instant::now();
     super::arguments::glue(model, &found.iter().map(|c| c.shape).collect::<Vec<_>>())?;
+    if std::env::var("CDBG").is_ok() { eprintln!("PHASE glue {:?}", t0.elapsed()); }
     Ok(found)
 }
 
@@ -48,26 +53,42 @@ fn split_all(model: &mut Model, shapes: &[Shape], split_higher: bool) -> Result<
     // the next shape outside all of them. A shape of lower dimension than a piece (a face
     // across a solid) splits it without taking anything away, its own part inside the
     // piece a cell inside both.
-    // (Each piece with its box once found: a piece meets many shapes.)
-    let mut pieces: Vec<(Vec<bool>, Shape, Option<crate::math::BoundingBox>)> = Vec::new();
+    // (Each piece with its box once found: a piece meets many shapes. Its marks are the
+    // shapes it lies inside, by their numbers: with many shapes, most of them none.)
+    let mut pieces: Vec<(Vec<usize>, Shape, Option<crate::math::BoundingBox>)> = Vec::new();
     for (k, &shape) in shapes.iter().enumerate() {
         let shape_box = crate::properties::bounding_box(model, shape);
         let shape_dimension = dimension(model, shape);
         let mut rest = Some(shape);
         let mut next = Vec::with_capacity(2 * pieces.len() + 1);
-        for (mut inside, piece, piece_box) in pieces {
+        for (inside, piece, piece_box) in pieces {
             let piece_box = piece_box.unwrap_or_else(|| crate::properties::bounding_box(model, piece));
             // (A part of the piece lies within its box; a part inside the shape too, within
             // both boxes.)
             let both = meet(&piece_box, &shape_box).unwrap_or(piece_box);
             if !piece_box.overlaps(&shape_box) {
-                inside.push(false);
                 next.push((inside, piece, Some(piece_box)));
                 continue;
             }
             let piece_dimension = dimension(model, piece);
             if piece_dimension > shape_dimension {
                 let (parts, cut) = if split_higher { split_by(model, piece, shape)? } else { (vec![piece], None) };
+                // (What is left of the shape apart from the piece's boundary lies wholly
+                // inside it or wholly outside: one of its points tells which.)
+                if let Some(r) = rest.filter(|_| cut.is_none()) {
+                    if let Some(inside_piece) = wholly_inside(model, r, piece)? {
+                        if inside_piece {
+                            let mut marks = inside.clone();
+                            marks.push(k);
+                            next.push((marks, r, Some(both)));
+                            rest = None;
+                        }
+                        for part in parts {
+                            next.push((inside.clone(), part, Some(piece_box)));
+                        }
+                        continue;
+                    }
+                }
                 if let Some(r) = rest {
                     // The shape's part inside the piece: where the piece's parts meet, when
                     // they were split by it (one face shared by both).
@@ -77,14 +98,15 @@ fn split_all(model: &mut Model, shapes: &[Shape], split_higher: bool) -> Result<
                     };
                     if !super::is_empty(model, within) {
                         let mut marks = inside.clone();
-                        marks.push(true);
+                        marks.push(k);
                         next.push((marks, within, Some(both)));
                     }
                     rest = Some(super::difference(model, r, piece)?).filter(|&r| !super::is_empty(model, r));
                 }
-                inside.push(false);
+                // (Parts of a piece split each have a box of their own, found when needed.)
+                let split = parts.len() > 1;
                 for part in parts {
-                    next.push((inside.clone(), part, Some(piece_box)));
+                    next.push((inside.clone(), part, (!split).then_some(piece_box)));
                 }
                 continue;
             }
@@ -95,41 +117,69 @@ fn split_all(model: &mut Model, shapes: &[Shape], split_higher: bool) -> Result<
                     rest = Some(beyond).filter(|&r| !super::is_empty(model, r));
                     if !super::is_empty(model, within) {
                         let mut marks = inside.clone();
-                        marks.push(true);
+                        marks.push(k);
                         next.push((marks, within, Some(both)));
                     }
                     if !super::is_empty(model, without) {
-                        inside.push(false);
                         next.push((inside, without, Some(piece_box)));
                     }
                     continue;
                 }
             }
-            let within = super::intersection(model, piece, shape)?;
-            let without = super::difference(model, piece, shape)?;
+            // (Faces in planes none of the other's: their intersection holds no area, and
+            // the operation finds nothing.)
+            let within = if piece_dimension == 2 && shape_dimension == 2 && !share_planes(model, piece, shape) {
+                compound(model, &[])?
+            } else {
+                super::intersection(model, piece, shape)?
+            };
+            let without = match (piece_dimension == 2 && shape_dimension == 2).then(|| near_and_far(model, piece, &shape_box)).flatten() {
+                // (Faces whose boxes miss the shape's are not split by it: they are kept, the
+                // others only split, as the operation on all would leave or split them.)
+                Some((near, far)) if !far.is_empty() => {
+                    let mut parts = far;
+                    if !near.is_empty() {
+                        let near = compound(model, &near)?;
+                        let split = super::difference(model, near, shape)?;
+                        parts.extend(model.children(split));
+                    }
+                    compound(model, &parts)?
+                }
+                _ => super::difference(model, piece, shape)?,
+            };
             if let Some(r) = rest {
                 rest = Some(if shape_dimension > piece_dimension {
                     // (A lower-dimensional piece takes nothing away: it splits.)
                     let (parts, _) = if split_higher { split_by(model, r, piece)? } else { (vec![r], None) };
                     compound(model, &parts)?
                 } else {
-                    super::difference(model, r, piece)?
+                    // (Likewise only the piece's faces near what is left of the shape take
+                    // anything from it.)
+                    let r_box = crate::properties::bounding_box(model, r);
+                    match (piece_dimension == 2 && shape_dimension == 2).then(|| near_and_far(model, piece, &r_box)).flatten() {
+                        Some((near, far)) if !far.is_empty() => match near.is_empty() {
+                            true => r,
+                            false => {
+                                let near = compound(model, &near)?;
+                                super::difference(model, r, near)?
+                            }
+                        },
+                        _ => super::difference(model, r, piece)?,
+                    }
                 })
                 .filter(|&r| !super::is_empty(model, r));
             }
             if !super::is_empty(model, within) {
                 let mut marks = inside.clone();
-                marks.push(true);
+                marks.push(k);
                 next.push((marks, within, Some(both)));
             }
             if !super::is_empty(model, without) {
-                inside.push(false);
                 next.push((inside, without, Some(piece_box)));
             }
         }
         if let Some(r) = rest {
-            let mut marks = vec![false; k];
-            marks.push(true);
+            let marks = vec![k];
             // (A solid split by pieces of lower dimension: each part apart, which later
             // operations on them together would fuse again.)
             let apart = if dimension(model, r) == 3 { parts(model, r) } else { vec![r] };
@@ -143,10 +193,66 @@ fn split_all(model: &mut Model, shapes: &[Shape], split_higher: bool) -> Result<
     let mut out = Vec::new();
     for (inside, piece, _) in pieces {
         for part in parts(model, piece) {
-            out.push(Cell { inside: inside.clone(), shape: part });
+            let mut marks = vec![false; shapes.len()];
+            for &k in &inside {
+                marks[k] = true;
+            }
+            out.push(Cell { inside: marks, shape: part });
         }
     }
     Ok(out)
+}
+
+/// Whether `shape` lies inside `solid`, where no face of the solid comes near it (their
+/// boxes, grown a little, apart): its first vertex tells; `None` where they come near (or
+/// it has no vertex, or the point is on the boundary after all).
+fn wholly_inside(model: &Model, shape: Shape, solid: Shape) -> Result<Option<bool>> {
+    let b = crate::properties::bounding_box(model, shape);
+    let grown = b.enlarged(1e-6 * (1.0 + (b.max - b.min).length()));
+    if model.unique_subshapes(solid, NodeKind::Face).into_iter().any(|f| crate::properties::bounding_box(model, f).overlaps(&grown)) {
+        return Ok(None);
+    }
+    let Some(v) = model.explore(shape, NodeKind::Vertex).next() else { return Ok(None) };
+    Ok(match super::PointClassifier::new(model, solid)?.locate(model.point(v)) {
+        super::PointLocation::Inside => Some(true),
+        super::PointLocation::Outside => Some(false),
+        _ => None,
+    })
+}
+
+/// The faces of a compound of faces (only) whose boxes meet `bbox` (grown a little), and
+/// the others; `None` for other shapes.
+fn near_and_far(model: &Model, shape: Shape, bbox: &crate::math::BoundingBox) -> Option<(Vec<Shape>, Vec<Shape>)> {
+    let children: Vec<Shape> = model.children(shape).collect();
+    if shape.kind() != NodeKind::Compound || children.is_empty() || children.iter().any(|c| c.kind() != NodeKind::Face) {
+        return None;
+    }
+    let grown = bbox.enlarged(1e-3 * (1.0 + (bbox.max - bbox.min).length()));
+    let (mut near, mut far) = (Vec::new(), Vec::new());
+    for face in children {
+        if crate::properties::bounding_box(model, face).overlaps(&grown) { near.push(face) } else { far.push(face) }
+    }
+    Some((near, far))
+}
+
+/// Whether `a` and `b` may share area: unless every face of both is planar, and none lies
+/// in (or nearly in) the plane of one of the other's.
+fn share_planes(model: &Model, a: Shape, b: Shape) -> bool {
+    use crate::geometry::surface::Surface;
+    let planes = |s: Shape| -> Option<Vec<(Point, Vector)>> {
+        let mut out: Vec<(Point, Vector)> = Vec::new();
+        for f in model.unique_subshapes(s, NodeKind::Face) {
+            let Some(Surface::Plane(p)) = model.surface(f).map(|s| s.transformed(&f.placement)) else { return None };
+            let n = Vector::from(p.normal());
+            if !out.iter().any(|&(o, m)| m.cross(n).length() <= 1e-12 && (p.origin() - o).dot(m).abs() <= 1e-12) {
+                out.push((p.origin(), n));
+            }
+        }
+        Some(out)
+    };
+    let (Some(pa), Some(pb)) = (planes(a), planes(b)) else { return true };
+    // (Generously: far looser than the operations' tolerances.)
+    pa.iter().any(|&(o, n)| pb.iter().any(|&(q, m)| n.cross(m).length() <= 1e-3 && (q - o).dot(n).abs() <= 1e-2 * (1.0 + (q - o).length())))
 }
 
 /// The box where two boxes overlap; `None` if they do not.

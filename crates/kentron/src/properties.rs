@@ -865,7 +865,14 @@ fn local_face_box(model: &Model, f: Shape) -> Option<BoundingBox> {
         .flat_map(|i| (0..=n).map(move |j| (i, j)))
         .map(|(i, j)| surface.point(lo[0] + (hi[0] - lo[0]) * i as f64 / n as f64, lo[1] + (hi[1] - lo[1]) * j as f64 / n as f64))
         .collect();
-    let step = grid.windows(2).map(|w| w[0].distance(w[1])).fold(0.0, f64::max);
+    // The largest step between neighbours of the grid (along u or v, not from the end of a
+    // row to the start of the next).
+    let at = |i: usize, j: usize| grid[i * (n + 1) + j];
+    let step = (0..=n).flat_map(|i| (0..=n).map(move |j| (i, j))).fold(0.0f64, |m, (i, j)| {
+        let along = if j < n { at(i, j).distance(at(i, j + 1)) } else { 0.0 };
+        let across = if i < n { at(i, j).distance(at(i + 1, j)) } else { 0.0 };
+        m.max(along).max(across)
+    });
     Some(BoundingBox::from_points(grid).enlarged(0.25 * step + model.tolerance(f)))
 }
 
@@ -1130,13 +1137,16 @@ fn face_extremes(model: &Model, face: Shape, surface: &Surface) -> Vec<Point> {
         }
         crossings % 2 == 1
     };
-    let n = 24;
+    // (On a sphere a coordinate is stationary only at the points of its axes: those the face
+    // has, found in closed form below, and its boundary's, its edges' extremes. No search.)
+    let sphere = matches!(surface, Surface::Sphere(_));
+    let n = if sphere { 0 } else { 24 };
     let grid: Vec<[f64; 2]> = (0..=n)
         .flat_map(|i| (0..=n).map(move |j| (i, j)))
         .map(|(i, j)| [lo[0] + (hi[0] - lo[0]) * i as f64 / n as f64, lo[1] + (hi[1] - lo[1]) * j as f64 / n as f64])
-        .filter(|&uv| inside(uv))
+        .filter(|&uv| !sphere && inside(uv))
         .collect();
-    if grid.is_empty() {
+    if grid.is_empty() && !sphere {
         return Vec::new();
     }
     // The grid's points, found once for all six directions.
@@ -1145,6 +1155,9 @@ fn face_extremes(model: &Model, face: Shape, surface: &Surface) -> Vec<Point> {
     for k in 0..3 {
         let c = |p: Point| [p.x, p.y, p.z][k];
         for sign in [1.0, -1.0] {
+            if grid.is_empty() {
+                continue;
+            }
             // The best grid point, then Newton on the coordinate's gradient.
             let best = (0..grid.len()).max_by(|&a, &b| (sign * c(points[a])).total_cmp(&(sign * c(points[b])))).expect("grid");
             let mut uv = grid[best];
