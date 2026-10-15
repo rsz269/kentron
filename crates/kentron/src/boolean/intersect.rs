@@ -2079,30 +2079,54 @@ impl Graph {
 
     /// The pieces of `section` between the vertices `on` it (at their parameters) inside
     /// both faces, as section edges of both.
-    /// Whether the piece of `section` from `t0` to `t1` runs along an edge of one face lying
-    /// on the other, within the faces' tolerance over the sine of the angle between their
-    /// surfaces: points that far from where they meet are on both (where they meet nearly
-    /// tangent, as a fillet the face it rolls on, far), and the section traced among them is
-    /// that edge (made of it, the faces would be split twice, by two curves a little apart).
-    fn along_edge_on_both(&self, fa: usize, fb: usize, section: &Section, t0: f64, t1: f64) -> bool {
+    /// The edges of either face lying on the other, and for each of their vertices (ends and
+    /// split points) those it is on.
+    fn edges_lying_on_both(&self, fa: usize, fb: usize) -> (Vec<usize>, HashMap<usize, Vec<usize>>) {
         let (a, b) = (&self.faces[fa], &self.faces[fb]);
-        let lying = |f: &Face, other: &Face| f.boundary.iter().map(|u| u.edge).filter(|e| other.on_edges.contains(e)).collect::<Vec<usize>>();
+        let lying = |f: &Face, other: &Face| {
+            let on: crate::hashing::FastSet<usize> = other.on_edges.iter().copied().collect();
+            f.boundary.iter().map(|u| u.edge).filter(move |e| on.contains(e)).collect::<Vec<usize>>()
+        };
         let mut edges = lying(a, b);
         edges.extend(lying(b, a));
+        let mut by_vertex: HashMap<usize, Vec<usize>> = HashMap::default();
+        for &e in &edges {
+            let edge = &self.edges[e];
+            for v in [edge.start, edge.end].into_iter().chain(edge.paves.iter().map(|&(_, v)| v)) {
+                by_vertex.entry(v).or_default().push(e);
+            }
+        }
+        (edges, by_vertex)
+    }
+
+    /// Whether the piece of `section` from `t0` to `t1` (from vertex `v0` to `v1`) runs along
+    /// `lying`, edges of one face lying on the other (see [`Self::edges_lying_on_both`]),
+    /// within the faces' tolerance over the sine of the angle between their surfaces: points
+    /// that far from where they meet are on both (where they meet nearly tangent, as a fillet
+    /// the face it rolls on, far), and the section traced among them is that edge (made of
+    /// it, the faces would be split twice, by two curves a little apart).
+    fn along_edge_on_both(&self, fa: usize, fb: usize, section: &Section, (t0, v0): (f64, usize), (t1, v1): (f64, usize), lying: &(Vec<usize>, HashMap<usize, Vec<usize>>)) -> bool {
+        let (edges, by_vertex) = lying;
         if edges.is_empty() {
             return false;
         }
+        let (a, b) = (&self.faces[fa], &self.faces[fb]);
         let tolerance = a.drift.max(b.drift) + 10.0 * on_tol();
         let scale = a.bbox.0.distance(a.bbox.1).min(b.bbox.0.distance(b.bbox.1));
+        // (Those through the piece's ends first: usually the one it runs along.)
+        let mut first: Vec<usize> = [v0, v1].iter().filter_map(|v| by_vertex.get(v)).flatten().copied().collect();
+        first.sort_unstable();
+        first.dedup();
         (0..=8).all(|i| {
             let p = section.point(t0 + (t1 - t0) * i as f64 / 8.0);
             let sine = geom::normal_at_point(&a.surface, p).cross(geom::normal_at_point(&b.surface, p)).length();
             let reach = (tolerance / sine.max(1e-12)).min(1e-3 * scale).max(tolerance);
-            edges.iter().any(|&e| {
+            let near = |&e: &usize| {
                 let edge = &self.edges[e];
                 let Some(curve) = &edge.curve else { return false };
                 geom::box_contains(&(edge.bbox.0 - Vector::new(reach, reach, reach), edge.bbox.1 + Vector::new(reach, reach, reach)), p) && geom::project(curve, edge.first, edge.last, p).1 <= reach
-            })
+            };
+            first.iter().any(near) || edges.iter().any(near)
         })
     }
 
@@ -2129,11 +2153,13 @@ impl Graph {
                 pieces.push((last.0, last.1, first.0 + period, first.1));
             }
         }
+        // (The edges either face has lying on the other, found once for all the pieces.)
+        let lying = self.edges_lying_on_both(fa, fb);
         for (t0, v0, t1, v1) in pieces {
             if t1 - t0 <= 1e-12 * period.max(1.0) {
                 continue;
             }
-            if self.along_edge_on_both(fa, fb, section, t0, t1) {
+            if self.along_edge_on_both(fa, fb, section, (t0, v0), (t1, v1), &lying) {
                 continue;
             }
             // (A marched section, followed a little past the surfaces' bounds: there off them,
