@@ -1936,6 +1936,74 @@ fn section_crossings(a: &Section, b: &Section) -> Vec<Point> {
         let (na, nb) = (segments(pa, *ca), segments(pb, *cb));
         let length = |p: &Vec<Point>, i: usize| p[i].distance(p[(i + 1) % p.len()]);
         let mut out: Vec<Point> = Vec::new();
+        // Refined from `(ta, tb)` (stretches `i` of `a` and `j` of `b`) by alternate projections.
+        let refine = |i: usize, j: usize, ta: f64, tb: f64, out: &mut Vec<Point>| {
+            let (mut q, mut sa, mut sb) = (a.point(ta), ta, tb);
+            // (Done where a round leaves everything as it was: so would the next.)
+            let state = |q: Point, sa: f64, sb: f64| [q.x, q.y, q.z, sa, sb].map(f64::to_bits);
+            // (Also done where the gap between the curves, shrinking as it does, would not
+            // come within the tolerance in the rounds left: curves running side by side
+            // without crossing.)
+            const ROUNDS: usize = 8;
+            let mut gap = f64::INFINITY;
+            for round in 0..ROUNDS {
+                let before = state(q, sa, sb);
+                (sb, _) = b.project_near(q, sb);
+                let qb = b.point(sb);
+                (sa, _) = a.project_near(qb, sa);
+                q = a.point(sa);
+                if state(q, sa, sb) == before {
+                    break;
+                }
+                let now = q.distance(qb);
+                let ratio = now / gap;
+                let left = (ROUNDS - 1 - round) as i32;
+                if now > on_tol() && (ratio >= 1.0 || now * ratio.powi(left) > on_tol()) {
+                    break;
+                }
+                gap = now;
+            }
+            // Only crossings within this pair of stretches.
+            let within = |s: f64, k: usize| s >= k as f64 - 1e-9 && s <= k as f64 + 1.0 + 1e-9;
+            if within(sa, i) && within(sb, j) && b.point(sb).distance(q) <= on_tol() && !out.iter().any(|x| x.distance(q) <= on_tol()) {
+                out.push(q);
+            }
+        };
+        if let (Section::Sampled(_, _, ta), Section::Sampled(_, _, tb)) = (a, b) {
+            if ta.base == tb.base && ta.uv.len() == pa.len() && tb.uv.len() == pb.len() {
+                // Traced on one surface: where their polylines cross in its parameters
+                // (curves running side by side there do not cross).
+                let period = |x: Option<f64>| x.filter(|p| *p > 0.0);
+                let (pu, pv) = (period(ta.u_period.or(tb.u_period)), period(ta.v_period.or(tb.v_period)));
+                // `b`'s point moved by whole periods to be nearest `near`.
+                let shifted = |p: (f64, f64), near: (f64, f64)| {
+                    let by = |x: f64, to: f64, period: Option<f64>| period.map_or(x, |p| x + ((to - x) / p).round() * p);
+                    (by(p.0, near.0, pu), by(p.1, near.1, pv))
+                };
+                for i in 0..na {
+                    let (a0, a1) = (ta.uv[i], ta.uv[(i + 1) % ta.uv.len()]);
+                    let a1 = shifted(a1, a0);
+                    for j in 0..nb {
+                        let b0 = shifted(tb.uv[j], a0);
+                        let b1 = shifted(tb.uv[(j + 1) % tb.uv.len()], b0);
+                        // Where a0 + s (a1 - a0) = b0 + r (b1 - b0), both within [0, 1].
+                        let (dx, dy, ex, ey) = (a1.0 - a0.0, a1.1 - a0.1, b1.0 - b0.0, b1.1 - b0.1);
+                        let den = dx * ey - dy * ex;
+                        if den == 0.0 {
+                            continue;
+                        }
+                        let (fx, fy) = (b0.0 - a0.0, b0.1 - a0.1);
+                        let (s, r) = ((fx * ey - fy * ex) / den, (fx * dy - fy * dx) / den);
+                        let slack = 1e-9;
+                        if s < -slack || s > 1.0 + slack || r < -slack || r > 1.0 + slack {
+                            continue;
+                        }
+                        refine(i, j, i as f64 + s.clamp(0.0, 1.0), j as f64 + r.clamp(0.0, 1.0), &mut out);
+                    }
+                }
+                return out;
+            }
+        }
         for i in 0..na {
             for j in 0..nb {
                 let (x0, x1, y0, y1) = (pa[i], pa[(i + 1) % pa.len()], pb[j], pb[(j + 1) % pb.len()]);
@@ -1948,24 +2016,7 @@ fn section_crossings(a: &Section, b: &Section) -> Vec<Point> {
                 if segments_gap(x0, x1, y0, y1) > 0.05 * reach + on_tol() {
                     continue;
                 }
-                let (ta, tb) = (i as f64 + 0.5, j as f64 + 0.5);
-                let (mut q, mut sa, mut sb) = (a.point(ta), ta, tb);
-                // (Done where a round leaves everything as it was: so would the next.)
-                let state = |q: Point, sa: f64, sb: f64| [q.x, q.y, q.z, sa, sb].map(f64::to_bits);
-                for _ in 0..8 {
-                    let before = state(q, sa, sb);
-                    (sb, _) = b.project_near(q, sb);
-                    q = b.point(sb);
-                    (sa, _) = a.project_near(q, sa);
-                    q = a.point(sa);
-                    if state(q, sa, sb) == before {
-                        break;
-                    }
-                }
-                // Only crossings within this pair of stretches.
-                if (sa - ta).abs() <= 0.5 + 1e-9 && (sb - tb).abs() <= 0.5 + 1e-9 && b.point(sb).distance(q) <= on_tol() && !out.iter().any(|x| x.distance(q) <= on_tol()) {
-                    out.push(q);
-                }
+                refine(i, j, i as f64 + 0.5, j as f64 + 0.5, &mut out);
             }
         }
         return out;
