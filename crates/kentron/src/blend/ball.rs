@@ -350,6 +350,7 @@ pub(super) fn rolling_tool(model: &mut Model, shape: Shape, edge: Shape, radius:
     let span = (t1 - t0).abs() * 1e-9;
     let kept: Vec<&Section> = sections.iter().filter(|s| convex || (s.t >= t0.min(t1) - span && s.t <= t0.max(t1) + span)).collect();
     let mut wires = Vec::with_capacity(kept.len());
+    let kept_radius = kept.iter().map(|s| s.radius).fold(0.0, f64::max);
     for s in kept {
         let (a, b) = (s.contacts[0] - s.center, s.contacts[1] - s.center);
         let half = 0.5 * a.cross(b).length().atan2(a.dot(b));
@@ -376,7 +377,43 @@ pub(super) fn rolling_tool(model: &mut Model, shape: Shape, edge: Shape, radius:
         wires.push(crate::make::wire(model, &edges)?);
     }
     let tool = crate::loft::loft(model, &wires, &crate::loft::LoftOptions { solid: true, ruled: false, ..Default::default() })?.shape;
+    let reach = 0.05 * kept_radius;
+    cover_sides(model, tool, shape, edge, reach)?;
     Ok((tool, convex))
+}
+
+/// Raises the tolerance of each edge of `tool` (and its vertices') lying on one of the faces
+/// along `edge` within `reach` to cover how far it strays from that face: the lofted tool
+/// only passes through its sections' points on the faces, and an operation meeting it with
+/// the shape finds its edges on the faces only within that much.
+fn cover_sides(model: &mut Model, tool: Shape, shape: Shape, edge: Shape, reach: f64) -> Result<()> {
+    let Ok(id) = EdgeId::try_from(edge.node) else { return Ok(()) };
+    let sides = sides_of(model, shape, id)?;
+    for e in model.unique_subshapes(tool, NodeKind::Edge) {
+        let Some((curve, first, last)) = model.edge_curve(e) else { continue };
+        let points: Vec<Point> = (0..=32).map(|k| curve.point(first + (last - first) * k as f64 / 32.0)).collect();
+        let strays = sides
+            .iter()
+            .filter_map(|side| points.iter().map(|&p| side.distance(p).map(|d| d.0.abs())).collect::<Result<Vec<f64>>>().ok())
+            .map(|d| d.into_iter().fold(0.0, f64::max))
+            .filter(|&d| d <= reach)
+            .fold(f64::INFINITY, f64::min);
+        if !strays.is_finite() {
+            continue;
+        }
+        let needed = 1.5 * strays;
+        let Ok(edge_id) = EdgeId::try_from(e.node) else { continue };
+        if needed > model.tolerance(e) {
+            model.set_edge_tolerance(edge_id, needed)?;
+            let (a, b) = model.edge_vertices(e);
+            for v in [a, b] {
+                if needed > model.tolerance(v) {
+                    model.set_vertex_tolerance(VertexId::try_from(v.node).expect("a vertex"), needed)?;
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// The two faces along the edge.
