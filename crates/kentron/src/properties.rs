@@ -107,13 +107,9 @@ pub fn area_with(model: &Model, shape: Shape, options: Options) -> MassPropertie
     }
     let mut total = Moments::default();
     for face in faces(model, shape, options) {
-        let mut moments = Moments { origin: total.origin, ..Moments::default() };
-        integrate_face(model, face, |p, n, weight| {
-            let area = n.length() * weight;
-            moments.add(p, area, 1.0, 1.0);
-        });
+        let moments = face_terms(model, face).2;
         // The sign follows the boundary's direction of travel; an area is positive.
-        total.merge(&moments, moments.measure.signum());
+        total.merge_area(&moments, moments.measure.signum());
     }
     total.properties()
 }
@@ -140,26 +136,35 @@ pub fn volume_with(model: &Model, shape: Shape, options: Options) -> MassPropert
 /// (`3/4 p`), signed by the face's orientation (a shell's volume and moment are the sums
 /// over its faces). Kept in the model for an unplaced face.
 pub(crate) fn face_volume_terms(model: &Model, face: Shape) -> (f64, Vector) {
-    struct VolumeTerms(f64, Vector);
+    let (volume, moment, _) = face_terms(model, face);
+    (volume, moment)
+}
+
+/// A face's volume terms (see [`face_volume_terms`]) and its area's moments (about its first
+/// sample: signed by the face's orientation, as is its area), found in one pass. Kept in the
+/// model for an unplaced face.
+fn face_terms(model: &Model, face: Shape) -> (f64, Vector, Moments) {
+    struct FaceTerms(f64, Vector, Moments);
     let compute = |f: Shape| {
-        let (mut volume, mut moment) = (0.0, Vector::new(0.0, 0.0, 0.0));
+        let (mut volume, mut moment, mut area) = (0.0, Vector::new(0.0, 0.0, 0.0), Moments::default());
         integrate_face(model, f, |p, n, weight| {
             let q = p - Point::ORIGIN;
             let m = q.dot(n) * weight / 3.0;
             volume += m;
             moment = moment + q * (0.75 * m);
+            area.add(p, n.length() * weight, 1.0, 1.0);
         });
-        (volume, moment)
+        (volume, moment, area)
     };
     match FaceId::try_from(face.node) {
         Ok(id) if face.placement == crate::math::Transform::IDENTITY => {
             let forward = Shape { orientation: Orientation::Forward, ..face };
             let sign = if face.orientation == Orientation::Reversed { -1.0 } else { 1.0 };
             let kept = model.derived(face.node, model.face_fingerprint(id), || {
-                let (v, m) = compute(forward);
-                VolumeTerms(v, m)
+                let (v, m, a) = compute(forward);
+                FaceTerms(v, m, a)
             });
-            (sign * kept.0, kept.1 * sign)
+            (sign * kept.0, kept.1 * sign, kept.2.signed(sign))
         }
         _ => compute(face),
     }
@@ -243,7 +248,7 @@ fn integrate_face(model: &Model, face: Shape, mut sample: impl FnMut(Point, Vect
                 let density = |knots: &[f64]| {
                     let spans = knots.len().saturating_sub(1);
                     let range = knots[knots.len() - 1] - knots[0];
-                    if spans > 1 && range > 0.0 { spans.min(8) as f64 / range / MAX_ANGLE_STEP } else { 0.0 }
+                    if spans > 1 && range > 0.0 { spans.min(8) as f64 / range } else { 0.0 }
                 };
                 (density(b.u_knots()), density(b.v_knots()))
             }
@@ -523,7 +528,7 @@ const GAUSS_LEGENDRE: [(f64, f64); 10] = [
 
 /// Accumulates a measure and its first and second moments from weighted samples,
 /// relative to the first sample's point.
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct Moments {
     origin: Option<Point>,
     measure: f64,
@@ -541,6 +546,31 @@ impl Moments {
         for r in 0..3 {
             for c in 0..3 {
                 self.second[r][c] += second * dm * q[r] * q[c];
+            }
+        }
+    }
+
+    /// The accumulation times `sign`.
+    fn signed(&self, sign: f64) -> Moments {
+        let mut out = Moments { origin: self.origin, ..Moments::default() };
+        out.merge(self, sign);
+        out
+    }
+
+    /// Adds `sign` times another accumulation of an area (its centroids and second moments
+    /// those of its points, as [`Self::add`] with factors 1), moved to this one's origin.
+    fn merge_area(&mut self, other: &Moments, sign: f64) {
+        let (Some(origin), Some(theirs)) = (self.origin, other.origin) else {
+            return self.merge(other, sign);
+        };
+        // About this origin, a point's q is its own q + d.
+        let d = theirs - origin;
+        let (m, first) = (sign * other.measure, other.first * sign);
+        self.measure += m;
+        self.first = self.first + first + d * m;
+        for r in 0..3 {
+            for c in 0..3 {
+                self.second[r][c] += sign * other.second[r][c] + first[r] * d[c] + d[r] * first[c] + m * d[r] * d[c];
             }
         }
     }

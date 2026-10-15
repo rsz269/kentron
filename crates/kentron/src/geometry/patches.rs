@@ -112,20 +112,25 @@ impl Patches {
         // Along u, each control point a row of the net.
         let rows: Vec<f64> = net.iter().flat_map(|row| row.iter().flatten().copied()).collect();
         let rows = split(&u_flat, u.degree, nu, &rows, 4 * nv);
-        // Then along v, row by row.
-        let width = npv * (pv + 1);
-        let mut grid: Vec<[f64; 4]> = Vec::with_capacity(npu * (pu + 1) * width);
-        for row in rows.chunks(4 * nv) {
-            let split_row = split(&v_flat, v.degree, nv, row, 4);
-            grid.extend(split_row.chunks(4).map(|c| [c[0], c[1], c[2], c[3]]));
+        // Then along v, all rows at once (each control point along v a column of the rows:
+        // the same sums, number by number, as row by row).
+        let r = rows.len() / (4 * nv);
+        let mut columns: Vec<f64> = Vec::with_capacity(rows.len());
+        for j in 0..nv {
+            for row in rows.chunks(4 * nv) {
+                columns.extend_from_slice(&row[4 * j..4 * j + 4]);
+            }
         }
-        // Patch by patch.
-        let mut points = Vec::with_capacity(grid.len());
+        let grid = split(&v_flat, v.degree, nv, &columns, 4 * r);
+        // Patch by patch: row a (pu + 1) + i, column b (pv + 1) + j at (column r + row) 4.
+        let mut points = Vec::with_capacity(grid.len() / 4);
         for a in 0..npu {
             for b in 0..npv {
                 for i in 0..=pu {
-                    let from = (a * (pu + 1) + i) * width + b * (pv + 1);
-                    points.extend_from_slice(&grid[from..from + pv + 1]);
+                    for j in 0..=pv {
+                        let at = ((b * (pv + 1) + j) * r + a * (pu + 1) + i) * 4;
+                        points.push([grid[at], grid[at + 1], grid[at + 2], grid[at + 3]]);
+                    }
                 }
             }
         }
