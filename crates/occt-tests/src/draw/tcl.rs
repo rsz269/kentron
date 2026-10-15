@@ -93,9 +93,12 @@ fn execute(name: &str, interp: &mut Interp<Session>, argv: &[Value]) -> MoltResu
     // The DRAW variables made are Tcl variables (global) too.
     let created = std::mem::take(&mut interp.context_mut().draw.created);
     if !created.is_empty() {
-        let globals = interp.vars_in_global_scope();
+        // (At the top level, where scripts mostly are, asked of the scope itself: listing
+        // every variable for each command made is slow with thousands of them.)
+        let globals = if interp.scope_level() == 0 { Vec::new() } else { interp.vars_in_global_scope() };
         for n in created {
-            if !globals.iter().any(|g| g.as_str() == n) {
+            let exists = if interp.scope_level() == 0 { interp.var_exists(&Value::from(n.as_str())) } else { globals.iter().any(|g| g.as_str() == n) };
+            if !exists {
                 let set = Value::from(vec![Value::from("set"), Value::from(n.as_str()), Value::from(n.as_str())]);
                 let _ = interp.eval_at_scope(0, &set);
             }
