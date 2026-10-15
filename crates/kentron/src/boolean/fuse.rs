@@ -19,10 +19,18 @@ use super::graph::{Graph, Location};
 use super::split;
 
 /// The cells of `shapes` (as [`super::cells`]), found in one graph; `None` where that is not
-/// done: with solids, empty shapes, or faces of two shapes lying on one another.
+/// done: with solids and other shapes together, empty shapes, or faces of two shapes (not
+/// solids) lying on one another.
 pub(super) fn cells(model: &mut Model, shapes: &[Shape]) -> Result<Option<Vec<Cell>>> {
     let n = shapes.len();
-    if n < 2 || shapes.iter().any(|&s| model.explore(s, NodeKind::Solid).next().is_some() || super::is_empty(model, s)) {
+    if n < 2 || shapes.iter().any(|&s| super::is_empty(model, s)) {
+        return Ok(None);
+    }
+    let solid = |s: Shape| model.explore(s, NodeKind::Solid).next().is_some();
+    if shapes.iter().all(|&s| super::graph::made_of_solids(model, s)) {
+        return solid_cells(model, shapes);
+    }
+    if shapes.iter().any(|&s| solid(s)) {
         return Ok(None);
     }
     let mut graph = Graph::with_operands(n);
@@ -133,6 +141,90 @@ pub(super) fn cells(model: &mut Model, shapes: &[Shape]) -> Result<Option<Vec<Ce
     out.set_tolerances(model, &graph, &pieces)?;
     // In the order of shapes added one after another: by the shapes each is inside, the
     // first first, inside one before outside it.
+    cells.sort_by(|a, b| b.inside.cmp(&a.inside));
+    Ok(Some(cells))
+}
+
+/// The cells of shapes made of solids: every face split by all the other shapes in one
+/// graph, the pieces of space the parts enclose, each inside the shapes a point of it is in
+/// (those inside none, enclosed between the shapes, left out). `None` with a shape whose
+/// shell is open (a half-space), or where the cells do not make up the shapes (faces left
+/// unsplit where they meet).
+fn solid_cells(model: &mut Model, shapes: &[Shape]) -> Result<Option<Vec<Cell>>> {
+    let n = shapes.len();
+    let mut graph = Graph::with_operands(n);
+    for (k, &shape) in shapes.iter().enumerate() {
+        graph.add_operand(model, shape, k, &Default::default())?;
+    }
+    if graph.open.iter().any(|&o| o) {
+        return Ok(None);
+    }
+    graph.intersect_edges_with_faces();
+    graph.intersect_edges_on_faces();
+    graph.share_vertices();
+    graph.intersect_faces();
+    graph.intersect_sections();
+    graph.share_vertices();
+    let (mut pieces, of_edge) = graph.pieces();
+    let mut arcs_of = Vec::with_capacity(graph.faces.len());
+    for fi in 0..graph.faces.len() {
+        arcs_of.push(graph.arcs_on_face(fi, &mut pieces, &of_edge, None));
+    }
+    // Every region of every face (those of faces lying on one another made one when the
+    // solids are gathered).
+    let mut kept: Vec<Kept> = Vec::new();
+    for (fi, arcs) in arcs_of.iter().enumerate() {
+        let face = &graph.faces[fi];
+        let scale = face.bbox.0.distance(face.bbox.1);
+        for region in split::split_face(arcs, &pieces, &face.polylines, scale, false) {
+            kept.push(Kept { face: fi, region, flip: false, far: false });
+        }
+    }
+    let mut out = Output::default();
+    let faces = out.faces(model, &graph, &pieces, &arcs_of, &kept)?;
+    out.set_tolerances(model, &graph, &pieces)?;
+    // (Each face held by the box of the face it is a region of.)
+    let known: crate::hashing::FastMap<crate::topology::NodeId, crate::math::BoundingBox> =
+        faces.iter().zip(&kept).map(|(f, k)| (f.node, crate::math::BoundingBox::new(graph.faces[k.face].bbox.0, graph.faces[k.face].bbox.1))).collect();
+    // Where a point lies: in the shapes whose boxes hold it and which contain it.
+    let mut boxes = vec![crate::math::BoundingBox::EMPTY; n];
+    for face in &graph.faces {
+        boxes[face.operand].add_box(&crate::math::BoundingBox::new(face.bbox.0, face.bbox.1));
+    }
+    // A step behind a face as a shell holds it, from the middle of its region (the face built
+    // faces out of its shape: what lies behind it is behind the region where the shell holds
+    // it as built).
+    let built: crate::hashing::FastMap<crate::topology::NodeId, usize> = faces.iter().enumerate().map(|(i, f)| (f.node, i)).collect();
+    let mut extent = crate::math::BoundingBox::EMPTY;
+    for b in &boxes {
+        extent.add_box(b);
+    }
+    let step = (1e-5 * (extent.max - extent.min).length()).max(10.0 * geom::on_tol());
+    let marks_at = |_: &Model, held: Shape| -> Option<Vec<bool>> {
+        let i = *built.get(&held.node)?;
+        let face = &graph.faces[kept[i].face];
+        let on = geom::surface_point(&face.surface, kept[i].region.interior);
+        let behind = held.orientation == faces[i].orientation;
+        let p = on + face.outward_normal(on) * if behind { -step } else { step };
+        Some((0..n).map(|k| boxes[k].contains(p) && graph.contains(k, graph.faces_of(k), p)).collect())
+    };
+    let enclosed = super::volume::enclosed_solids_marked(model, &faces, &known, &marks_at)?;
+    // The pieces inside some shape are the cells (those inside none, enclosed between the
+    // shapes, left out).
+    let mut cells: Vec<Cell> = enclosed.into_iter().filter(|(_, inside)| inside.iter().any(|&b| b)).map(|(shape, inside)| Cell { inside, shape }).collect();
+    // Each shape made up of its cells, else (faces left unsplit where shapes meet) none of
+    // them.
+    let volume = |model: &Model, s: Shape| crate::properties::solid_volume(model, s).map_or_else(|| crate::properties::volume(model, s).mass, |v| v.0);
+    let slack = 1e-9 * (extent.max - extent.min).length().powi(3);
+    let cell_volumes: Vec<f64> = cells.iter().map(|c| volume(model, c.shape)).collect();
+    for (k, &shape) in shapes.iter().enumerate() {
+        let whole = volume(model, shape);
+        let parts: f64 = cells.iter().zip(&cell_volumes).filter(|(c, _)| c.inside[k]).map(|(_, v)| v).sum();
+        // (Within what integrating the faces either way may differ by.)
+        if (parts - whole).abs() > 1e-4 * whole.abs() + slack || cell_volumes.iter().any(|&v| v <= 0.0) {
+            return Ok(None);
+        }
+    }
     cells.sort_by(|a, b| b.inside.cmp(&a.inside));
     Ok(Some(cells))
 }

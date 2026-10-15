@@ -568,12 +568,19 @@ impl Index {
     pub fn face_pairs(&self) -> Vec<(usize, usize)> {
         let mut pairs: Vec<(usize, usize)> = match &self.all_faces {
             None => self.faces[0].overlapping_pairs(&self.faces[1]).into_iter().map(|(a, b)| (self.face_ids[0][a], self.face_ids[1][b])).collect(),
-            Some((tree, ids)) => tree
-                .overlapping_pairs(tree)
-                .into_iter()
-                .map(|(a, b)| (ids[a], ids[b]))
-                .filter(|&(a, b)| self.face_operand[a] < self.face_operand[b])
-                .collect(),
+            Some((tree, ids)) => {
+                // (The tree against itself may give a pair either way round, or both.)
+                let mut found: Vec<(usize, usize)> = tree
+                    .overlapping_pairs(tree)
+                    .into_iter()
+                    .map(|(a, b)| (ids[a], ids[b]))
+                    .filter(|&(a, b)| self.face_operand[a] != self.face_operand[b])
+                    .map(|(a, b)| if self.face_operand[a] < self.face_operand[b] { (a, b) } else { (b, a) })
+                    .collect();
+                found.sort_unstable();
+                found.dedup();
+                found
+            }
         };
         pairs.sort_unstable();
         pairs
@@ -584,12 +591,21 @@ impl Index {
     pub fn edge_pairs(&self) -> Vec<(usize, usize)> {
         let mut pairs: Vec<(usize, usize)> = match &self.all_edges {
             None => self.edges[0].overlapping_pairs(&self.edges[1]).into_iter().map(|(a, b)| (self.edge_ids[0][a], self.edge_ids[1][b])).collect(),
-            Some((tree, ids)) => tree
-                .overlapping_pairs(tree)
-                .into_iter()
-                .map(|(a, b)| (ids[a], ids[b]))
-                .filter(|&(a, b)| matches!((self.edge_operand[a], self.edge_operand[b]), (Some(x), Some(y)) if x < y))
-                .collect(),
+            Some((tree, ids)) => {
+                let mut found: Vec<(usize, usize)> = tree
+                    .overlapping_pairs(tree)
+                    .into_iter()
+                    .map(|(a, b)| (ids[a], ids[b]))
+                    .filter_map(|(a, b)| match (self.edge_operand[a], self.edge_operand[b]) {
+                        (Some(x), Some(y)) if x < y => Some((a, b)),
+                        (Some(x), Some(y)) if x > y => Some((b, a)),
+                        _ => None,
+                    })
+                    .collect();
+                found.sort_unstable();
+                found.dedup();
+                found
+            }
         };
         pairs.sort_unstable();
         pairs

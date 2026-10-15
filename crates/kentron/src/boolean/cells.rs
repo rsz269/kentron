@@ -63,6 +63,7 @@ fn compare(model: &Model, shapes: &[Shape], shared: &[Cell], pairwise: &[Cell], 
             let measure = match c.shape.kind() {
                 NodeKind::Face => crate::properties::area(model, c.shape).mass,
                 NodeKind::Edge => crate::properties::length(model, c.shape).mass,
+                NodeKind::Solid => crate::properties::volume(model, c.shape).mass,
                 _ => 0.0,
             };
             let e = out.entry(format!("{kind} {marks}")).or_insert((0, 0.0));
@@ -393,7 +394,8 @@ fn split_by_faces(model: &mut Model, shape: Shape, cutter: Shape) -> Result<(Vec
 fn point_inside(model: &Model, solid: Shape) -> Result<Option<crate::math::Point>> {
     use crate::geometry::ParametricSurface;
     let classifier = super::PointClassifier::new(model, solid)?;
-    let centre = crate::properties::volume(model, solid).center_of_mass;
+    // (From the faces' volume terms, kept with them.)
+    let centre = crate::properties::solid_volume(model, solid).map_or_else(|| crate::properties::volume(model, solid).center_of_mass, |v| v.1);
     if classifier.locate(centre) == super::PointLocation::Inside {
         return Ok(Some(centre));
     }

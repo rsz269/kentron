@@ -2431,7 +2431,6 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/bugs/modalg_2/bug578_1
-expect: not_done
 build:
   - w1: {load: {brep: "OCC578_w1.brep"}}
   - check: {valid: w1}
@@ -2452,7 +2451,6 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/bugs/modalg_2/bug578_2
-expect: not_done
 build:
   - w1: {load: {brep: "OCC578_w1.brep"}}
   - check: {valid: w1}

@@ -23,16 +23,28 @@ use super::PointLocation;
 #[doc(alias = "BOPAlgo_MakerVolume")]
 #[doc(alias = "mkvolume")]
 pub fn enclosed_solids(model: &mut Model, shapes: &[Shape]) -> Result<Shape> {
-    enclose(model, shapes, true)
+    Ok(enclose(model, shapes, true, &Default::default(), None)?.0)
 }
 
 /// [`enclosed_solids`] of faces taken as they are, not split by one another: they must meet
 /// along shared edges already.
 pub fn enclosed_solids_unsplit(model: &mut Model, shapes: &[Shape]) -> Result<Shape> {
-    enclose(model, shapes, false)
+    Ok(enclose(model, shapes, false, &Default::default(), None)?.0)
 }
 
-fn enclose(model: &mut Model, shapes: &[Shape], split: bool) -> Result<Shape> {
+/// Where the space behind a face (as a shell holds it) lies: in which of the shapes of a
+/// general fuse; `None` if not known.
+pub(super) type MarksAt<'a> = &'a dyn Fn(&Model, Shape) -> Option<Vec<bool>>;
+
+/// [`enclosed_solids_unsplit`] of faces with boxes known to hold them (by node), and each
+/// solid with where it lies by `marks_at` (behind one of its faces): a shell turned inwards
+/// is a cavity of the solid around it lying where the space just outside the shell does.
+pub(super) fn enclosed_solids_marked(model: &mut Model, faces: &[Shape], boxes: &crate::hashing::FastMap<crate::topology::NodeId, crate::math::BoundingBox>, marks_at: MarksAt) -> Result<Vec<(Shape, Vec<bool>)>> {
+    Ok(enclose(model, faces, false, boxes, Some(marks_at))?.1)
+}
+
+#[allow(clippy::type_complexity)]
+fn enclose(model: &mut Model, shapes: &[Shape], split: bool, known: &crate::hashing::FastMap<crate::topology::NodeId, crate::math::BoundingBox>, marks_at: Option<MarksAt>) -> Result<(Shape, Vec<(Shape, Vec<bool>)>)> {
     // The arguments as faces (a solid's shells), split by one another.
     let mut sheets = Vec::new();
     for &shape in shapes {
@@ -83,45 +95,111 @@ fn enclose(model: &mut Model, shapes: &[Shape], split: bool) -> Result<Shape> {
             // The space on the side the face's normal points to: the face turned away.
             model.add(shell, if side { faces[i].reversed() } else { faces[i] })?;
         }
-        built.push((shell, properties::volume(model, shell).mass));
+        // (From the faces' volume terms, kept with them.)
+        built.push((shell, properties::closed_shell_volume(model, shell)));
     }
     // (Shells enclosing next to nothing, between faces lying on one another, are left out.)
+    // (The size from the faces' vertices.)
     let mut size = crate::math::BoundingBox::EMPTY;
     for &f in &faces {
-        size.add_box(&properties::bounding_box(model, f));
+        for v in model.explore(f, NodeKind::Vertex) {
+            size.add_point(model.point(v));
+        }
     }
     let negligible = 1e-9 * (size.max - size.min).length().powi(3);
     let built: Vec<(Shape, f64)> = built.into_iter().map(|(s, v)| (s, if v.abs() <= negligible { 0.0 } else { v })).collect();
+    // (With the shell each was made of.)
     let mut solids: Vec<(Shape, f64)> = Vec::new();
-    for &(shell, volume) in built.iter().filter(|(_, v)| *v > 0.0) {
+    let mut solid_shell: Vec<usize> = Vec::new();
+    for (k, &(shell, volume)) in built.iter().enumerate().filter(|(_, (_, v))| *v > 0.0) {
         let solid = model.new_empty(NodeKind::Solid);
         model.add(solid, shell)?;
         solids.push((solid, volume));
+        solid_shell.push(k);
     }
     // A shell turned inwards bounds the space outside its faces: a cavity of the smallest
-    // solid around it (not one it touches), if any.
+    // solid around it (not one it touches), if any. (Each solid's classifier made once.)
+    let mut classifiers: Vec<Option<super::PointClassifier>> = (0..solids.len()).map(|_| None).collect();
+    // (With `marks_at`: where each solid lies, and the space just outside an inward shell.)
+    let marks_of = |model: &Model, shell: Shape| -> Option<Vec<bool>> { marks_at?(model, model.explore(shell, NodeKind::Face).next()?) };
+    let solid_marks: Vec<Option<Vec<bool>>> = solids.iter().zip(&solid_shell).map(|(_, &k)| marks_of(model, built[k].0)).collect();
+    // (Each face's box found once, where an inward shell needs it; a shell's of its faces'.)
+    let mut face_boxes: Vec<Option<crate::math::BoundingBox>> = vec![None; faces.len()];
+    let mut shell_box = |model: &Model, k: usize| {
+        let mut b = crate::math::BoundingBox::EMPTY;
+        for &(i, _) in &shells[k] {
+            b.add_box(face_boxes[i].get_or_insert_with(|| known.get(&faces[i].node).copied().unwrap_or_else(|| properties::bounding_box(model, faces[i]))));
+        }
+        b
+    };
     for (k, &(shell, volume)) in built.iter().enumerate() {
         if volume >= 0.0 {
             continue;
         }
         let Some(probe) = point_on(model, &faces[shells[k][0].0]) else { continue };
-        let around = solids
-            .iter()
-            .filter(|(solid, _)| super::classify_point(model, *solid, probe).is_ok_and(|l| l == PointLocation::Inside))
-            .min_by(|a, b| a.1.total_cmp(&b.1))
-            .map(|s| s.0);
-        if let Some(solid) = around {
+        let outside = marks_of(model, shell);
+        // (In no shape: no solid around it.)
+        if outside.as_ref().is_some_and(|m| !m.iter().any(|&b| b)) {
+            continue;
+        }
+        // (Only solids whose boxes hold the shell's can hold it: none around the shell
+        // bounding everything.)
+        let this_box = shell_box(model, k);
+        // (Nor solids sharing a face with it: they touch it.)
+        let shell_faces: crate::hashing::FastSet<usize> = shells[k].iter().map(|&(i, _)| i).collect();
+        // The solids that may hold it.
+        let mut candidates: Vec<usize> = Vec::new();
+        for (j, &(solid, _)) in solids.iter().enumerate() {
+            let _ = solid;
+            if shells[solid_shell[j]].iter().any(|(i, _)| shell_faces.contains(i)) {
+                continue;
+            }
+            let b = shell_box(model, solid_shell[j]).enlarged(1e-7 * (1.0 + (this_box.max - this_box.min).length()));
+            if !b.contains_box(&this_box) {
+                continue;
+            }
+            // (Where its space lies as the space outside the shell does, if known.)
+            if let (Some(o), Some(m)) = (&outside, &solid_marks[j]) {
+                if o != m {
+                    continue;
+                }
+            }
+            candidates.push(j);
+        }
+        let mut around: Option<(Shape, f64)> = None;
+        if let ([j], Some(_)) = (candidates.as_slice(), &outside) {
+            // (Only one where the space outside lies.)
+            around = Some(solids[*j]);
+        } else {
+            for &j in &candidates {
+                let (solid, size) = solids[j];
+                if classifiers[j].is_none() {
+                    classifiers[j] = super::PointClassifier::new(model, solid).ok();
+                }
+                let inside = classifiers[j].as_ref().is_some_and(|c| c.locate(probe) == PointLocation::Inside);
+                if inside && around.is_none_or(|(_, s)| size < s) {
+                    around = Some((solid, size));
+                }
+            }
+        }
+        if let Some((solid, _)) = around {
             model.add(solid, shell)?;
+            // (Its inside changed.)
+            if let Some(j) = solids.iter().position(|s| s.0 == solid) {
+                classifiers[j] = None;
+            }
         }
     }
     // Tolerances grown to cover the gaps where pieces were joined.
     for &(solid, _) in &solids {
         crate::modify::update_tolerances(model, solid)?;
     }
-    match solids.as_slice() {
-        [(solid, _)] => Ok(*solid),
-        _ => compound(model, &solids.iter().map(|s| s.0).collect::<Vec<_>>()),
-    }
+    let marked: Vec<(Shape, Vec<bool>)> = solids.iter().zip(solid_marks).filter_map(|(&(solid, _), m)| Some((solid, m?))).collect();
+    let shape = match solids.as_slice() {
+        [(solid, _)] => *solid,
+        _ => compound(model, &solids.iter().map(|s| s.0).collect::<Vec<_>>())?,
+    };
+    Ok((shape, marked))
 }
 
 /// `faces` without those lying on another of them (on its surface, between the same
@@ -184,7 +262,8 @@ struct Sides {
 
 impl Sides {
     fn around_edges(model: &Model, faces: &[Shape]) -> Result<Sides> {
-        let mut by_edge: Vec<(EdgeId, Vec<(usize, Point, Vector, Vector, Vector)>)> = Vec::new();
+        #[allow(clippy::type_complexity)]
+        let mut by_edge: Vec<(EdgeId, Vec<(usize, Point, Vector, Vector, Vector, Vector)>)> = Vec::new();
         for (i, &face) in faces.iter().enumerate() {
             let surface = model.surface(face).ok_or_else(|| Error::InvalidInput("a face without a surface".into()))?;
             let loops = crate::heal::face_loops(model, face).ok_or_else(|| Error::InvalidInput("a face without pcurves".into()))?;
@@ -200,9 +279,15 @@ impl Sides {
                 let (_, du, dv) = surface.d1(uv.x, uv.y);
                 let inward = du * -ahead.y + dv * ahead.x;
                 let normal = du.cross(dv);
+                // Where the face goes a short step in (a thousandth of the edge): how it bends
+                // away, for faces leaving the edge the same way (a cylinder along its tangent
+                // plane).
+                let length = curve.point(first).distance(curve.point(last)).max(curve.point(first).distance(point)).max(1e-9);
+                let step = 1e-3 * length / inward.length().max(1e-300);
+                let ahead_point = surface.point(uv.x - ahead.y * step, uv.y + ahead.x * step) - surface.point(uv.x, uv.y);
                 match by_edge.iter_mut().find(|(e, _)| *e == u.edge) {
-                    Some((_, list)) => list.push((i, point, tangent, inward, normal)),
-                    None => by_edge.push((u.edge, vec![(i, point, tangent, inward, normal)])),
+                    Some((_, list)) => list.push((i, point, tangent, inward, normal, ahead_point)),
+                    None => by_edge.push((u.edge, vec![(i, point, tangent, inward, normal, ahead_point)])),
                 }
             }
         }
@@ -212,13 +297,27 @@ impl Sides {
             let flat = |v: Vector| v - tangent * v.dot(tangent);
             let x = flat(list[0].3).normalized();
             let y = tangent.cross(x);
+            let angle = |v: Vector| {
+                let d = flat(v);
+                d.dot(y).atan2(d.dot(x))
+            };
             let mut sheets: Vec<(usize, f64, bool)> = list
                 .iter()
-                .map(|&(i, _, _, inward, normal)| {
+                .map(|&(i, _, _, inward, normal, _)| {
                     let d = flat(inward);
-                    (i, d.dot(y).atan2(d.dot(x)), normal.dot(tangent.cross(d)) > 0.0)
+                    (i, angle(inward), normal.dot(tangent.cross(d)) > 0.0)
                 })
                 .collect();
+            // Faces leaving the edge the same way: all ordered by where they go a step in.
+            let tied = (0..sheets.len()).any(|a| (a + 1..sheets.len()).any(|b| {
+                let d = (sheets[a].1 - sheets[b].1).abs();
+                d.min(std::f64::consts::TAU - d) <= 1e-7
+            }));
+            if tied {
+                for (sheet, &(_, _, _, _, _, ahead)) in sheets.iter_mut().zip(&list) {
+                    sheet.1 = angle(ahead);
+                }
+            }
             sheets.sort_by(|a, b| a.1.total_cmp(&b.1));
             around.push(sheets);
         }
