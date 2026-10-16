@@ -432,6 +432,16 @@ fn chamfer_in_turn(model: &mut Model, shape: Shape, chains: &[(Shape, f64)], edg
         };
         wanted.push((curve, first, last, e.face.map(|f| f.node), distance, second));
     }
+    // All together first (meeting in mitres and corners, ending on free boundaries).
+    let profiles: Vec<(Shape, ball::Profile)> = chains
+        .iter()
+        .zip(&wanted)
+        .map(|(&(edge, _), (_, _, _, face, distance, second))| (Shape { placement: Transform::IDENTITY, ..edge }, ball::Profile::Chamfer { first: *face, distance: *distance, second: *second }))
+        .collect();
+    match ball::blend_network(model, shape, &profiles) {
+        Ok(done) => return Ok(done.moved(&placement)),
+        Err(_) => {}
+    }
     let mut failure = None;
     let orders: &[bool] = if wanted.len() > 1 { &[false, true] } else { &[false] };
     'orders: for &reverse in orders {

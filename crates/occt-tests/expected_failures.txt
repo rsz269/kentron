@@ -967,8 +967,6 @@ tests/chamfer/dist_angle/E7
 tests/chamfer/dist_angle/E8
 tests/chamfer/dist_angle/F1
 tests/chamfer/dist_angle_complex/B3
-tests/chamfer/dist_angle_complex/B4
-tests/chamfer/dist_angle_complex/B8
 tests/chamfer/dist_angle_complex/C3
 tests/chamfer/dist_angle_sequence/A1
 tests/chamfer/dist_angle_sequence/A4
@@ -989,9 +987,7 @@ tests/chamfer/dist_dist/E6
 tests/chamfer/dist_dist/E7
 tests/chamfer/dist_dist/E8
 tests/chamfer/dist_dist_complex/B3
-tests/chamfer/dist_dist_complex/B5
 tests/chamfer/dist_dist_complex/B8
-tests/chamfer/dist_dist_complex/B9
 tests/chamfer/dist_dist_complex/C3
 tests/chamfer/dist_dist_sequence/A1
 tests/chamfer/dist_dist_sequence/A4
@@ -1011,8 +1007,6 @@ tests/chamfer/equal_dist/E7
 tests/chamfer/equal_dist/E8
 tests/chamfer/equal_dist/E9
 tests/chamfer/equal_dist/F1
-tests/chamfer/equal_dist_complex/B6
-tests/chamfer/equal_dist_complex/B8
 tests/chamfer/equal_dist_complex/C3
 tests/chamfer/equal_dist_sequence/B3
 tests/chamfer/equal_dist_sequence/B6

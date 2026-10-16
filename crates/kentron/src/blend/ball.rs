@@ -18,7 +18,7 @@ use crate::topology::{CoEdgeId, EdgeId, Model, NodeKind, Orientation, Shape, Ver
 
 #[path = "network.rs"]
 mod network;
-pub(super) use network::fillet_network;
+pub(super) use network::{blend_network, fillet_network};
 
 
 /// Sections along the edge, and past each of its ends.
@@ -947,7 +947,8 @@ fn open_end(model: &Model, vertex: VertexId, free: [EdgeId; 2], sides: &[Side; 2
         let w = 0.5 * (lo + hi);
         let (d, t) = gap(w);
         let size = fillet.point(0.0, w).distance(fillet.point(1.0, w)).max(1e-9);
-        if d > (1e3 * target).max(1e-4 * size) {
+        // (Within the free edge's tolerance, too: its curve strays from its faces that much.)
+        if d > (1e3 * target).max(1e-4 * size).max(2.0 * model.tolerance(Shape::from(free[i]))) {
             return Err(Error::InvalidInput("a fillet's contact does not meet the free edge at its end".into()));
         }
         v[i] = w;

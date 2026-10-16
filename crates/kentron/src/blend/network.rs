@@ -18,7 +18,7 @@ use crate::geometry::{fit, project, ParametricCurve, ParametricSurface};
 use crate::math::{Direction2, Point, Point2};
 use crate::topology::{EdgeId, Model, NodeKind, Orientation, Shape, VertexId};
 
-use super::{cover_pcurve, end_cut, extension, fillet_surface, new_face, rebuild_face, rolling_past, unwrapped, EndCut, Rolling, Use, NOT_REACHED};
+use super::{cover_pcurve, end_cut, extension, fillet_surface, new_face, rebuild_face, rolling_with, unwrapped, EndCut, Profile, Rolling, Use, NOT_REACHED};
 
 /// Samples along a fillet's stop curve at a corner, and across a corner patch.
 const ACROSS: usize = 32;
@@ -83,18 +83,25 @@ struct MitreCut {
 /// faces meet) rounded by rolling-ball fillets of the given radii (as laws over the fraction
 /// of each edge's length), built together.
 pub(in crate::blend) fn fillet_network(model: &mut Model, shape: Shape, edges: &[(Shape, &dyn Fn(f64) -> f64)]) -> Result<Shape> {
+    let profiles: Vec<(Shape, Profile)> = edges.iter().map(|&(edge, radius)| (edge, Profile::Ball(radius))).collect();
+    blend_network(model, shape, &profiles)
+}
+
+/// [`fillet_network`] for fillets or chamfers (each edge's profile).
+pub(in crate::blend) fn blend_network(model: &mut Model, shape: Shape, edges: &[(Shape, Profile)]) -> Result<Shape> {
     // (Further past the ends where the end faces are not reached.)
-    match fillet_network_past(model, shape, edges, 1) {
-        Err(Error::InvalidInput(m)) if m == NOT_REACHED => fillet_network_past(model, shape, edges, 3),
+    match blend_network_past(model, shape, edges, 1) {
+        Err(Error::InvalidInput(m)) if m == NOT_REACHED => blend_network_past(model, shape, edges, 3),
         other => other,
     }
 }
 
-/// [`fillet_network`] with the sections carried `far` times as far past the edges' ends.
-fn fillet_network_past(model: &mut Model, shape: Shape, edges: &[(Shape, &dyn Fn(f64) -> f64)], far: usize) -> Result<Shape> {
+/// [`blend_network`] with the sections carried `far` times as far past the edges' ends.
+fn blend_network_past(model: &mut Model, shape: Shape, edges: &[(Shape, Profile)], far: usize) -> Result<Shape> {
     let mut stripes = Vec::with_capacity(edges.len());
-    for &(edge, radius) in edges {
-        let rolling = rolling_past(model, shape, edge, radius, far)?;
+    for (edge, profile) in edges {
+        let edge = *edge;
+        let rolling = rolling_with(model, shape, edge, profile, far)?;
         if rolling.closed {
             return Err(Error::InvalidInput("closed edges in a network of fillets are not supported yet".into()));
         }
@@ -423,7 +430,9 @@ fn free_end(model: &Model, shape: Shape, s: &Stripe, k: usize) -> Result<Option<
         let w = 0.5 * (x + y);
         let point = s.rolling.contacts[i].point(w);
         let on = crate::geometry::extrema::nearest_on_curve(point, &curve, first, last);
-        if on.distance > (1e3 * s.rolling.target).max(1e-6 * (1.0 + (point - Point::ORIGIN).length())) {
+        // (Within the free edge's tolerance, too: its curve strays from its faces that much.)
+        let edge_tolerance = model.tolerance(Shape::from(other));
+        if on.distance > (1e3 * s.rolling.target).max(1e-6 * (1.0 + (point - Point::ORIGIN).length())).max(2.0 * edge_tolerance) {
             return Err(Error::InvalidInput("a fillet's contact curve does not reach the free edge at its end".into()));
         }
         v[i] = w;
