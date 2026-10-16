@@ -311,10 +311,12 @@ fn face_mesh(model: &Model, face: Shape, options: MeshOptions) -> Result<Option<
     let unscale = |q: Point2| Point2::new(q.x / scale.0, q.y / scale.1);
     let mut triangles;
     let mut rounds = 0;
+    // (Triangulated once, the points each round adds inserted.)
+    let mut all = boundary_points.clone();
+    all.extend(inside.iter().map(|&p| scaled(p)));
+    let mut cdt = Cdt::new(&all, &segments);
     loop {
-        let mut all = boundary_points.clone();
-        all.extend(inside.iter().map(|&p| scaled(p)));
-        triangles = constrained_delaunay(&all, &segments);
+        triangles = cdt.as_ref().map_or_else(Vec::new, Cdt::triangles);
         let inside_face = triangles_inside(&triangles, &all, &polygons, &boundary_edges);
         let mut keep = inside_face.into_iter();
         triangles.retain(|_| keep.next().expect("one per triangle"));
@@ -350,6 +352,11 @@ fn face_mesh(model: &Model, face: Shape, options: MeshOptions) -> Result<Option<
         if new_points.is_empty() {
             break;
         }
+        let added: Vec<Point2> = new_points.iter().map(|&p| scaled(p)).collect();
+        if let Some(cdt) = cdt.as_mut() {
+            cdt.extend(&added);
+        }
+        all.extend(added);
         inside.extend(new_points);
     }
     let deflection = if curved { achieved_deflection(&surface, &triangles, &boundary_3d, &inside, &polygons, unscale) } else { 0.0 };
@@ -599,37 +606,75 @@ fn in_circle(a: Point2, b: Point2, c: Point2, d: Point2) -> bool {
 
 /// Triangles (counter-clockwise) over `points` containing every segment (as an edge, or a
 /// chain of edges through points lying on it). Coincident points are triangulated once.
+#[cfg(test)]
 fn constrained_delaunay(points: &[Point2], segments: &[(usize, usize)]) -> Vec<[usize; 3]> {
-    let n = points.len();
-    if n < 3 {
-        return Vec::new();
+    Cdt::new(points, segments).map_or_else(Vec::new, |cdt| cdt.triangles())
+}
+
+/// A constrained Delaunay triangulation of points (by their indices as given, coincident
+/// ones made one), to which points can be added: within the segments it contains, which
+/// later points do not undo.
+struct Cdt {
+    tris: Triangulation,
+    /// Points given so far (the triangulation's own indices of the first `n`, then after the
+    /// super triangle's three).
+    n: usize,
+    count: usize,
+    same: Vec<usize>,
+    grid: HashMap<(i64, i64), Vec<usize>>,
+    eps: f64,
+    cell: f64,
+}
+
+impl Cdt {
+    fn new(points: &[Point2], segments: &[(usize, usize)]) -> Option<Self> {
+        let n = points.len();
+        if n < 3 {
+            return None;
+        }
+        let (mut lo, mut hi) = (points[0], points[0]);
+        for p in points {
+            lo = Point2::new(lo.x.min(p.x), lo.y.min(p.y));
+            hi = Point2::new(hi.x.max(p.x), hi.y.max(p.y));
+        }
+        let size = (hi.x - lo.x).max(hi.y - lo.y).max(1e-12);
+        let eps = 1e-12 * size;
+        let mid = Point2::new(0.5 * (lo.x + hi.x), 0.5 * (lo.y + hi.y));
+        let mut pts: Vec<Point2> = points.to_vec();
+        // A super triangle.
+        pts.push(Point2::new(mid.x - 20.0 * size, mid.y - 10.0 * size));
+        pts.push(Point2::new(mid.x + 20.0 * size, mid.y - 10.0 * size));
+        pts.push(Point2::new(mid.x, mid.y + 20.0 * size));
+        let tris = Triangulation::new(pts, [n, n + 1, n + 2]);
+        let mut cdt = Cdt { tris, n, count: 0, same: Vec::with_capacity(n), grid: HashMap::default(), eps, cell: (size * 1e-9).max(1e-300) };
+        for i in 0..n {
+            cdt.place(i);
+        }
+        for &(a, b) in segments {
+            let (a, b) = (cdt.same[a], cdt.same[b]);
+            if a != b {
+                cdt.tris.force_edge(a, b, eps);
+            }
+        }
+        Some(cdt)
     }
-    let (mut lo, mut hi) = (points[0], points[0]);
-    for p in points {
-        lo = Point2::new(lo.x.min(p.x), lo.y.min(p.y));
-        hi = Point2::new(hi.x.max(p.x), hi.y.max(p.y));
+
+    /// The triangulation's index of the next point given.
+    fn own(&self, k: usize) -> usize {
+        if k < self.n { k } else { k + 3 }
     }
-    let size = (hi.x - lo.x).max(hi.y - lo.y).max(1e-12);
-    let eps = 1e-12 * size;
-    let mid = Point2::new(0.5 * (lo.x + hi.x), 0.5 * (lo.y + hi.y));
-    let mut pts: Vec<Point2> = points.to_vec();
-    // A super triangle.
-    pts.push(Point2::new(mid.x - 20.0 * size, mid.y - 10.0 * size));
-    pts.push(Point2::new(mid.x + 20.0 * size, mid.y - 10.0 * size));
-    pts.push(Point2::new(mid.x, mid.y + 20.0 * size));
-    let mut tris = Triangulation::new(&pts, [n, n + 1, n + 2]);
-    // Coincident points are one.
-    let mut same: Vec<usize> = (0..n).collect();
-    let mut grid: HashMap<(i64, i64), Vec<usize>> = HashMap::default();
-    let cell = (size * 1e-9).max(1e-300);
-    for i in 0..n {
-        let key = ((pts[i].x / cell).round() as i64, (pts[i].y / cell).round() as i64);
+
+    /// Inserts the point at the triangulation's index `i` (the next given), unless it
+    /// coincides with one there already.
+    fn place(&mut self, i: usize) {
+        let p = self.tris.pts[i];
+        let key = ((p.x / self.cell).round() as i64, (p.y / self.cell).round() as i64);
         let mut found = None;
         'search: for dx in -1..=1 {
             for dy in -1..=1 {
-                if let Some(list) = grid.get(&(key.0 + dx, key.1 + dy)) {
+                if let Some(list) = self.grid.get(&(key.0 + dx, key.1 + dy)) {
                     for &j in list {
-                        if pts[j].distance(pts[i]) <= eps {
+                        if self.tris.pts[j].distance(p) <= self.eps {
                             found = Some(j);
                             break 'search;
                         }
@@ -637,36 +682,49 @@ fn constrained_delaunay(points: &[Point2], segments: &[(usize, usize)]) -> Vec<[
                 }
             }
         }
+        self.count += 1;
         match found {
-            Some(j) => same[i] = j,
+            Some(j) => self.same.push(j),
             None => {
-                grid.entry(key).or_default().push(i);
-                tris.insert(i);
+                self.same.push(i);
+                self.grid.entry(key).or_default().push(i);
+                self.tris.insert(i);
             }
         }
     }
-    for &(a, b) in segments {
-        let (a, b) = (same[a], same[b]);
-        if a != b {
-            tris.force_edge(a, b, eps);
+
+    /// Adds points, given after those so far.
+    fn extend(&mut self, points: &[Point2]) {
+        for &p in points {
+            let i = self.own(self.count);
+            debug_assert_eq!(i, self.tris.pts.len());
+            self.tris.pts.push(p);
+            self.place(i);
         }
     }
-    tris.live()
-        .filter(|t| t.iter().all(|&v| v < n))
-        .collect()
+
+    /// The triangles, by the points' indices as given.
+    fn triangles(&self) -> Vec<[usize; 3]> {
+        let n = self.n;
+        let given = |v: usize| if v < n { Some(v) } else if v >= n + 3 { Some(v - 3) } else { None };
+        self.tris.live().filter_map(|t| Some([given(t[0])?, given(t[1])?, given(t[2])?])).collect()
+    }
 }
 
 /// A triangulation kept as triangles and a map from directed edges to triangles.
-struct Triangulation<'a> {
-    pts: &'a [Point2],
+struct Triangulation {
+    pts: Vec<Point2>,
     tris: Vec<Option<[usize; 3]>>,
     edges: HashMap<(usize, usize), usize>,
     last: usize,
+    /// Edges made to contain the segments (either way round, as `(min, max)`), which later
+    /// insertions do not cross.
+    constrained: FastSet<(usize, usize)>,
 }
 
-impl<'a> Triangulation<'a> {
-    fn new(pts: &'a [Point2], first: [usize; 3]) -> Self {
-        let mut t = Triangulation { pts, tris: Vec::new(), edges: HashMap::default(), last: 0 };
+impl Triangulation {
+    fn new(pts: Vec<Point2>, first: [usize; 3]) -> Self {
+        let mut t = Triangulation { pts, tris: Vec::new(), edges: HashMap::default(), last: 0, constrained: FastSet::default() };
         t.add(first);
         t
     }
@@ -733,6 +791,10 @@ impl<'a> Triangulation<'a> {
             let t = self.tris[bad[k]].expect("live");
             for e in 0..3 {
                 let (a, b) = (t[e], t[(e + 1) % 3]);
+                // (Not across the segments the triangulation contains.)
+                if self.constrained.contains(&(a.min(b), a.max(b))) {
+                    continue;
+                }
                 if let Some(&j) = self.edges.get(&(b, a)) {
                     if seen.insert(j) {
                         let u = self.tris[j].expect("live");
@@ -768,6 +830,7 @@ impl<'a> Triangulation<'a> {
                 return;
             }
             if self.edges.contains_key(&(a, b)) || self.edges.contains_key(&(b, a)) {
+                self.constrained.insert((a.min(b), a.max(b)));
                 continue;
             }
             let (pa, pb) = (self.pts[a], self.pts[b]);
@@ -809,6 +872,9 @@ impl<'a> Triangulation<'a> {
                     None if self.edges.contains_key(&(u, v)) => queue.push_back((u, v)),
                     None => {}
                 }
+            }
+            if self.edges.contains_key(&(a, b)) || self.edges.contains_key(&(b, a)) {
+                self.constrained.insert((a.min(b), a.max(b)));
             }
         }
     }
