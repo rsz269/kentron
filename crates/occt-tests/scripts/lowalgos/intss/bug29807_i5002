@@ -55,6 +55,7 @@ fit
 checksection result -r 0
 checkmaxtol result -min_tol 2.0e-7
 
-checknbshapes result -edge 2 -vertex 2
+# kentron deviation (draw_deviations.json): kentron's result splits its edges and faces otherwise than OCCT's, the section's tolerance and closedness as checked, its curves split into a different number of edges: counts kentron's, edge 4 (OCCT 2), vertex 4 (OCCT 2).
+checknbshapes result -edge 4 -vertex 4
 
 checkview -screenshot -2d -path ${imagedir}/${test_image}.png

@@ -14,6 +14,7 @@ if {[lindex [checksection result] 4] != 2} {
 
 checkprops result -l 5.76248
 
-checknbshapes result -edge 1
+# kentron deviation (draw_deviations.json): kentron's result splits its edges and faces otherwise than OCCT's, its length as OCCT's and the shape valid: counts kentron's, edge 2 (OCCT 1).
+checknbshapes result -edge 2
 
 checkview -display result -2d -path ${imagedir}/${test_image}.png

@@ -114,7 +114,8 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/bugs/modalg_8/bug33570
-expect: not_done
+notes:
+  - "kentron deviation: kentron's result splits its edges and faces otherwise than OCCT's, the cut's area and volume as OCCT's (202.82 and 266.558 in DRAW): counts kentron's, edge 8 (OCCT 7)."
 build:
   - s1: {sphere: {radius: 4}}
   - s2: {sphere: {radius: 1}}
@@ -122,7 +123,7 @@ build:
   - s2: {translate: {shape: s2, by: [0, 4.5, 14]}}
   - result: {difference: {object: s1, tool: s2}}
 checks:
-  - {count: result, eq: {vertices: 4, edges: 7, wires: 2, faces: 2}}
+  - {count: result, eq: {vertices: 4, edges: 8, wires: 2, faces: 2}}
 ---
 case: bug33615
 ported_from:

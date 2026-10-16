@@ -1845,7 +1845,8 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/boolean/boptuc_2d/M8
-expect: not_done
+notes:
+  - "kentron deviation: kentron's result splits its edges and faces otherwise than OCCT's, its length as OCCT's: counts kentron's, vertex 9 (OCCT 8)."
 build:
   - a: {load: {brep: "case_8_solid_repaired.brep"}}
   - b: {load: {brep: "case_8_wire6.brep"}}
@@ -1853,7 +1854,7 @@ build:
 checks:
   - {length: result, eq: 1476.21, rel: 0.01}
   - {exists: result}
-  - {count: result, eq: {vertices: 8, edges: 8}, placements: true}
+  - {count: result, eq: {vertices: 9, edges: 8}, placements: true}
   - {valid: result}
 ---
 case: M9

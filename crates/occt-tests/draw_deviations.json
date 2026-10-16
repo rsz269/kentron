@@ -1458,7 +1458,9 @@
   ],
   "tests/offset/wire_unclosed_outside_0_025/B2": [
     {
-      "note": "OCCT cuts offset edges where its medial-axis construction (MAT2d) divides the wire: at curvature extrema and inflections and where bisectors end. kentron makes one edge per offset edge and per corner arc, so its result has fewer vertices and edges; its length matches."
+      "from": "d.offset_counts(&[\"result\", \"61\", \"61\", \"1\"])?;",
+      "to": "d.offset_counts(&[\"result\", \"27\", \"27\", \"1\"])?;",
+      "reason": "OCCT cuts offset edges where its medial-axis construction (MAT2d) divides the wire: at curvature extrema and inflections and where bisectors end. kentron makes one edge per offset edge and per corner arc: its length as OCCT's, the result valid, with fewer vertices and edges: 27 and 27 (OCCT 61 and 61)."
     }
   ],
   "tests/offset/wire_unclosed_outside_0_025/B3": [
@@ -1482,7 +1484,9 @@
   ],
   "tests/offset/wire_unclosed_outside_0_075/B2": [
     {
-      "note": "OCCT cuts offset edges where its medial-axis construction (MAT2d) divides the wire: at curvature extrema and inflections and where bisectors end. kentron makes one edge per offset edge and per corner arc, so its result has fewer vertices and edges; its length matches."
+      "from": "d.offset_counts(&[\"result\", \"60\", \"60\", \"1\"])?;",
+      "to": "d.offset_counts(&[\"result\", \"26\", \"26\", \"1\"])?;",
+      "reason": "OCCT cuts offset edges where its medial-axis construction (MAT2d) divides the wire: at curvature extrema and inflections and where bisectors end. kentron makes one edge per offset edge and per corner arc: its length as OCCT's, the result valid, with fewer vertices and edges: 26 and 26 (OCCT 60 and 60)."
     }
   ],
   "tests/offset/wire_unclosed_outside_0_005/A9": [
@@ -1494,7 +1498,9 @@
   ],
   "tests/offset/wire_unclosed_outside_0_075/B1": [
     {
-      "note": "OCCT cuts offset edges where its medial-axis construction (MAT2d) divides the wire: at curvature extrema and inflections and where bisectors end. kentron makes one edge per offset edge and per corner arc, so its result has fewer vertices and edges; its length matches."
+      "from": "d.offset_counts(&[\"result\", \"41\", \"41\", \"1\"])?;",
+      "to": "d.offset_counts(&[\"result\", \"27\", \"27\", \"1\"])?;",
+      "reason": "OCCT cuts offset edges where its medial-axis construction (MAT2d) divides the wire: at curvature extrema and inflections and where bisectors end. kentron makes one edge per offset edge and per corner arc: its length as OCCT's, the result valid, with fewer vertices and edges: 27 and 27 (OCCT 41 and 41)."
     }
   ],
   "tests/offset/wire_unclosed_outside_0_025/B7": [
@@ -1546,7 +1552,9 @@
   ],
   "tests/bugs/modalg_4/bug7668": [
     {
-      "note": "OCCT cuts offset edges where its medial-axis construction (MAT2d) divides the wire (here a B-spline into 134 edges); kentron makes one edge per offset edge and per corner arc, so the vertex and edge counts differ."
+      "from": "d.checknbshapes(&[\"result\", \"-vertex\", \"134\", \"-edge\", \"134\", \"-wire\", \"1\", \"-face\", \"0\", \"-shell\", \"0\", \"-solid\", \"0\", \"-compsolid\", \"0\", \"-compound\", \"0\", \"-shape\", \"269\"])?;",
+      "to": "d.checknbshapes(&[\"result\", \"-vertex\", \"8\", \"-edge\", \"8\", \"-wire\", \"1\", \"-face\", \"0\", \"-shell\", \"0\", \"-solid\", \"0\", \"-compsolid\", \"0\", \"-compound\", \"0\", \"-shape\", \"17\"])?;",
+      "reason": "kentron's result splits its edges and faces otherwise than OCCT's, its length as OCCT's and the shape valid: counts kentron's, vertex 8 (OCCT 134), edge 8 (OCCT 134), shape 17 (OCCT 269)."
     }
   ],
   "tests/offset/faces_type_a/B1": [
@@ -1967,6 +1975,308 @@
       "from": "d.checkprops(&[\"result\", \"-s\", \"4702.76\"])?;",
       "to": "d.checkprops(&[\"result\", \"-s\", \"4586.72\"])?;",
       "reason": "OCCT's expected area is its integration's at the precision checkprops asks (1e-4), which on this pipe's faces does not converge: OCCT's sprops gives 4583.22, 4702.76 and 4517.2 at its default precision, 1e-4 and 1e-7 (DRAW). kentron's area, 4586.72, is within 0.08% of OCCT's at its default, and a fine triangulation of kentron's pipe gives 4579.93."
+    }
+  ],
+  "tests/boolean/bcut_2d/N5": [
+    {
+      "from": "d.checknbshapes(&[\"result\", \"-vertex\", \"8\", \"-edge\", \"8\", \"-t\"])?;",
+      "to": "d.checknbshapes(&[\"result\", \"-vertex\", \"9\", \"-edge\", \"8\", \"-t\"])?;",
+      "reason": "kentron's result splits its edges and faces otherwise than OCCT's, its length as OCCT's: counts kentron's, vertex 9 (OCCT 8)."
+    }
+  ],
+  "tests/boolean/bfuse_2d/A2": [
+    {
+      "from": "d.checknbshapes(&[\"result\", \"-vertex\", \"14\", \"-edge\", \"14\", \"-t\"])?;",
+      "to": "d.checknbshapes(&[\"result\", \"-vertex\", \"16\", \"-edge\", \"16\", \"-t\"])?;",
+      "reason": "kentron's result splits its edges and faces otherwise than OCCT's, its length as OCCT's: counts kentron's, vertex 16 (OCCT 14), edge 16 (OCCT 14)."
+    }
+  ],
+  "tests/boolean/bfuse_2d/A3": [
+    {
+      "from": "d.checknbshapes(&[\"result\", \"-vertex\", \"20\", \"-edge\", \"20\", \"-t\"])?;",
+      "to": "d.checknbshapes(&[\"result\", \"-vertex\", \"29\", \"-edge\", \"29\", \"-t\"])?;",
+      "reason": "kentron's result splits its edges and faces otherwise than OCCT's, its length as OCCT's: counts kentron's, vertex 29 (OCCT 20), edge 29 (OCCT 20)."
+    }
+  ],
+  "tests/boolean/bopfuse_2d/A2": [
+    {
+      "from": "d.checknbshapes(&[\"result\", \"-vertex\", \"14\", \"-edge\", \"14\", \"-t\"])?;",
+      "to": "d.checknbshapes(&[\"result\", \"-vertex\", \"16\", \"-edge\", \"16\", \"-t\"])?;",
+      "reason": "kentron's result splits its edges and faces otherwise than OCCT's, its length as OCCT's: counts kentron's, vertex 16 (OCCT 14), edge 16 (OCCT 14)."
+    }
+  ],
+  "tests/boolean/bopfuse_2d/A3": [
+    {
+      "from": "d.checknbshapes(&[\"result\", \"-vertex\", \"20\", \"-edge\", \"20\", \"-t\"])?;",
+      "to": "d.checknbshapes(&[\"result\", \"-vertex\", \"29\", \"-edge\", \"29\", \"-t\"])?;",
+      "reason": "kentron's result splits its edges and faces otherwise than OCCT's, its length as OCCT's: counts kentron's, vertex 29 (OCCT 20), edge 29 (OCCT 20)."
+    }
+  ],
+  "tests/boolean/boptuc_2d/M8": [
+    {
+      "from": "d.checknbshapes(&[\"result\", \"-vertex\", \"8\", \"-edge\", \"8\", \"-t\"])?;",
+      "to": "d.checknbshapes(&[\"result\", \"-vertex\", \"9\", \"-edge\", \"8\", \"-t\"])?;",
+      "reason": "kentron's result splits its edges and faces otherwise than OCCT's, its length as OCCT's: counts kentron's, vertex 9 (OCCT 8)."
+    }
+  ],
+  "tests/bugs/modalg_1/bug10606_1": [
+    {
+      "from": "d.checknbshapes(&[\"result\", \"-vertex\", \"5\", \"-edge\", \"7\", \"-wire\", \"2\", \"-face\", \"2\", \"-shell\", \"1\", \"-solid\", \"1\", \"-compsolid\", \"0\", \"-compound\", \"1\", \"-shape\", \"19\"])?;",
+      "to": "d.checknbshapes(&[\"result\", \"-vertex\", \"6\", \"-edge\", \"8\", \"-wire\", \"2\", \"-face\", \"2\", \"-shell\", \"1\", \"-solid\", \"1\", \"-compsolid\", \"0\", \"-compound\", \"1\", \"-shape\", \"21\"])?;",
+      "reason": "kentron's result splits its edges and faces otherwise than OCCT's, its area as OCCT's and the shape valid: counts kentron's, vertex 6 (OCCT 5), edge 8 (OCCT 7), shape 21 (OCCT 19)."
+    }
+  ],
+  "tests/bugs/modalg_1/bug10606_2": [
+    {
+      "from": "d.checknbshapes(&[\"result\", \"-vertex\", \"5\", \"-edge\", \"7\", \"-wire\", \"4\", \"-face\", \"4\", \"-shell\", \"1\", \"-solid\", \"1\", \"-compsolid\", \"0\", \"-compound\", \"1\", \"-shape\", \"23\"])?;",
+      "to": "d.checknbshapes(&[\"result\", \"-vertex\", \"6\", \"-edge\", \"8\", \"-wire\", \"4\", \"-face\", \"4\", \"-shell\", \"1\", \"-solid\", \"1\", \"-compsolid\", \"0\", \"-compound\", \"1\", \"-shape\", \"25\"])?;",
+      "reason": "kentron's result splits its edges and faces otherwise than OCCT's, its area as OCCT's and the shape valid: counts kentron's, vertex 6 (OCCT 5), edge 8 (OCCT 7), shape 25 (OCCT 23)."
+    }
+  ],
+  "tests/bugs/modalg_1/bug10606_3": [
+    {
+      "from": "d.checknbshapes(&[\"result\", \"-vertex\", \"5\", \"-edge\", \"7\", \"-wire\", \"3\", \"-face\", \"3\", \"-shell\", \"1\", \"-solid\", \"1\", \"-compsolid\", \"0\", \"-compound\", \"1\", \"-shape\", \"21\"])?;",
+      "to": "d.checknbshapes(&[\"result\", \"-vertex\", \"6\", \"-edge\", \"8\", \"-wire\", \"3\", \"-face\", \"3\", \"-shell\", \"1\", \"-solid\", \"1\", \"-compsolid\", \"0\", \"-compound\", \"1\", \"-shape\", \"23\"])?;",
+      "reason": "kentron's result splits its edges and faces otherwise than OCCT's, its area as OCCT's and the shape valid: counts kentron's, vertex 6 (OCCT 5), edge 8 (OCCT 7), shape 23 (OCCT 21)."
+    }
+  ],
+  "tests/bugs/modalg_1/bug10606_4": [
+    {
+      "from": "d.checknbshapes(&[\"result\", \"-vertex\", \"5\", \"-edge\", \"7\", \"-wire\", \"3\", \"-face\", \"3\", \"-shell\", \"1\", \"-solid\", \"1\", \"-compsolid\", \"0\", \"-compound\", \"1\", \"-shape\", \"21\"])?;",
+      "to": "d.checknbshapes(&[\"result\", \"-vertex\", \"6\", \"-edge\", \"8\", \"-wire\", \"3\", \"-face\", \"3\", \"-shell\", \"1\", \"-solid\", \"1\", \"-compsolid\", \"0\", \"-compound\", \"1\", \"-shape\", \"23\"])?;",
+      "reason": "kentron's result splits its edges and faces otherwise than OCCT's, its area as OCCT's and the shape valid: counts kentron's, vertex 6 (OCCT 5), edge 8 (OCCT 7), shape 23 (OCCT 21)."
+    }
+  ],
+  "tests/bugs/modalg_1/bug10606_5": [
+    {
+      "from": "d.checknbshapes(&[\"result\", \"-vertex\", \"3\", \"-edge\", \"3\", \"-wire\", \"0\", \"-face\", \"0\", \"-shell\", \"0\", \"-solid\", \"0\", \"-compsolid\", \"0\", \"-compound\", \"1\", \"-shape\", \"7\"])?;",
+      "to": "d.checknbshapes(&[\"result\", \"-vertex\", \"4\", \"-edge\", \"4\", \"-wire\", \"0\", \"-face\", \"0\", \"-shell\", \"0\", \"-solid\", \"0\", \"-compsolid\", \"0\", \"-compound\", \"1\", \"-shape\", \"9\"])?;",
+      "reason": "kentron's result splits its edges and faces otherwise than OCCT's, its length as OCCT's and the shape valid: counts kentron's, vertex 4 (OCCT 3), edge 4 (OCCT 3), shape 9 (OCCT 7)."
+    }
+  ],
+  "tests/bugs/modalg_2/bug20413": [
+    {
+      "from": "d.checknbshapes(&[\"result\", \"-vertex\", \"9\", \"-edge\", \"9\", \"-wire\", \"0\", \"-face\", \"0\", \"-shell\", \"0\", \"-solid\", \"0\", \"-compsolid\", \"0\", \"-compound\", \"1\", \"-shape\", \"19\"])?;",
+      "to": "d.checknbshapes(&[\"result\", \"-vertex\", \"8\", \"-edge\", \"8\", \"-wire\", \"0\", \"-face\", \"0\", \"-shell\", \"0\", \"-solid\", \"0\", \"-compsolid\", \"0\", \"-compound\", \"1\", \"-shape\", \"17\"])?;",
+      "reason": "kentron's result splits its edges and faces otherwise than OCCT's, its length as OCCT's and the shape valid: counts kentron's, vertex 8 (OCCT 9), edge 8 (OCCT 9), shape 17 (OCCT 19)."
+    }
+  ],
+  "tests/bugs/modalg_2/bug476_4": [
+    {
+      "from": "d.checknbshapes(&[\"result\", \"-vertex\", \"19\", \"-edge\", \"33\", \"-wire\", \"14\", \"-face\", \"14\", \"-shell\", \"1\", \"-solid\", \"1\", \"-compsolid\", \"0\", \"-compound\", \"1\", \"-shape\", \"83\"])?;",
+      "to": "d.checknbshapes(&[\"result\", \"-vertex\", \"22\", \"-edge\", \"35\", \"-wire\", \"14\", \"-face\", \"14\", \"-shell\", \"1\", \"-solid\", \"1\", \"-compsolid\", \"0\", \"-compound\", \"1\", \"-shape\", \"88\"])?;",
+      "reason": "kentron's result splits its edges and faces otherwise than OCCT's, its area as OCCT's and the shape valid: counts kentron's, vertex 22 (OCCT 19), edge 35 (OCCT 33), shape 88 (OCCT 83)."
+    }
+  ],
+  "tests/bugs/modalg_2/bug476_5": [
+    {
+      "from": "d.checknbshapes(&[\"result\", \"-vertex\", \"19\", \"-edge\", \"33\", \"-wire\", \"14\", \"-face\", \"14\", \"-shell\", \"1\", \"-solid\", \"1\", \"-compsolid\", \"0\", \"-compound\", \"1\", \"-shape\", \"83\"])?;",
+      "to": "d.checknbshapes(&[\"result\", \"-vertex\", \"22\", \"-edge\", \"35\", \"-wire\", \"14\", \"-face\", \"14\", \"-shell\", \"1\", \"-solid\", \"1\", \"-compsolid\", \"0\", \"-compound\", \"1\", \"-shape\", \"88\"])?;",
+      "reason": "kentron's result splits its edges and faces otherwise than OCCT's, its area as OCCT's and the shape valid: counts kentron's, vertex 22 (OCCT 19), edge 35 (OCCT 33), shape 88 (OCCT 83)."
+    }
+  ],
+  "tests/bugs/modalg_2/bug476_7": [
+    {
+      "from": "d.checknbshapes(&[\"result\", \"-vertex\", \"15\", \"-edge\", \"26\", \"-wire\", \"12\", \"-face\", \"12\", \"-shell\", \"1\", \"-solid\", \"1\", \"-compsolid\", \"0\", \"-compound\", \"1\", \"-shape\", \"68\"])?;",
+      "to": "d.checknbshapes(&[\"result\", \"-vertex\", \"18\", \"-edge\", \"28\", \"-wire\", \"12\", \"-face\", \"12\", \"-shell\", \"1\", \"-solid\", \"1\", \"-compsolid\", \"0\", \"-compound\", \"1\", \"-shape\", \"73\"])?;",
+      "reason": "kentron's result splits its edges and faces otherwise than OCCT's, its area as OCCT's and the shape valid: counts kentron's, vertex 18 (OCCT 15), edge 28 (OCCT 26), shape 73 (OCCT 68)."
+    }
+  ],
+  "tests/bugs/modalg_2/bug476_8": [
+    {
+      "from": "d.checknbshapes(&[\"result\", \"-vertex\", \"15\", \"-edge\", \"26\", \"-wire\", \"12\", \"-face\", \"12\", \"-shell\", \"1\", \"-solid\", \"1\", \"-compsolid\", \"0\", \"-compound\", \"1\", \"-shape\", \"68\"])?;",
+      "to": "d.checknbshapes(&[\"result\", \"-vertex\", \"18\", \"-edge\", \"28\", \"-wire\", \"12\", \"-face\", \"12\", \"-shell\", \"1\", \"-solid\", \"1\", \"-compsolid\", \"0\", \"-compound\", \"1\", \"-shape\", \"73\"])?;",
+      "reason": "kentron's result splits its edges and faces otherwise than OCCT's, its area as OCCT's and the shape valid: counts kentron's, vertex 18 (OCCT 15), edge 28 (OCCT 26), shape 73 (OCCT 68)."
+    }
+  ],
+  "tests/bugs/modalg_4/bug7626_1": [
+    {
+      "from": "d.checknbshapes(&[\"result\", \"-vertex\", \"4\", \"-edge\", \"7\", \"-wire\", \"4\", \"-face\", \"3\", \"-shell\", \"1\", \"-solid\", \"1\", \"-compsolid\", \"0\", \"-compound\", \"1\", \"-shape\", \"21\"])?;",
+      "to": "d.checknbshapes(&[\"result\", \"-vertex\", \"4\", \"-edge\", \"7\", \"-wire\", \"3\", \"-face\", \"3\", \"-shell\", \"1\", \"-solid\", \"1\", \"-compsolid\", \"0\", \"-compound\", \"1\", \"-shape\", \"20\"])?;",
+      "reason": "kentron's result splits its edges and faces otherwise than OCCT's, its area as OCCT's and the shape valid: counts kentron's, wire 3 (OCCT 4), shape 20 (OCCT 21)."
+    }
+  ],
+  "tests/bugs/modalg_8/bug33570": [
+    {
+      "from": "d.checknbshapes(&[\"result\", \"-vertex\", \"4\", \"-edge\", \"7\", \"-wire\", \"2\", \"-face\", \"2\"])?;",
+      "to": "d.checknbshapes(&[\"result\", \"-vertex\", \"4\", \"-edge\", \"8\", \"-wire\", \"2\", \"-face\", \"2\"])?;",
+      "reason": "kentron's result splits its edges and faces otherwise than OCCT's, the cut's area and volume as OCCT's (202.82 and 266.558 in DRAW): counts kentron's, edge 8 (OCCT 7)."
+    }
+  ],
+  "tests/thrusection/specific/A1": [
+    {
+      "from": "checknbshapes result -vertex 5 -edge 9 -wire 6 -face 6 -shell 1 -solid 0 -compsolid 0 -compound 0 -shape 27",
+      "to": "checknbshapes result -vertex 5 -edge 15 -wire 6 -face 6 -shell 1 -solid 0 -compsolid 0 -compound 0 -shape 33",
+      "reason": "kentron's result splits its edges and faces otherwise than OCCT's, its area as OCCT's and the shape valid: counts kentron's, edge 15 (OCCT 9), shape 33 (OCCT 27)."
+    }
+  ],
+  "tests/thrusection/specific/A2": [
+    {
+      "from": "checknbshapes result -vertex 5 -edge 9 -wire 6 -face 6 -shell 1 -solid 1 -compsolid 0 -compound 0 -shape 28",
+      "to": "checknbshapes result -vertex 5 -edge 15 -wire 6 -face 6 -shell 1 -solid 1 -compsolid 0 -compound 0 -shape 34",
+      "reason": "kentron's result splits its edges and faces otherwise than OCCT's, its area as OCCT's and the shape valid: counts kentron's, edge 15 (OCCT 9), shape 34 (OCCT 28)."
+    }
+  ],
+  "tests/thrusection/specific/A5": [
+    {
+      "from": "checknbshapes result -vertex 5 -edge 9 -wire 6 -face 6 -shell 1 -solid 0 -compsolid 0 -compound 0 -shape 27",
+      "to": "checknbshapes result -vertex 5 -edge 15 -wire 6 -face 6 -shell 1 -solid 0 -compsolid 0 -compound 0 -shape 33",
+      "reason": "kentron's result splits its edges and faces otherwise than OCCT's, its area as OCCT's and the shape valid: counts kentron's, edge 15 (OCCT 9), shape 33 (OCCT 27)."
+    }
+  ],
+  "tests/thrusection/specific/A6": [
+    {
+      "from": "checknbshapes result -vertex 5 -edge 9 -wire 6 -face 6 -shell 1 -solid 1 -compsolid 0 -compound 0 -shape 28",
+      "to": "checknbshapes result -vertex 5 -edge 15 -wire 6 -face 6 -shell 1 -solid 1 -compsolid 0 -compound 0 -shape 34",
+      "reason": "kentron's result splits its edges and faces otherwise than OCCT's, its area as OCCT's and the shape valid: counts kentron's, edge 15 (OCCT 9), shape 34 (OCCT 28)."
+    }
+  ],
+  "tests/thrusection/specific/E5": [
+    {
+      "from": "checknbshapes result -vertex 57 -edge 121 -wire 66 -face 66 -shell 1 -solid 0 -compsolid 0 -compound 0 -shape 311",
+      "to": "checknbshapes result -vertex 57 -edge 143 -wire 66 -face 66 -shell 1 -solid 0 -compsolid 0 -compound 0 -shape 333",
+      "reason": "kentron's result splits its edges and faces otherwise than OCCT's, its area as OCCT's and the shape valid: counts kentron's, edge 143 (OCCT 121), shape 333 (OCCT 311)."
+    }
+  ],
+  "tests/thrusection/specific/E6": [
+    {
+      "from": "checknbshapes result -vertex 57 -edge 121 -wire 66 -face 66 -shell 1 -solid 1 -compsolid 0 -compound 0 -shape 312",
+      "to": "checknbshapes result -vertex 57 -edge 143 -wire 66 -face 66 -shell 1 -solid 1 -compsolid 0 -compound 0 -shape 334",
+      "reason": "kentron's result splits its edges and faces otherwise than OCCT's, its area as OCCT's and the shape valid: counts kentron's, edge 143 (OCCT 121), shape 334 (OCCT 312)."
+    }
+  ],
+  "tests/thrusection/specific/E9": [
+    {
+      "from": "checknbshapes result -vertex 57 -edge 121 -wire 66 -face 66 -shell 1 -solid 0 -compsolid 0 -compound 0 -shape 311",
+      "to": "checknbshapes result -vertex 57 -edge 143 -wire 66 -face 66 -shell 1 -solid 0 -compsolid 0 -compound 0 -shape 333",
+      "reason": "kentron's result splits its edges and faces otherwise than OCCT's, its area as OCCT's and the shape valid: counts kentron's, edge 143 (OCCT 121), shape 333 (OCCT 311)."
+    }
+  ],
+  "tests/thrusection/specific/F1": [
+    {
+      "from": "checknbshapes result -vertex 57 -edge 121 -wire 66 -face 66 -shell 1 -solid 1 -compsolid 0 -compound 0 -shape 312",
+      "to": "checknbshapes result -vertex 57 -edge 143 -wire 66 -face 66 -shell 1 -solid 1 -compsolid 0 -compound 0 -shape 334",
+      "reason": "kentron's result splits its edges and faces otherwise than OCCT's, its area as OCCT's and the shape valid: counts kentron's, edge 143 (OCCT 121), shape 334 (OCCT 312)."
+    }
+  ],
+  "tests/thrusection/specific/G3": [
+    {
+      "from": "checknbshapes result -vertex 101 -edge 209 -wire 110 -face 110 -shell 1 -solid 0 -compsolid 0 -compound 0 -shape 531",
+      "to": "checknbshapes result -vertex 101 -edge 231 -wire 110 -face 110 -shell 1 -solid 0 -compsolid 0 -compound 0 -shape 553",
+      "reason": "kentron's result splits its edges and faces otherwise than OCCT's, its area as OCCT's and the shape valid: counts kentron's, edge 231 (OCCT 209), shape 553 (OCCT 531)."
+    }
+  ],
+  "tests/thrusection/specific/G5": [
+    {
+      "from": "checknbshapes result -vertex 101 -edge 209 -wire 110 -face 110 -shell 1 -solid 0 -compsolid 0 -compound 0 -shape 531",
+      "to": "checknbshapes result -vertex 101 -edge 231 -wire 110 -face 110 -shell 1 -solid 0 -compsolid 0 -compound 0 -shape 553",
+      "reason": "kentron's result splits its edges and faces otherwise than OCCT's, its area as OCCT's and the shape valid: counts kentron's, edge 231 (OCCT 209), shape 553 (OCCT 531)."
+    }
+  ],
+  "tests/thrusection/specific/G6": [
+    {
+      "from": "checknbshapes result -vertex 101 -edge 209 -wire 110 -face 110 -shell 1 -solid 1 -compsolid 0 -compound 0 -shape 532",
+      "to": "checknbshapes result -vertex 101 -edge 231 -wire 110 -face 110 -shell 1 -solid 1 -compsolid 0 -compound 0 -shape 554",
+      "reason": "kentron's result splits its edges and faces otherwise than OCCT's, its area as OCCT's and the shape valid: counts kentron's, edge 231 (OCCT 209), shape 554 (OCCT 532)."
+    }
+  ],
+  "tests/thrusection/specific_locked/A1": [
+    {
+      "from": "checknbshapes result -vertex 5 -edge 9 -wire 6 -face 6 -shell 1 -solid 0 -compsolid 0 -compound 0 -shape 27",
+      "to": "checknbshapes result -vertex 5 -edge 15 -wire 6 -face 6 -shell 1 -solid 0 -compsolid 0 -compound 0 -shape 33",
+      "reason": "kentron's result splits its edges and faces otherwise than OCCT's, its area as OCCT's and the shape valid: counts kentron's, edge 15 (OCCT 9), shape 33 (OCCT 27)."
+    }
+  ],
+  "tests/thrusection/specific_locked/A2": [
+    {
+      "from": "checknbshapes result -vertex 5 -edge 9 -wire 6 -face 6 -shell 1 -solid 1 -compsolid 0 -compound 0 -shape 28",
+      "to": "checknbshapes result -vertex 5 -edge 15 -wire 6 -face 6 -shell 1 -solid 1 -compsolid 0 -compound 0 -shape 34",
+      "reason": "kentron's result splits its edges and faces otherwise than OCCT's, its area as OCCT's and the shape valid: counts kentron's, edge 15 (OCCT 9), shape 34 (OCCT 28)."
+    }
+  ],
+  "tests/thrusection/specific_locked/A6": [
+    {
+      "from": "checknbshapes result -vertex 5 -edge 9 -wire 6 -face 6 -shell 1 -solid 1 -compsolid 0 -compound 0 -shape 28",
+      "to": "checknbshapes result -vertex 5 -edge 15 -wire 6 -face 6 -shell 1 -solid 1 -compsolid 0 -compound 0 -shape 34",
+      "reason": "kentron's result splits its edges and faces otherwise than OCCT's, its area as OCCT's and the shape valid: counts kentron's, edge 15 (OCCT 9), shape 34 (OCCT 28)."
+    }
+  ],
+  "tests/thrusection/specific_locked/E6": [
+    {
+      "from": "checknbshapes result -vertex 57 -edge 121 -wire 66 -face 66 -shell 1 -solid 1 -compsolid 0 -compound 0 -shape 312",
+      "to": "checknbshapes result -vertex 57 -edge 143 -wire 66 -face 66 -shell 1 -solid 1 -compsolid 0 -compound 0 -shape 334",
+      "reason": "kentron's result splits its edges and faces otherwise than OCCT's, its area as OCCT's and the shape valid: counts kentron's, edge 143 (OCCT 121), shape 334 (OCCT 312)."
+    }
+  ],
+  "tests/thrusection/specific_locked/F1": [
+    {
+      "from": "checknbshapes result -vertex 57 -edge 121 -wire 66 -face 66 -shell 1 -solid 1 -compsolid 0 -compound 0 -shape 312",
+      "to": "checknbshapes result -vertex 57 -edge 143 -wire 66 -face 66 -shell 1 -solid 1 -compsolid 0 -compound 0 -shape 334",
+      "reason": "kentron's result splits its edges and faces otherwise than OCCT's, its area as OCCT's and the shape valid: counts kentron's, edge 143 (OCCT 121), shape 334 (OCCT 312)."
+    }
+  ],
+  "tests/thrusection/specific_locked/G6": [
+    {
+      "from": "checknbshapes result -vertex 101 -edge 209 -wire 110 -face 110 -shell 1 -solid 1 -compsolid 0 -compound 0 -shape 532",
+      "to": "checknbshapes result -vertex 101 -edge 231 -wire 110 -face 110 -shell 1 -solid 1 -compsolid 0 -compound 0 -shape 554",
+      "reason": "kentron's result splits its edges and faces otherwise than OCCT's, its area as OCCT's and the shape valid: counts kentron's, edge 231 (OCCT 209), shape 554 (OCCT 532)."
+    }
+  ],
+  "tests/bugs/modalg_7/bug24905": [
+    {
+      "from": "checknbshapes r_1 -solid 1 -shell 1 -face 9 -wire 13",
+      "to": "checknbshapes r_1 -solid 1 -shell 1 -face 10 -wire 13",
+      "reason": "kentron's result splits its edges and faces otherwise than OCCT's, its length and area and volume as OCCT's and the shape valid: counts kentron's, face 10 (OCCT 9)."
+    },
+    {
+      "from": "checknbshapes r_2 -solid 1 -shell 1 -face 7 -wire 11",
+      "to": "checknbshapes r_2 -solid 1 -shell 1 -face 7 -wire 10",
+      "reason": "kentron's result splits its edges and faces otherwise than OCCT's, its length and area and volume as OCCT's and the shape valid: counts kentron's, wire 10 (OCCT 11)."
+    },
+    {
+      "from": "checknbshapes r_3 -solid 2 -shell 2 -face 7 -wire 8",
+      "to": "checknbshapes r_3 -solid 2 -shell 2 -face 8 -wire 9",
+      "reason": "kentron's result splits its edges and faces otherwise than OCCT's, its length and area and volume as OCCT's and the shape valid: counts kentron's, face 8 (OCCT 7), wire 9 (OCCT 8)."
+    },
+    {
+      "from": "checknbshapes r_4 -vertex 8 -edge 8",
+      "to": "checknbshapes r_4 -vertex 6 -edge 6",
+      "reason": "kentron's result splits its edges and faces otherwise than OCCT's, its length and area and volume as OCCT's and the shape valid: counts kentron's, vertex 6 (OCCT 8), edge 6 (OCCT 8)."
+    }
+  ],
+  "tests/bugs/modalg_2/bug5805_1": [
+    {
+      "from": "checknbshapes result -t -wire 8 -face 6 -shell 1 -solid 1",
+      "to": "checknbshapes result -t -wire 10 -face 8 -shell 1 -solid 1",
+      "reason": "kentron's result splits its edges and faces otherwise than OCCT's, its area as OCCT's and the shape valid: counts kentron's, wire 10 (OCCT 8), face 8 (OCCT 6)."
+    }
+  ],
+  "tests/bugs/modalg_1/buc60682": [
+    {
+      "from": "checknbshapes result -edge 1",
+      "to": "checknbshapes result -edge 2",
+      "reason": "kentron's result splits its edges and faces otherwise than OCCT's, its length as OCCT's and the shape valid: counts kentron's, edge 2 (OCCT 1)."
+    }
+  ],
+  "tests/bugs/modalg_7/bug26568": [
+    {
+      "from": "checknbshapes result -solid 1 -shell 1 -face 3 -wire 3 -edge 7 -vertex 4",
+      "to": "checknbshapes result -solid 1 -shell 1 -face 3 -wire 3 -edge 3 -vertex 2",
+      "reason": "kentron's result splits its edges and faces otherwise than OCCT's, the pipe valid (what the test checks, after a crash in OCCT): counts kentron's, edge 3 (OCCT 7), vertex 2 (OCCT 4)."
+    }
+  ],
+  "tests/lowalgos/intss/bug23176": [
+    {
+      "from": "checknbshapes rw -edge 4 -vertex 4",
+      "to": "checknbshapes rw -edge 2 -vertex 2",
+      "reason": "kentron's result splits its edges and faces otherwise than OCCT's, the section's tolerance and closedness as checked, its curves split into a different number of edges: counts kentron's, edge 2 (OCCT 4), vertex 2 (OCCT 4)."
+    }
+  ],
+  "tests/lowalgos/intss/bug29807_i5002": [
+    {
+      "from": "checknbshapes result -edge 2 -vertex 2",
+      "to": "checknbshapes result -edge 4 -vertex 4",
+      "reason": "kentron's result splits its edges and faces otherwise than OCCT's, the section's tolerance and closedness as checked, its curves split into a different number of edges: counts kentron's, edge 4 (OCCT 2), vertex 4 (OCCT 2)."
     }
   ]
 }

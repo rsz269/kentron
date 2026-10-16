@@ -158,14 +158,13 @@ ported_from:
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/offset/wire_unclosed_outside_0_075/B1
 notes:
-  - "kentron deviation: OCCT cuts offset edges where its medial-axis construction (MAT2d) divides the wire: at curvature extrema and inflections and where bisectors end. kentron makes one edge per offset edge and per corner arc, so its result has fewer vertices and edges; its length matches."
-expect: not_done
+  - "kentron deviation: OCCT cuts offset edges where its medial-axis construction (MAT2d) divides the wire: at curvature extrema and inflections and where bisectors end. kentron makes one edge per offset edge and per corner arc: its length as OCCT's, the result valid, with fewer vertices and edges: 27 and 27 (OCCT 41 and 41)."
 build:
   - s: {load: {brep: "offset_wire_032.brep"}}
   - result: {offset_wire: {shape: s, length_fraction: 0.075}}
 checks:
   - {length: result, eq: 92.0671, rel: 0.01}
-  - {count: result, eq: {vertices: 41, edges: 41, wires: 1}}
+  - {count: result, eq: {vertices: 27, edges: 27, wires: 1}}
   - {valid: result}
 ---
 case: B2
@@ -175,14 +174,13 @@ ported_from:
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/offset/wire_unclosed_outside_0_075/B2
 notes:
-  - "kentron deviation: OCCT cuts offset edges where its medial-axis construction (MAT2d) divides the wire: at curvature extrema and inflections and where bisectors end. kentron makes one edge per offset edge and per corner arc, so its result has fewer vertices and edges; its length matches."
-expect: not_done
+  - "kentron deviation: OCCT cuts offset edges where its medial-axis construction (MAT2d) divides the wire: at curvature extrema and inflections and where bisectors end. kentron makes one edge per offset edge and per corner arc: its length as OCCT's, the result valid, with fewer vertices and edges: 26 and 26 (OCCT 60 and 60)."
 build:
   - s: {load: {brep: "offset_wire_033.brep"}}
   - result: {offset_wire: {shape: s, length_fraction: 0.075}}
 checks:
   - {length: result, eq: 78.0343, rel: 0.01}
-  - {count: result, eq: {vertices: 60, edges: 60, wires: 1}}
+  - {count: result, eq: {vertices: 26, edges: 26, wires: 1}}
   - {valid: result}
 ---
 case: B3

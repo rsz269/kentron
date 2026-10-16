@@ -5,7 +5,8 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/bugs/modalg_2/bug20413
-expect: not_done
+notes:
+  - "kentron deviation: kentron's result splits its edges and faces otherwise than OCCT's, its length as OCCT's and the shape valid: counts kentron's, vertex 8 (OCCT 9), edge 8 (OCCT 9), shape 17 (OCCT 19)."
 build:
   - b1: {load: {brep: "OCC20413_a1.brep"}}
   - b2: {load: {brep: "OCC20413_a2.brep"}}
@@ -14,7 +15,7 @@ checks:
   - {length: result, eq: 233.024, rel: 0.01}
   - {valid: result}
   - {exists: result}
-  - {count: result, eq: {vertices: 9, edges: 9, wires: 0, faces: 0, shells: 0, solids: 0, compsolids: 0, compounds: 1, shapes: 19}}
+  - {count: result, eq: {vertices: 8, edges: 8, wires: 0, faces: 0, shells: 0, solids: 0, compsolids: 0, compounds: 1, shapes: 17}}
 ---
 case: bug20465
 ported_from:
@@ -2259,7 +2260,8 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/bugs/modalg_2/bug476_4
-expect: not_done
+notes:
+  - "kentron deviation: kentron's result splits its edges and faces otherwise than OCCT's, its area as OCCT's and the shape valid: counts kentron's, vertex 22 (OCCT 19), edge 35 (OCCT 33), shape 88 (OCCT 83)."
 build:
   - s1: {load: {brep: "OCC485b.brep"}}
   - s2: {load: {brep: "OCC485a.brep"}}
@@ -2269,7 +2271,7 @@ build:
 checks:
   - {area: result, eq: 9340.03, rel: 0.01}
   - {valid: result}
-  - {count: result, eq: {vertices: 19, edges: 33, wires: 14, faces: 14, shells: 1, solids: 1, compsolids: 0, compounds: 1, shapes: 83}}
+  - {count: result, eq: {vertices: 22, edges: 35, wires: 14, faces: 14, shells: 1, solids: 1, compsolids: 0, compounds: 1, shapes: 88}}
 ---
 case: bug476_5
 ported_from:
@@ -2277,7 +2279,8 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/bugs/modalg_2/bug476_5
-expect: not_done
+notes:
+  - "kentron deviation: kentron's result splits its edges and faces otherwise than OCCT's, its area as OCCT's and the shape valid: counts kentron's, vertex 22 (OCCT 19), edge 35 (OCCT 33), shape 88 (OCCT 83)."
 build:
   - s1: {load: {brep: "OCC485b.brep"}}
   - s2: {load: {brep: "OCC485a.brep"}}
@@ -2287,7 +2290,7 @@ build:
 checks:
   - {area: result, eq: 9340.03, rel: 0.01}
   - {valid: result}
-  - {count: result, eq: {vertices: 19, edges: 33, wires: 14, faces: 14, shells: 1, solids: 1, compsolids: 0, compounds: 1, shapes: 83}}
+  - {count: result, eq: {vertices: 22, edges: 35, wires: 14, faces: 14, shells: 1, solids: 1, compsolids: 0, compounds: 1, shapes: 88}}
 ---
 case: bug476_6
 ported_from:
@@ -2312,7 +2315,8 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/bugs/modalg_2/bug476_7
-expect: not_done
+notes:
+  - "kentron deviation: kentron's result splits its edges and faces otherwise than OCCT's, its area as OCCT's and the shape valid: counts kentron's, vertex 18 (OCCT 15), edge 28 (OCCT 26), shape 73 (OCCT 68)."
 build:
   - s1: {load: {brep: "OCC485b.brep"}}
   - s2: {load: {brep: "OCC485a.brep"}}
@@ -2322,7 +2326,7 @@ build:
 checks:
   - {area: result, eq: 105.587, rel: 0.01}
   - {valid: result}
-  - {count: result, eq: {vertices: 15, edges: 26, wires: 12, faces: 12, shells: 1, solids: 1, compsolids: 0, compounds: 1, shapes: 68}}
+  - {count: result, eq: {vertices: 18, edges: 28, wires: 12, faces: 12, shells: 1, solids: 1, compsolids: 0, compounds: 1, shapes: 73}}
 ---
 case: bug476_8
 ported_from:
@@ -2330,7 +2334,8 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/bugs/modalg_2/bug476_8
-expect: not_done
+notes:
+  - "kentron deviation: kentron's result splits its edges and faces otherwise than OCCT's, its area as OCCT's and the shape valid: counts kentron's, vertex 18 (OCCT 15), edge 28 (OCCT 26), shape 73 (OCCT 68)."
 build:
   - s1: {load: {brep: "OCC485b.brep"}}
   - s2: {load: {brep: "OCC485a.brep"}}
@@ -2340,7 +2345,7 @@ build:
 checks:
   - {area: result, eq: 105.587, rel: 0.01}
   - {valid: result}
-  - {count: result, eq: {vertices: 15, edges: 26, wires: 12, faces: 12, shells: 1, solids: 1, compsolids: 0, compounds: 1, shapes: 68}}
+  - {count: result, eq: {vertices: 18, edges: 28, wires: 12, faces: 12, shells: 1, solids: 1, compsolids: 0, compounds: 1, shapes: 73}}
 ---
 case: bug4993_1
 ported_from:

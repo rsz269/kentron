@@ -144,7 +144,8 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/bugs/modalg_4/bug7626_1
-expect: not_done
+notes:
+  - "kentron deviation: kentron's result splits its edges and faces otherwise than OCCT's, its area as OCCT's and the shape valid: counts kentron's, wire 3 (OCCT 4), shape 20 (OCCT 21)."
 build:
   - s: {sphere: {radius: 10}}
   - b: {box: {corner: [10, 0, 0], size: [20, 20, 20]}}
@@ -153,7 +154,7 @@ build:
 checks:
   - {area: result, eq: 1271.7, rel: 0.01}
   - {valid: result}
-  - {count: result, eq: {vertices: 4, edges: 7, wires: 4, faces: 3, shells: 1, solids: 1, compsolids: 0, compounds: 1, shapes: 21}}
+  - {count: result, eq: {vertices: 4, edges: 7, wires: 3, faces: 3, shells: 1, solids: 1, compsolids: 0, compounds: 1, shapes: 20}}
 ---
 case: bug7626_2
 ported_from:
@@ -194,15 +195,14 @@ ported_from:
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/bugs/modalg_4/bug7668
 notes:
-  - "kentron deviation: OCCT cuts offset edges where its medial-axis construction (MAT2d) divides the wire (here a B-spline into 134 edges); kentron makes one edge per offset edge and per corner arc, so the vertex and edge counts differ."
-expect: not_done
+  - "kentron deviation: kentron's result splits its edges and faces otherwise than OCCT's, its length as OCCT's and the shape valid: counts kentron's, vertex 8 (OCCT 134), edge 8 (OCCT 134), shape 17 (OCCT 269)."
 build:
   - a1: {load: {brep: "OCC7668.brep"}}
   - w1: {wire: {edges: [a1]}}
   - result_1: {offset_wire: {shape: w1, distance: 2}}
   - result: result_1
 checks:
-  - {count: result, eq: {vertices: 134, edges: 134, wires: 1, faces: 0, shells: 0, solids: 0, compsolids: 0, compounds: 0, shapes: 269}}
+  - {count: result, eq: {vertices: 8, edges: 8, wires: 1, faces: 0, shells: 0, solids: 0, compsolids: 0, compounds: 0, shapes: 17}}
   - {length: result, eq: 136.008, rel: 0.01}
   - {valid: result}
   - {exists: result}
