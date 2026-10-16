@@ -1503,7 +1503,10 @@ impl Draw {
             let [(profile, contact, correction)] = self.sweep_profiles[..] else {
                 return self.not_implemented("buildsweep", args);
             };
-            if !self.sweep_mode.is_empty() && self.sweep_mode != ["-CF"] {
+            // (Frenet's frame turns as the corrected one does where the spine is straight
+            // between its corners.)
+            let straight = self.model.explore(spine, NodeKind::Edge).all(|e| matches!(self.model.edge_curve(e), Some((kentron::geometry::curve::Curve::Line(_), _, _))));
+            if !self.sweep_mode.is_empty() && self.sweep_mode != ["-CF"] && !(self.sweep_mode == ["-FR"] && straight) {
                 return self.not_implemented("buildsweep", args);
             }
             let profile = if solid && profile.kind() == NodeKind::Wire { make::planar_face(&mut self.model, profile)? } else { profile };
@@ -4410,6 +4413,17 @@ impl Draw {
         };
         self.set(name, object);
         Ok(String::new())
+    }
+    /// DRAW command `save`.
+    ///
+    /// Example: `save result result.brep`
+    pub fn save(&mut self, args: &[&str]) -> DrawResult {
+        // `save name file`: the shape written as a BRep file (as `restore` reads it).
+        let [name, file] = args else { return self.not_implemented("save", args) };
+        let shape = self.shape_var(name)?;
+        let mut out = std::fs::File::create(file).map_err(|e| DrawError::Failed(format!("save: {file}: {e}")))?;
+        kentron::io::brep::write(&self.model, shape, &mut out, &Default::default())?;
+        Ok(format!("{name} saved\n"))
     }
     /// DRAW command `result`: 8 uses in 5 converted scripts.
     ///

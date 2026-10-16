@@ -20,7 +20,8 @@ Re-running is safe: generated test files are rewritten, shims are only appended.
 Intentional differences from OCCT live in crates/occt-tests/draw_deviations.json. An entry
 either replaces generated statements of a script (the reason is emitted as a comment on the
 test; a stale entry, whose statement is no longer generated, aborts the run) or skips the
-script altogether (the reason shows in the report's skip reasons).
+script altogether (the reason shows in the report's skip reasons). For a script run as it is
+on the Tcl interpreter, `from` and `to` are lines of its text.
 """
 
 from __future__ import annotations
@@ -983,10 +984,11 @@ def existing_command_methods() -> set:
 NOT_RUN_PREFIXES = ("data-exchange:", "viewer:", "draw_deviations.json:")
 
 
-def vendor_scripts(occt: Path, skipped: list) -> set:
+def vendor_scripts(occt: Path, skipped: list, deviations: dict) -> set:
     """Copies the scripts not converted (that the Tcl interpreter can run) into `scripts/`,
     with their groups' and grids' begin and end files and parse.rules, for `tests/draw_tcl.rs`;
-    the scripts' paths (`tests/...`), as converted."""
+    the scripts' paths (`tests/...`), as converted. A script's deviations replace lines of it
+    (each marked with its reason)."""
     import shutil
     root = TESTS_CRATE / "scripts"
     tests = occt / "tests"
@@ -997,7 +999,8 @@ def vendor_scripts(occt: Path, skipped: list) -> set:
         "# OCCT's DRAW scripts, as they are\n\n"
         "Copied from OCCT's `tests` by `tools/draw2rs.py`: the scripts it does not convert to Rust,\n"
         "which `tests/draw_tcl.rs` runs on a Tcl interpreter (`src/draw/tcl.rs`), with their groups'\n"
-        "and grids' `begin` and `end` files and `parse.rules`. LGPL-2.1 with the Open CASCADE\n"
+        "and grids' `begin` and `end` files and `parse.rules`; lines that `draw_deviations.json`\n"
+        "replaces are marked `# kentron deviation`. LGPL-2.1 with the Open CASCADE\n"
         "exception, as OCCT (see `../README.md`). Do not edit; re-run the tool instead.\n")
     copied = set()
 
@@ -1016,6 +1019,17 @@ def vendor_scripts(occt: Path, skipped: list) -> set:
         rel = Path(path)
         group, grid = rel.parts[0], rel.parts[1]
         copy(rel)
+        entry = deviations.get(f"tests/{path}", [])
+        if isinstance(entry, list) and entry:
+            target = root / rel
+            text = target.read_text(errors="replace")
+            for dev in entry:
+                if "from" not in dev:
+                    continue
+                if dev["from"] not in text:
+                    raise SystemExit(f"stale deviation for tests/{path}: line not found: {dev['from']}")
+                text = text.replace(dev["from"], f"# kentron deviation (draw_deviations.json): {dev['reason']}\n{dev['to']}", 1)
+            target.write_text(text)
         for d in (Path(group), Path(group) / grid):
             for f in ("begin", "end", "parse.rules"):
                 copy(d / f)
@@ -1211,7 +1225,7 @@ def main() -> int:
     target = TESTS_CRATE.parent.parent / "target"
     target.mkdir(exist_ok=True)
     (target / "draw_skipped.txt").write_text("".join(f"{p}\t{r}\n" for p, r in skipped_all))
-    converted |= vendor_scripts(occt, skipped_all)
+    converted |= vendor_scripts(occt, skipped_all, deviations)
 
     stale = sorted(expected - converted)
     if stale:

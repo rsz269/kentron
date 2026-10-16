@@ -311,6 +311,7 @@ pub fn dispatch(d: &mut Draw, name: &str, args: &[&str]) -> Option<DrawResult> {
         "rotate" => d.rotate(args),
         "sameparameter" => d.sameparameter(args),
         "samerange" => d.samerange(args),
+        "save" => d.save(args),
         "savehistory" => d.savehistory(args),
         "scaleshape" => d.scaleshape(args),
         "scalexyz" => d.scalexyz(args),
