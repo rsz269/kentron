@@ -504,7 +504,7 @@ fn turning_breaks(curve: &crate::geometry::curve::Curve, a: f64, b: f64, out: &m
     turned
 }
 
-const MAX_ANGLE_STEP: f64 = std::f64::consts::PI / 8.0;
+const MAX_ANGLE_STEP: f64 = std::f64::consts::PI / 4.0;
 
 /// The 2-point Gauss–Legendre rule on [-1, 1] (exact for cubics).
 const GAUSS_LEGENDRE_2: [(f64, f64); 2] = [(-0.577_350_269_189_625_8, 1.0), (0.577_350_269_189_625_8, 1.0)];

@@ -1385,7 +1385,8 @@ fn sliced(base: &Face, other: &Face, crossings: &[Point]) -> Vec<Section> {
         // as the B-spline batches them, the same points.)
         let (samples, spacing) = base.samples.get_or_init(|| {
             let us: Vec<f64> = (0..=N).map(|i| u0 + (u1 - u0) * i as f64 / N as f64).collect();
-            let rows: Vec<Vec<Point>> = (0..=N).map(|j| s.points_along_u(&us, v0 + (v1 - v0) * j as f64 / N as f64)).collect();
+            let vs: Vec<f64> = (0..=N).map(|j| v0 + (v1 - v0) * j as f64 / N as f64).collect();
+            let rows = s.points_on_grid(&us, &vs);
             let samples: Vec<Vec<Point>> = (0..=N).map(|i| (0..=N).map(|j| rows[j][i]).collect()).collect();
             let spacing = (0..N).flat_map(|i| (0..N).map(move |j| (i, j))).map(|(i, j)| samples[i][j].distance(samples[i + 1][j]).max(samples[i][j].distance(samples[i][j + 1]))).fold(0.0, f64::max);
             (samples, spacing)
@@ -1443,7 +1444,7 @@ fn sliced(base: &Face, other: &Face, crossings: &[Point]) -> Vec<Section> {
     // The grid's points evaluated row by row along u, then the distances in the order the
     // foot points chain.
     let us: Vec<f64> = (0..columns).map(u_at).collect();
-    let grid: Vec<Vec<Point>> = (0..rows).map(|j| s.points_along_u(&us, v_at(j))).collect();
+    let grid = s.points_on_grid(&us, &(0..rows).map(v_at).collect::<Vec<f64>>());
     let values: Vec<Vec<f64>> = (0..columns)
         .map(|i| {
             (0..rows)

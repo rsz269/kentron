@@ -50,10 +50,30 @@ impl Surface {
     /// The points at `(u, v)` for each `u` of `us` (best ascending), as `point` gives them
     /// one by one.
     pub fn points_along_u(&self, us: &[f64], v: f64) -> Vec<Point> {
-        use super::ParametricSurface;
+        use super::{ParametricCurve, ParametricSurface};
         match self {
             Surface::BSpline(b) => b.points_along_u(us, v),
+            // (The basis point at v once, turned for each u.)
+            Surface::Revolution(r) => {
+                let at = r.basis().point(v);
+                us.iter().map(|&u| at.transformed(&Transform::rotation(r.axis(), u))).collect()
+            }
             _ => us.iter().map(|&u| self.point(u, v)).collect(),
+        }
+    }
+
+    /// The points at `(u, v)` for each `v` of `vs` (a row each) and each `u` of `us`, as
+    /// [`Self::points_along_u`] gives them row by row; an extrusion's basis points found once
+    /// for all rows.
+    pub fn points_on_grid(&self, us: &[f64], vs: &[f64]) -> Vec<Vec<Point>> {
+        use super::ParametricCurve;
+        match self {
+            Surface::Extrusion(e) => {
+                let at: Vec<Point> = us.iter().map(|&u| e.basis().point(u)).collect();
+                let direction = Vector::from(e.direction());
+                vs.iter().map(|&v| at.iter().map(|&p| p + direction * v).collect()).collect()
+            }
+            _ => vs.iter().map(|&v| self.points_along_u(us, v)).collect(),
         }
     }
 
