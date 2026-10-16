@@ -47,11 +47,11 @@ const IGNORED: &[&str] = &[
     "left", "right", "bottom", "back", "xwd", "don", "isos", "protect", "unprotect", "dchrono", "chrono", "dlog", "decho",
     "dtracelevel", "view", "wait", "meminfo", "checkcolor", "trinfo_display", "dversion", "dsetsignal", "set_display",
     "autodisplay", "repaint", "dflush", "dbreak", "datadir", "vinit", "pu", "pd", "pl", "pr", "mu", "md", "mu4", "md4", "2dpu",
-    "2dpd", "2dpl", "2dpr", "2dmu", "2dmd", "2dzoom", "zoom", "wzoom", "vclear", "vdisplay", "vfit", "vsetdispmode", "vtop",
+    "2dpd", "2dpl", "2dpr", "2dmu", "2dmd", "2dzoom", "zoom", "wzoom", "vclear", "vdisplay", "vfit", "vtop",
     "vaxo", "vfront", "vright", "vleft", "vback", "vbottom", "vremove", "verase", "vzoom", "vrotate", "vsetcolor", "vaspects",
     "vcamera", "vviewparams", "vrenderparams", "vlight", "vdrawparray", "vtrihedron", "vzbufftrihedron", "vfps", "vglinfo",
     "vcaps", "vsetmaterial", "vsettransparency", "vshowfaceboundary", "vdefaults", "vclose", "vraytrace", "vupdate", "vredraw",
-    "vexport", "dtyp", "disp", "pick", "checkdisplay", "tclean_display", "checktrinfo_display", "chkfi", "dhistory",
+    "vexport", "vdump", "dtyp", "disp", "pick", "checkdisplay", "tclean_display", "checktrinfo_display", "chkfi", "dhistory",
     "dfreemem", "dmalloc", "dputs", "dsetenv", "testgrid", "help",
     // (Boolean operations' history, and fillets' tolerances: kentron keeps no history and
     // uses its own tolerances.)
@@ -313,6 +313,7 @@ fn extra(name: &str, interp: &mut Interp<Session>, argv: &[Value]) -> Option<Mol
         "regexp" => regexp(interp, &args),
         "regsub" => regsub(interp, &args),
         "lsearch" => lsearch(&args),
+        "lset" => lset(interp, &args),
         "lsort" => lsort(&args),
         "format" => format(&args),
         "file" => file(&args),
@@ -468,6 +469,43 @@ fn lsearch(args: &[String]) -> MoltResult {
         Some(&k) => molt_ok!(if inline { items[k].clone() } else { Value::from(k as MoltInt) }),
         None => molt_ok!(if inline { Value::empty() } else { Value::from(-1 as MoltInt) }),
     }
+}
+
+/// `lset varName ?index ...? value`: the variable's list with the element at the indices
+/// (one in each nested list; `end`, `end-N`) replaced by `value`.
+fn lset(interp: &mut Interp<Session>, args: &[String]) -> MoltResult {
+    let [name, rest @ ..] = args else { return molt_err!("wrong # args: should be \"lset listVar ?index? ?index ...? value\"") };
+    let Some((value, indices)) = rest.split_last() else { return molt_err!("wrong # args: should be \"lset listVar ?index? ?index ...? value\"") };
+    // (Several indices given as one list, as Tcl allows.)
+    let indices: Vec<String> = match indices {
+        [one] => Value::from(one.as_str()).as_list()?.iter().map(|v| v.as_str().to_string()).collect(),
+        many => many.to_vec(),
+    };
+    let var = Value::from(name.as_str());
+    let list = interp.var(&var)?;
+    fn set_in(list: &Value, indices: &[String], value: &str) -> MoltResult {
+        let Some((first, rest)) = indices.split_first() else { return molt_ok!(Value::from(value)) };
+        let mut items: Vec<Value> = list.as_list()?.to_vec();
+        let n = items.len() as i64;
+        let k = match first.trim() {
+            "end" => n - 1,
+            t if t.starts_with("end-") => n - 1 - t[4..].parse::<i64>().map_err(|_| Exception::molt_err(Value::from(format!("bad index \"{t}\""))))?,
+            t => t.parse::<i64>().map_err(|_| Exception::molt_err(Value::from(format!("bad index \"{t}\""))))?,
+        };
+        if k < 0 || k > n || (k == n && !rest.is_empty()) {
+            return molt_err!("list index out of range");
+        }
+        let inner = if k < n { set_in(&items[k as usize], rest, value)? } else { Value::from(value) };
+        if k == n {
+            items.push(inner);
+        } else {
+            items[k as usize] = inner;
+        }
+        molt_ok!(Value::from(items))
+    }
+    let new = set_in(&list, &indices, value)?;
+    interp.set_var(&var, new.clone())?;
+    molt_ok!(new)
 }
 
 /// `lsort ?-ascii|-dictionary|-integer|-real? ?-increasing|-decreasing? ?-unique? list`
@@ -699,12 +737,36 @@ fn rules(tests: &Path, group: &str, grid: &str) -> Vec<(bool, regex::Regex)> {
 /// The OCCT TODO a script declares that applies on this platform (`puts "TODO id platforms:
 /// message"`): a known failure of OCCT's.
 pub fn known_failure(script: &str) -> Option<String> {
-    let todo = regex::Regex::new(r#"(?m)^\s*puts\s+"(TODO\s+\S+\s+([^:"]+):[^"]*)""#).expect("a pattern");
-    let found = todo
-        .captures_iter(script)
-        .find(|c| c[2].split([' ', ',']).any(|p| ["ALL", "All", "Linux", "Debian", "Ubuntu"].contains(&p)))
-        .map(|c| c[1].to_string());
-    found
+    let todo = regex::Regex::new(r#"^\s*puts\s+"(TODO\s+\S+\s+([^:"]+):[^"]*)""#).expect("a pattern");
+    // (Only a TODO outside braces holds whatever runs: one in a block, as under an `if` on
+    // the grid's variables, is told when the script puts it.)
+    let mut depth = 0i32;
+    for line in script.lines() {
+        if depth == 0 {
+            if let Some(c) = todo.captures(line) {
+                if c[2].split([' ', ',']).any(|p| ["ALL", "All", "Linux", "Debian", "Ubuntu"].contains(&p)) {
+                    return Some(c[1].to_string());
+                }
+            }
+        }
+        depth += line.matches('{').count() as i32 - line.matches('}').count() as i32;
+    }
+    None
+}
+
+/// The file of the script `<group>/<grid>/<case>` under `tests`: in the grid's directory, or
+/// in the one its `cases.list` names (a grid running another's scripts with its own begin
+/// and end files).
+fn case_file(tests: &Path, group: &str, grid: &str, case: &str) -> std::path::PathBuf {
+    let dir = tests.join(group).join(grid);
+    let file = dir.join(case);
+    if file.is_file() {
+        return file;
+    }
+    match std::fs::read_to_string(dir.join("cases.list")).ok().and_then(|t| t.lines().map(str::trim).find(|l| !l.is_empty()).map(String::from)) {
+        Some(alias) => dir.join(alias).join(case),
+        None => file,
+    }
 }
 
 /// Runs OCCT's script `tests/<group>/<grid>/<case>` from the checkout `tests` (its `tests`
@@ -712,7 +774,8 @@ pub fn known_failure(script: &str) -> Option<String> {
 pub fn run_script(tests: &Path, group: &str, grid: &str, case: &str) -> Outcome {
     // (A TODO that applies here makes it a known failure of OCCT's: not run, as the
     // converted scripts with one are not.)
-    if let Some(todo) = std::fs::read_to_string(tests.join(group).join(grid).join(case)).ok().and_then(|t| known_failure(&t)) {
+    let script = case_file(tests, group, grid, case);
+    if let Some(todo) = std::fs::read_to_string(&script).ok().and_then(|t| known_failure(&t)) {
         return Outcome::KnownFailure(todo);
     }
     let session = Session {
@@ -740,7 +803,7 @@ pub fn run_script(tests: &Path, group: &str, grid: &str, case: &str) -> Outcome 
     let files = [
         tests.join(group).join("begin"),
         tests.join(group).join(grid).join("begin"),
-        tests.join(group).join(grid).join(case),
+        script,
         tests.join(group).join(grid).join("end"),
         tests.join(group).join("end"),
     ];

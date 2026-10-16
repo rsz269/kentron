@@ -648,7 +648,15 @@ class Case:
     group: str
     grid: str
     name: str
+    # The script, and the grid's directory (its begin and end files): for a grid aliased to
+    # another directory by its cases.list, the script lies in that one.
     path: Path
+    grid_dir: Path
+
+    @property
+    def rel(self) -> str:
+        """`tests/<group>/<grid>/<case>`: the case as OCCT's harness names it."""
+        return f"tests/{self.group}/{self.grid}/{self.name}"
 
 
 def discover(occt: Path, groups: list[str]) -> list[Case]:
@@ -674,9 +682,19 @@ def discover(occt: Path, groups: list[str]) -> list[Case]:
             gr = gdir / grid
             if not gr.is_dir():
                 continue
-            for f in sorted(gr.iterdir()):
+            # (A grid whose cases.list names another directory runs the scripts there, with
+            # its own begin and end files, as OCCT's harness does.)
+            scripts = gr
+            aliased = gr / "cases.list"
+            if aliased.is_file():
+                lines = [l.strip() for l in aliased.read_text().splitlines() if l.strip()]
+                if lines:
+                    scripts = (gr / lines[0]).resolve()
+            if not scripts.is_dir():
+                continue
+            for f in sorted(scripts.iterdir()):
                 if f.is_file() and f.name not in ("begin", "end", "cases.list") and not f.name.startswith("."):
-                    cases.append(Case(g, grid, f.name, f))
+                    cases.append(Case(g, grid, f.name, f, gr))
     return cases
 
 
@@ -801,7 +819,7 @@ def translate_case(case: Case, consts: dict, procs: set, data_index: dict, prelu
     tr = Translator(consts, procs, data_index)
     for c in cmds:
         tr.statement(c)
-    grid_end = case.path.parent / "end"
+    grid_end = case.grid_dir / "end"
     if f"{case.group}/{case.grid}" in GRID_EPILOGUE_TCL:
         for c in parse_tcl(GRID_EPILOGUE_TCL[f"{case.group}/{case.grid}"]):
             tr.statement(c)
@@ -905,7 +923,7 @@ def case_timeout(rel: str, deviations: dict):
 def try_yaml(case: Case, res: CaseResult, data_index: dict, occt: Path, deviations: dict, selectors: dict,
              git_hash: str, expected: set):
     """The case as a YAML document (docs/test-cases.md), or None if it needs Rust."""
-    rel = case.path.relative_to(occt).as_posix()
+    rel = case.rel
     body = list(res.rust_body)
     notes = [f"kentron deviation: {r}" for r in apply_deviations(rel, body, deviations)]
     if rel in selectors:
@@ -928,7 +946,7 @@ def try_yaml(case: Case, res: CaseResult, data_index: dict, occt: Path, deviatio
 
 def emit_case(case: Case, res: CaseResult, fn_name: str, data_index: dict, occt: Path,
               deviations: dict, selectors: dict, expected: set) -> str:
-    rel = case.path.relative_to(occt)
+    rel = Path(case.rel)
     lines = [f"/// `{rel.as_posix()}`"]
     for reason in apply_deviations(rel.as_posix(), res.rust_body, deviations):
         lines.append(f"/// kentron deviation (draw_deviations.json): {reason}")
@@ -984,11 +1002,12 @@ def existing_command_methods() -> set:
 NOT_RUN_PREFIXES = ("data-exchange:", "viewer:", "draw_deviations.json:")
 
 
-def vendor_scripts(occt: Path, skipped: list, deviations: dict) -> set:
+def vendor_scripts(occt: Path, skipped: list, deviations: dict, sources: dict) -> set:
     """Copies the scripts not converted (that the Tcl interpreter can run) into `scripts/`,
     with their groups' and grids' begin and end files and parse.rules, for `tests/draw_tcl.rs`;
     the scripts' paths (`tests/...`), as converted. A script's deviations replace lines of it
-    (each marked with its reason)."""
+    (each marked with its reason). `sources` has the files of scripts lying elsewhere than
+    their grids (grids aliased by a cases.list), copied into their grids."""
     import shutil
     root = TESTS_CRATE / "scripts"
     tests = occt / "tests"
@@ -1005,7 +1024,7 @@ def vendor_scripts(occt: Path, skipped: list, deviations: dict) -> set:
     copied = set()
 
     def copy(rel: Path) -> None:
-        src = tests / rel
+        src = sources.get(rel.as_posix(), tests / rel)
         if src.is_file() and rel not in copied:
             (root / rel).parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(src, root / rel)
@@ -1126,7 +1145,7 @@ def main() -> int:
     selectors = load_selectors()
     pre_cache: dict = {}
     for case in cases:
-        key_g, key_grid = case.path.parent.parent, case.path.parent
+        key_g, key_grid = case.grid_dir.parent, case.grid_dir
         for key in (key_g, key_grid):
             if key not in pre_cache:
                 pre_cache[key] = preamble_info(key / "begin")
@@ -1136,7 +1155,7 @@ def main() -> int:
         procs = gprocs | cprocs
         stats["total"] += 1
         try:
-            entry = deviations.get(case.path.relative_to(occt).as_posix())
+            entry = deviations.get(case.rel)
             if isinstance(entry, dict):
                 raise Unsupported(f"draw_deviations.json: {entry['skip']}")
             if ccomplex:
@@ -1148,10 +1167,10 @@ def main() -> int:
                 raise Unsupported("checks only in the group's end script")
         except Unsupported as e:
             reason = str(e)
-            skipped_all.append((case.path.relative_to(occt / "tests").as_posix(), reason))
+            skipped_all.append((case.rel[len("tests/"):], reason))
             skipped[reason] += 1
             if len(skipped_examples[reason]) < 3:
-                skipped_examples[reason].append(case.path.relative_to(occt / "tests").as_posix())
+                skipped_examples[reason].append(case.rel[len("tests/"):])
             continue
         stats["converted"] += 1
         if any(f not in data_index for f in res.data_files):
@@ -1186,7 +1205,7 @@ def main() -> int:
             body = [HEADER.format(src=f"tests/{group}/{grid}"), "use occt_tests::draw::*;", ""]
             docs = []
             for case, res in items:
-                converted.add(case.path.relative_to(occt).as_posix())
+                converted.add(case.rel)
                 doc = try_yaml(case, res, data_index, occt, deviations, selectors, git_hash, expected)
                 if doc is not None:
                     docs.append(doc)
@@ -1225,7 +1244,7 @@ def main() -> int:
     target = TESTS_CRATE.parent.parent / "target"
     target.mkdir(exist_ok=True)
     (target / "draw_skipped.txt").write_text("".join(f"{p}\t{r}\n" for p, r in skipped_all))
-    converted |= vendor_scripts(occt, skipped_all, deviations)
+    converted |= vendor_scripts(occt, skipped_all, deviations, {c.rel[len("tests/"):]: c.path for c in cases})
 
     stale = sorted(expected - converted)
     if stale:

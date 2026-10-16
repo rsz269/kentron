@@ -2,23 +2,25 @@
 
 OCCT: `V8_0_1-42-g3d097a0328`; groups: blend, boolean, bugs, chamfer, cr, draft, evolved, feat, fillet2d, geometry, heal, helix, lowalgos, mesh, mkface, nproject, offset, pipe, prism, prj, sewing, thrusection
 
-- scripts considered: 13183
-- converted: 9596 (2659 ignored for missing data), 6373 of them as YAML cases (cases/occt/draw)
-- skipped: 3587
+- scripts considered: 16420
+- converted: 10245 (2858 ignored for missing data), 6373 of them as YAML cases (cases/occt/draw)
+- skipped: 6175
 - distinct DRAW commands used by converted scripts: 342
 
 ## Skip reasons
 
 | reason | scripts | examples |
 |---|---|---|
-| tcl:if | 1242 | boolean/bsection/N4, boolean/cells_test/D5, boolean/cells_test/J3 |
+| tcl:if | 1683 | boolean/bsection/N4, boolean/cells_test/D5, boolean/cells_test/J3 |
+| grid end file: tcl:regexp | 1395 | heal/direct_faces/A1, heal/direct_faces/A2, heal/direct_faces/A3 |
+| no commands | 536 | bugs/moddata_1/bug22554_1, bugs/moddata_1/bug22554_2, bugs/moddata_1/bug22554_3 |
 | tcl:source | 328 | boolean/gdml_private/A1, boolean/gdml_private/A2, boolean/gdml_private/A3 |
 | grid begin file | 289 | blend/tolblend_simple/A1, blend/tolblend_simple/A2, blend/tolblend_simple/A3 |
 | tcl:foreach | 288 | blend/complex/A6, boolean/bcut_complex/F2, boolean/bsection/M8 |
+| tcl:list | 284 | bugs/modalg_6/bug26647, bugs/modalg_6/bug28795, bugs/modalg_7/bug32863 |
 | tcl:regexp | 269 | boolean/bsection/M3, bugs/fclasses/bug23774, bugs/fclasses/bug24137 |
 | tcl:lrange | 244 | bugs/modalg_6/bug21507, bugs/moddata_3/bug28182, bugs/moddata_3/bug28183 |
 | tcl:catch | 180 | bugs/fclasses/bug23192_1, bugs/fclasses/bug23192_2, bugs/fclasses/bug28829 |
-| grid end file: tcl:regexp | 97 | heal/direct_faces/A1, heal/direct_faces/A2, heal/direct_faces/A3 |
 | tcl:llength | 61 | bugs/modalg_1/buc60663_2, bugs/modalg_1/buc60708, bugs/modalg_1/bug13140 |
 | tcl:for | 60 | bugs/fclasses/bug24863_1, bugs/fclasses/bug7287_1, bugs/fclasses/bug7287_2 |
 | data-exchange:stepread | 46 | boolean/removefeatures/A1, boolean/removefeatures/A2, boolean/removefeatures/A3 |
@@ -26,6 +28,7 @@ OCCT: `V8_0_1-42-g3d097a0328`; groups: blend, boolean, bugs, chamfer, cr, draft,
 | proc:CheckIsFeatureRemoved | 43 | boolean/removefeatures/A9, boolean/removefeatures/B1, boolean/removefeatures/B2 |
 | tcl:lsearch | 43 | thrusection/specific/A1, thrusection/specific/A2, thrusection/specific/A3 |
 | tcl:string | 42 | bugs/modalg_2/bug22428, bugs/modalg_2/bug23089, bugs/modalg_5/bug25124_6 |
+| dynamic set | 42 | bugs/modalg_2/bug415, bugs/modalg_7/bug30396_1, lowalgos/2dinter/bug27976 |
 | tcl:eval | 41 | bugs/modalg_6/bug24097, bugs/modalg_6/bug26701, bugs/modalg_6/bug27283 |
 | non-constant expr | 18 | bugs/modalg_2/bug442, bugs/modalg_6/bug27537, bugs/moddata_1/buc60852 |
 | grid end file: tcl:if | 17 | heal/drop_small_edges/A1, heal/drop_small_edges/A2, heal/drop_small_edges/A3 |
@@ -45,9 +48,7 @@ OCCT: `V8_0_1-42-g3d097a0328`; groups: blend, boolean, bugs, chamfer, cr, draft,
 | proc:val2d | 7 | geometry/2dbeziecurve/B1, geometry/2dbsplinecurve/B7, geometry/circle/C2 |
 | data-exchange:ReadStep | 6 | bugs/modalg_5/bug24140, bugs/modalg_5/bug24746, bugs/modalg_6/bug26308 |
 | data-exchange:igesread | 5 | bugs/modalg_4/bug8370, bugs/modalg_5/bug24012, bugs/modalg_5/bug24074 |
-| tcl:list | 5 | bugs/modalg_6/bug26647, bugs/modalg_6/bug28795, bugs/modalg_7/bug32863 |
 | array variable | 5 | bugs/modalg_7/bug30273, bugs/moddata_3/bug31136_1, bugs/moddata_3/bug31136_2 |
-| no commands | 5 | bugs/moddata_1/bug22554_1, bugs/moddata_1/bug22554_2, bugs/moddata_1/bug22554_3 |
 | data-exchange:param | 5 | bugs/mesh/bug25281, bugs/mesh/bug25287, bugs/mesh/bug25837_1 |
 | grid end file: array variable | 5 | heal/elementary_to_revolution/A1, heal/elementary_to_revolution/A2, heal/elementary_to_revolution/A3 |
 | proc:perform_offset_multi_with_ref | 5 | offset/shape_type_i_c_multi/C2, offset/shape_type_i_c_multi/C3, offset/shape_type_i_c_multi/XI1 |
@@ -56,7 +57,6 @@ OCCT: `V8_0_1-42-g3d097a0328`; groups: blend, boolean, bugs, chamfer, cr, draft,
 | tcl:open | 4 | bugs/modalg_7/bug29939, bugs/modalg_7/bug30269, bugs/modalg_7/optimal_bndbox_exception |
 | checks only in the group's end script | 4 | offset/faces_type_i/C9, offset/shape_type_i/C5, offset/bugs/bug26030 |
 | tcl:encoding | 3 | bugs/fclasses/bug25367_brep, bugs/fclasses/bug25367_igs, bugs/fclasses/bug63 |
-| dynamic set | 3 | bugs/modalg_2/bug415, bugs/modalg_7/bug30396_1, lowalgos/2dinter/bug27976 |
 | viewer:vmoveto | 2 | bugs/modalg_2/bug21909, bugs/mesh/bug25469_3 |
 | viewer:vselect | 2 | bugs/modalg_2/bug22781_2, bugs/modalg_2/bug22781_4 |
 | data-exchange:testreadiges | 2 | bugs/modalg_5/bug25410, bugs/heal/bug27078 |
@@ -79,11 +79,11 @@ OCCT: `V8_0_1-42-g3d097a0328`; groups: blend, boolean, bugs, chamfer, cr, draft,
 
 | command | uses | scripts |
 |---|---|---|
-| `restore` | 9020 | 6308 |
+| `restore` | 9669 | 6957 |
 | `checkprops` | 8074 | 7435 |
 | `dset` | 5768 | 4077 |
+| `checkshape` | 3425 | 2814 |
 | `checknbshapes` | 3392 | 3010 |
-| `checkshape` | 2776 | 2165 |
 | `bop` | 2746 | 2685 |
 | `box` | 2522 | 1670 |
 | `explode` | 1751 | 1439 |
@@ -104,6 +104,7 @@ OCCT: `V8_0_1-42-g3d097a0328`; groups: blend, boolean, bugs, chamfer, cr, draft,
 | `wire` | 726 | 498 |
 | `bopcommon` | 709 | 706 |
 | `checkfaults` | 700 | 700 |
+| `DT_SplitAngle` | 697 | 697 |
 | `plane` | 695 | 263 |
 | `bopfuse` | 635 | 600 |
 | `bfuse` | 632 | 540 |
@@ -135,7 +136,7 @@ OCCT: `V8_0_1-42-g3d097a0328`; groups: blend, boolean, bugs, chamfer, cr, draft,
 | `featperform` | 220 | 218 |
 | `bsection` | 219 | 211 |
 | `checktrinfo` | 186 | 173 |
-| `tclean` | 181 | 167 |
+| `tclean` | 182 | 168 |
 | `trim` | 179 | 105 |
 | `addsweep` | 169 | 108 |
 | `incmesh` | 169 | 153 |
@@ -188,7 +189,6 @@ OCCT: `V8_0_1-42-g3d097a0328`; groups: blend, boolean, bugs, chamfer, cr, draft,
 | `triangles` | 50 | 50 |
 | `orientation` | 49 | 31 |
 | `point` | 48 | 11 |
-| `DT_SplitAngle` | 48 | 48 |
 | `project` | 47 | 46 |
 | `savehistory` | 47 | 43 |
 | `cone` | 46 | 35 |

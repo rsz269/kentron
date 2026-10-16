@@ -2321,7 +2321,11 @@ impl Draw {
         // `distmini name shape1 shape2`: the distance as `name_val`, and as `name` the segment
         // between the closest points (a vertex if they meet).
         need(args, 3, "distmini name shape1 shape2")?;
-        let (a, b) = (self.shape_var(args[1])?, self.shape_var(args[2])?);
+        // (A name of no shape, as OCCT's scripts going through all DRAW variables give it:
+        // reported, no error.)
+        let (Ok(a), Ok(b)) = (self.shape_var(args[1]), self.shape_var(args[2])) else {
+            return Ok("problem: no distance is found\n".into());
+        };
         let d = kentron::distance::distance(&mut self.model, a, b)?;
         self.set(&format!("{}_val", args[0]), DrawObject::Number(d.value));
         let segment = if d.value > tolerance::LINEAR {
@@ -2364,6 +2368,11 @@ impl Draw {
     pub fn dval(&mut self, args: &[&str]) -> DrawResult {
         // `dval expression`: its value.
         need(args, 1, "dval expression")?;
+        // (A name no variable has is 0, as in DRAW.)
+        let name = args[0].trim();
+        if !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') && !name.starts_with(|c: char| c.is_ascii_digit()) && !self.vars.contains_key(name) && name != "pi" {
+            return Ok(format_real(0.0));
+        }
         Ok(format_real(self.number(args[0])?))
     }
     /// DRAW command `edge`: 875 uses in 170 converted scripts.
@@ -2968,6 +2977,9 @@ impl Draw {
                 "-ai" | "-min" | "-algo" | "-di" => i += 1,
                 a if a.starts_with('-') => {}
                 a if deflection.is_none() && self.number(a).is_ok() && self.shape_var(a).is_err() => deflection = Some(self.number(a)?),
+                // (A number after the deflection, as the value OCCT's scripts give `-parallel`:
+                // not taken into account.)
+                a if deflection.is_some() && self.number(a).is_ok() && self.shape_var(a).is_err() => {}
                 a => shapes.push(self.shape_var(a)?),
             }
             i += 1;
@@ -5187,6 +5199,58 @@ impl Draw {
         }
         out += &format!("{pad}{triangles} triangles.\n{pad}{nodes} nodes.\nMaximal deflection {}\n", format_real(deflection));
         Ok(out)
+    }
+    /// DRAW command `countshapes`: `nbshapes`'s report.
+    ///
+    /// Example: `countshapes result`
+    pub fn countshapes(&mut self, args: &[&str]) -> DrawResult {
+        self.nbshapes(args)
+    }
+    /// DRAW command `vsetdispmode`: a shape shown shaded (mode 1) is meshed, as OCCT's viewer
+    /// meshes it (a deflection of 0.001 of its bounding box's largest side, 20 degrees),
+    /// unless it has a mesh; otherwise nothing.
+    ///
+    /// Example: `vsetdispmode res 1`
+    pub fn vsetdispmode(&mut self, args: &[&str]) -> DrawResult {
+        let [name, mode] = args else { return Ok(String::new()) };
+        let Ok(shape) = self.shape_var(name) else { return Ok(String::new()) };
+        if self.number(mode).ok() != Some(1.0) {
+            return Ok(String::new());
+        }
+        let faces = self.model.unique_subshapes(shape, NodeKind::Face);
+        if faces.is_empty() || faces.iter().all(|&f| self.model.face_mesh(f).is_some()) {
+            return Ok(String::new());
+        }
+        let b = kentron::properties::bounding_box(&self.model, shape);
+        let size = (b.max - b.min);
+        let deflection = 0.001 * size.x.max(size.y).max(size.z);
+        if deflection > 0.0 {
+            kentron::meshing::mesh_with(&mut self.model, shape, kentron::meshing::MeshOptions { deflection, angle: 20f64.to_radians() })?;
+        }
+        Ok(String::new())
+    }
+    /// DRAW command `triarea`: the area of a shape's mesh, and of its faces.
+    ///
+    /// Example: `triarea res 0`
+    pub fn triarea(&mut self, args: &[&str]) -> DrawResult {
+        // `triarea shape [eps]`: the area of the triangles of the faces' meshes, and the faces'
+        // area (`eps`, OCCT's precision for that, not taken into account).
+        if args.is_empty() || args.len() > 2 {
+            return Err(DrawError::Failed("usage: triarea shape [eps]".into()));
+        }
+        let shape = self.shape_var(args[0])?;
+        let mut mesh_area = 0.0;
+        for face in self.model.unique_subshapes(shape, NodeKind::Face) {
+            if let Some(mesh) = self.model.face_mesh(face) {
+                let p = mesh.nodes();
+                for t in mesh.triangles() {
+                    let (a, b, c) = (p[t[0] as usize], p[t[1] as usize], p[t[2] as usize]);
+                    mesh_area += 0.5 * (b - a).cross(c - a).length();
+                }
+            }
+        }
+        let area = kentron::properties::area(&self.model, shape).mass;
+        Ok(format!("{} {}", format_real(mesh_area), format_real(area)))
     }
     /// DRAW command `trotate`: 1438 uses in 1062 converted scripts.
     ///

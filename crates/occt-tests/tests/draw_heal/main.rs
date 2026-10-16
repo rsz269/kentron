@@ -8,6 +8,8 @@ mod fix_shape;
 mod same_parameter;
 mod same_parameter_locked;
 mod split_angle;
+mod split_angle_advanced;
+mod split_angle_standard;
 mod split_closed_faces;
 mod split_number;
 mod split_two_numbers;
