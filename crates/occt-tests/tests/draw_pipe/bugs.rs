@@ -140,21 +140,18 @@ fn bug32807() -> DrawResult<()> {
 
 /// `tests/pipe/bugs/bug32809`
 #[test]
-#[should_panic]
-fn bug32809() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.restore(&[data_file("bug32809_path.brep").as_str(), "p"])?;
-        d.restore(&[data_file("bug32809_profile.brep").as_str(), "pr"])?;
-        d.mksweep(&["p"])?;
-        d.setsweep(&["-CF"])?;
-        d.addsweep(&["pr"])?;
-        d.buildsweep(&["result", "-R", "-S"])?;
-        d.checkshape(&["result"])?;
-        d.checknbshapes(&["result", "-vertex", "140", "-edge", "285", "-wire", "140", "-face", "140", "-shell", "1"])?;
-        d.checkshape(&["result"])?;
-        Ok(())
-    })
+fn bug32809() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.restore(&[data_file("bug32809_path.brep").as_str(), "p"])?;
+    d.restore(&[data_file("bug32809_profile.brep").as_str(), "pr"])?;
+    d.mksweep(&["p"])?;
+    d.setsweep(&["-CF"])?;
+    d.addsweep(&["pr"])?;
+    d.buildsweep(&["result", "-R", "-S"])?;
+    d.checkshape(&["result"])?;
+    d.checknbshapes(&["result", "-vertex", "140", "-edge", "285", "-wire", "140", "-face", "140", "-shell", "1"])?;
+    d.checkshape(&["result"])?;
+    Ok(())
 }
 
 /// `tests/pipe/bugs/bug32818`

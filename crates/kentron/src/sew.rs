@@ -517,7 +517,26 @@ impl Input {
 /// face running along it: that face's `pcurve` over `section`, of the curve `other`,
 /// reparametrized to follow `curve`. Returns the pcurve and its largest distance from `curve`.
 fn transfer(curve: &Curve, range: (f64, f64), other: &Curve, section: &Section, pcurve: &Curve2, surface: &Surface) -> Result<(Curve2, f64)> {
-    const N: usize = 16;
+    // (Finer where the interpolation strays measurably from the curve: an ellipse's
+    // pcurve on a cylinder takes more than a few points to follow closely.)
+    let size = curve.point(range.0).distance(curve.point(0.5 * (range.0 + range.1))) + curve.point(0.5 * (range.0 + range.1)).distance(curve.point(range.1));
+    let mut found = transfer_with(curve, range, other, section, pcurve, surface, 16)?;
+    for n in [64, 256] {
+        if found.1 <= 1e-10 * (1.0 + size) {
+            break;
+        }
+        let finer = transfer_with(curve, range, other, section, pcurve, surface, n)?;
+        if finer.1 < found.1 {
+            found = finer;
+        }
+    }
+    Ok(found)
+}
+
+/// [`transfer`] by interpolating `n + 1` points.
+fn transfer_with(curve: &Curve, range: (f64, f64), other: &Curve, section: &Section, pcurve: &Curve2, surface: &Surface, n: usize) -> Result<(Curve2, f64)> {
+    #[allow(non_snake_case)]
+    let N = n;
     let ts: Vec<f64> = (0..=N).map(|i| lerp(range.0, range.1, i as f64 / N as f64)).collect();
     let (lo, hi) = (section.first.min(section.last), section.first.max(section.last));
     let mut ss: Vec<f64> = ts.iter().map(|&t| nearest_on_curve(curve.point(t), other, lo, hi).parameter).collect();

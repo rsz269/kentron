@@ -99,9 +99,10 @@ pub(super) fn pipe_cornered(model: &mut Model, profile: Shape, pieces: &[SpinePi
         let normal = ends[k].3 + ends[(k + 1) % n].1;
         (ends[k].2, normal * (1.0 / normal.length()))
     };
-    // How far past corner `c` the piece before it reaches the bisecting plane (the piece
-    // after is its mirror image): the farthest of the profile's points there, along the
-    // tangent, and half as far again (the piece may curve away).
+    // How far past corner `c` the piece before it reaches the bisecting plane (and before
+    // it, back along its tangent, the piece after: the profile oblique to the spine, they
+    // are not each other's mirror images): the farthest of the profile's points there, along
+    // the tangent, and half as far again (the piece may curve away).
     let profile_points: Vec<Point> = {
         let mut points = Vec::new();
         for e in model.unique_subshapes(face, NodeKind::Edge) {
@@ -118,52 +119,147 @@ pub(super) fn pipe_cornered(model: &mut Model, profile: Shape, pieces: &[SpinePi
         let farthest = profile_points.iter().map(|&q| -(q.transformed(&at_end) - p).dot(normal) / cos).fold(0.0, f64::max);
         Ok(1.5 * farthest + 1e-3 * reach)
     };
-    // Each piece swept, carried on past its corners.
-    let mut parts: Vec<Shape> = Vec::new();
-    let mut lengths: Vec<(f64, f64)> = Vec::new();
+    let extension_back = |c: usize| -> Result<f64> {
+        let next = (c + 1) % n;
+        let (p, normal) = bisector(c);
+        let cos = ends[next].1.dot(normal);
+        let farthest = profile_points.iter().map(|&q| (q.transformed(&starts[next]) - p).dot(normal) / cos).fold(0.0, f64::max);
+        Ok(1.5 * farthest + 1e-3 * reach)
+    };
+    // Each piece swept, carried on past its corners and cut there by the plane bisecting
+    // the corner: the profile turned at the corner, its section there is the next piece's.
+    // The pieces' faces are sewn (not fused: faces of two pieces lying in one plane stay
+    // two faces, meeting at the corner), less the sections where the pieces meet.
+    let spine_length: f64 = pieces.iter().map(length).sum();
+    let plane_size = 4.0 * (reach + spine_length);
+    let cut = |model: &mut Model, part: Shape, (p, normal): (Point, Vector), keep_before: bool| -> Result<Shape> {
+        let plane = crate::geometry::surface::Plane::new(p, Direction::try_from_vector(normal).ok_or_else(|| Error::Failed("a corner of no direction".into()))?);
+        let (u, v) = plane.parameters(p);
+        let bound = make::face_on_domain(model, crate::geometry::surface::Surface::Plane(plane), u - plane_size, u + plane_size, v - plane_size, v + plane_size)?;
+        // (The side dropped: past the plane for the piece before the corner.)
+        let away = if keep_before { normal } else { -normal };
+        let half = crate::primitives::half_space(model, bound, p + away * (1e-3 * plane_size))?;
+        boolean::difference(model, part, half)
+    };
+    // Where consecutive pieces meet (after piece k): the plane bisecting a corner, else
+    // the section of the profile carried there (the same for both).
+    let (profile_centre, profile_normal) = super::pipe::profile_axis(model, face);
+    let section_plane = |k: usize| -> Result<Option<(Point, Vector)>> {
+        if corners.contains(&k) {
+            return Ok(Some(bisector(k)));
+        }
+        let at_end = carried(&pieces[k], 0.0, 1.0)? * starts[k];
+        Ok(profile_normal.map(|n| (profile_centre.transformed(&at_end), n.transformed(&at_end))))
+    };
+    let lies_in = |model: &Model, f: Shape, (p, normal): (Point, Vector)| {
+        let unit = normal * (1.0 / normal.length());
+        matches!(model.surface(f), Some(crate::geometry::surface::Surface::Plane(_)))
+            && model.unique_subshapes(f, NodeKind::Vertex).iter().all(|&v| (model.point(v) - p).dot(unit).abs() <= 1e3 * tolerance::LINEAR)
+    };
+    let mut faces: Vec<Shape> = Vec::new();
+    // (Each piece also as swept, carried on past its corners, uncut: for the other way of
+    // joining them, below.)
+    let mut extended: Vec<(Shape, (f64, f64))> = Vec::new();
     for (k, piece) in pieces.iter().enumerate() {
         let previous = (k + n - 1) % n;
-        let before = if (k > 0 || closed) && corners.contains(&previous) { extension(previous)? } else { 0.0 };
+        let joined_before = k > 0 || closed;
+        let joined_after = k + 1 < n || closed;
+        let before = if joined_before && corners.contains(&previous) { extension_back(previous)? } else { 0.0 };
         let after = if corners.contains(&k) { extension(k)? } else { 0.0 };
         let spine = carried_on_edge(model, piece, before, after)?;
         let start = if before > 0.0 { carried_back(piece, before)? * starts[k] } else { starts[k] };
-        parts.push(super::pipe(model, face.moved(&start), spine)?.shape);
-        lengths.push((before, after));
-    }
-    // The pieces joined one after another, each across the plane bisecting the corner (or
-    // square to the spine where it runs on smoothly) before it, and the last also across the
-    // one after it if the spine is closed: near there each kept on its own side.
-    let joint = |k: usize, toward_next: bool| {
-        let (p, normal) = bisector(k);
-        let length = lengths[k].1.max(lengths[(k + 1) % n].0);
-        (p, if toward_next { normal } else { -normal }, 2.0 * (reach + length))
-    };
-    let mut result = parts[0];
-    for k in 1..n {
-        let mut planes = vec![joint(k - 1, true)];
-        if closed && k == n - 1 {
-            planes.push(joint(k, false));
+        let swept = super::pipe(model, face.moved(&start), spine)?.shape;
+        extended.push((swept, (before, after)));
+        let mut part = swept;
+        if before > 0.0 {
+            part = cut(model, part, bisector(previous), false)?;
         }
-        result = joined(model, result, parts[k], &planes)?;
+        if after > 0.0 {
+            part = cut(model, part, bisector(k), true)?;
+        }
+        // Its faces, less those where it meets the pieces either side.
+        let mut dropped: Vec<(Point, Vector)> = Vec::new();
+        if joined_before {
+            dropped.extend(section_plane(previous)?);
+        }
+        if joined_after {
+            dropped.extend(section_plane(k)?);
+        }
+        for f in model.unique_subshapes(part, NodeKind::Face) {
+            if !dropped.iter().any(|&plane| lies_in(model, f, plane)) {
+                faces.push(f);
+            }
+        }
     }
-    let options = crate::unify::UnifyOptions { same_surface_only: true, ..Default::default() };
-    let result = crate::unify::unify_same_domain_with(model, result, options)?;
-    let solids = model.unique_subshapes(result, NodeKind::Solid);
-    let [solid] = solids[..] else {
-        return Err(Error::Failed("a pipe round corners whose pieces do not join".into()));
+    // (Within the cuts' edges' tolerances: on curved pieces the two cuts' curves of a joint,
+    // each fitted on its own, agree only that closely.)
+    let gap = faces
+        .iter()
+        .flat_map(|&f| model.unique_subshapes(f, NodeKind::Edge))
+        .map(|e| model.tolerance(e))
+        .fold(0.0, f64::max);
+    let options = crate::sew::SewOptions { tolerance: (2.0 * gap).clamp(1e-6, 1e-3 * reach.max(1e-9)), ..Default::default() };
+    let sewn = crate::sew::sew(model, &faces, &options)?;
+    let shells = model.unique_subshapes(sewn, NodeKind::Shell);
+    let closed_up = |model: &Model, shell: Shape| {
+        let mut uses: std::collections::HashMap<crate::topology::NodeId, usize> = std::collections::HashMap::new();
+        for e in model.explore(shell, NodeKind::Edge) {
+            *uses.entry(e.node).or_default() += 1;
+        }
+        uses.values().all(|&u| u == 2)
+    };
+    let solid = match shells[..] {
+        [shell] if closed_up(model, shell) => {
+            let solid = model.new_empty(NodeKind::Solid);
+            model.add(solid, shell)?;
+            if properties::volume(model, solid).mass < 0.0 {
+                let turned = model.new_empty(NodeKind::Solid);
+                model.add(turned, shell.reversed())?;
+                turned
+            } else {
+                solid
+            }
+        }
+        // Where the pieces' sections at a corner differ (curved pieces, each cut by the
+        // plane on its own): the pieces carried on past the corners fused, what is left of
+        // either beyond a plane dropped.
+        _ => {
+            let joint = |k: usize, toward_next: bool| {
+                let (p, normal) = bisector(k);
+                let length = extended[k].1 .1.max(extended[(k + 1) % n].1 .0);
+                (p, if toward_next { normal } else { -normal }, 2.0 * (reach + length))
+            };
+            let mut result = extended[0].0;
+            for k in 1..n {
+                let mut planes = vec![joint(k - 1, true)];
+                if closed && k == n - 1 {
+                    planes.push(joint(k, false));
+                }
+                result = joined(model, result, extended[k].0, &planes)?;
+            }
+            let options = crate::unify::UnifyOptions { same_surface_only: true, ..Default::default() };
+            let result = crate::unify::unify_same_domain_with(model, result, options)?;
+            let solids = model.unique_subshapes(result, NodeKind::Solid);
+            let [solid] = solids[..] else {
+                return Err(Error::Failed("a pipe round corners whose pieces do not join".into()));
+            };
+            solid
+        }
     };
     if !wanted_shell {
         return Ok(solid);
     }
-    // The boundary less the ends: faces lying in the planes the profile stands in there.
-    let caps: Vec<(Point, Vector)> = if closed { Vec::new() } else { vec![(ends[0].0, ends[0].1), (ends[n - 1].2, ends[n - 1].3)] };
-    let in_cap = |model: &Model, f: Shape| {
-        matches!(model.surface(f), Some(crate::geometry::surface::Surface::Plane(_)))
-            && caps.iter().any(|&(p, t)| model.unique_subshapes(f, NodeKind::Vertex).iter().all(|&v| (model.point(v) - p).dot(t).abs() <= 1e3 * tolerance::LINEAR))
+    // The boundary less the ends (where the profile stands at the spine's ends).
+    let caps: Vec<(Point, Vector)> = match (closed, profile_normal) {
+        (false, Some(normal)) => {
+            let at_end = carried(&pieces[n - 1], 0.0, 1.0)? * starts[n - 1];
+            vec![(profile_centre.transformed(&starts[0]), normal.transformed(&starts[0])), (profile_centre.transformed(&at_end), normal.transformed(&at_end))]
+        }
+        _ => Vec::new(),
     };
     let shell = model.new_empty(NodeKind::Shell);
     for f in model.unique_subshapes(solid, NodeKind::Face) {
-        if !in_cap(model, f) {
+        if !caps.iter().any(|&plane| lies_in(model, f, plane)) {
             model.add(shell, f)?;
         }
     }
@@ -186,6 +282,67 @@ fn rounded(
     wanted_shell: bool,
 ) -> Result<Shape> {
     let n = pieces.len();
+    // A face swept: the union of the pieces' solids (overlapping inside each corner) and
+    // the knees (filling it outside), less the ends for a shell.
+    if face.kind() == NodeKind::Face {
+        let mut solid: Option<Shape> = None;
+        for (k, piece) in pieces.iter().enumerate() {
+            let spine = carried_on_edge(model, piece, 0.0, 0.0)?;
+            let mut parts = vec![super::pipe(model, face.moved(&starts[k]), spine)?.shape];
+            if corners.contains(&k) {
+                let (p, t1, t2) = (ends[k].2, ends[k].3, ends[(k + 1) % n].1);
+                let axis = t1.cross(t2);
+                let angle = axis.length().atan2(t1.dot(t2));
+                let at_end = carried(piece, 0.0, 1.0)? * starts[k];
+                // (The part of the section outside the corner, past the axis: the rest turns
+                // inside the pieces, which overlap there.)
+                let outside = (t1 * t1.dot(t2) - t2) * (1.0 / (t1 * t1.dot(t2) - t2).length().max(1e-300));
+                let section = face.moved(&at_end);
+                let b = properties::bounding_box(model, section);
+                let size = (b.max - b.min).length().max(1e-9);
+                let plane = crate::geometry::surface::Plane::new(p, Direction::from_vector(outside));
+                let (u, v) = plane.parameters(p);
+                let bound = make::face_on_domain(model, crate::geometry::surface::Surface::Plane(plane), u - 4.0 * size, u + 4.0 * size, v - 4.0 * size, v + 4.0 * size)?;
+                let inside = crate::primitives::half_space(model, bound, p - outside * (1e-3 * size))?;
+                let outer = boolean::difference(model, section, inside)?;
+                for f in model.unique_subshapes(outer, NodeKind::Face) {
+                    parts.push(super::revolve(model, f, Axis::new(p, Direction::from_vector(axis)), angle)?.shape);
+                }
+            }
+            for part in parts {
+                solid = Some(match solid {
+                    None => part,
+                    Some(s) => boolean::union(model, s, part)?,
+                });
+            }
+        }
+        let solids = model.unique_subshapes(solid.expect("a piece"), NodeKind::Solid);
+        let [solid] = solids[..] else {
+            return Err(Error::Failed("a pipe round corners whose pieces do not join".into()));
+        };
+        if !wanted_shell {
+            return Ok(solid);
+        }
+        let (centre, normal) = super::pipe::profile_axis(model, face);
+        let caps: Vec<(Point, Vector)> = match (closed, normal) {
+            (false, Some(normal)) => {
+                let at_end = carried(&pieces[n - 1], 0.0, 1.0)? * starts[n - 1];
+                vec![(centre.transformed(&starts[0]), normal.transformed(&starts[0])), (centre.transformed(&at_end), normal.transformed(&at_end))]
+            }
+            _ => Vec::new(),
+        };
+        let in_cap = |model: &Model, f: Shape| {
+            matches!(model.surface(f), Some(crate::geometry::surface::Surface::Plane(_)))
+                && caps.iter().any(|&(p, t)| model.unique_subshapes(f, NodeKind::Vertex).iter().all(|&v| (model.point(v) - p).dot(t * (1.0 / t.length())).abs() <= 1e3 * tolerance::LINEAR))
+        };
+        let shell = model.new_empty(NodeKind::Shell);
+        for f in model.unique_subshapes(solid, NodeKind::Face) {
+            if !in_cap(model, f) {
+                model.add(shell, f)?;
+            }
+        }
+        return Ok(shell);
+    }
     // (`face` an open wire swept as it is.)
     let wires: Vec<Shape> = if face.kind() == NodeKind::Wire { vec![face] } else { model.children(face).collect() };
     let [wire] = wires[..] else {
@@ -341,6 +498,7 @@ fn joined(model: &mut Model, a: Shape, b: Shape, planes: &[(Point, Vector, f64)]
     model.add(solid, shell)?;
     Ok(solid)
 }
+
 
 #[cfg(test)]
 mod tests {

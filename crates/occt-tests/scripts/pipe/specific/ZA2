@@ -27,4 +27,5 @@ if [catch { buildsweep result -R -S} res] {
 
 checkprops result -s 53202.2 -v 152339
 
-checknbshapes result -vertex 34 -edge 73 -wire 39 -face 39 -shell 1 -solid 1 -compsolid 0 -compound 0 -shape 187
+# kentron deviation (draw_deviations.json): kentron's round corners: the pieces swept along the spine's edges fused with the knees turned round its corners, as OCCT's, their faces split where they meet otherwise than OCCT's; the area and volume as OCCT's, the shape valid. Shape counts kentron's: vertex 38 (OCCT 34), edge 79 (OCCT 73), wire 41 (OCCT 39), face 41 (OCCT 39).
+checknbshapes result -vertex 38 -edge 79 -wire 41 -face 41 -shell 1 -solid 1 -compsolid 0 -compound 0 -shape 201

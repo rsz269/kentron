@@ -244,7 +244,8 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/pipe/standard/B5
-expect: not_done
+notes:
+  - "kentron deviation: OCCT's expected area is its integration's at the precision checkprops asks (1e-4), which on this pipe's faces does not converge: OCCT's sprops gives 4068.2, 4272.58 and 3993.27 at its default precision, 1e-4 and 1e-7 (DRAW). kentron's area, 4069.16, is within 0.02% of OCCT's at its default, and a fine triangulation of kentron's pipe gives 4067.03."
 build:
   - profile: {ellipse: {center: [10, 0, 0], normal: [1, 0, 1], major: 10, minor: 5}}
   - profile: {edge: {curve: profile}}
@@ -253,7 +254,7 @@ build:
   - w: {polyline: {points: [[10, 0, 0], [0, 30, 30], [0, 70, 70]]}}
   - result: {pipe: {spine: w, profile: profile}}
 checks:
-  - {area: result, eq: 4272.58, rel: 0.01}
+  - {area: result, eq: 4069.16, rel: 0.01}
   - {valid: result}
 ---
 case: B6
@@ -731,7 +732,8 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/pipe/standard/E6
-expect: not_done
+notes:
+  - "kentron deviation: OCCT's expected area is its integration's at the precision checkprops asks (1e-4), which on this pipe's faces does not converge: OCCT's sprops gives 4687.7, 4352.33 and 5025.2 at its default precision, 1e-4 and 1e-7 (DRAW). kentron's area, 4698.83, is within 0.24% of OCCT's at its default, and a fine triangulation of kentron's pipe gives 4697.60."
 build:
   - profile: {bspline: {degree: 2, knots: [[0, 3], [1, 1], [2, 3]], poles: [[0, 10, 0], [-10, -10, 0], [10, -10, 5], [0, 10, 0]], weights: [5, 5, 5, 5]}}
   - profile: {edge: {curve: profile}}
@@ -740,7 +742,7 @@ build:
   - w: {polyline: {points: [[0, 0, 0], [10, -30, 30], [0, -70, 90]]}}
   - result: {pipe: {spine: w, profile: profile}}
 checks:
-  - {area: result, eq: 4352.33, rel: 0.01}
+  - {area: result, eq: 4698.83, rel: 0.01}
   - {valid: result}
 ---
 case: E7
@@ -863,7 +865,8 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/pipe/standard/F4
-expect: not_done
+notes:
+  - "kentron deviation: OCCT's expected area is its integration's at the precision checkprops asks (1e-4), which on this pipe's faces does not converge: OCCT's sprops gives 4583.22, 4702.76 and 4517.2 at its default precision, 1e-4 and 1e-7 (DRAW). kentron's area, 4586.72, is within 0.08% of OCCT's at its default, and a fine triangulation of kentron's pipe gives 4579.93."
 build:
   - profile: {bezier: {poles: [[0, 10, 0], [-5, 0, 0], [-5, -20, 0], [5, -20, 0], [5, 0, 0], [0, 10, 0]]}}
   - profile: {edge: {curve: profile}}
@@ -872,7 +875,7 @@ build:
   - w: {polyline: {points: [[0, 0, 0], [10, -30, 30], [0, -70, 90]]}}
   - result: {pipe: {spine: w, profile: profile}}
 checks:
-  - {area: result, eq: 4702.76, rel: 0.01}
+  - {area: result, eq: 4586.72, rel: 0.01}
   - {valid: result}
 ---
 case: F5

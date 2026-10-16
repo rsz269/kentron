@@ -1,5 +1,5 @@
 {
-  "_comment": "Intentional differences from OCCT in converted DRAW scripts, applied by tools/draw2rs.py. A script maps to a list of {from, to, reason} (generated statements replaced exactly) or {note} (a known difference, the test unchanged and failing) or {timeout, reason} (a case known to run long and fail given a shorter limit on its processor time, in seconds), or to {skip: reason} (not converted).",
+  "_comment": "Intentional differences from OCCT in converted DRAW scripts, applied by tools/draw2rs.py. A script maps to a list of {from, to, reason} (generated statements replaced exactly; for a script run as it is on the Tcl interpreter, lines of its text) or {note} (a known difference, the test unchanged and failing) or {timeout, reason} (a case known to run long and fail given a shorter limit on its processor time, in seconds), or to {skip: reason} (not converted).",
   "tests/bugs/modalg_2/bug22588": {
     "skip": "checks OCCT's shape sharing, not geometry (nbshapes counts a vertex and its moved copy once)"
   },
@@ -1813,6 +1813,160 @@
   "tests/boolean/volumemaker/D6": [
     {
       "note": "kentron's volumes miss separations where four faces meet along an edge inside the slab between the parallel planes at y = -672 and -691: OCCT finds 14 solids, kentron fewer (its total area happened to match OCCT's within 1% before slits were kept while fusing)."
+    }
+  ],
+  "tests/pipe/specific/H4": [
+    {
+      "from": "checknbshapes result -vertex 32 -edge 61 -wire 25 -face 25 -shell 1 -solid 0 -compsolid 0 -compound 0 -shape 144",
+      "to": "checknbshapes result -vertex 48 -edge 93 -wire 40 -face 40 -shell 1 -solid 0 -compsolid 0 -compound 0 -shape 222",
+      "reason": "kentron's round corners: the pieces swept along the spine's edges fused with the knees turned round its corners, as OCCT's, their faces split where they meet otherwise than OCCT's; the area as OCCT's, the shape valid. Shape counts kentron's: vertex 48 (OCCT 32), edge 93 (OCCT 61), wire 40 (OCCT 25), face 40 (OCCT 25)."
+    }
+  ],
+  "tests/pipe/specific/H6": [
+    {
+      "from": "checknbshapes result -vertex 32 -edge 61 -wire 27 -face 27 -shell 1 -solid 1 -compsolid 0 -compound 0 -shape 149",
+      "to": "checknbshapes result -vertex 48 -edge 93 -wire 43 -face 43 -shell 1 -solid 1 -compsolid 0 -compound 0 -shape 229",
+      "reason": "kentron's round corners: the pieces swept along the spine's edges fused with the knees turned round its corners, as OCCT's, their faces split where they meet otherwise than OCCT's; the area and volume as OCCT's, the shape valid. Shape counts kentron's: vertex 48 (OCCT 32), edge 93 (OCCT 61), wire 43 (OCCT 27), face 43 (OCCT 27)."
+    }
+  ],
+  "tests/pipe/specific/I5": [
+    {
+      "from": "checknbshapes result -vertex 32 -edge 61 -wire 25 -face 25 -shell 1 -solid 0 -compsolid 0 -compound 0 -shape 144",
+      "to": "checknbshapes result -vertex 48 -edge 93 -wire 40 -face 40 -shell 1 -solid 0 -compsolid 0 -compound 0 -shape 222",
+      "reason": "kentron's round corners: the pieces swept along the spine's edges fused with the knees turned round its corners, as OCCT's, their faces split where they meet otherwise than OCCT's; the area as OCCT's, the shape valid. Shape counts kentron's: vertex 48 (OCCT 32), edge 93 (OCCT 61), wire 40 (OCCT 25), face 40 (OCCT 25)."
+    }
+  ],
+  "tests/pipe/specific/I7": [
+    {
+      "from": "checknbshapes result -vertex 32 -edge 61 -wire 27 -face 27 -shell 1 -solid 1 -compsolid 0 -compound 0 -shape 149",
+      "to": "checknbshapes result -vertex 48 -edge 93 -wire 43 -face 43 -shell 1 -solid 1 -compsolid 0 -compound 0 -shape 229",
+      "reason": "kentron's round corners: the pieces swept along the spine's edges fused with the knees turned round its corners, as OCCT's, their faces split where they meet otherwise than OCCT's; the area and volume as OCCT's, the shape valid. Shape counts kentron's: vertex 48 (OCCT 32), edge 93 (OCCT 61), wire 43 (OCCT 27), face 43 (OCCT 27)."
+    }
+  ],
+  "tests/pipe/specific/J6": [
+    {
+      "from": "checknbshapes result -vertex 32 -edge 61 -wire 25 -face 25 -shell 1 -solid 0 -compsolid 0 -compound 0 -shape 144",
+      "to": "checknbshapes result -vertex 48 -edge 93 -wire 40 -face 40 -shell 1 -solid 0 -compsolid 0 -compound 0 -shape 222",
+      "reason": "kentron's round corners: the pieces swept along the spine's edges fused with the knees turned round its corners, as OCCT's, their faces split where they meet otherwise than OCCT's; the area as OCCT's, the shape valid. Shape counts kentron's: vertex 48 (OCCT 32), edge 93 (OCCT 61), wire 40 (OCCT 25), face 40 (OCCT 25)."
+    }
+  ],
+  "tests/pipe/specific/J8": [
+    {
+      "from": "checknbshapes result -vertex 32 -edge 61 -wire 27 -face 27 -shell 1 -solid 1 -compsolid 0 -compound 0 -shape 149",
+      "to": "checknbshapes result -vertex 48 -edge 93 -wire 43 -face 43 -shell 1 -solid 1 -compsolid 0 -compound 0 -shape 229",
+      "reason": "kentron's round corners: the pieces swept along the spine's edges fused with the knees turned round its corners, as OCCT's, their faces split where they meet otherwise than OCCT's; the area and volume as OCCT's, the shape valid. Shape counts kentron's: vertex 48 (OCCT 32), edge 93 (OCCT 61), wire 43 (OCCT 27), face 43 (OCCT 27)."
+    }
+  ],
+  "tests/pipe/specific/K1": [
+    {
+      "from": "checknbshapes result -vertex 48 -edge 90 -wire 42 -face 42 -shell 1 -solid 0 -compsolid 0 -compound 0 -shape 223",
+      "to": "checknbshapes result -vertex 72 -edge 126 -wire 54 -face 54 -shell 1 -solid 0 -compsolid 0 -compound 0 -shape 307",
+      "reason": "kentron's round corners: the pieces swept along the spine's edges fused with the knees turned round its corners, as OCCT's, their faces split where they meet otherwise than OCCT's; the area as OCCT's, the shape valid. Shape counts kentron's: vertex 72 (OCCT 48), edge 126 (OCCT 90), wire 54 (OCCT 42), face 54 (OCCT 42)."
+    }
+  ],
+  "tests/pipe/specific/Z5": [
+    {
+      "from": "checknbshapes result -vertex 48 -edge 90 -wire 42 -face 42 -shell 1 -solid 0 -compsolid 0 -compound 0 -shape 223",
+      "to": "checknbshapes result -vertex 72 -edge 126 -wire 54 -face 54 -shell 1 -solid 0 -compsolid 0 -compound 0 -shape 307",
+      "reason": "kentron's round corners: the pieces swept along the spine's edges fused with the knees turned round its corners, as OCCT's, their faces split where they meet otherwise than OCCT's; the area as OCCT's, the shape valid. Shape counts kentron's: vertex 72 (OCCT 48), edge 126 (OCCT 90), wire 54 (OCCT 42), face 54 (OCCT 42)."
+    }
+  ],
+  "tests/pipe/specific/Z7": [
+    {
+      "from": "checknbshapes result -vertex 48 -edge 90 -wire 42 -face 42 -shell 1 -solid 1 -compsolid 0 -compound 0 -shape 224",
+      "to": "checknbshapes result -vertex 72 -edge 126 -wire 54 -face 54 -shell 1 -solid 1 -compsolid 0 -compound 0 -shape 308",
+      "reason": "kentron's round corners: the pieces swept along the spine's edges fused with the knees turned round its corners, as OCCT's, their faces split where they meet otherwise than OCCT's; the area and volume as OCCT's, the shape valid. Shape counts kentron's: vertex 72 (OCCT 48), edge 126 (OCCT 90), wire 54 (OCCT 42), face 54 (OCCT 42)."
+    }
+  ],
+  "tests/pipe/specific/Z9": [
+    {
+      "from": "checknbshapes result -vertex 34 -edge 73 -wire 39 -face 39 -shell 1 -solid 0 -compsolid 0 -compound 0 -shape 186",
+      "to": "checknbshapes result -vertex 38 -edge 79 -wire 41 -face 41 -shell 1 -solid 0 -compsolid 0 -compound 0 -shape 200",
+      "reason": "kentron's round corners: the pieces swept along the spine's edges fused with the knees turned round its corners, as OCCT's, their faces split where they meet otherwise than OCCT's; the area as OCCT's, the shape valid. Shape counts kentron's: vertex 38 (OCCT 34), edge 79 (OCCT 73), wire 41 (OCCT 39), face 41 (OCCT 39)."
+    }
+  ],
+  "tests/pipe/specific/ZA2": [
+    {
+      "from": "checknbshapes result -vertex 34 -edge 73 -wire 39 -face 39 -shell 1 -solid 1 -compsolid 0 -compound 0 -shape 187",
+      "to": "checknbshapes result -vertex 38 -edge 79 -wire 41 -face 41 -shell 1 -solid 1 -compsolid 0 -compound 0 -shape 201",
+      "reason": "kentron's round corners: the pieces swept along the spine's edges fused with the knees turned round its corners, as OCCT's, their faces split where they meet otherwise than OCCT's; the area and volume as OCCT's, the shape valid. Shape counts kentron's: vertex 38 (OCCT 34), edge 79 (OCCT 73), wire 41 (OCCT 39), face 41 (OCCT 39)."
+    }
+  ],
+  "tests/pipe/specific/ZA8": [
+    {
+      "from": "checknbshapes result -vertex 48 -edge 90 -wire 42 -face 42 -shell 1 -solid 0 -compsolid 0 -compound 0 -shape 223",
+      "to": "checknbshapes result -vertex 72 -edge 126 -wire 54 -face 54 -shell 1 -solid 0 -compsolid 0 -compound 0 -shape 307",
+      "reason": "kentron's round corners: the pieces swept along the spine's edges fused with the knees turned round its corners, as OCCT's, their faces split where they meet otherwise than OCCT's; the area as OCCT's, the shape valid. Shape counts kentron's: vertex 72 (OCCT 48), edge 126 (OCCT 90), wire 54 (OCCT 42), face 54 (OCCT 42)."
+    }
+  ],
+  "tests/pipe/specific/ZB1": [
+    {
+      "from": "checknbshapes result -vertex 48 -edge 90 -wire 42 -face 42 -shell 1 -solid 1 -compsolid 0 -compound 0 -shape 224",
+      "to": "checknbshapes result -vertex 72 -edge 126 -wire 54 -face 54 -shell 1 -solid 1 -compsolid 0 -compound 0 -shape 308",
+      "reason": "kentron's round corners: the pieces swept along the spine's edges fused with the knees turned round its corners, as OCCT's, their faces split where they meet otherwise than OCCT's; the area and volume as OCCT's, the shape valid. Shape counts kentron's: vertex 72 (OCCT 48), edge 126 (OCCT 90), wire 54 (OCCT 42), face 54 (OCCT 42)."
+    }
+  ],
+  "tests/pipe/specific/ZB3": [
+    {
+      "from": "checknbshapes result -vertex 34 -edge 73 -wire 39 -face 39 -shell 1 -solid 0 -compsolid 0 -compound 0 -shape 186",
+      "to": "checknbshapes result -vertex 38 -edge 79 -wire 41 -face 41 -shell 1 -solid 0 -compsolid 0 -compound 0 -shape 200",
+      "reason": "kentron's round corners: the pieces swept along the spine's edges fused with the knees turned round its corners, as OCCT's, their faces split where they meet otherwise than OCCT's; the area as OCCT's, the shape valid. Shape counts kentron's: vertex 38 (OCCT 34), edge 79 (OCCT 73), wire 41 (OCCT 39), face 41 (OCCT 39)."
+    }
+  ],
+  "tests/pipe/specific/ZB5": [
+    {
+      "from": "checknbshapes result -vertex 34 -edge 73 -wire 39 -face 39 -shell 1 -solid 1 -compsolid 0 -compound 0 -shape 187",
+      "to": "checknbshapes result -vertex 38 -edge 79 -wire 41 -face 41 -shell 1 -solid 1 -compsolid 0 -compound 0 -shape 201",
+      "reason": "kentron's round corners: the pieces swept along the spine's edges fused with the knees turned round its corners, as OCCT's, their faces split where they meet otherwise than OCCT's; the area and volume as OCCT's, the shape valid. Shape counts kentron's: vertex 38 (OCCT 34), edge 79 (OCCT 73), wire 41 (OCCT 39), face 41 (OCCT 39)."
+    }
+  ],
+  "tests/pipe/specific/ZC2": [
+    {
+      "from": "checknbshapes result -vertex 48 -edge 90 -wire 42 -face 42 -shell 1 -solid 0 -compsolid 0 -compound 0 -shape 223",
+      "to": "checknbshapes result -vertex 72 -edge 126 -wire 54 -face 54 -shell 1 -solid 0 -compsolid 0 -compound 0 -shape 307",
+      "reason": "kentron's round corners: the pieces swept along the spine's edges fused with the knees turned round its corners, as OCCT's, their faces split where they meet otherwise than OCCT's; the area as OCCT's, the shape valid. Shape counts kentron's: vertex 72 (OCCT 48), edge 126 (OCCT 90), wire 54 (OCCT 42), face 54 (OCCT 42)."
+    }
+  ],
+  "tests/pipe/specific/ZC4": [
+    {
+      "from": "checknbshapes result -vertex 48 -edge 90 -wire 42 -face 42 -shell 1 -solid 1 -compsolid 0 -compound 0 -shape 224",
+      "to": "checknbshapes result -vertex 72 -edge 126 -wire 54 -face 54 -shell 1 -solid 1 -compsolid 0 -compound 0 -shape 308",
+      "reason": "kentron's round corners: the pieces swept along the spine's edges fused with the knees turned round its corners, as OCCT's, their faces split where they meet otherwise than OCCT's; the area and volume as OCCT's, the shape valid. Shape counts kentron's: vertex 72 (OCCT 48), edge 126 (OCCT 90), wire 54 (OCCT 42), face 54 (OCCT 42)."
+    }
+  ],
+  "tests/pipe/specific/ZC6": [
+    {
+      "from": "checknbshapes result -vertex 34 -edge 73 -wire 39 -face 39 -shell 1 -solid 0 -compsolid 0 -compound 0 -shape 186",
+      "to": "checknbshapes result -vertex 38 -edge 79 -wire 41 -face 41 -shell 1 -solid 0 -compsolid 0 -compound 0 -shape 200",
+      "reason": "kentron's round corners: the pieces swept along the spine's edges fused with the knees turned round its corners, as OCCT's, their faces split where they meet otherwise than OCCT's; the area as OCCT's, the shape valid. Shape counts kentron's: vertex 38 (OCCT 34), edge 79 (OCCT 73), wire 41 (OCCT 39), face 41 (OCCT 39)."
+    }
+  ],
+  "tests/pipe/specific/ZC8": [
+    {
+      "from": "checknbshapes result -vertex 34 -edge 73 -wire 39 -face 39 -shell 1 -solid 1 -compsolid 0 -compound 0 -shape 187",
+      "to": "checknbshapes result -vertex 38 -edge 79 -wire 41 -face 41 -shell 1 -solid 1 -compsolid 0 -compound 0 -shape 201",
+      "reason": "kentron's round corners: the pieces swept along the spine's edges fused with the knees turned round its corners, as OCCT's, their faces split where they meet otherwise than OCCT's; the area and volume as OCCT's, the shape valid. Shape counts kentron's: vertex 38 (OCCT 34), edge 79 (OCCT 73), wire 41 (OCCT 39), face 41 (OCCT 39)."
+    }
+  ],
+  "tests/pipe/standard/B5": [
+    {
+      "from": "d.checkprops(&[\"result\", \"-s\", \"4272.58\"])?;",
+      "to": "d.checkprops(&[\"result\", \"-s\", \"4069.16\"])?;",
+      "reason": "OCCT's expected area is its integration's at the precision checkprops asks (1e-4), which on this pipe's faces does not converge: OCCT's sprops gives 4068.2, 4272.58 and 3993.27 at its default precision, 1e-4 and 1e-7 (DRAW). kentron's area, 4069.16, is within 0.02% of OCCT's at its default, and a fine triangulation of kentron's pipe gives 4067.03."
+    }
+  ],
+  "tests/pipe/standard/E6": [
+    {
+      "from": "d.checkprops(&[\"result\", \"-s\", \"4352.33\"])?;",
+      "to": "d.checkprops(&[\"result\", \"-s\", \"4698.83\"])?;",
+      "reason": "OCCT's expected area is its integration's at the precision checkprops asks (1e-4), which on this pipe's faces does not converge: OCCT's sprops gives 4687.7, 4352.33 and 5025.2 at its default precision, 1e-4 and 1e-7 (DRAW). kentron's area, 4698.83, is within 0.24% of OCCT's at its default, and a fine triangulation of kentron's pipe gives 4697.60."
+    }
+  ],
+  "tests/pipe/standard/F4": [
+    {
+      "from": "d.checkprops(&[\"result\", \"-s\", \"4702.76\"])?;",
+      "to": "d.checkprops(&[\"result\", \"-s\", \"4586.72\"])?;",
+      "reason": "OCCT's expected area is its integration's at the precision checkprops asks (1e-4), which on this pipe's faces does not converge: OCCT's sprops gives 4583.22, 4702.76 and 4517.2 at its default precision, 1e-4 and 1e-7 (DRAW). kentron's area, 4586.72, is within 0.08% of OCCT's at its default, and a fine triangulation of kentron's pipe gives 4579.93."
     }
   ]
 }
