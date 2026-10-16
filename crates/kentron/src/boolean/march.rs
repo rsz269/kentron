@@ -208,7 +208,8 @@ pub(super) fn trace(base: &Surface, other: &Surface, range: Range, (nu, nv): (us
         // distance from one to the other changing sign across the curve) or only touch, as a
         // fillet the face it rolls on. Where they only touch all along, there is no section
         // (none splits the faces, as with no change of sign to find); where they cross, it
-        // is one; where it is both, the sections are not traced here.
+        // is one; where it is both, the stretches where they cross are sections, those where
+        // they only touch none.
         let tangent: Vec<usize> = (0..chain.0.len()).filter(|&i| tracer.sine(&chain.0[i]) < TANGENT).collect();
         if !tangent.is_empty() {
             let crossing: Vec<bool> = tangent.iter().map(|&i| tracer.crosses(&chain.0, i, 0.1 * leaf)).collect();
@@ -217,7 +218,14 @@ pub(super) fn trace(base: &Surface, other: &Surface, range: Range, (nu, nv): (us
                 continue;
             }
             if !crossing.iter().all(|&c| c) {
-                return None;
+                let mut keep = vec![true; chain.0.len()];
+                for (&i, &c) in tangent.iter().zip(&crossing) {
+                    keep[i] = c;
+                }
+                let (crossed, touched) = stretches(&chain.0, chain.1, &keep);
+                chains.extend(crossed);
+                touching.extend(touched);
+                continue;
             }
         }
         chains.push(chain);
@@ -236,6 +244,41 @@ pub(super) fn trace(base: &Surface, other: &Surface, range: Range, (nu, nv): (us
 
 /// `points` without those nearer than `spacing` to the one kept before them (the last kept
 /// in place of the one before it, where that is too near).
+/// A chain's stretches where `keep` holds (each with the points either side of it, on both
+/// surfaces, where it gives way to the others), and those where it does not: open chains.
+fn stretches(points: &[Both], closed: bool, keep: &[bool]) -> (Vec<(Vec<Both>, bool)>, Vec<(Vec<Both>, bool)>) {
+    let n = points.len();
+    // (A closed chain from where a stretch begins.)
+    let start = if closed { (0..n).find(|&i| keep[i] != keep[(i + n - 1) % n]).unwrap_or(0) } else { 0 };
+    let order: Vec<usize> = (0..n).map(|k| (start + k) % n).collect();
+    let (mut kept, mut left) = (Vec::new(), Vec::new());
+    let mut k = 0;
+    while k < n {
+        let flag = keep[order[k]];
+        let mut end = k;
+        while end + 1 < n && keep[order[end + 1]] == flag {
+            end += 1;
+        }
+        if flag {
+            let mut run: Vec<Both> = Vec::with_capacity(end - k + 3);
+            if k > 0 || closed {
+                run.push(points[order[(k + n - 1) % n]]);
+            }
+            run.extend((k..=end).map(|j| points[order[j]]));
+            if end + 1 < n || closed {
+                run.push(points[order[(end + 1) % n]]);
+            }
+            if run.len() >= 2 {
+                kept.push((run, false));
+            }
+        } else {
+            left.push(((k..=end).map(|j| points[order[j]]).collect(), false));
+        }
+        k = end + 1;
+    }
+    (kept, left)
+}
+
 fn thinned(points: Vec<Both>, spacing: f64) -> Vec<Both> {
     let n = points.len();
     let mut out: Vec<Both> = Vec::with_capacity(n);
