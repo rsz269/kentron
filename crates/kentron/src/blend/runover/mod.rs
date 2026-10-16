@@ -88,7 +88,13 @@ impl Bounded {
     }
 
     /// Whether `(u, v)` lies on the face (inside its loops, even-odd, or on them).
-    fn contains(&self, (u, v): (f64, f64)) -> bool {
+    fn contains(&self, uv: (f64, f64)) -> bool {
+        self.locate(uv) != Some(false)
+    }
+
+    /// Where `(u, v)` lies: inside the face (`Some(true)`), on its loops (`None`) or outside
+    /// (`Some(false)`).
+    fn locate(&self, (u, v): (f64, f64)) -> Option<bool> {
         let on = |a: Point2, b: Point2, q: Point2| {
             let (ab, aq) = (b - a, q - a);
             let s = (aq.dot(ab) / ab.dot(ab).max(1e-300)).clamp(0.0, 1.0);
@@ -102,7 +108,7 @@ impl Bounded {
             for sv in shifts(self.v_period) {
                 let q = Point2::new(u + su, v + sv);
                 if self.loops.iter().any(|l| l.windows(2).any(|w| on(w[0], w[1], q))) {
-                    return true;
+                    return None;
                 }
                 let crossings: usize = self
                     .loops
@@ -110,18 +116,25 @@ impl Bounded {
                     .map(|l| l.windows(2).filter(|w| (w[0].y > q.y) != (w[1].y > q.y) && w[0].x + (q.y - w[0].y) / (w[1].y - w[0].y) * (w[1].x - w[0].x) > q.x).count())
                     .sum();
                 if crossings % 2 == 1 {
-                    return true;
+                    return Some(true);
                 }
             }
         }
-        false
+        Some(false)
     }
 
     /// The distance from `p` to the face, the nearest point of it, and where that lies: on
     /// the face (`None`) or on its edge of that index.
     fn nearest(&self, p: Point) -> (f64, Point, Option<usize>) {
         let (u, v, d) = nearest_on_surface(p, &self.surface, self.near.get());
-        if u.is_finite() && v.is_finite() && self.contains((u, v)) {
+        // (A foot on the surface's bounds and on the face's loops, the point lying beyond
+        // them: the nearest point is on one of the face's edges, found there with which.)
+        let on_bounds = {
+            use crate::geometry::ParametricSurface;
+            let (u0, u1, v0, v1) = self.surface.bounds();
+            (self.u_period.is_none() && (u <= u0 || u >= u1)) || (self.v_period.is_none() && (v <= v0 || v >= v1))
+        };
+        if u.is_finite() && v.is_finite() && self.locate((u, v)).unwrap_or(!on_bounds) {
             self.near.set(Some((u, v)));
             return (d, self.surface.point(u, v), None);
         }

@@ -1205,7 +1205,7 @@ pub(crate) fn newton_foot(p: Point, surface: &Surface, start: (f64, f64)) -> Sur
     // rounding noise, where steps no longer shrink).
     let span = |a: f64, b: f64, t: f64| if (b - a).is_finite() { b - a } else { 1.0 + t.abs() };
     let (u_small, v_small) = (1e-12 * span(u0, u1, u), 1e-12 * span(v0, v1, v));
-    for _ in 0..50 {
+    for step in 0..50 {
         let d = surface.d2(u, v);
         let r = d.point - p;
         let (gu, gv) = (r.dot(d.du), r.dot(d.dv));
@@ -1217,6 +1217,17 @@ pub(crate) fn newton_foot(p: Point, surface: &Surface, start: (f64, f64)) -> Sur
             // Not convex here: a gradient step instead.
             let len2 = d.du.dot(d.du).max(d.dv.dot(d.dv)).max(1e-300);
             (-gu / len2, -gv / len2)
+        };
+        // Steps not settling (as on a bound, the step in both cut short there): a parameter on
+        // its bound that the step would take past it stays there, and the other alone moves,
+        // to the nearest point along that edge.
+        const SETTLING: usize = 12;
+        let held = |x: f64, dx: f64, lo: f64, hi: f64, periodic: bool| step >= SETTLING && !periodic && ((x <= lo && dx < 0.0) || (x >= hi && dx > 0.0));
+        let (du, dv) = match (held(u, du, u0, u1, u_periodic), held(v, dv, v0, v1, v_periodic)) {
+            (true, true) => (0.0, 0.0),
+            (true, false) => (0.0, if hvv > 0.0 { -gv / hvv } else { -gv / d.dv.dot(d.dv).max(1e-300) }),
+            (false, true) => (if huu > 0.0 { -gu / huu } else { -gu / d.du.dot(d.du).max(1e-300) }, 0.0),
+            (false, false) => (du, dv),
         };
         let (nu, nv) = clamp(u + du, v + dv);
         let done = (nu - u).abs() <= u_small && (nv - v).abs() <= v_small;

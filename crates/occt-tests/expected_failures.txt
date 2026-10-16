@@ -44,10 +44,9 @@ tests/blend/simple/Q3
 tests/blend/simple/Q9
 tests/blend/simple/R1
 tests/blend/simple/R2
+tests/blend/simple/R3
 tests/blend/simple/R4
-tests/blend/simple/R5
 tests/blend/simple/R6
-tests/blend/simple/T8
 tests/blend/simple/U1
 tests/blend/simple/U4
 tests/blend/simple/U5
