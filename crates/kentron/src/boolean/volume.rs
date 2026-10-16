@@ -85,7 +85,7 @@ fn enclose(model: &mut Model, shapes: &[Shape], split: bool, known: &crate::hash
         if loose.is_empty() {
             break sides.shells();
         }
-        faces = faces.into_iter().enumerate().filter(|(i, _)| !loose.contains(i)).map(|(_, f)| f).collect();
+        faces = faces.into_iter().enumerate().filter(|(i, _)| loose.binary_search(i).is_err()).map(|(_, f)| f).collect();
     };
     // Each shell as a shell of the model, its faces facing out of its piece of space.
     let mut built = Vec::with_capacity(shells.len());
@@ -132,6 +132,8 @@ fn enclose(model: &mut Model, shapes: &[Shape], split: bool, known: &crate::hash
         }
         b
     };
+    // (The solids' boxes, found once where an inward shell needs them.)
+    let mut solid_boxes: Option<Vec<crate::math::BoundingBox>> = None;
     for (k, &(shell, volume)) in built.iter().enumerate() {
         if volume >= 0.0 {
             continue;
@@ -149,13 +151,12 @@ fn enclose(model: &mut Model, shapes: &[Shape], split: bool, known: &crate::hash
         let shell_faces: crate::hashing::FastSet<usize> = shells[k].iter().map(|&(i, _)| i).collect();
         // The solids that may hold it.
         let mut candidates: Vec<usize> = Vec::new();
-        for (j, &(solid, _)) in solids.iter().enumerate() {
-            let _ = solid;
-            if shells[solid_shell[j]].iter().any(|(i, _)| shell_faces.contains(i)) {
+        for j in 0..solids.len() {
+            let b = solid_boxes.get_or_insert_with(|| solid_shell.iter().map(|&k| shell_box(model, k)).collect())[j].enlarged(1e-7 * (1.0 + (this_box.max - this_box.min).length()));
+            if !b.contains_box(&this_box) {
                 continue;
             }
-            let b = shell_box(model, solid_shell[j]).enlarged(1e-7 * (1.0 + (this_box.max - this_box.min).length()));
-            if !b.contains_box(&this_box) {
+            if shells[solid_shell[j]].iter().any(|(i, _)| shell_faces.contains(i)) {
                 continue;
             }
             // (Where its space lies as the space outside the shell does, if known.)
@@ -206,7 +207,9 @@ fn enclose(model: &mut Model, shapes: &[Shape], split: bool, known: &crate::hash
 /// edges).
 fn distinct_faces(model: &Model, faces: Vec<Shape>) -> Vec<Shape> {
     use crate::geometry::ParametricSurface;
-    let mut kept: Vec<(Vec<crate::topology::NodeId>, Shape)> = Vec::new();
+    let mut kept: Vec<Shape> = Vec::new();
+    // (The faces kept by their edges.)
+    let mut by_edges: crate::hashing::FastMap<Vec<crate::topology::NodeId>, Vec<Shape>> = Default::default();
     for f in faces {
         let mut key: Vec<_> = model.unique_subshapes(f, NodeKind::Edge).iter().map(|e| e.node).collect();
         key.sort_unstable();
@@ -216,11 +219,13 @@ fn distinct_faces(model: &Model, faces: Vec<Shape>) -> Vec<Shape> {
             let p = s.point(0.5 * (u0 + u1), 0.5 * (v0 + v1));
             super::geom::signed_distance(rs, p).abs() <= super::geom::on_tol()
         };
-        if !kept.iter().any(|(k, r)| *k == key && same(*r)) {
-            kept.push((key, f));
+        let alike = by_edges.entry(key).or_default();
+        if !alike.iter().any(|&r| same(r)) {
+            alike.push(f);
+            kept.push(f);
         }
     }
-    kept.into_iter().map(|(_, f)| f).collect()
+    kept
 }
 
 /// `face` without its slits (loops running along edges and back), as a new face if it had
@@ -264,6 +269,8 @@ impl Sides {
     fn around_edges(model: &Model, faces: &[Shape]) -> Result<Sides> {
         #[allow(clippy::type_complexity)]
         let mut by_edge: Vec<(EdgeId, Vec<(usize, Point, Vector, Vector, Vector, Vector)>)> = Vec::new();
+        // (Where each edge is in `by_edge`.)
+        let mut at: crate::hashing::FastMap<EdgeId, usize> = Default::default();
         for (i, &face) in faces.iter().enumerate() {
             let surface = model.surface(face).ok_or_else(|| Error::InvalidInput("a face without a surface".into()))?;
             let loops = crate::heal::face_loops(model, face).ok_or_else(|| Error::InvalidInput("a face without pcurves".into()))?;
@@ -285,9 +292,12 @@ impl Sides {
                 let length = curve.point(first).distance(curve.point(last)).max(curve.point(first).distance(point)).max(1e-9);
                 let step = 1e-3 * length / inward.length().max(1e-300);
                 let ahead_point = surface.point(uv.x - ahead.y * step, uv.y + ahead.x * step) - surface.point(uv.x, uv.y);
-                match by_edge.iter_mut().find(|(e, _)| *e == u.edge) {
-                    Some((_, list)) => list.push((i, point, tangent, inward, normal, ahead_point)),
-                    None => by_edge.push((u.edge, vec![(i, point, tangent, inward, normal, ahead_point)])),
+                match at.get(&u.edge) {
+                    Some(&k) => by_edge[k].1.push((i, point, tangent, inward, normal, ahead_point)),
+                    None => {
+                        at.insert(u.edge, by_edge.len());
+                        by_edge.push((u.edge, vec![(i, point, tangent, inward, normal, ahead_point)]));
+                    }
                 }
             }
         }
@@ -358,17 +368,22 @@ impl Sides {
                 }
             }
         }
-        let mut shells: Vec<(usize, Vec<(usize, bool)>)> = Vec::new();
+        // (In the order their first half-faces come, each found by its root.)
+        let mut shells: Vec<Vec<(usize, bool)>> = Vec::new();
+        let mut at: crate::hashing::FastMap<usize, usize> = Default::default();
         for face in 0..self.count {
             for side in [false, true] {
                 let r = root(&mut parent, half(face, side));
-                match shells.iter_mut().find(|(key, _)| *key == r) {
-                    Some((_, list)) => list.push((face, side)),
-                    None => shells.push((r, vec![(face, side)])),
+                match at.get(&r) {
+                    Some(&k) => shells[k].push((face, side)),
+                    None => {
+                        at.insert(r, shells.len());
+                        shells.push(vec![(face, side)]);
+                    }
                 }
             }
         }
-        shells.into_iter().map(|(_, list)| list).collect()
+        shells
     }
 }
 

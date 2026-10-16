@@ -67,9 +67,9 @@ impl Graph {
         if self.free_vertices.iter().any(|&(o, v)| o == k && self.vertices.points[v].distance(p) <= on_tol()) {
             return Place::On;
         }
-        let solid_faces: Vec<usize> = (0..self.faces.len()).filter(|&i| self.faces[i].operand == k && self.faces[i].solid).collect();
+        let solid_faces = self.solid_faces_of(k);
         let inside = !solid_faces.is_empty()
-            && if self.open[k] { self.behind(&solid_faces, p) } else { self.contains(k, &solid_faces, p) };
+            && if self.open[k] { self.behind(solid_faces, p) } else { self.contains(k, solid_faces, p) };
         if inside { Place::In } else { Place::Out }
     }
 

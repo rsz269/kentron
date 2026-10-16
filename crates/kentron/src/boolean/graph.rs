@@ -427,6 +427,8 @@ pub(super) struct Graph {
     index: std::sync::OnceLock<Index>,
     /// Per operand: its faces' indices, ascending (found once).
     operand_faces: Vec<std::sync::OnceLock<Vec<usize>>>,
+    /// Per operand: those of its faces on a solid, ascending (found once).
+    operand_solid_faces: Vec<std::sync::OnceLock<Vec<usize>>>,
 }
 
 impl Default for Graph {
@@ -453,6 +455,7 @@ impl Graph {
             containers: 0,
             index: std::sync::OnceLock::new(),
             operand_faces: (0..n).map(|_| std::sync::OnceLock::new()).collect(),
+            operand_solid_faces: (0..n).map(|_| std::sync::OnceLock::new()).collect(),
         }
     }
 
@@ -619,6 +622,11 @@ impl Graph {
     /// The indices of `operand`'s faces, ascending.
     pub fn faces_of(&self, operand: usize) -> &[usize] {
         self.operand_faces[operand].get_or_init(|| (0..self.faces.len()).filter(|&i| self.faces[i].operand == operand).collect())
+    }
+
+    /// The indices of `operand`'s faces on a solid of it, ascending.
+    pub fn solid_faces_of(&self, operand: usize) -> &[usize] {
+        self.operand_solid_faces[operand].get_or_init(|| self.faces_of(operand).iter().copied().filter(|&i| self.faces[i].solid).collect())
     }
 }
 
