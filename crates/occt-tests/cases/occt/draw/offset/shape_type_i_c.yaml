@@ -878,7 +878,6 @@ ported_from:
   file: tests/offset/shape_type_i_c/I4
 notes:
   - "kentron deviation: The offset changes the shape's topology (faces collide or vanish, e.g. where a narrow notch closes), which kentron's offset, keeping the faces and edges of the shape, does not handle: volume 219.112 against 216.363."
-expect: not_done
 build:
   - p: {polyline: {points: [[0, 0, 0], [5, 0, 0], [7, 0, 3], [3, 0, 3], [4, 0, 1], [1, 0, 1], [2, 0, 3], [-2, 0, 3], [0, 0, 0]]}}
   - f: {face: {wire: p}}
@@ -896,7 +895,6 @@ ported_from:
   file: tests/offset/shape_type_i_c/I5
 notes:
   - "kentron deviation: The offset changes the shape's topology (faces collide or vanish, e.g. where a narrow notch closes), which kentron's offset, keeping the faces and edges of the shape, does not handle: volume 422.855 against 394.982."
-expect: not_done
 build:
   - p: {polyline: {points: [[0, 0, 0], [5, 0, 0], [7, 0, 3], [3, 0, 3], [4, 0, 1], [1, 0, 1], [2, 0, 3], [-2, 0, 3], [0, 0, 0]]}}
   - f: {face: {wire: p}}
@@ -1259,7 +1257,6 @@ ported_from:
   file: tests/offset/shape_type_i_c/P1
 notes:
   - "kentron deviation: The offset changes the shape's topology (faces collide or vanish, e.g. where a narrow notch closes), which kentron's offset, keeping the faces and edges of the shape, does not handle: volume 1148.99 against 1188."
-expect: not_done
 build:
   - p: {polyline: {points: [[0, 0, 0], [4, 0, 0], [4, 0, 3], [3, 0, 3], [2, 0, 1], [1, 0, 3], [0, 0, 3], [0, 0, 0]]}}
   - f: {face: {wire: p}}
@@ -1862,7 +1859,6 @@ ported_from:
   file: tests/offset/shape_type_i_c/V1
 notes:
   - "kentron deviation: The offset changes the shape's topology (faces collide or vanish, e.g. where a narrow notch closes), which kentron's offset, keeping the faces and edges of the shape, does not handle: volume 1152 against 1116."
-expect: not_done
 build:
   - p: {polyline: {points: [[4, 0, 0], [10, 0, 0], [10, 0, 10], [8, 0, 10], [8, 0, 4], [6, 0, 4], [6, 0, 6], [4, 0, 6], [4, 0, 0]]}}
   - f: {face: {wire: p}}
@@ -1917,7 +1913,6 @@ ported_from:
   file: tests/offset/shape_type_i_c/W1
 notes:
   - "kentron deviation: The offset changes the shape's topology (faces collide or vanish, e.g. where a narrow notch closes), which kentron's offset, keeping the faces and edges of the shape, does not handle: volume 4617.97 against 4536."
-expect: not_done
 build:
   - b1: {box: {size: [10, 6, 10]}}
   - p: {polyline: {points: [[2, 0, 5], [2, 2, 5], [2, 2.5, 3], [2, 3, 5], [2, 3, 10], [2, 0, 10], [2, 0, 5]]}}
@@ -2011,7 +2006,6 @@ ported_from:
   file: tests/offset/shape_type_i_c/W7
 notes:
   - "kentron deviation: The offset changes the shape's topology (faces collide or vanish, e.g. where a narrow notch closes), which kentron's offset, keeping the faces and edges of the shape, does not handle: volume 619.787 against 630."
-expect: not_done
 build:
   - p: {polyline: {points: [[0, 0, 0], [4, 0, 0], [4, 0, 3], [3, 0, 3], [2, 0, 1], [1, 0, 3], [0, 0, 3], [0, 0, 0]]}}
   - f: {face: {wire: p}}

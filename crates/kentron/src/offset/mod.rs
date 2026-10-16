@@ -5,6 +5,7 @@
 //! * [`thick_solid`]: a solid hollowed out, its walls of a given thickness, with some faces
 //!   removed to open it.
 
+mod regularize;
 pub(crate) mod shape;
 mod wire;
 

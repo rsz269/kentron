@@ -38,7 +38,8 @@ pub fn shape_with_faces(model: &mut Model, shape: Shape, distance: f64, faces: &
     let moved = offset_faces(model, shape, distance, &own, &[], join)?;
     let result = rebuild(model, shape, &moved.faces, &moved.new_faces)?;
     let radius = moved.parting.first().map_or(0.0, |&(a, _)| own.iter().find(|(n, _)| *n == moved.faces[a].shape.node).map_or(distance, |(_, d)| *d).abs());
-    round_parting(model, result, &moved, radius)
+    let result = round_parting(model, result, &moved, radius)?;
+    super::regularize::regularized(model, result)
 }
 
 /// `shape` (a solid) hollowed out to walls of `thickness`, open where `removed` (faces of
@@ -97,7 +98,8 @@ pub fn thick_solid(model: &mut Model, shape: Shape, removed: &[Shape], thickness
     }
     let solid = model.new_empty(NodeKind::Solid);
     model.add(solid, shell)?;
-    round_parting(model, solid, &moved, thickness.abs())
+    let solid = round_parting(model, solid, &moved, thickness.abs())?;
+    super::regularize::regularized(model, solid)
 }
 
 /// The face of `copy` (`original` moved where it is placed) standing for `face` of

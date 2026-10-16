@@ -835,51 +835,45 @@ fn u1() -> DrawResult<()> {
 
 /// `tests/offset/shape_type_i_c/V2`
 #[test]
-#[should_panic]
-fn v2() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.polyline(&["p", "4", "0", "0", "10", "0", "0", "10", "0", "10", "8", "0", "10", "8", "0", "4", "6", "0", "4", "6", "0", "6", "4", "0", "6", "4", "0", "0"])?;
-        d.mkplane(&["f", "p"])?;
-        d.prism(&["s1", "f", "0", "5", "0"])?;
-        d.polyline(&["p", "6", "0", "4", "6", "5", "4", "6", "2.5", "5", "6", "0", "4"])?;
-        d.mkplane(&["f", "p"])?;
-        d.prism(&["s2", "f", "2", "0", "0"])?;
-        d.bfuse(&["s", "s1", "s2"])?;
-        d.explode(&["s", "so"])?;
-        d.copy(&["s_1", "s"])?;
-        d.offsetparameter(&["1e-7", "c", "i"])?;
-        d.offsetload(&["s", "2"])?;
-        d.offsetperform(&["result"])?;
-        d.checkprops(&["result", "-v", "1116"])?;
-        d.checknbshapes(&["result", "-shell", "1"])?;
-        Ok(())
-    })
+fn v2() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.polyline(&["p", "4", "0", "0", "10", "0", "0", "10", "0", "10", "8", "0", "10", "8", "0", "4", "6", "0", "4", "6", "0", "6", "4", "0", "6", "4", "0", "0"])?;
+    d.mkplane(&["f", "p"])?;
+    d.prism(&["s1", "f", "0", "5", "0"])?;
+    d.polyline(&["p", "6", "0", "4", "6", "5", "4", "6", "2.5", "5", "6", "0", "4"])?;
+    d.mkplane(&["f", "p"])?;
+    d.prism(&["s2", "f", "2", "0", "0"])?;
+    d.bfuse(&["s", "s1", "s2"])?;
+    d.explode(&["s", "so"])?;
+    d.copy(&["s_1", "s"])?;
+    d.offsetparameter(&["1e-7", "c", "i"])?;
+    d.offsetload(&["s", "2"])?;
+    d.offsetperform(&["result"])?;
+    d.checkprops(&["result", "-v", "1116"])?;
+    d.checknbshapes(&["result", "-shell", "1"])?;
+    Ok(())
 }
 
 /// `tests/offset/shape_type_i_c/V3`
 #[test]
-#[should_panic]
-fn v3() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.polyline(&["p", "4", "0", "0", "10", "0", "0", "10", "0", "10", "8", "0", "10", "8", "0", "4", "6", "0", "4", "6", "0", "6", "4", "0", "6", "4", "0", "0"])?;
-        d.mkplane(&["f", "p"])?;
-        d.prism(&["s1", "f", "0", "5", "0"])?;
-        d.polyline(&["p", "6", "0", "4", "6", "5", "4", "6", "2.5", "3", "6", "0", "4"])?;
-        d.mkplane(&["f", "p"])?;
-        d.prism(&["s2", "f", "2", "0", "0"])?;
-        d.bcut(&["s", "s1", "s2"])?;
-        d.explode(&["s", "so"])?;
-        d.copy(&["s_1", "s"])?;
-        d.unifysamedom(&["s", "s"])?;
-        d.offsetparameter(&["1e-7", "c", "i"])?;
-        d.offsetload(&["s", "2"])?;
-        d.offsetperform(&["result"])?;
-        d.checkprops(&["result", "-v", "1116"])?;
-        d.checknbshapes(&["result", "-shell", "1"])?;
-        Ok(())
-    })
+fn v3() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.polyline(&["p", "4", "0", "0", "10", "0", "0", "10", "0", "10", "8", "0", "10", "8", "0", "4", "6", "0", "4", "6", "0", "6", "4", "0", "6", "4", "0", "0"])?;
+    d.mkplane(&["f", "p"])?;
+    d.prism(&["s1", "f", "0", "5", "0"])?;
+    d.polyline(&["p", "6", "0", "4", "6", "5", "4", "6", "2.5", "3", "6", "0", "4"])?;
+    d.mkplane(&["f", "p"])?;
+    d.prism(&["s2", "f", "2", "0", "0"])?;
+    d.bcut(&["s", "s1", "s2"])?;
+    d.explode(&["s", "so"])?;
+    d.copy(&["s_1", "s"])?;
+    d.unifysamedom(&["s", "s"])?;
+    d.offsetparameter(&["1e-7", "c", "i"])?;
+    d.offsetload(&["s", "2"])?;
+    d.offsetperform(&["result"])?;
+    d.checkprops(&["result", "-v", "1116"])?;
+    d.checknbshapes(&["result", "-shell", "1"])?;
+    Ok(())
 }
 
 /// `tests/offset/shape_type_i_c/V4`
@@ -2716,23 +2710,20 @@ fn xz9() -> DrawResult<()> {
 /// `tests/offset/shape_type_i_c/Y3`
 /// kentron: sub-shapes named by OCCT's enumeration are selected by position (draw_selectors.json)
 #[test]
-#[should_panic]
-fn y3() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.polyline(&["p", "0", "0", "0", "4", "0", "0", "4", "0", "2", "2", "0", "4", "0", "0", "4", "0", "0", "0"])?;
-        d.mkplane(&["f", "p"])?;
-        d.prism(&["s", "f", "0", "5", "0"])?;
-        d.explode(&["s", "f"])?;
-        d.nearest(&["s_3", "s", "F", "3.0", "2.5", "3.0", "14.1421"])?;
-        d.offsetparameter(&["1e-7", "c", "i"])?;
-        d.offsetload(&["s", "1"])?;
-        d.offsetonface(&["s_3", "5"])?;
-        d.offsetperform(&["result"])?;
-        d.checkprops(&["result", "-v", "252"])?;
-        d.checknbshapes(&["result", "-shell", "1"])?;
-        Ok(())
-    })
+fn y3() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.polyline(&["p", "0", "0", "0", "4", "0", "0", "4", "0", "2", "2", "0", "4", "0", "0", "4", "0", "0", "0"])?;
+    d.mkplane(&["f", "p"])?;
+    d.prism(&["s", "f", "0", "5", "0"])?;
+    d.explode(&["s", "f"])?;
+    d.nearest(&["s_3", "s", "F", "3.0", "2.5", "3.0", "14.1421"])?;
+    d.offsetparameter(&["1e-7", "c", "i"])?;
+    d.offsetload(&["s", "1"])?;
+    d.offsetonface(&["s_3", "5"])?;
+    d.offsetperform(&["result"])?;
+    d.checkprops(&["result", "-v", "252"])?;
+    d.checknbshapes(&["result", "-shell", "1"])?;
+    Ok(())
 }
 
 /// `tests/offset/shape_type_i_c/Y4`

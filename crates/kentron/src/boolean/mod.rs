@@ -44,6 +44,7 @@ use crate::topology::{Model, Shape};
 pub use arguments::{combine, Combination};
 pub use cells::{cells, Cell};
 pub use volume::{enclosed_solids, enclosed_solids_unsplit};
+pub(crate) use cells::point_inside;
 
 use build::Kept;
 use classify::State;
@@ -217,6 +218,13 @@ impl PointClassifier {
         let mut graph = Graph::default();
         graph.add_operand(model, shape, 0, &Default::default())?;
         Ok(PointClassifier { graph })
+    }
+
+    /// How many times the shape's faces wind round `p` (off them): 1 inside a solid, 0
+    /// outside, more where a shell passing through itself covers it more than once; `None`
+    /// where that cannot be told.
+    pub(crate) fn winding(&self, p: crate::math::Point) -> Option<i32> {
+        self.graph.winding(0, p)
     }
 
     /// Where `p` lies with respect to the shape's solids.

@@ -63,6 +63,42 @@ impl Graph {
         }
     }
 
+    /// How many times the faces of `operand` wind round `p` (off them): along a ray from it,
+    /// the faces it leaves through less those it enters by (1 inside a solid, 0 outside it;
+    /// more inside a shell passing through itself). `None` where every ray grazes an edge,
+    /// or the operand has far faces.
+    pub(super) fn winding(&self, operand: usize, p: Point) -> Option<i32> {
+        if self.far.iter().any(|f| f.operand == operand) {
+            return None;
+        }
+        let faces = self.faces_of(operand);
+        'rays: for (x, y, z) in DIRECTIONS {
+            let d = Vector::new(x, y, z).normalized();
+            let mut winding = 0;
+            for g in self.index().faces_along_ray(operand, p, d).into_iter().filter(|g| faces.binary_search(g).is_ok()) {
+                let face = &self.faces[g];
+                let Some(hits) = geom::ray_hits(&face.surface, p, d, &face.bbox) else { continue 'rays };
+                for t in hits {
+                    let at = p + d * t;
+                    match face.locate(at, &self.edges, &self.vertices) {
+                        Location::Inside => {
+                            let along = face.outward_normal(at).dot(d);
+                            // (Grazing the face: ambiguous.)
+                            if along.abs() <= 1e-9 {
+                                continue 'rays;
+                            }
+                            winding += if along > 0.0 { 1 } else { -1 };
+                        }
+                        Location::Boundary => continue 'rays,
+                        Location::Outside => {}
+                    }
+                }
+            }
+            return Some(winding);
+        }
+        None
+    }
+
     /// True if `p` (off their boundary) is inside the solid bounded by `faces` (faces of
     /// `operand`) and the operand's far faces.
     pub(super) fn contains(&self, operand: usize, faces: &[usize], p: Point) -> bool {

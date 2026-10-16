@@ -391,7 +391,7 @@ fn split_by_faces(model: &mut Model, shape: Shape, cutter: Shape) -> Result<(Vec
 }
 
 /// A point inside `solid`: its centre of mass if inside, else one just inside a face.
-fn point_inside(model: &Model, solid: Shape) -> Result<Option<crate::math::Point>> {
+pub(crate) fn point_inside(model: &Model, solid: Shape) -> Result<Option<crate::math::Point>> {
     use crate::geometry::ParametricSurface;
     let classifier = super::PointClassifier::new(model, solid)?;
     // (From the faces' volume terms, kept with them.)
