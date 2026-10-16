@@ -1244,7 +1244,6 @@ tests/offset/faces_type_i/M8
 tests/offset/shape/A1
 tests/offset/shape_type_a/A2
 tests/offset/shape_type_i/A5
-tests/offset/shape_type_i/A8
 tests/offset/shape_type_i/A9
 tests/offset/shape_type_i/B4
 tests/offset/shape_type_i_c/I4

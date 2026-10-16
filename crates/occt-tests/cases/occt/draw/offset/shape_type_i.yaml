@@ -99,7 +99,6 @@ ported_from:
   file: tests/offset/shape_type_i/A8
 notes:
   - "kentron deviation: kentron's volume 45.6182 differs from OCCT's 47.0723."
-expect: not_done
 build:
   - s: {cone: {r1: 5, r2: 0, height: 12, angle: 270}}
   - result: {offset_shape: {shape: s, distance: -1, join: "intersection"}}

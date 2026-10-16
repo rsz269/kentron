@@ -739,18 +739,66 @@ fn trace_edge(
         uvs[k][0] = foot_on(&f.offset, a, uvs[k][0], f.nappe).0;
         uvs[k][n] = foot_on(&f.offset, b, uvs[k][n], f.nappe).0;
     }
+    // Between two elementary surfaces, the conic they meet in, where it runs through both new
+    // vertices: exact, where the samples taken along the old edge may miss part of the new
+    // one (a hyperbola turning back past the old edge's end).
+    let mut conic = if n > 1 && distinct.len() == 2 && coaxial_circle(curve, &xs).is_none() {
+        exact_section(&faces[distinct[0]].offset, &faces[distinct[1]].offset, a, b, xs[n / 2])
+    } else {
+        None
+    };
+    if let Some((c, first, last)) = &conic {
+        // The samples again, along the conic, each one's parameters found from the last; their
+        // ends where the traced ones are (whole periods away, the parameters moved by them;
+        // else the traced edge kept).
+        let points: Vec<Point> = (0..=n).map(|i| if i == 0 { a } else if i == n { b } else { c.point(first + (last - first) * i as f64 / n as f64) }).collect();
+        let mut marched: Vec<Vec<Point2>> = Vec::with_capacity(edge.uses.len());
+        let mut agree = true;
+        for (k, u) in edge.uses.iter().enumerate() {
+            let f = &faces[u.face];
+            let mut uv = vec![uvs[k][0]];
+            for i in 1..=n {
+                uv.push(foot_on(&f.offset, points[i], uv[i - 1], f.nappe).0);
+            }
+            let whole = |d: f64, period: Option<f64>| match period {
+                Some(t) => (d / t).round() * t,
+                None => 0.0,
+            };
+            let (dx, dy) = (uvs[k][n].x - uv[n].x, uvs[k][n].y - uv[n].y);
+            let shift = Point2::new(whole(dx, f.offset.u_period()), whole(dy, f.offset.v_period())) - Point2::new(0.0, 0.0);
+            if (dx - shift.x).abs() + (dy - shift.y).abs() > 1e-6 * (1.0 + uv[n].x.abs() + uv[n].y.abs()) || shift.x != 0.0 || shift.y != 0.0 {
+                // (A pcurve ending a period away runs round the face: not this edge.)
+                agree = false;
+                break;
+            }
+            marched.push(uv);
+        }
+        if agree {
+            xs = points;
+            uvs = marched;
+        } else {
+            conic = None;
+        }
+    }
     let curve3 = if n == 1 {
         Curve::Line(Line { origin: a, direction: Direction::try_from_vector(b - a).ok_or_else(|| Error::InvalidInput("an offset edge of no length".into()))? })
     } else if let Some(circle) = coaxial_circle(curve, &xs) {
         // (A circle between surfaces about its axis moves to a circle about it, at the same
         // angles.)
         Curve::Circle(circle)
+    } else if let Some((c, _, _)) = &conic {
+        c.clone()
     } else {
         Curve::BSpline(fit::interpolate_with_parameters(&xs, &ts)?)
     };
-    // Lines by length; other curves over the old curve's parameters, which keep increasing
-    // from the start vertex to the end one unless the offset turned the edge round.
-    let (first, last, params) = if n == 1 { (0.0, a.distance(b), vec![0.0, a.distance(b)]) } else { (t0, t1, ts.clone()) };
+    // Lines by length, conics over their own parameters; other curves over the old curve's
+    // parameters, which keep increasing from the start vertex to the end one unless the
+    // offset turned the edge round.
+    let (first, last, params) = match &conic {
+        _ if n == 1 => (0.0, a.distance(b), vec![0.0, a.distance(b)]),
+        Some((_, first, last)) => (*first, *last, (0..=n).map(|i| first + (last - first) * i as f64 / n as f64).collect()),
+        None => (t0, t1, ts.clone()),
+    };
     if first >= last {
         return Err(Error::InvalidInput("an offset edge turned round (the offset is too large)".into()));
     }
@@ -768,6 +816,82 @@ fn trace_edge(
         })
         .collect();
     Ok((id, pcurves))
+}
+
+/// Where elementary surfaces `s1` and `s2` meet in a conic through `a` and `b`: the conic,
+/// run from `a` to `b` (over the arc nearest `middle` on a closed one), and its parameters
+/// there.
+fn exact_section(s1: &Surface, s2: &Surface, a: Point, b: Point, middle: Point) -> Option<(Curve, f64, f64)> {
+    use crate::geometry::intersect::{quadrics, QuadricIntersection as Q};
+    let elementary = |s: &Surface| matches!(s, Surface::Plane(_) | Surface::Cylinder(_) | Surface::Cone(_) | Surface::Sphere(_) | Surface::Torus(_));
+    if !elementary(s1) || !elementary(s2) {
+        return None;
+    }
+    let scale = 1.0 + (a - Point::ORIGIN).length().max((b - Point::ORIGIN).length());
+    let tolerance = 1e-9 * scale;
+    let curves: Vec<Curve> = match quadrics(s1, s2, tolerance) {
+        Q::Circles(v) => v.into_iter().map(Curve::Circle).collect(),
+        Q::Ellipses(v) => v.into_iter().map(Curve::Ellipse).collect(),
+        Q::Parabolas(v) => v.into_iter().map(Curve::Parabola).collect(),
+        Q::Hyperbolas(v) => v.into_iter().map(Curve::Hyperbola).collect(),
+        _ => return None,
+    };
+    // A point's parameter on a conic, in closed form (in the conic's frame).
+    let parameter = |c: &Curve, p: Point| -> Option<f64> {
+        let local = |frame: &crate::math::Frame| {
+            let d = p - frame.origin();
+            (d.dot(Vector::from(frame.x())), d.dot(Vector::from(frame.y())))
+        };
+        Some(match c {
+            Curve::Circle(c) => {
+                let (x, y) = local(c.frame());
+                y.atan2(x).rem_euclid(std::f64::consts::TAU)
+            }
+            Curve::Ellipse(e) => {
+                let (x, y) = local(e.frame());
+                (y / e.minor_radius()).atan2(x / e.major_radius()).rem_euclid(std::f64::consts::TAU)
+            }
+            Curve::Hyperbola(h) => (local(h.frame()).1 / h.minor_radius()).asinh(),
+            Curve::Parabola(q) => local(q.frame()).1,
+            _ => return None,
+        })
+    };
+    for mut c in curves {
+        let (Some(ta), Some(tb)) = (parameter(&c, a), parameter(&c, b)) else { continue };
+        if c.point(ta).distance(a) > 1e3 * tolerance || c.point(tb).distance(b) > 1e3 * tolerance {
+            continue;
+        }
+        let range = match c.period() {
+            // (Of the two arcs, the one through the middle of the traced edge.)
+            Some(period) => {
+                let forward = (ta, if tb > ta { tb } else { tb + period });
+                let mid = |(x, y): (f64, f64)| c.point(0.5 * (x + y)).distance(middle);
+                let mut turned = c.clone();
+                turned.reverse();
+                let (ra, rb) = (turned.reversed_parameter(ta).rem_euclid(period), turned.reversed_parameter(tb).rem_euclid(period));
+                let backward = (ra, if rb > ra { rb } else { rb + period });
+                if mid(forward) <= turned.point(0.5 * (backward.0 + backward.1)).distance(middle) {
+                    forward
+                } else {
+                    c = turned;
+                    backward
+                }
+            }
+            None if ta < tb => (ta, tb),
+            None => {
+                let (ra, rb) = (c.reversed_parameter(ta), c.reversed_parameter(tb));
+                c.reverse();
+                (ra, rb)
+            }
+        };
+        // (Where it is the edge: through the traced middle, not another stretch of it.)
+        let (lo, hi) = range;
+        let near_middle = c.point(nearest_on_curve(middle, &c, lo, hi).parameter).distance(middle);
+        if near_middle <= 1e-6 * scale {
+            return Some((c, lo, hi));
+        }
+    }
+    None
 }
 
 /// The circle about the axis of `curve` (a circle) through `points`, if they all lie at one

@@ -1135,7 +1135,12 @@ fn sections(fa: &Face, fb: &Face, crossings: &[Point]) -> Vec<Section> {
             return Vec::new();
         }
     }
-    match intersect::quadrics(a, b, TOL) {
+    // (A cone's conics other than circles are traced as before, by angle about its axis.)
+    let found = match intersect::quadrics(a, b, TOL) {
+        QuadricIntersection::Ellipses(_) | QuadricIntersection::Parabolas(_) | QuadricIntersection::Hyperbolas(_) if matches!(a, Surface::Cone(_)) || matches!(b, Surface::Cone(_)) => QuadricIntersection::NotAnalytic,
+        found => found,
+    };
+    match found {
         QuadricIntersection::Lines(lines) => lines
             .into_iter()
             .map(|l| {

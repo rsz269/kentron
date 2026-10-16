@@ -804,7 +804,49 @@ fn plane_cone(plane: &Plane, cone: &crate::geometry::surface::Cone, tol: f64) ->
         let center = f.origin() + z * h;
         return Q::Circles(vec![Circle::new(Frame::new(center, f.z(), f.x()), radius)]);
     }
-    Q::NotAnalytic
+    // Otherwise a conic: with the plane's points `q + s e1 + t e2` (q the apex's foot, e1 the
+    // axis's direction in the plane, e2 across it), the double cone `(w·z)² = cos²α |w|²`
+    // (w from the apex) reads `A s² + B s + C - cos²α t² = 0`: an ellipse (A < 0), a parabola
+    // (A = 0) or a hyperbola of two branches (A > 0).
+    let d = n.dot(apex - plane.origin());
+    let foot = apex - n * d;
+    let e1 = (z - n * n.dot(z)).normalized();
+    let e2 = n.cross(e1);
+    let (nz, ez) = (n.dot(z), e1.dot(z));
+    let c2 = cos * cos;
+    let (a2, b, c0) = (ez * ez - c2, -2.0 * d * nz * ez, d * d * (nz * nz - c2));
+    let plane_z = Direction::from_vector(n);
+    let at = |s: f64| foot + e1 * s;
+    if a2.abs() <= 1e-12 {
+        // A parabola, `s - s_v = (cos²α / B) t²`, opening the way of B along e1.
+        if b.abs() <= 1e-300 {
+            return Q::NotAnalytic;
+        }
+        let vertex = at(-c0 / b);
+        let opening = if b > 0.0 { e1 } else { -e1 };
+        return Q::Parabolas(vec![Parabola::new(Frame::new(vertex, plane_z, Direction::from_vector(opening)), b.abs() / (4.0 * c2))]);
+    }
+    let s0 = -b / (2.0 * a2);
+    let k = a2 * s0 * s0 - c0;
+    let centre = at(s0);
+    if k.abs() <= tol * tol {
+        return Q::NotAnalytic;
+    }
+    if a2 < 0.0 {
+        // `(s - s0)² / (k / A) + t² / (-k / cos²α) = 1`.
+        if k >= 0.0 {
+            return Q::Empty;
+        }
+        let (rs, rt) = ((k / a2).sqrt(), (-k / c2).sqrt());
+        let (x, major, minor) = if rs >= rt { (e1, rs, rt) } else { (e2, rt, rs) };
+        return Q::Ellipses(vec![Ellipse::new(Frame::new(centre, plane_z, Direction::from_vector(x)), major, minor)]);
+    }
+    // A hyperbola across s (k > 0) or across t (k < 0); a branch either way along it.
+    let (x, major, minor) = if k > 0.0 { (e1, (k / a2).sqrt(), (k / c2).sqrt()) } else { (e2, (-k / c2).sqrt(), (-k / a2).sqrt()) };
+    Q::Hyperbolas(vec![
+        Hyperbola::new(Frame::new(centre, plane_z, Direction::from_vector(x)), major, minor),
+        Hyperbola::new(Frame::new(centre, plane_z, Direction::from_vector(-x)), major, minor),
+    ])
 }
 
 /// A plane meets a cylinder in a circle (axis across the plane), lines (axis parallel to
@@ -1569,6 +1611,41 @@ mod tests {
     }
 
     #[test]
+    fn planes_meet_a_cone_in_conics() {
+        // Planes at every slant to a cone's axis (half-angle 30°): each conic found lies on
+        // both, and is of the kind the slant makes.
+        use crate::geometry::surface::Cone;
+        let cone = Surface::Cone(Cone::new(Frame::new(Point::new(1.0, 2.0, 3.0), Direction::new(0.2, 0.1, 1.0), Direction::X), std::f64::consts::FRAC_PI_6, 4.0));
+        let on_cone = |p: Point| {
+            let Surface::Cone(c) = &cone else { unreachable!() };
+            let z = Vector::from(c.frame().z());
+            let w = p - c.apex();
+            let (sin, cos) = c.semi_angle_sin_cos();
+            (w.dot(z).abs() * sin.abs() - (w - z * w.dot(z)).length() * cos).abs()
+        };
+        for (tilt, kind) in [(1.2, "ellipse"), (std::f64::consts::FRAC_PI_6, "parabola"), (0.4, "hyperbola"), (0.0, "hyperbola")] {
+            // The plane's normal at `tilt` from the axis, through a point off the apex.
+            let Surface::Cone(c) = &cone else { unreachable!() };
+            let f = c.frame();
+            let n = Vector::from(f.z()) * tilt.sin() + Vector::from(f.x()) * tilt.cos();
+            let plane = Surface::Plane(Plane::new(c.apex() + Vector::from(f.z()) * -5.0 + Vector::from(f.x()) * 0.7, Direction::from_vector(n)));
+            let curves: Vec<crate::geometry::curve::Curve> = match quadrics(&plane, &cone, 1e-7) {
+                QuadricIntersection::Ellipses(v) if kind == "ellipse" => v.into_iter().map(crate::geometry::curve::Curve::Ellipse).collect(),
+                QuadricIntersection::Parabolas(v) if kind == "parabola" => v.into_iter().map(crate::geometry::curve::Curve::Parabola).collect(),
+                QuadricIntersection::Hyperbolas(v) if kind == "hyperbola" => v.into_iter().map(crate::geometry::curve::Curve::Hyperbola).collect(),
+                other => panic!("tilt {tilt}: {other:?}"),
+            };
+            for curve in &curves {
+                for i in -10..=10 {
+                    let p = curve.point(0.3 * i as f64);
+                    assert!(on_cone(p) < 1e-9 * (1.0 + (p - Point::ORIGIN).length()), "tilt {tilt}: {p:?} off the cone by {}", on_cone(p));
+                    assert!(distance(&plane, p) < 1e-9 * (1.0 + (p - Point::ORIGIN).length()), "tilt {tilt}: {p:?} off the plane");
+                }
+            }
+        }
+    }
+
+    #[test]
     fn a_plane_across_a_narrow_band_of_a_cone() {
         // A plane along the axis of a steep cone (radius 150, semi-angle -0.17), 23 from the
         // axis, crosses the band 0 <= v <= 3.46 within angles narrower than the samples, and
@@ -1696,7 +1773,10 @@ mod tests {
         // A plane parallel to a generator: a parabola, kept within the range of v.
         let (sin, cos) = 0.4f64.sin_cos();
         let parallel = Surface::Plane(Plane::new(Point::new(1.0, 0.0, 0.0), Direction::new(cos, 0.0, -sin)));
-        assert!(matches!(quadrics(&parallel, &cone, 1e-7), QuadricIntersection::NotAnalytic));
+        let QuadricIntersection::Parabolas(parabolas) = quadrics(&parallel, &cone, 1e-7) else { panic!() };
+        for p in parabolas.iter().flat_map(|c| (-5..=5).map(move |i| crate::geometry::curve::Curve::Parabola(c.clone()).point(0.5 * i as f64))) {
+            assert!(distance(&cone, p) < 1e-9 && distance(&parallel, p) < 1e-9, "{p:?}");
+        }
         let curves = ruled_quadric(&cone, &parallel, 1e-7, Some((-5.0, 5.0))).unwrap();
         assert!(!curves.curves.is_empty());
         for c in &curves.curves {
