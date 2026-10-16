@@ -359,11 +359,24 @@ fn chamfer_solid_edges(model: &mut Model, shape: Shape, edges: &[ChamferedEdge])
     }
     // The edges continuing them tangentially (indices into `edges` as their "radius").
     let indexed: Vec<(Shape, f64)> = edges.iter().enumerate().map(|(i, e)| (e.edge, i as f64)).collect();
+    let chains = tangent_chains(model, shape, &indexed);
+    // Where an edge's faces have other cross-sections than lines and circles: every edge
+    // chamfered in turn, section by section along it.
+    let mut elementary = true;
+    for &(edge, _) in &chains {
+        if Corner::of(model, shape, edge, true)?.is_none() {
+            elementary = false;
+            break;
+        }
+    }
+    if !elementary {
+        return chamfer_in_turn(model, shape, &chains, edges);
+    }
     let mut corners: Vec<(Corner, [f64; 2])> = Vec::new();
-    for (edge, index) in tangent_chains(model, shape, &indexed) {
+    for (edge, index) in chains {
         let wanted = edges[index as usize];
         let Some(corner) = Corner::of(model, shape, edge, true)? else {
-            todo!("chamfers of edges between faces of this kind");
+            return Err(Error::Failed("a chamfered edge's faces changed kind".into()));
         };
         // The first distance along the chosen face (for an edge carrying the chosen one on,
         // the face it shares with it, if any).
@@ -396,6 +409,54 @@ fn chamfer_solid_edges(model: &mut Model, shape: Shape, edges: &[ChamferedEdge])
         result = boolean::difference(model, result, tool)?;
     }
     Ok(result)
+}
+
+/// [`chamfer_solid_edges`] edge by edge on the solid as it is rebuilt (each found again by
+/// its curve), section by section along it; in the order given, else in reverse.
+fn chamfer_in_turn(model: &mut Model, shape: Shape, chains: &[(Shape, f64)], edges: &[ChamferedEdge]) -> Result<Shape> {
+    // (On the shape unplaced, in its own units, the result placed as the shape is.)
+    let placement = shape.placement;
+    if chains.iter().any(|(e, _)| e.placement != placement) {
+        todo!("chamfers of edges placed apart from their shape, between faces of this kind");
+    }
+    let unscale = 1.0 / placement.scale_factor().abs();
+    let shape = Shape { placement: Transform::IDENTITY, ..shape };
+    let mut wanted = Vec::with_capacity(chains.len());
+    for &(edge, index) in chains {
+        let edge = Shape { placement: Transform::IDENTITY, orientation: Orientation::Forward, ..edge };
+        let (curve, first, last) = model.edge_curve(edge).ok_or_else(|| Error::InvalidInput("a degenerate edge has no chamfer".into()))?;
+        let e = edges[index as usize];
+        let (distance, second) = match e.size {
+            ChamferSize::Distances(a, b) => (a * unscale, ball::ChamferSecond::Distance(b * unscale)),
+            ChamferSize::DistanceAngle(d, angle) => (d * unscale, ball::ChamferSecond::Angle(angle)),
+        };
+        wanted.push((curve, first, last, e.face.map(|f| f.node), distance, second));
+    }
+    let mut failure = None;
+    let orders: &[bool] = if wanted.len() > 1 { &[false, true] } else { &[false] };
+    'orders: for &reverse in orders {
+        let mut sequence: Vec<_> = wanted.iter().collect();
+        if reverse {
+            sequence.reverse();
+        }
+        let mut result = shape;
+        for (curve, first, last, face, distance, second) in sequence {
+            let Some(edge) = find_edge(model, result, curve, *first, *last) else {
+                failure = Some(Error::Failed("a chamfered edge was lost by another chamfer".into()));
+                continue 'orders;
+            };
+            let profile = ball::Profile::Chamfer { first: *face, distance: *distance, second: *second };
+            match ball::rolling_chamfer(model, result, edge, &profile) {
+                Ok(done) => result = done,
+                Err(e) => {
+                    failure = Some(e);
+                    continue 'orders;
+                }
+            }
+        }
+        return Ok(result.moved(&placement));
+    }
+    Err(failure.expect("a failure"))
 }
 
 /// Where three convex chamfers of straight edges between planes meet at a vertex, the
@@ -1445,6 +1506,30 @@ mod tests {
         let lopsided = chamfer_edges(&mut model, cube, &edges).unwrap();
         let frustum = 0.1 / 3.0 * (1.0 + 0.36 + 0.6);
         check_volume(&model, lopsided, 1.0 - 0.1 + frustum);
+    }
+
+    #[test]
+    fn chamfered_edge_between_bspline_faces() {
+        // A unit cube made of B-spline faces: chamfered section by section, the same prisms
+        // cut away as from the cube of planes.
+        let mut model = Model::new();
+        let planes = Cuboid::new(1.0, 1.0, 1.0).build(&mut model).unwrap();
+        let cube = crate::convert::to_nurbs(&mut model, planes).unwrap();
+        let top = edges_at(&model, cube, 1.0);
+        let d = 0.1;
+        let one = chamfer(&mut model, cube, &top[..1], d).unwrap();
+        check_volume(&model, one, 1.0 - d * d / 2.0);
+        assert_eq!(model.unique_subshapes(one, NodeKind::Face).len(), 7);
+        // 0.2 along the top face, 0.1 down the side; and 0.1 along the top at 45 degrees.
+        let top_face = model
+            .unique_subshapes(cube, NodeKind::Face)
+            .into_iter()
+            .find(|&f| model.unique_subshapes(f, NodeKind::Vertex).iter().all(|&v| (model.point(v).z - 1.0).abs() < 1e-9))
+            .unwrap();
+        let lopsided = chamfer_edges(&mut model, cube, &[ChamferedEdge { edge: top[0], size: ChamferSize::Distances(0.2, 0.1), face: Some(top_face) }]).unwrap();
+        check_volume(&model, lopsided, 1.0 - 0.2 * 0.1 / 2.0);
+        let angled = chamfer_edges(&mut model, cube, &[ChamferedEdge { edge: top[0], size: ChamferSize::DistanceAngle(0.1, PI / 4.0), face: Some(top_face) }]).unwrap();
+        check_volume(&model, angled, 1.0 - d * d / 2.0);
     }
 
     #[test]

@@ -135,6 +135,25 @@ struct Section {
     /// The contacts' parameters on the faces.
     contact_uv: [Point2; 2],
     radius: f64,
+    /// A chamfer's section: straight from contact to contact (`center` then the spine
+    /// point reflected through the chord's middle, on the side a ball's centre would be).
+    straight: bool,
+}
+
+/// What runs along the edge: a ball of radius `law(s)` (`s` the fraction of the edge's
+/// length from its start), or a chamfer cutting back `distance` along the first face
+/// (`first`, else the first side found) and along the second the other distance, or as far
+/// as a cut at `angle` (radians) to the first face reaches.
+pub(super) enum Profile<'a> {
+    Ball(&'a dyn Fn(f64) -> f64),
+    Chamfer { first: Option<crate::topology::NodeId>, distance: f64, second: ChamferSecond },
+}
+
+/// How far a chamfer cuts back along its second face.
+#[derive(Clone, Copy)]
+pub(super) enum ChamferSecond {
+    Distance(f64),
+    Angle(f64),
 }
 
 /// The ball's sections along `edge` of `shape` (and past its ends), with what the fillet
@@ -149,6 +168,11 @@ const NOT_REACHED: &str = "the fillet does not reach the face at the end of its 
 
 /// [`rolling`] with the sections carried `far` times as far past the edge's ends.
 fn rolling_past(model: &Model, shape: Shape, edge: Shape, radius: &dyn Fn(f64) -> f64, far: usize) -> Result<Rolling> {
+    rolling_with(model, shape, edge, &Profile::Ball(radius), far)
+}
+
+/// [`rolling_past`] for a ball or a chamfer.
+fn rolling_with(model: &Model, shape: Shape, edge: Shape, profile: &Profile, far: usize) -> Result<Rolling> {
     let id = EdgeId::try_from(edge.node).map_err(|n| Error::InvalidInput(format!("{n:?} is not an edge")))?;
     let forward = Shape { orientation: Orientation::Forward, ..edge };
     let (curve, t0, t1) = model.edge_curve(forward).ok_or_else(|| Error::InvalidInput("a degenerate edge has no fillet".into()))?;
@@ -185,6 +209,33 @@ fn rolling_past(model: &Model, shape: Shape, edge: Shape, radius: &dyn Fn(f64) -
     }
     let convex = normals[0].dot(into(1)) < 0.0;
     let side_of_ball = if convex { -1.0 } else { 1.0 };
+    // A chamfer's distances along the two sides (the second from the angle in the faces'
+    // cross-section at the edge's middle, by the sines' law in its triangle).
+    let chamfer: Option<[f64; 2]> = match profile {
+        Profile::Ball(_) => None,
+        Profile::Chamfer { first, distance, second } => {
+            let swapped = first.is_some_and(|f| sides[1].face.node == f);
+            let (a, b) = if swapped { (1, 0) } else { (0, 1) };
+            let other = match *second {
+                ChamferSecond::Distance(d) => d,
+                ChamferSecond::Angle(angle) => {
+                    let between = into(a).dot(into(b)).clamp(-1.0, 1.0).acos();
+                    let opposite = (between + angle).sin();
+                    if !(opposite > crate::tolerance::ANGULAR) {
+                        return Err(Error::InvalidInput(format!("a chamfer at {angle} rad does not meet the other face")));
+                    }
+                    distance * angle.sin() / opposite
+                }
+            };
+            Some(if swapped { [other, *distance] } else { [*distance, other] })
+        }
+    };
+    let chamfer_size = chamfer.map(|d| d[0].max(d[1]));
+    let ball_law = |s: f64| match profile {
+        Profile::Ball(law) => law(s),
+        Profile::Chamfer { .. } => chamfer_size.expect("a chamfer's size"),
+    };
+    let radius: &dyn Fn(f64) -> f64 = &ball_law;
 
     // The spine: points of the edge, continued past its ends (by a few radii) along the
     // faces' intersection.
@@ -205,12 +256,23 @@ fn rolling_past(model: &Model, shape: Shape, edge: Shape, radius: &dyn Fn(f64) -
     };
     // (Each section from the centre of the last found, relative to its point of the spine.)
     let last_offset: std::cell::Cell<Option<Vector>> = std::cell::Cell::new(None);
+    let last_contacts: std::cell::Cell<Option<[Vector; 2]>> = std::cell::Cell::new(None);
     let section_at = |t: f64| -> Result<Section> {
         let r = radius(fraction(t));
         if !(r > crate::tolerance::LINEAR) {
             return Err(Error::InvalidInput(format!("fillet radius must be positive, got {r}")));
         }
         let (o, tangent) = spine_at(t)?;
+        if let Some(distances) = chamfer {
+            let near = last_contacts.get();
+            let on_edge = (t0.min(t1)..=t0.max(t1)).contains(&t);
+            let s = chamfer_section(&sides, o, tangent, distances, near, on_edge).or_else(|e| match near {
+                Some(_) => chamfer_section(&sides, o, tangent, distances, None, on_edge),
+                None => Err(e),
+            })?;
+            last_contacts.set(Some([s.contacts[0] - o, s.contacts[1] - o]));
+            return Ok(Section { t, ..s });
+        }
         let found = match section(&sides, o, tangent, r, side_of_ball, last_offset.get()) {
             Ok(found) => Ok((o, Section { t, ..found })),
             // On the edge, where the faces' surfaces meet a seam or an end of theirs: just
@@ -271,7 +333,13 @@ fn rolling_past(model: &Model, shape: Shape, edge: Shape, radius: &dyn Fn(f64) -
         let contacts = [contact(0)?, contact(1)?];
         let mut worst: f64 = 0.0;
         for w in ts.windows(2) {
-            let mid = section_at(0.5 * (w[0] + w[1]))?;
+            // (Past the edge's ends, where the faces' surfaces may end between two sections
+            // found, a section not found midway is left out of the measure.)
+            let mid = match section_at(0.5 * (w[0] + w[1])) {
+                Ok(mid) => mid,
+                Err(_) if w[1] <= t0.min(t1) || w[0] >= t0.max(t1) => continue,
+                Err(e) => return Err(e),
+            };
             for i in 0..2 {
                 worst = worst.max(contacts[i].point(mid.t).distance(mid.contacts[i]));
             }
@@ -332,6 +400,28 @@ fn rolling_ball_past(model: &mut Model, shape: Shape, edge: Shape, radius: &dyn 
     }
     let mut builder = Rebuild { model, id, sides: &sides, surface: &surface, contacts: &contacts, ends: &ends, ts: &ts };
     builder.build(shape, closed, &sections, convex)
+}
+
+/// `shape` with `edge` chamfered as `profile` (a [`Profile::Chamfer`]) has it, the faces
+/// along it cut back and the chamfer ending on the faces at the edge's ends.
+pub(super) fn rolling_chamfer(model: &mut Model, shape: Shape, edge: Shape, profile: &Profile) -> Result<Shape> {
+    let attempt = |model: &mut Model, far: usize| -> Result<Shape> {
+        let Rolling { id, va, vb, closed, sides, sections, contacts, convex, target, .. } = rolling_with(model, shape, edge, profile, far)?;
+        let surface = fillet_surface(&sections)?;
+        let ts: Vec<f64> = sections.iter().map(|s| s.t).collect();
+        let mut ends = Vec::new();
+        if !closed {
+            for (vertex, at_end) in [(va, false), (vb, true)] {
+                ends.push(end_cut(model, shape, id, vertex, &sides, &surface, &ts, at_end, target)?);
+            }
+        }
+        let mut builder = Rebuild { model, id, sides: &sides, surface: &surface, contacts: &contacts, ends: &ends, ts: &ts };
+        builder.build(shape, closed, &sections, convex)
+    };
+    match attempt(model, 1) {
+        Err(Error::InvalidInput(m)) if m == NOT_REACHED => attempt(model, 3),
+        other => other,
+    }
 }
 
 /// The solid a rolling-ball fillet of `edge` takes away (at a convex edge) or adds (at a
@@ -463,7 +553,7 @@ fn section(sides: &[Side; 2], o: Point, tangent: Vector, r: f64, side: f64, near
         if let Ok(center) = solved {
             let contacts = [sides[0].distance(center)?.1, sides[1].distance(center)?.1];
             let contact_uv = [sides[0].uv(center)?, sides[1].uv(center)?];
-            return Ok(Section { t: 0.0, center, contacts, contact_uv, radius: r });
+            return Ok(Section { t: 0.0, center, contacts, contact_uv, radius: r, straight: false });
         }
     }
     // (The faces' normals at `o`, or where a surface is singular there (a cone's apex), just
@@ -488,7 +578,77 @@ fn section(sides: &[Side; 2], o: Point, tangent: Vector, r: f64, side: f64, near
     })?;
     let contacts = [sides[0].distance(center)?.1, sides[1].distance(center)?.1];
     let contact_uv = [sides[0].uv(center)?, sides[1].uv(center)?];
-    Ok(Section { t: 0.0, center, contacts, contact_uv, radius: r })
+    Ok(Section { t: 0.0, center, contacts, contact_uv, radius: r, straight: false })
+}
+
+/// The chamfer's section in the plane through `o` square to `tangent`: on each face the
+/// point `distances[i]` from `o` (in that plane, into the face), from the points at offsets
+/// `near` from `o` (a neighbouring section's), else from along the faces' tangent planes.
+/// (Off a face's patch, in its parameters, only for a section `on_edge`: past the edge's
+/// ends the sections stop where the faces do.)
+fn chamfer_section(sides: &[Side; 2], o: Point, tangent: Vector, distances: [f64; 2], near: Option<[Vector; 2]>, on_edge: bool) -> Result<Section> {
+    let normal = |i: usize| -> Result<Vector> {
+        let reach = 1e-6 * (1.0 + (o - Point::ORIGIN).length());
+        sides[i].distance(o).or_else(|e| sides[i].distance(o + tangent * reach).or_else(|_| sides[i].distance(o - tangent * reach)).map_err(|_| e)).map(|d| d.2)
+    };
+    let mut contacts = [o; 2];
+    for i in 0..2 {
+        let d = distances[i];
+        let start = match near {
+            Some(offsets) => o + (offsets[i] - tangent * offsets[i].dot(tangent)),
+            None => {
+                let into = normal(i)?.cross(tangent * sides[i].along);
+                if into.length() <= 1e-9 {
+                    return Err(Error::InvalidInput("the faces at a fillet edge are tangent".into()));
+                }
+                o + into.normalized() * d
+            }
+        };
+        // (Else in the face's parameters: past a patch's bounds a point's distance from the
+        // surface jumps; its parametric form carries on.)
+        contacts[i] = match newton(start, |x| Ok([sides[i].distance(x)?.0, (x - o).dot(tangent), (x - o).length() - d])) {
+            Ok(x) => x,
+            Err(e) if on_edge => on_surface_at(&sides[i], start, o, tangent, d).ok_or(e)?,
+            Err(e) => return Err(e),
+        };
+    }
+    let middle = Point::barycenter(&[(contacts[0], 1.0), (contacts[1], 1.0)]);
+    let center = middle + (middle - o);
+    let contact_uv = [sides[0].uv(contacts[0])?, sides[1].uv(contacts[1])?];
+    Ok(Section { t: 0.0, center, contacts, contact_uv, radius: distances[0].max(distances[1]), straight: true })
+}
+
+/// The point of `side`'s surface in the plane through `o` square to `tangent`, `d` from
+/// `o`: Newton's method in the surface's parameters, from `start`'s.
+fn on_surface_at(side: &Side, start: Point, o: Point, tangent: Vector, d: f64) -> Option<Point> {
+    let (mut u, mut v) = side.parameters(start);
+    let scale = d.max(1e-9);
+    for _ in 0..60 {
+        let (p, du, dv) = side.surface.d1(u, v);
+        let r = p - o;
+        let length = r.length();
+        if !(length > 0.0) {
+            return None;
+        }
+        let f = [r.dot(tangent), length - d];
+        if f[0].abs() <= 1e-12 * scale && f[1].abs() <= 1e-12 * scale {
+            return Some(p);
+        }
+        let radial = r * (1.0 / length);
+        let (a, b, c, e) = (du.dot(tangent), dv.dot(tangent), du.dot(radial), dv.dot(radial));
+        let det = a * e - b * c;
+        if det.abs() <= 1e-300 {
+            return None;
+        }
+        let (su, sv) = ((f[0] * e - b * f[1]) / det, (a * f[1] - c * f[0]) / det);
+        u -= su;
+        v -= sv;
+        if !(u.is_finite() && v.is_finite()) {
+            return None;
+        }
+    }
+    let p = side.surface.point(u, v);
+    ((p - o).dot(tangent).abs() <= 1e-8 * scale && ((p - o).length() - d).abs() <= 1e-8 * scale).then_some(p)
 }
 
 /// Newton's method on a function of a point with three components, from `start`.
@@ -524,6 +684,16 @@ fn newton(start: Point, f: impl Fn(Point) -> Result<[f64; 3]>) -> Result<Point> 
 /// spine's parameter) a cubic interpolation of the arcs' homogeneous control points.
 fn fillet_surface(sections: &[Section]) -> Result<Surface> {
     let ts: Vec<f64> = sections.iter().map(|s| s.t).collect();
+    if sections.iter().all(|s| s.straight) {
+        // A chamfer: ruled between the contact curves (across, u in [0, 1], degree 1).
+        let rows = [
+            fit::interpolate_with_parameters(&sections.iter().map(|s| s.contacts[0]).collect::<Vec<_>>(), &ts)?,
+            fit::interpolate_with_parameters(&sections.iter().map(|s| s.contacts[1]).collect::<Vec<_>>(), &ts)?,
+        ];
+        let u = KnotVector::new(vec![0.0, 1.0], vec![2, 2], 1);
+        let v = KnotVector::new(rows[0].knots().to_vec(), rows[0].multiplicities().to_vec(), rows[0].degree());
+        return Ok(Surface::BSpline(BSplineSurface::try_new(vec![rows[0].poles().to_vec(), rows[1].poles().to_vec()], u, v)?));
+    }
     let mut middle = Vec::with_capacity(sections.len());
     let mut weights = Vec::with_capacity(sections.len());
     for s in sections {
@@ -576,6 +746,10 @@ struct EndCut {
     /// Per face along the edge: whether the contact meets that edge's curve past the vertex
     /// (the edge is kept, and carried on to the contact by a new edge).
     extended: [bool; 2],
+    /// An end on the shell's free boundary: no face there (`face` is the first side's, not
+    /// rebuilt); the crossing runs straight across the fillet's parameters between where
+    /// the contact curves meet the two free edges, and is left free.
+    open: bool,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -610,6 +784,11 @@ fn end_cut(
     };
     if neighbours[0].len() != 1 || neighbours[1].len() != 1 || a == b {
         return Err(Error::InvalidInput("rolling-ball fillets ending at vertices with more than three edges are not supported yet".into()));
+    }
+    // (Each face going on from the vertex along a free edge: an open end.)
+    let uses = |e: EdgeId| model.explore(shape, NodeKind::Face).filter(|f| model.explore(*f, NodeKind::Edge).any(|x| x.node == crate::topology::NodeId::from(e))).count();
+    if uses(a) == 1 && uses(b) == 1 {
+        return open_end(model, v_id, [a, b], sides, fillet, ts, at_end, target);
     }
     // The end face: the one using both edges.
     let end_faces: Vec<Shape> = model
@@ -734,7 +913,53 @@ fn end_cut(
     let params: Vec<f64> = uv.iter().map(|&(u, _)| u).collect();
     let face_uv: Vec<Point2> = uv.iter().map(|&(u, v)| end.uv(fillet.point(u, v))).collect::<Result<_>>()?;
     let on_face = fit::interpolate_with_parameters(&unwrapped(face_uv, &end.surface), &params)?;
-    Ok(EndCut { vertex: v_id, face: end, curve, on_fillet, on_face, v: [uv[0].1, uv[across].1], edges, extended })
+    Ok(EndCut { vertex: v_id, face: end, curve, on_fillet, on_face, v: [uv[0].1, uv[across].1], edges, extended, open: false })
+}
+
+/// [`end_cut`] where the faces along the edge go on from `vertex` along free edges `free`
+/// (one on each face): where each contact curve (the fillet at u = 0 and u = 1) meets its
+/// free edge, nearest the vertex, and across the fillet's parameters between those.
+#[allow(clippy::too_many_arguments)]
+fn open_end(model: &Model, vertex: VertexId, free: [EdgeId; 2], sides: &[Side; 2], fillet: &Surface, ts: &[f64], at_end: bool, target: f64) -> Result<EndCut> {
+    let mid = 0.5 * (ts[0] + ts[ts.len() - 1]);
+    let far = if at_end { ts[ts.len() - 1] } else { ts[0] };
+    let mut v = [0.0; 2];
+    let mut edges = [(free[0], 0.0); 2];
+    for i in 0..2 {
+        let (curve, first, last) = model.edge_curve(Shape::from(free[i])).ok_or_else(|| Error::InvalidInput("a degenerate edge at a fillet's end".into()))?;
+        let u = i as f64;
+        let gap = |w: f64| -> (f64, f64) {
+            let p = fillet.point(u, w);
+            let t = parameter_on(&curve, first, last, p);
+            (curve.point(t).distance(p), t)
+        };
+        // From the middle of the edge towards this end, the first place the contact comes
+        // nearest the free edge: sampled, then narrowed.
+        let n = 400;
+        let ws: Vec<f64> = (0..=n).map(|k| mid + (far - mid) * k as f64 / n as f64).collect();
+        let gaps: Vec<f64> = ws.iter().map(|&w| gap(w).0).collect();
+        let k = (0..=n).min_by(|&x, &y| gaps[x].total_cmp(&gaps[y])).expect("samples");
+        let (mut lo, mut hi) = (ws[k.saturating_sub(1)], ws[(k + 1).min(n)]);
+        for _ in 0..100 {
+            let (a, b) = (lo + (hi - lo) / 3.0, hi - (hi - lo) / 3.0);
+            if gap(a).0 <= gap(b).0 { hi = b } else { lo = a }
+        }
+        let w = 0.5 * (lo + hi);
+        let (d, t) = gap(w);
+        let size = fillet.point(0.0, w).distance(fillet.point(1.0, w)).max(1e-9);
+        if d > (1e3 * target).max(1e-4 * size) {
+            return Err(Error::InvalidInput("a fillet's contact does not meet the free edge at its end".into()));
+        }
+        v[i] = w;
+        edges[i] = (free[i], t);
+    }
+    // The crossing: straight in the fillet's parameters, from (0, v0) to (1, v1).
+    let params: Vec<f64> = (0..=ACROSS).map(|j| j as f64 / ACROSS as f64).collect();
+    let uv: Vec<Point2> = params.iter().map(|&u| Point2::new(u, v[0] + (v[1] - v[0]) * u)).collect();
+    let points: Vec<Point> = uv.iter().map(|q| fillet.point(q.x, q.y)).collect();
+    let curve = fit::interpolate_with_parameters(&points, &params)?;
+    let on_fillet = BSplineCurve2::new(vec![uv[0], uv[ACROSS]], vec![0.0, 1.0], vec![2, 2], 1);
+    Ok(EndCut { vertex, face: sides[0].clone(), curve, on_fillet: on_fillet.clone(), on_face: on_fillet, v, edges, extended: [false; 2], open: true })
 }
 
 /// The edge carrying edge `i` of `cut` (along the fillet's face `side`) on past the vertex to
@@ -1044,6 +1269,9 @@ impl Rebuild<'_> {
         // Each end face once, with the cuts of both ends where it is at both.
         let mut end_faces: Vec<(Shape, Vec<(EdgeId, Curve2, [VertexId; 2])>)> = Vec::new();
         for (k, cut) in self.ends.iter().enumerate() {
+            if cut.open {
+                continue;
+            }
             let pcurve = match project::analytic_pcurve(&Curve::BSpline(cut.curve.clone()), &cut.face.surface) {
                 Some(p) => p,
                 None => Curve2::BSpline(cut.on_face.clone()),
@@ -1097,7 +1325,9 @@ impl Rebuild<'_> {
 
         // The solid with the faces replaced and the fillet added.
         let mut solids = Vec::new();
-        for solid in self.model.explore(shape, NodeKind::Solid).collect::<Vec<_>>() {
+        // (Or its shells, where it has no solids: an open shell, filleted.)
+        let kind = if self.model.explore(shape, NodeKind::Solid).next().is_some() { NodeKind::Solid } else { NodeKind::Shell };
+        for solid in self.model.explore(shape, kind).collect::<Vec<_>>() {
             let faces: Vec<Shape> = self.model.explore(solid, NodeKind::Face).collect();
             let touched = faces.iter().any(|f| rebuilt.iter().any(|(old, _)| old.node == f.node));
             if !touched {
@@ -1115,6 +1345,10 @@ impl Rebuild<'_> {
                     }
                     None => self.model.add(shell, f)?,
                 }
+            }
+            if kind == NodeKind::Shell {
+                solids.push(shell);
+                continue;
             }
             let new_solid = self.model.new_empty(NodeKind::Solid);
             self.model.add(new_solid, shell)?;
@@ -1373,6 +1607,9 @@ fn align(pcurve: &Curve2, t: f64, target: Point2, surface: &Surface) -> Curve2 {
 /// The arc of a section, from the first contact to the second, over [0, 1] (a rational
 /// quadratic B-spline).
 fn arc_curve(s: &Section) -> Curve {
+    if s.straight {
+        return Curve::BSpline(BSplineCurve::new(vec![s.contacts[0], s.contacts[1]], vec![0.0, 1.0], vec![2, 2], 1));
+    }
     let (a, b) = (s.contacts[0] - s.center, s.contacts[1] - s.center);
     let w = (0.5 * a.cross(b).length().atan2(a.dot(b))).cos();
     let corner = s.center + (a + b).normalized() * (s.radius / w);
