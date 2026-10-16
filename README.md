@@ -17,7 +17,8 @@ eating up 1 GB+ of memory, so I figured why not spin up my own kernel.
 kentron models solids the way Open CASCADE Technology (OCCT) does: as faces bounded by
 edges and vertices, over exact curves and surfaces (analytic and NURBS). It covers
 primitives, extrusions and revolutions, lofts and pipes, booleans, fillets, chamfers,
-drafts, offsets and thick solids, sewing and healing, text from TrueType and OpenType
+drafts, offsets and thick solids, removing features, sewing and healing, meshing, text from
+TrueType and OpenType
 fonts, and BRep, STEP and STL files. All of
 it is kentron's own code: OCCT is the reference to match, not a dependency.
 
@@ -56,10 +57,11 @@ and no change may make a passing test fail.
 
 ## Tested against
 
-- **OCCT's DRAW test scripts:** 13,074 of its 13,183 scripts (the rest exercise viewers and
-  data exchange). 9,596 are converted by `tools/draw2rs.py` into Rust tests and YAML cases;
-  the 3,478 that use Tcl (conditions, loops, procedures) run as they are, on a Tcl
-  interpreter. Many need OCCT's external test dataset (not in this repo).
+- **OCCT's DRAW test scripts:** 16,311 of its 16,420 scripts in the modelling groups (the
+  rest exercise viewers and data exchange). 10,245 are converted by `tools/draw2rs.py` into
+  Rust tests and YAML cases; the 6,066 that use Tcl (conditions, loops, procedures) run as
+  they are, on a Tcl interpreter. Many need OCCT's external test dataset (not in this
+  repo).
 - **OCCT's GTests:** the computational-geometry and topology toolkits, translated by hand.
 - **BRL-CAD:** NIST's MBE PMI test parts and other STEP files from its source tree, with
   OCCT's reading of them as the reference, plus its `libbg` geometry tests.
@@ -69,7 +71,7 @@ and no change may make a passing test fail.
 - **44 CadQuery models from a private project** build on pykentron; for the 42 that return
   their parts, every part is valid and within 0.1% of CadQuery's volume.
 
-About 10,300 tests run (with OCCT's dataset). About 1,700 of them are known gaps, marked as
+About 12,700 tests run (with OCCT's dataset). About 1,500 of them are known gaps, marked as
 expected failures (`crates/occt-tests/expected_failures.txt` for OCCT's scripts): they pass
 while they fail, so `cargo test` is green, and fail once they pass, so a fix is noticed
 as surely as a regression.
