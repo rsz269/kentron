@@ -577,6 +577,97 @@ pub fn split_by_angle(model: &mut Model, shape: Shape, max_angle: f64) -> Result
     fix_shape(model, shape, &FixOptions::default())
 }
 
+/// The parameters strictly inside `[first, last]` where `curve` is not C1 by its
+/// representation: a B-spline's knots of multiplicity at least its degree (a trimmed or
+/// offset one's basis'); none for other curves.
+pub fn curve_breaks(curve: &crate::geometry::curve::Curve, first: f64, last: f64) -> Vec<f64> {
+    use crate::geometry::curve::Curve;
+    match curve {
+        Curve::Trimmed(t) => curve_breaks(t.basis(), first, last),
+        Curve::Offset(o) => curve_breaks(o.basis(), first, last),
+        Curve::BSpline(b) => knot_breaks(b.knots(), b.multiplicities(), b.degree(), first, last),
+        _ => Vec::new(),
+    }
+}
+
+/// [`curve_breaks`] of a curve in a surface's parameters.
+pub fn curve2_breaks(curve: &crate::geometry::curve2::Curve2, first: f64, last: f64) -> Vec<f64> {
+    use crate::geometry::curve2::Curve2;
+    match curve {
+        Curve2::Trimmed(t) => curve2_breaks(t.basis(), first, last),
+        Curve2::Offset(o) => curve2_breaks(o.basis(), first, last),
+        Curve2::BSpline(b) => knot_breaks(b.knots(), b.multiplicities(), b.degree(), first, last),
+        _ => Vec::new(),
+    }
+}
+
+/// The u and v parameters strictly inside `[u0, u1] x [v0, v1]` where `surface` is not C1
+/// across its iso-lines by its representation: a B-spline's knots of multiplicity at least
+/// its degree in that direction (a trimmed or offset one's basis'); none for others.
+pub fn surface_breaks(surface: &crate::geometry::surface::Surface, u0: f64, u1: f64, v0: f64, v1: f64) -> (Vec<f64>, Vec<f64>) {
+    use crate::geometry::surface::Surface;
+    match surface {
+        Surface::Trimmed(t) => surface_breaks(t.basis(), u0, u1, v0, v1),
+        Surface::Offset(o) => surface_breaks(o.basis(), u0, u1, v0, v1),
+        Surface::BSpline(b) => (
+            knot_breaks(b.u_knots(), b.u_multiplicities(), b.u_degree(), u0, u1),
+            knot_breaks(b.v_knots(), b.v_multiplicities(), b.v_degree(), v0, v1),
+        ),
+        _ => (Vec::new(), Vec::new()),
+    }
+}
+
+/// The knots strictly inside `[first, last]` (by more than a relative 1e-9) of multiplicity
+/// at least `degree`.
+fn knot_breaks(knots: &[f64], multiplicities: &[usize], degree: usize, first: f64, last: f64) -> Vec<f64> {
+    let (lo, hi) = (first.min(last), first.max(last));
+    let margin = 1e-9 * (hi - lo).abs().max(1e-300);
+    knots.iter().zip(multiplicities).filter(|&(&k, &m)| m >= degree.max(1) && k > lo + margin && k < hi - margin).map(|(&k, _)| k).collect()
+}
+
+/// Divides the faces and edges of `shape` where their surfaces and curves are not C1 (see
+/// [`surface_breaks`], [`curve_breaks`]): faces along those iso-lines, edges at those
+/// parameters (in place; returns `shape`, or for a face divided a shell of its pieces).
+#[doc(alias = "ShapeUpgrade_ShapeDivideContinuity")]
+#[doc(alias = "DT_ShapeDivide")]
+pub fn split_at_breaks(model: &mut Model, shape: Shape) -> Result<Shape> {
+    for face in model.unique_subshapes(shape, NodeKind::Face) {
+        let Some(surface) = model.surface(face).cloned() else { continue };
+        let (u0, u1, v0, v1) = model.face_uv_bounds(face);
+        let (us, vs) = surface_breaks(&surface, u0, u1, v0, v1);
+        if us.is_empty() && vs.is_empty() {
+            continue;
+        }
+        let cuts: Vec<crate::divide::Cut> = us
+            .iter()
+            .map(|&u| crate::divide::Cut::iso(&surface, true, u, v0, v1))
+            .chain(vs.iter().map(|&v| crate::divide::Cut::iso(&surface, false, v, u0, u1)))
+            .collect();
+        let pieces = crate::divide::divide_face(model, face, &cuts)?;
+        // (A face on its own, divided: a shell of its pieces, as OCCT gives.)
+        if shape.kind() == NodeKind::Face && pieces.len() > 1 {
+            let shell = model.new_empty(NodeKind::Shell);
+            for piece in pieces {
+                model.add(shell, piece)?;
+            }
+            return split_at_breaks(model, shell);
+        }
+    }
+    for edge in model.unique_subshapes(shape, NodeKind::Edge) {
+        let Some((curve, first, last)) = model.edge_curve(edge) else { continue };
+        let mut breaks = curve_breaks(&curve, first, last);
+        // (From the last: the edge split keeps its first part as the edge to split next.)
+        breaks.sort_by(|a, b| b.total_cmp(a));
+        let mut rest = EdgeId::try_from(edge.node).expect("an edge");
+        for t in breaks {
+            let v = model.add_vertex(curve.point(t), model.tolerance(edge));
+            let (before, _) = model.split_edge(rest, v, t)?;
+            rest = before;
+        }
+    }
+    Ok(shape)
+}
+
 /// A use of an edge in a face's loop, in the loop's direction of travel.
 #[derive(Clone)]
 pub(crate) struct LoopUse {
@@ -849,6 +940,32 @@ mod tests {
     }
     use crate::geometry::surface::Surface;
     use crate::primitives::{Cuboid, Cylinder, Sphere};
+
+    #[test]
+    fn a_face_is_divided_where_its_surface_bends() {
+        // A sheet of degree 2 across u, bent at u = 1 (a double knot): two faces, meeting
+        // there, and no edge running round the bend.
+        use crate::geometry::surface::{BSplineSurface, KnotVector};
+        use crate::math::Point;
+        let row = |x: f64, z: f64| vec![Point::new(x, 0.0, z), Point::new(x, 1.0, z)];
+        let poles = vec![row(0.0, 0.0), row(0.5, 0.2), row(1.0, 1.0), row(1.5, 0.2), row(2.0, 0.0)];
+        let surface = Surface::BSpline(BSplineSurface::new(poles, KnotVector::new(vec![0.0, 1.0, 2.0], vec![3, 2, 3], 2), KnotVector::new(vec![0.0, 1.0], vec![2, 2], 1)));
+        assert_eq!(surface_breaks(&surface, 0.0, 2.0, 0.0, 1.0), (vec![1.0], vec![]));
+        let mut model = Model::new();
+        let face = crate::make::face_on_domain(&mut model, surface, 0.0, 2.0, 0.0, 1.0).unwrap();
+        let area = crate::properties::area(&model, face).mass;
+        let divided = split_at_breaks(&mut model, face).unwrap();
+        assert_eq!(divided.kind(), NodeKind::Shell);
+        assert_eq!(model.unique_subshapes(divided, NodeKind::Face).len(), 2);
+        assert!((crate::properties::area(&model, divided).mass - area).abs() < 1e-6 * area);
+        for edge in model.unique_subshapes(divided, NodeKind::Edge) {
+            let (curve, first, last) = model.edge_curve(edge).unwrap();
+            assert!(curve_breaks(&curve, first, last).is_empty());
+        }
+        assert!(problems(&model, divided).is_empty(), "{:?}", problems(&model, divided));
+    }
+
+
     use crate::properties::volume;
 
     fn problems(model: &Model, s: Shape) -> Vec<String> {

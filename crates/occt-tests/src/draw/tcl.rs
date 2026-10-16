@@ -253,7 +253,20 @@ fn extra(name: &str, interp: &mut Interp<Session>, argv: &[Value]) -> Option<Mol
                         let o = f.origin();
                         format!("Plane\n  Origin :{}\n  Axis   :{}\n  XAxis  :{}\n  YAxis  :{}\n\n", xyz([o.x, o.y, o.z]), d(f.z()), d(f.x()), d(f.y()))
                     }
-                    O::Number(x) => format!("{x}\n"),
+                    // (A number without a newline after it, as OCCT prints it.)
+                    O::Number(x) => format!("{x}"),
+                    O::Curve2(kentron::geometry::curve2::Curve2::BSpline(b)) => {
+                        // (OCCT's layout, with its missing newline before the poles.)
+                        let mut t = format!("BSplineCurve\n  Degree {}, {} Poles, {}  KnotsPoles :\n", b.degree(), b.poles().len(), b.knots().len());
+                        for (i, p) in b.poles().iter().enumerate() {
+                            t += &format!("   {} : {}, {} \n", i + 1, p.x, p.y);
+                        }
+                        t += "Knots :\n";
+                        for (i, (k, m)) in b.knots().iter().zip(b.multiplicities()).enumerate() {
+                            t += &format!("   {} : {} {}\n", i + 1, k, m);
+                        }
+                        t
+                    }
                     other => format!("{other:?}\n"),
                 };
             }
@@ -365,14 +378,11 @@ fn regexp(interp: &mut Interp<Session>, args: &[String]) -> MoltResult {
         return molt_ok!(Value::from(out));
     }
     let all: Vec<regex::Captures> = if sw.contains(&"-all") { re.captures_iter(string).collect() } else { re.captures(string).into_iter().collect() };
+    // (No match leaves the variables as they were, as in Tcl.)
     if let Some(last) = all.last() {
         let g = groups(last);
         for (k, var) in vars.iter().enumerate() {
             interp.set_var(&Value::from(var.as_str()), g.get(k).cloned().unwrap_or_else(Value::empty))?;
-        }
-    } else {
-        for var in vars {
-            interp.set_var(&Value::from(var.as_str()), Value::empty())?;
         }
     }
     molt_ok!(Value::from(all.len() as MoltInt))
@@ -862,7 +872,23 @@ fn describe_curve(c: &kentron::geometry::curve::Curve) -> String {
         Curve::Hyperbola(_) => "Hyperbola\n".into(),
         Curve::Parabola(_) => "Parabola\n".into(),
         Curve::Bezier(_) => "BezierCurve\n".into(),
-        Curve::BSpline(_) => "BSplineCurve\n".into(),
+        Curve::BSpline(b) => {
+            // (OCCT's layout: degree, poles (with weights if rational), knots.)
+            let rational = b.is_rational();
+            let mut t = format!("BSplineCurve{}\n  Degree {}, {} Poles, {}  Knots\nPoles :\n", if rational { " rational" } else { "" }, b.degree(), b.poles().len(), b.knots().len());
+            for (i, p) in b.poles().iter().enumerate() {
+                t += &format!("   {} : {}, {}, {} ", i + 1, p.x, p.y, p.z);
+                if rational {
+                    t += &format!(" {}", b.weight(i));
+                }
+                t += "\n";
+            }
+            t += "Knots :\n";
+            for (i, (k, m)) in b.knots().iter().zip(b.multiplicities()).enumerate() {
+                t += &format!("   {} :  {} {}\n", i + 1, k, m);
+            }
+            t
+        }
         Curve::Offset(_) => "OffsetCurve\n".into(),
     }
 }

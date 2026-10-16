@@ -230,7 +230,239 @@ impl Draw {
     ///
     /// Example: `DT_ShapeDivide ts ts0`
     pub fn DT_ShapeDivide(&mut self, args: &[&str]) -> DrawResult {
-        self.not_implemented("DT_ShapeDivide", args)
+        // `DT_ShapeDivide result shape [tolerance]`: a copy divided where its curves and
+        // surfaces are not C1 (the tolerance not taken into account).
+        if !(2..=3).contains(&args.len()) {
+            return self.not_implemented("DT_ShapeDivide", args);
+        }
+        let shape = self.shape_var(args[1])?;
+        let copy = kentron::modify::copy(&mut self.model, shape, false).unwrap_or(shape);
+        let divided = kentron::heal::split_at_breaks(&mut self.model, copy)?;
+        self.set_shape_var(args[0], divided)?;
+        Ok("Status: OK\n".into())
+    }
+    /// DRAW command `DT_ShapeConvertRev`: OCCT's turns the surfaces into surfaces of
+    /// revolution and the curves and surfaces into Bézier pieces; kentron's converts them all
+    /// to B-splines (its NURBS conversion), not cut into Bézier pieces.
+    ///
+    /// Example: `DT_ShapeConvertRev result a 1 1`
+    pub fn DT_ShapeConvertRev(&mut self, args: &[&str]) -> DrawResult {
+        // `DT_ShapeConvertRev result shape convert-2d convert-3d` (both 1 only).
+        if args.len() != 4 || self.number(args[2])? != 1.0 || self.number(args[3])? != 1.0 {
+            return self.not_implemented("DT_ShapeConvertRev", args);
+        }
+        let shape = self.shape_var(args[1])?;
+        let converted = kentron::convert::to_nurbs(&mut self.model, shape)?;
+        self.set_shape_var(args[0], converted)?;
+        Ok("Status: DONE1\n".into())
+    }
+    /// DRAW command `expshape`: how many of a shape's surfaces, curves and pcurves are of
+    /// each kind, in OCCT's report.
+    ///
+    /// Example: `expshape result 0 0`
+    pub fn expshape(&mut self, args: &[&str]) -> DrawResult {
+        // `expshape shape [degree [spans]]`: B-splines and Béziers of more than `degree`
+        // (and B-splines of more than `spans` spans) counted, and those less than C1 (by
+        // their representation).
+        if args.is_empty() || args.len() > 3 {
+            return Err(DrawError::Failed("usage: expshape shape [degree [spans]]".into()));
+        }
+        use kentron::geometry::surface::Surface;
+        let shape = self.shape_var(args[0])?;
+        let degree = match args.get(1) { Some(a) => self.number(a)? as usize, None => 0 };
+        let spans = match args.get(2) { Some(a) => self.number(a)? as usize, None => 0 };
+        let spans_of = |knots: &[f64]| knots.len().saturating_sub(1);
+        let mut n = [0usize; 26];
+        let faces = self.model.unique_subshapes(shape, NodeKind::Face);
+        for &face in &faces {
+            // Seams: the uses of an edge the face uses twice.
+            let coedges = self.model.unique_subshapes(face, NodeKind::CoEdge);
+            let edges: Vec<_> = coedges.iter().map(|c| self.model[kentron::topology::CoEdgeId::try_from(c.node).expect("a coedge")].edge).collect();
+            n[0] += edges.iter().filter(|e| edges.iter().filter(|f| f == e).count() > 1).count();
+            let Some(mut surface) = self.model.surface(face) else { continue };
+            while let Surface::Trimmed(t) = surface {
+                surface = t.basis();
+            }
+            match surface {
+                Surface::BSpline(b) => {
+                    n[1] += (b.u_degree().max(b.v_degree()) > degree) as usize;
+                    n[2] += (spans_of(b.u_knots()).max(spans_of(b.v_knots())) > spans) as usize;
+                    n[3] += (b.is_u_rational() || b.is_v_rational()) as usize;
+                    let (b0, b1, b2, b3) = kentron::geometry::ParametricSurface::bounds(surface);
+                    let (us, vs) = kentron::heal::surface_breaks(surface, b0, b1, b2, b3);
+                    n[4] += (!us.is_empty() || !vs.is_empty()) as usize;
+                }
+                Surface::Bezier(b) => {
+                    n[5] += (b.u_degree().max(b.v_degree()) > degree) as usize;
+                    n[6] += (b.is_u_rational() || b.is_v_rational()) as usize;
+                }
+                Surface::Plane(_) => n[8] += 1,
+                _ => n[9] += 1,
+            }
+            for c in &coedges {
+                let Some((mut p, _, _)) = self.model.effective_pcurve(kentron::topology::CoEdgeId::try_from(c.node).expect("a coedge")) else { continue };
+                while let Curve2::Trimmed(t) = p {
+                    p = t.basis().clone();
+                }
+                match &p {
+                    Curve2::BSpline(b) => {
+                        n[18] += (b.degree() > degree) as usize;
+                        n[19] += (spans_of(b.knots()) > spans) as usize;
+                        n[20] += b.is_rational() as usize;
+                        let k = b.knots();
+                        n[21] += (!kentron::heal::curve2_breaks(&p, k[0], k[k.len() - 1]).is_empty()) as usize;
+                    }
+                    Curve2::Bezier(b) => {
+                        n[22] += (b.degree() > degree) as usize;
+                        n[23] += b.is_rational() as usize;
+                    }
+                    _ => n[25] += 1,
+                }
+            }
+        }
+        for edge in self.model.unique_subshapes(shape, NodeKind::Edge) {
+            let Some((mut c, _, _)) = self.model.edge_curve(edge) else { continue };
+            while let Curve::Trimmed(t) = c {
+                c = t.basis().clone();
+            }
+            match &c {
+                Curve::BSpline(b) => {
+                    n[10] += (b.degree() > degree) as usize;
+                    n[11] += (spans_of(b.knots()) > spans) as usize;
+                    n[12] += b.is_rational() as usize;
+                    let k = b.knots();
+                    n[13] += (!kentron::heal::curve_breaks(&c, k[0], k[k.len() - 1]).is_empty()) as usize;
+                }
+                Curve::Bezier(b) => {
+                    n[14] += (b.degree() > degree) as usize;
+                    n[15] += b.is_rational() as usize;
+                }
+                _ => n[17] += 1,
+            }
+        }
+        let labels = [
+            "Number of seam edges - ",
+            "Number of BSpline surfaces with degree more then 0 - ",
+            "Number of BSpline surfaces with number of spans more then 0 - ",
+            "Number of Rational BSpline surfaces ",
+            "Number of BSpline surfaces with continuity less than specified - ",
+            "Number of Bezier surfaces with degree more then 0 - ",
+            "Number of Rational Bezier surfaces  - ",
+            "Number of Bezier surfaces with continuity less than specified - ",
+            "Number of Planes - ",
+            "Number of other surfaces - ",
+            "Number of BSpline curves with degree more then 0 - ",
+            "Number of BSpline curves with number of spans more then - 0 - ",
+            "Number of Rational BSpline curves ",
+            "Number of  BSpline curves with less continuity - ",
+            "Number of Bezier curves with degree more then - 0 - ",
+            "Number of Rational Bezier curves  - ",
+            "Number of  Bezier curves with less continuity - ",
+            "Number of  other curves - ",
+            "Number of BSpline pcurves with degree more then - 0 - ",
+            "Number of BSpline pcurves with number of spans more then 0 - ",
+            "Number of Rational BSpline pcurves - ",
+            "Number of  BSpline pcurves with less continuity - ",
+            "Number of Bezier pcurves with degree more then 0 -  - ",
+            "Number of Rational Bezier pcurves  - ",
+            "Number of  Bezier pcurves with less continuity - ",
+            "Number of  other pcurves - ",
+        ];
+        Ok(labels.iter().zip(n).map(|(l, k)| format!("{l}{k}\n")).collect())
+    }
+    /// DRAW command `statshape`: counts of a shape's sub-shapes and kinds of geometry, in
+    /// OCCT's report (the counts kentron gives; lines of none left out, as OCCT does).
+    ///
+    /// Example: `statshape result`
+    pub fn statshape(&mut self, args: &[&str]) -> DrawResult {
+        // `statshape shape`. "Curve Only C0" and "Surface Only C0" count edges and faces not
+        // C1 inside them (by their curves' and surfaces' representation).
+        need(args, 1, "statshape shape")?;
+        use kentron::geometry::surface::Surface;
+        let shape = self.shape_var(args[0])?;
+        let m = &self.model;
+        let unique = |s: Shape, k: NodeKind| m.unique_subshapes(s, k);
+        let faces = unique(shape, NodeKind::Face);
+        let edges = unique(shape, NodeKind::Edge);
+        let in_faces: std::collections::HashSet<_> = faces.iter().flat_map(|&f| unique(f, NodeKind::Edge)).map(|e| e.node).collect();
+        let in_shells: std::collections::HashSet<_> = unique(shape, NodeKind::Shell).iter().flat_map(|&s| unique(s, NodeKind::Face)).map(|f| f.node).collect();
+        let wires = unique(shape, NodeKind::Wire);
+        let wires_in_faces: std::collections::HashSet<_> = faces.iter().flat_map(|&f| unique(f, NodeKind::Wire)).map(|w| w.node).collect();
+        // Edges as each face uses them (an edge used both ways counted twice).
+        let mut oriented = std::collections::HashSet::new();
+        let mut no_pcurve = 0;
+        let mut trimmed2 = 0;
+        for &face in &faces {
+            for c in unique(face, NodeKind::CoEdge) {
+                let id = kentron::topology::CoEdgeId::try_from(c.node).expect("a coedge");
+                let edge = m[id].edge;
+                oriented.insert((edge, m[id].orientation.compose(c.orientation) == kentron::topology::Orientation::Reversed));
+                match m.effective_pcurve(id) {
+                    None => no_pcurve += 1,
+                    Some((Curve2::Trimmed(_), _, _)) => trimmed2 += 1,
+                    _ => {}
+                }
+            }
+        }
+        let (mut bezier_surfaces, mut bspline_surfaces, mut c0_surfaces, mut offset_surfaces, mut trimmed_surfaces, mut big) = (0, 0, 0, 0, 0, 0);
+        for &face in &faces {
+            let Some(surface) = m.surface(face) else { continue };
+            let (u0, u1, v0, v1) = m.face_uv_bounds(face);
+            let (us, vs) = kentron::heal::surface_breaks(surface, u0, u1, v0, v1);
+            c0_surfaces += (!us.is_empty() || !vs.is_empty()) as usize;
+            match surface {
+                Surface::Bezier(_) => bezier_surfaces += 1,
+                Surface::BSpline(b) => {
+                    bspline_surfaces += 1;
+                    big += (b.poles().iter().map(|r| r.len()).sum::<usize>() > 8192) as usize;
+                }
+                Surface::Offset(_) => offset_surfaces += 1,
+                Surface::Trimmed(_) => trimmed_surfaces += 1,
+                _ => {}
+            }
+        }
+        let (mut c0_curves, mut offset_curves, mut trimmed3) = (0, 0, 0);
+        for &edge in &edges {
+            let Some((curve, first, last)) = m.edge_curve(edge) else { continue };
+            c0_curves += (!kentron::heal::curve_breaks(&curve, first, last).is_empty()) as usize;
+            match curve {
+                Curve::Offset(_) => offset_curves += 1,
+                Curve::Trimmed(_) => trimmed3 += 1,
+                Curve::BSpline(b) => big += (b.poles().len() > 8192) as usize,
+                _ => {}
+            }
+        }
+        let rows: Vec<(usize, &str)> = vec![
+            (oriented.len(), "\t EDGE (Oriented)"),
+            (edges.len(), "\t EDGE (Shared)"),
+            (edges.iter().filter(|e| !in_faces.contains(&e.node)).count(), "\t EDGE (Free)"),
+            (faces.len(), "\t FACE"),
+            (faces.iter().filter(|f| !in_shells.contains(&f.node)).count(), "\t FACE (Free)"),
+            (wires.iter().filter(|w| !wires_in_faces.contains(&w.node)).count(), "\t WIRE (Free)"),
+            (unique(shape, NodeKind::Shell).len(), "\t SHELL"),
+            (unique(shape, NodeKind::Solid).len(), "\t SOLID"),
+            (unique(shape, NodeKind::Vertex).len(), "\t VERTEX (Shared)"),
+            (wires.len(), "\t WIRE"),
+            (faces.iter().filter(|&&f| unique(f, NodeKind::Wire).len() > 1).count(), "\tFace with more than one wire"),
+            (no_pcurve, "\tNo pcurve"),
+            (big, "\tbigspl : BSpline > 8192 poles"),
+            (bezier_surfaces, "\tbezsur : BezierSurface"),
+            (bspline_surfaces, "\tbspsur : BSplineSurface"),
+            (c0_curves, "\tc0curv : Curve Only C0"),
+            (c0_surfaces, "\tc0surf : Surface Only C0"),
+            (offset_curves, "\tofcur  : Offset Curve(s)"),
+            (offset_surfaces, "\tofsur  : Offset Surface"),
+            (trimmed2, "\ttrc2d  : Trimmed Curve2d"),
+            (trimmed3, "\ttrc3d  : Trimmed Curve3d"),
+            (trimmed_surfaces, "\ttrimsu : RectangularTrimmedSurface"),
+        ];
+        let mut out = String::from("Count    Item\n-----    ----\n");
+        for (k, label) in rows {
+            if k > 0 {
+                out += &format!("{k}{label}\n");
+            }
+        }
+        Ok(out)
     }
     /// DRAW command `DT_SplitAngle`: 1 uses in 1 converted scripts.
     ///
@@ -672,9 +904,12 @@ impl Draw {
         // `bbuild result [-t]`: the general fuse: every argument split by the others, the
         // pieces together.
         need(args, 1, "bbuild result")?;
+        let start = std::time::Instant::now();
         let all: Vec<Shape> = self.fuse_cells()?.iter().map(|c| c.shape).collect();
         let result = self.compound_of(&all)?;
-        self.set_shape_var(args[0], result)
+        self.set_shape_var(args[0], result)?;
+        // (With `-t`, the time taken, as OCCT reports it.)
+        Ok(if args.contains(&"-t") { format!(" Tps: {}\n", start.elapsed().as_secs_f64()) } else { String::new() })
     }
     /// DRAW command `bcadd`: 120 uses in 72 converted scripts.
     ///
@@ -5222,7 +5457,7 @@ impl Draw {
             return Ok(String::new());
         }
         let b = kentron::properties::bounding_box(&self.model, shape);
-        let size = (b.max - b.min);
+        let size = b.max - b.min;
         let deflection = 0.001 * size.x.max(size.y).max(size.z);
         if deflection > 0.0 {
             kentron::meshing::mesh_with(&mut self.model, shape, kentron::meshing::MeshOptions { deflection, angle: 20f64.to_radians() })?;
