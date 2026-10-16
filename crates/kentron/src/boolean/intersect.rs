@@ -50,6 +50,9 @@ fn surface_contact(curve: &Curve, first: f64, last: f64, surface: &Surface, tole
             let (mut lo, mut hi, mut glo) = (ts[i], ts[i + 1], values[i]);
             for _ in 0..100 {
                 let mid = 0.5 * (lo + hi);
+                if mid == lo || mid == hi {
+                    break;
+                }
                 let gm = g(mid);
                 if gm == 0.0 {
                     lo = mid;
@@ -90,6 +93,9 @@ fn surface_contact(curve: &Curve, first: f64, last: f64, surface: &Surface, tole
                 let t = if slo * shi < 0.0 {
                     for _ in 0..100 {
                         let mid = 0.5 * (lo + hi);
+                        if mid == lo || mid == hi {
+                            break;
+                        }
                         if (slope(mid) < 0.0) == (slo < 0.0) {
                             lo = mid;
                         } else {
@@ -110,6 +116,9 @@ fn surface_contact(curve: &Curve, first: f64, last: f64, surface: &Surface, tole
                         let (mut lo, mut hi, glo) = (lo, hi, g(lo));
                         for _ in 0..100 {
                             let mid = 0.5 * (lo + hi);
+                            if mid == lo || mid == hi {
+                                break;
+                            }
                             if (g(mid) < 0.0) == (glo < 0.0) {
                                 lo = mid;
                             } else {

@@ -19,8 +19,8 @@ use super::graph::{Graph, Location};
 use super::split;
 
 /// The cells of `shapes` (as [`super::cells`]), found in one graph; `None` where that is not
-/// done: with solids and other shapes together, empty shapes, or faces of two shapes (not
-/// solids) lying on one another.
+/// done: with solids and other shapes together, or empty shapes, or where faces of shapes
+/// (not solids) lying on one another are not split alike there.
 pub(super) fn cells(model: &mut Model, shapes: &[Shape]) -> Result<Option<Vec<Cell>>> {
     let n = shapes.len();
     if n < 2 || shapes.iter().any(|&s| super::is_empty(model, s)) {
@@ -52,27 +52,41 @@ pub(super) fn cells(model: &mut Model, shapes: &[Shape]) -> Result<Option<Vec<Ce
     }
     let dimension = graph.dimension.clone();
 
-    // The regions of the faces, each inside its own shape only (on another's face, the
-    // cells of both would be one: not done here).
+    // The regions of the faces, each inside its own shape and those whose faces it lies on:
+    // a region lying on faces of other shapes is one cell with theirs, kept from the first
+    // of the shapes (each face split by the other's edges lying on it, alike there).
     let mut arcs_of = Vec::with_capacity(graph.faces.len());
     for fi in 0..graph.faces.len() {
         arcs_of.push(graph.arcs_on_face(fi, &mut pieces, &of_edge, None));
     }
     let mut kept: Vec<Kept> = Vec::new();
-    let mut region_marks: Vec<usize> = Vec::new();
+    let mut region_marks: Vec<Vec<usize>> = Vec::new();
+    let mut shared_regions = false;
     for (fi, arcs) in arcs_of.iter().enumerate() {
         let face = &graph.faces[fi];
         let scale = face.bbox.0.distance(face.bbox.1);
         for region in split::split_face(arcs, &pieces, &face.polylines, scale, false) {
             let p = geom::surface_point(&face.surface, region.interior);
-            let on_other = graph.index().faces_containing_others(face.operand, p).into_iter().any(|g| {
-                let other = &graph.faces[g];
-                geom::signed_distance(&other.surface, p).abs() <= on_tol() && other.locate(p, &graph.edges, &graph.vertices) != Location::Outside
-            });
-            if on_other {
-                return Ok(None);
+            let mut on: Vec<usize> = graph
+                .index()
+                .faces_containing_others(face.operand, p)
+                .into_iter()
+                .filter(|&g| {
+                    let other = &graph.faces[g];
+                    geom::signed_distance(&other.surface, p).abs() <= on_tol() && other.locate(p, &graph.edges, &graph.vertices) != Location::Outside
+                })
+                .map(|g| graph.faces[g].operand)
+                .collect();
+            if !on.is_empty() {
+                shared_regions = true;
             }
-            region_marks.push(face.operand);
+            if on.iter().any(|&k| k < face.operand) {
+                continue;
+            }
+            on.push(face.operand);
+            on.sort_unstable();
+            on.dedup();
+            region_marks.push(on);
             kept.push(Kept { face: fi, region, flip: false, far: false });
         }
     }
@@ -129,7 +143,22 @@ pub(super) fn cells(model: &mut Model, shapes: &[Shape]) -> Result<Option<Vec<Ce
         }
         flags
     };
-    let mut cells: Vec<Cell> = faces.into_iter().zip(&region_marks).map(|(shape, &k)| Cell { inside: inside(&[k]), shape }).collect();
+    // Where regions lie on one another, each shape's faces made up of the cells inside it,
+    // else (faces split differently where they meet) none of them.
+    if shared_regions {
+        let areas: Vec<f64> = faces.iter().map(|&f| crate::properties::area(model, f).mass).collect();
+        for (k, &shape) in shapes.iter().enumerate() {
+            if dimension[k] != 2 {
+                continue;
+            }
+            let whole = crate::properties::area(model, shape).mass;
+            let parts: f64 = region_marks.iter().zip(&areas).filter(|(m, _)| m.contains(&k)).map(|(_, a)| a).sum();
+            if (parts - whole).abs() > 1e-6 * whole.abs() + 1e-12 {
+                return Ok(None);
+            }
+        }
+    }
+    let mut cells: Vec<Cell> = faces.into_iter().zip(&region_marks).map(|(shape, marks)| Cell { inside: inside(marks), shape }).collect();
     for (pi, marks) in piece_cells {
         let shape = out.edge(model, &graph, &pieces, pi)?;
         cells.push(Cell { inside: inside(&marks), shape });

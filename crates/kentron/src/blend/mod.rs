@@ -139,7 +139,7 @@ fn fillet_solid_edges(model: &mut Model, shape: Shape, edges: &[(Shape, f64)]) -
                 }
             }
         }
-        let rounded = ball::fillet_network(model, local, &edges).or_else(|_| fillet_in_turn(model, local, &edges)).or_else(|e| match &members[..] {
+        let rounded = ball::fillet_network(model, local, &edges).or_else(|_| fillet_in_turn(model, local, &edges, rolled_over)).or_else(|e| match &members[..] {
             // One edge whose ball rolls off its faces: on onto the faces beyond (unless that
             // was tried first, on the same shape).
             [i] if !rolled_over => runover::fillet(model, local, Shape { placement: Transform::IDENTITY, ..classified[*i].0 }, radii[0]).map_err(|_| e),
@@ -471,8 +471,9 @@ fn tetrahedron(model: &mut Model, points: [Point; 4]) -> Result<Shape> {
 }
 
 /// `shape` with `edges` rounded one after another by rolling-ball fillets, each found again
-/// in the solid as the ones before left it.
-fn fillet_in_turn(model: &mut Model, shape: Shape, edges: &[(Shape, &dyn Fn(f64) -> f64)]) -> Result<Shape> {
+/// in the solid as the ones before left it. With `rolled_over`, a single edge's ball
+/// rolling on over the faces beyond has been tried on `shape` already (and failed).
+fn fillet_in_turn(model: &mut Model, shape: Shape, edges: &[(Shape, &dyn Fn(f64) -> f64)], rolled_over: bool) -> Result<Shape> {
     // Each edge's curve and range, to find it by.
     let mut wanted = Vec::with_capacity(edges.len());
     for &(edge, radius) in edges {
@@ -480,14 +481,15 @@ fn fillet_in_turn(model: &mut Model, shape: Shape, edges: &[(Shape, &dyn Fn(f64)
         wanted.push((curve, first, last, radius));
     }
     // In the order given, else in reverse (the later fillet may be the one that has to roll
-    // over onto the earlier).
+    // over onto the earlier; one edge has one order).
     let mut failure = None;
-    for order in [false, true] {
+    let orders: &[bool] = if wanted.len() > 1 { &[false, true] } else { &[false] };
+    for &order in orders {
         let mut sequence: Vec<_> = wanted.iter().collect();
         if order {
             sequence.reverse();
         }
-        match in_order(model, shape, &sequence) {
+        match in_order(model, shape, &sequence, rolled_over && wanted.len() == 1) {
             Ok(rounded) => return Ok(rounded),
             Err(e) => failure = Some(e),
         }
@@ -496,8 +498,9 @@ fn fillet_in_turn(model: &mut Model, shape: Shape, edges: &[(Shape, &dyn Fn(f64)
 }
 
 /// [`fillet_in_turn`] in the given order: each edge's ball rolling on its faces, or rolling
-/// on over the faces beyond them (a constant radius).
-fn in_order(model: &mut Model, shape: Shape, sequence: &[&(Curve, f64, f64, &dyn Fn(f64) -> f64)]) -> Result<Shape> {
+/// on over the faces beyond them (a constant radius; unless `rolled_over`, for the only
+/// edge).
+fn in_order(model: &mut Model, shape: Shape, sequence: &[&(Curve, f64, f64, &dyn Fn(f64) -> f64)], rolled_over: bool) -> Result<Shape> {
     let mut shape = shape;
     for &(curve, first, last, radius) in sequence {
         let edge = find_edge(model, shape, curve, *first, *last).ok_or_else(|| Error::Failed("a filleted edge was lost by another fillet".into()))?;
@@ -505,7 +508,7 @@ fn in_order(model: &mut Model, shape: Shape, sequence: &[&(Curve, f64, f64, &dyn
         let constant = [0.25, 0.5, 0.75, 1.0].iter().all(|&s| (radius(s) - r0).abs() <= tolerance::LINEAR);
         shape = match ball::rolling_ball(model, shape, edge, *radius) {
             Ok(rounded) => rounded,
-            Err(e) if constant => runover::fillet(model, shape, edge, r0).map_err(|_| e)?,
+            Err(e) if constant && !rolled_over => runover::fillet(model, shape, edge, r0).map_err(|_| e)?,
             Err(e) => return Err(e),
         };
     }
@@ -711,7 +714,7 @@ fn fillet_solid_evolving(model: &mut Model, shape: Shape, edges: &[(Shape, Vec<(
         let group_edges: Vec<(Shape, &dyn Fn(f64) -> f64)> = members.iter().map(|&i| (Shape { placement: Transform::IDENTITY, ..edges[i].0 }, radii[i].as_ref())).collect();
         let built = match &group_edges[..] {
             [(edge, law)] => ball::rolling_ball(model, result, *edge, *law),
-            _ => ball::fillet_network(model, result, &group_edges).or_else(|_| fillet_in_turn(model, result, &group_edges)),
+            _ => ball::fillet_network(model, result, &group_edges).or_else(|_| fillet_in_turn(model, result, &group_edges, false)),
         };
         result = match built {
             Ok(rounded) => rounded,
