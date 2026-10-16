@@ -524,17 +524,30 @@ fn numeric_ray_hits(surface: &Surface, origin: Point, direction: Vector, bbox: &
 /// The parameter in `[first, last]` of the point of `curve` closest to `p`, and the
 /// distance to it.
 pub(super) fn project(curve: &Curve, first: f64, last: f64, p: Point) -> (f64, f64) {
+    project_among(curve, first, last, None, p)
+}
+
+/// The points [`project`] samples `curve` at over `first..last` (to project many points
+/// onto it with [`project_among`]).
+pub(super) fn projection_samples(curve: &Curve, first: f64, last: f64) -> Vec<Point> {
+    (0..=PROJECTION_SAMPLES).map(|i| curve.point(first + (last - first) * i as f64 / PROJECTION_SAMPLES as f64)).collect()
+}
+
+const PROJECTION_SAMPLES: usize = 64;
+
+/// [`project`], with the curve's samples found before ([`projection_samples`]) when given.
+pub(super) fn project_among(curve: &Curve, first: f64, last: f64, samples: Option<&[Point]>, p: Point) -> (f64, f64) {
     let clamp = |t: f64| t.clamp(first.min(last), first.max(last));
     if let Curve::Line(line) = curve {
         let t = clamp((p - line.origin).dot(Vector::from(line.direction)));
         return (t, curve.point(t).distance(p));
     }
     // Coarse sampling, then Newton steps on (C(t) - p)·C'(t) = 0.
-    let n = 64;
+    let n = PROJECTION_SAMPLES;
     let mut best = (first, f64::INFINITY);
     let mut sample = |i: usize| {
         let t = first + (last - first) * i as f64 / n as f64;
-        let d = curve.point(t).distance(p);
+        let d = samples.map_or_else(|| curve.point(t), |s| s[i]).distance(p);
         if d < best.1 {
             best = (t, d);
         }

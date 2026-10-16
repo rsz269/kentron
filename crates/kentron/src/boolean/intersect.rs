@@ -1013,9 +1013,10 @@ impl Section {
                     }
                     let as_curve = Curve::BSpline(curve.clone());
                     let (c0, c1) = (curve.first_parameter(), curve.last_parameter());
+                    let samples = geom::projection_samples(&as_curve, c0, c1);
                     let error = kept_params
                         .windows(2)
-                        .map(|w| geom::project(&as_curve, c0, c1, self.point(0.5 * (w[0] + w[1]))).1)
+                        .map(|w| geom::project_among(&as_curve, c0, c1, Some(&samples), self.point(0.5 * (w[0] + w[1]))).1)
                         .fold(0.0, f64::max);
                     // (A traced section is a polyline in the base's parameters between its
                     // samples, not an exact curve to converge to: its first fit stands.)
