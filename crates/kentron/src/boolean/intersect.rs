@@ -1445,17 +1445,32 @@ fn sliced(base: &Face, other: &Face, crossings: &[Point]) -> Vec<Section> {
     // foot points chain.
     let us: Vec<f64> = (0..columns).map(u_at).collect();
     let grid = s.points_on_grid(&us, &(0..rows).map(v_at).collect::<Vec<f64>>());
-    let values: Vec<Vec<f64>> = (0..columns)
-        .map(|i| {
-            (0..rows)
-                .map(|j| {
-                    let (d, foot) = geom::signed_distance_from(q, grid[j][i], last_foot.get());
-                    last_foot.set(foot);
-                    d
-                })
-                .collect()
-        })
-        .collect();
+    // (Only the signs matter, and a distance moves by no more than the point does: a point
+    // farther from the other surface than from a neighbour has the neighbour's sign, a
+    // distance at least as far as it less the gap kept for it. Not on a free-form other,
+    // whose feet chain.)
+    let lipschitz = !geom::freeform(q);
+    let margin = 1e3 * on_tol();
+    let mut values: Vec<Vec<f64>> = Vec::with_capacity(columns);
+    for i in 0..columns {
+        let mut column = Vec::with_capacity(rows);
+        for j in 0..rows {
+            let p = grid[j][i];
+            if lipschitz {
+                let below = (j > 0).then(|| (column[j - 1], grid[j - 1][i]));
+                let left = (i > 0).then(|| (values[i - 1][j], grid[j][i - 1]));
+                let (reach, d) = [below, left].into_iter().flatten().map(|(d, q): (f64, Point)| (d.abs() - p.distance(q), d)).fold((0.0, 0.0), |a, b| if b.0 > a.0 { b } else { a });
+                if reach > margin {
+                    column.push(reach.copysign(d));
+                    continue;
+                }
+            }
+            let (d, foot) = geom::signed_distance_from(q, p, last_foot.get());
+            last_foot.set(foot);
+            column.push(d);
+        }
+        values.push(column);
+    }
     let sign = |i: usize, j: usize| values[i % columns][j % rows] >= 0.0;
     // A root of g on [a, b] (g(a) and g(b) of different signs, zero counting as positive).
     // (Done once a and b are neighbouring numbers, where the steps would not move them,
