@@ -2268,9 +2268,16 @@ impl BSplineSurface {
 impl crate::geometry::ParametricSurface for BSplineSurface {
     fn bounds(&self) -> (f64, f64, f64, f64) {
         let (u, v) = (&self.u, &self.v);
+        // (Clamped ends, as most are, are the first and last knots: found without counting
+        // through the knots.)
         let range = |kv: &KnotVector, count: usize| match kv.periodic {
             true => (kv.knots[0], kv.knots[kv.knots.len() - 1]),
-            false => (flat_knot(kv, kv.degree), flat_knot(kv, count)),
+            false => {
+                let n = kv.knots.len();
+                let first = if kv.multiplicities[0] > kv.degree { kv.knots[0] } else { flat_knot(kv, kv.degree) };
+                // (The knots number the poles and the degree plus one, as made.)
+                (first, if kv.multiplicities[n - 1] > kv.degree { kv.knots[n - 1] } else { flat_knot(kv, count) })
+            }
         };
         let ((a, b), (c, d)) = (range(u, self.poles.len()), range(v, self.poles[0].len()));
         (a, b, c, d)

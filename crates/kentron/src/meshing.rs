@@ -645,8 +645,11 @@ impl Cdt {
         pts.push(Point2::new(mid.x - 20.0 * size, mid.y - 10.0 * size));
         pts.push(Point2::new(mid.x + 20.0 * size, mid.y - 10.0 * size));
         pts.push(Point2::new(mid.x, mid.y + 20.0 * size));
-        let tris = Triangulation::new(pts, [n, n + 1, n + 2]);
-        let mut cdt = Cdt { tris, n, count: 0, same: Vec::with_capacity(n), grid: HashMap::default(), eps, cell: (size * 1e-9).max(1e-300) };
+        let mut tris = Triangulation::new(pts, [n, n + 1, n + 2]);
+        tris.reserve(n);
+        let mut grid = HashMap::default();
+        grid.reserve(n);
+        let mut cdt = Cdt { tris, n, count: 0, same: Vec::with_capacity(n), grid, eps, cell: (size * 1e-9).max(1e-300) };
         for i in 0..n {
             cdt.place(i);
         }
@@ -695,6 +698,9 @@ impl Cdt {
 
     /// Adds points, given after those so far.
     fn extend(&mut self, points: &[Point2]) {
+        self.tris.reserve(points.len());
+        self.grid.reserve(points.len());
+        self.same.reserve(points.len());
         for &p in points {
             let i = self.own(self.count);
             debug_assert_eq!(i, self.tris.pts.len());
@@ -727,6 +733,13 @@ impl Triangulation {
         let mut t = Triangulation { pts, tris: Vec::new(), edges: HashMap::default(), last: 0, constrained: FastSet::default() };
         t.add(first);
         t
+    }
+
+    /// Room for `points` more points' triangles and edges (about two and six per point), so
+    /// that the edge map does not grow step by step as they are inserted.
+    fn reserve(&mut self, points: usize) {
+        self.tris.reserve(2 * points);
+        self.edges.reserve(6 * points);
     }
 
     fn add(&mut self, t: [usize; 3]) -> usize {
