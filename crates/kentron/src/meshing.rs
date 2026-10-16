@@ -445,14 +445,22 @@ fn achieved_deflection(
 ) -> f64 {
     let boundary_uv: Vec<Point2> = polygons.iter().flatten().map(|&q| unscale(q)).collect();
     let uv = |i: usize| if i < boundary_uv.len() { boundary_uv[i] } else { inside[i - boundary_uv.len()] };
-    let point3 = |i: usize| if i < boundary_3d.len() { boundary_3d[i] } else { let p = inside[i - boundary_3d.len()]; surface.point(p.x, p.y) };
+    // (The inside points evaluated once each.)
+    let inside_3d: Vec<Point> = inside.iter().map(|p| surface.point(p.x, p.y)).collect();
+    let point3 = |i: usize| if i < boundary_3d.len() { boundary_3d[i] } else { inside_3d[i - boundary_3d.len()] };
     let gap = |ids: &[usize]| {
         let n = ids.len() as f64;
         let mid_uv = ids.iter().fold(Point2::new(0.0, 0.0), |m, &i| Point2::new(m.x + uv(i).x / n, m.y + uv(i).y / n));
         let mid = ids.iter().fold(Point::new(0.0, 0.0, 0.0), |m, &i| { let p = point3(i); Point::new(m.x + p.x / n, m.y + p.y / n, m.z + p.z / n) });
         surface.point(mid_uv.x, mid_uv.y).distance(mid)
     };
-    triangles.iter().map(|t| gap(t).max(gap(&[t[0], t[1]])).max(gap(&[t[1], t[2]])).max(gap(&[t[2], t[0]]))).fold(0.0, f64::max)
+    // (Each side once, shared by two triangles: the middle of two points is the same either
+    // way round.)
+    let mut sides: Vec<(usize, usize)> = triangles.iter().flat_map(|t| [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])]).map(|(a, b)| (a.min(b), a.max(b))).collect();
+    sides.sort_unstable();
+    sides.dedup();
+    let within = triangles.iter().map(|t| gap(t)).fold(0.0, f64::max);
+    sides.iter().map(|&(a, b)| gap(&[a, b])).fold(within, f64::max)
 }
 
 /// The parameters of a boundary point: the surface's own (in the period of `estimate`, the

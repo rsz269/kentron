@@ -994,6 +994,65 @@ fn basis_to_second<const N: usize>(flat: &[f64], offset: usize, span: usize, t: 
     ders
 }
 
+/// [`basis_derivatives`] on the stack, for degrees below `N` and orders up to 3: the same
+/// steps, so the same values.
+fn basis_derivatives_fixed<const N: usize>(flat: &[f64], span: usize, t: f64, p: usize, order: usize) -> [[f64; N]; 4] {
+    let mut ndu = [[0.0f64; N]; N];
+    let (mut left, mut right) = ([0.0f64; N], [0.0f64; N]);
+    ndu[0][0] = 1.0;
+    for j in 1..=p {
+        left[j] = t - flat[span + 1 - j];
+        right[j] = flat[span + j] - t;
+        let mut saved = 0.0;
+        for r in 0..j {
+            ndu[j][r] = right[r + 1] + left[j - r];
+            let temp = if ndu[j][r] != 0.0 { ndu[r][j - 1] / ndu[j][r] } else { 0.0 };
+            ndu[r][j] = saved + right[r + 1] * temp;
+            saved = left[j - r] * temp;
+        }
+        ndu[j][j] = saved;
+    }
+    let mut ders = [[0.0f64; N]; 4];
+    for j in 0..=p {
+        ders[0][j] = ndu[j][p];
+    }
+    let mut a = [[0.0f64; N]; 2];
+    for r in 0..=p {
+        let (mut s1, mut s2) = (0usize, 1usize);
+        a[0][0] = 1.0;
+        for k in 1..=order {
+            let mut d = 0.0;
+            let rk = r as isize - k as isize;
+            let pk = p - k;
+            if r >= k {
+                a[s2][0] = if ndu[pk + 1][rk as usize] != 0.0 { a[s1][0] / ndu[pk + 1][rk as usize] } else { 0.0 };
+                d = a[s2][0] * ndu[rk as usize][pk];
+            }
+            let j1 = if rk >= -1 { 1 } else { (-rk) as usize };
+            let j2 = if (r as isize - 1) <= pk as isize { k - 1 } else { p - r };
+            for j in j1..=j2 {
+                let idx = (rk + j as isize) as usize;
+                a[s2][j] = if ndu[pk + 1][idx] != 0.0 { (a[s1][j] - a[s1][j - 1]) / ndu[pk + 1][idx] } else { 0.0 };
+                d += a[s2][j] * ndu[idx][pk];
+            }
+            if r <= pk {
+                a[s2][k] = if ndu[pk + 1][r] != 0.0 { -a[s1][k - 1] / ndu[pk + 1][r] } else { 0.0 };
+                d += a[s2][k] * ndu[r][pk];
+            }
+            ders[k][r] = d;
+            std::mem::swap(&mut s1, &mut s2);
+        }
+    }
+    let mut factor = p as f64;
+    for k in 1..=order {
+        for v in &mut ders[k][..=p] {
+            *v *= factor;
+        }
+        factor *= (p - k) as f64;
+    }
+    ders
+}
+
 pub(crate) fn basis_derivatives(flat: &[f64], span: usize, t: f64, p: usize, order: usize) -> Vec<Vec<f64>> {
     let mut ndu = vec![vec![0.0; p + 1]; p + 1];
     let (mut left, mut right) = (vec![0.0; p + 1], vec![0.0; p + 1]);
@@ -1482,6 +1541,77 @@ impl BSplineSurface {
     /// Derivatives `S(k, l)` for `k <= ku`, `l <= kv` at `(u, v)` (outside the bounds,
     /// those of the end spans' polynomials), as coordinates (The NURBS Book, A3.6 and A4.4).
     fn derivatives(&self, u: f64, v: f64, ku: usize, kv: usize) -> Vec<Vec<[f64; 3]>> {
+        self.derivatives_to(u, v, ku, kv, ku + kv)
+    }
+
+    /// [`Self::derivatives_to`] of orders up to 3 in all, on the stack (degrees below `N`;
+    /// `W` holding a span's `2N` knots): the same sums in the same order, so the same values.
+    fn fast_d3<const N: usize, const W: usize>(&self, u: f64, v: f64) -> [[[f64; 3]; 4]; 4] {
+        const TOTAL: usize = 3;
+        let flat = self.flat_knots();
+        let along = |kvec: &KnotVector, count: usize, t: f64, flat: Option<&[f64]>| {
+            // (The knots from `span - p + 1` to `span + p`, which are all the basis reads: the
+            // span `p - 1` in them.)
+            let p = kvec.degree;
+            let (window, span) = knot_window::<N, W>(kvec, count, t, flat);
+            (span, basis_derivatives_fixed::<N>(&window, p - 1, t, p, TOTAL.min(p)))
+        };
+        let (nu, nv) = (self.poles.len(), self.poles[0].len());
+        let (su, bu) = along(&self.u, nu, u, flat.map(|f| &f[0][..]));
+        let (sv, bv) = along(&self.v, nv, v, flat.map(|f| &f[1][..]));
+        let (pu, pv) = (self.u.degree, self.v.degree);
+        let (ru_count, rv_count) = (TOTAL.min(pu) + 1, TOTAL.min(pv) + 1);
+        let mut a = [[[0.0f64; 4]; 4]; 4];
+        for i in 0..=pu {
+            for j in 0..=pv {
+                let (ii, jj) = (su - pu + i, sv - pv + j);
+                let w = self.weight(ii, jj);
+                let pt = self.poles[ii][jj];
+                for (k, ru) in bu.iter().enumerate().take(ru_count) {
+                    for (l, rv) in bv.iter().enumerate().take(rv_count).take((TOTAL + 1).saturating_sub(k)) {
+                        let f = ru[i] * rv[j] * w;
+                        a[k][l][0] += f * pt.x;
+                        a[k][l][1] += f * pt.y;
+                        a[k][l][2] += f * pt.z;
+                        a[k][l][3] += f;
+                    }
+                }
+            }
+        }
+        let binom = |n: usize, r: usize| (1..=r).fold(1.0, |acc, i| acc * (n - r + i) as f64 / i as f64);
+        let mut s = [[[0.0f64; 3]; 4]; 4];
+        for k in 0..=TOTAL {
+            for l in 0..=TOTAL - k {
+                let mut c = [a[k][l][0], a[k][l][1], a[k][l][2]];
+                for j in 1..=l {
+                    let f = binom(l, j) * a[0][j][3];
+                    for d in 0..3 {
+                        c[d] -= f * s[k][l - j][d];
+                    }
+                }
+                for i in 1..=k {
+                    let f = binom(k, i) * a[i][0][3];
+                    for d in 0..3 {
+                        c[d] -= f * s[k - i][l][d];
+                    }
+                    for j in 1..=l {
+                        let g = binom(k, i) * binom(l, j) * a[i][j][3];
+                        for d in 0..3 {
+                            c[d] -= g * s[k - i][l - j][d];
+                        }
+                    }
+                }
+                for d in 0..3 {
+                    c[d] /= a[0][0][3];
+                }
+                s[k][l] = c;
+            }
+        }
+        s
+    }
+
+    /// [`Self::derivatives`] of orders `k + l <= total` only (the others left zero).
+    fn derivatives_to(&self, u: f64, v: f64, ku: usize, kv: usize, total: usize) -> Vec<Vec<[f64; 3]>> {
         let along = |kvec: &KnotVector, count: usize, t: f64, order: usize| {
             let flat = flatten(&kvec.knots, &kvec.multiplicities);
             let p = kvec.degree;
@@ -1493,15 +1623,16 @@ impl BSplineSurface {
         let (sv, bv) = along(&self.v, nv, v, kv);
         let (pu, pv) = (self.u.degree, self.v.degree);
         // Homogeneous derivatives A(k, l) = Σ N_i^(k)(u) N_j^(l)(v) (w P, w).
+        // (Pole by pole, each read once: every sum still runs over the poles in order.)
         let mut a = vec![vec![[0.0; 4]; kv + 1]; ku + 1];
-        for (k, ru) in bu.iter().enumerate() {
-            for (l, rv) in bv.iter().enumerate() {
-                for (i, &nui) in ru.iter().enumerate() {
-                    for (j, &nvj) in rv.iter().enumerate() {
-                        let (ii, jj) = (su - pu + i, sv - pv + j);
-                        let w = self.weight(ii, jj);
-                        let pt = self.poles[ii][jj];
-                        let f = nui * nvj * w;
+        for i in 0..=pu {
+            for j in 0..=pv {
+                let (ii, jj) = (su - pu + i, sv - pv + j);
+                let w = self.weight(ii, jj);
+                let pt = self.poles[ii][jj];
+                for (k, ru) in bu.iter().enumerate() {
+                    for (l, rv) in bv.iter().enumerate().take((total + 1).saturating_sub(k)) {
+                        let f = ru[i] * rv[j] * w;
                         a[k][l][0] += f * pt.x;
                         a[k][l][1] += f * pt.y;
                         a[k][l][2] += f * pt.z;
@@ -1513,7 +1644,10 @@ impl BSplineSurface {
         let binom = |n: usize, r: usize| (1..=r).fold(1.0, |acc, i| acc * (n - r + i) as f64 / i as f64);
         let mut s = vec![vec![[0.0; 3]; kv + 1]; ku + 1];
         for k in 0..=ku {
-            for l in 0..=kv {
+            for l in 0..=kv.min(total.saturating_sub(k)) {
+                if k + l > total {
+                    continue;
+                }
                 let mut c = [a[k][l][0], a[k][l][1], a[k][l][2]];
                 for j in 1..=l {
                     let f = binom(l, j) * a[0][j][3];
@@ -2188,7 +2322,23 @@ impl crate::geometry::ParametricSurface for BSplineSurface {
             let (u, v) = self.wrapped(u, v);
             return s.d3(u, v);
         }
-        let d = self.derivatives(u, v, 3, 3);
+        let at = |d: &[[[f64; 3]; 4]; 4], k: usize, l: usize| d[k][l];
+        let d: [[[f64; 3]; 4]; 4] = match self.u.degree.max(self.v.degree) {
+            0..=3 => self.fast_d3::<4, 8>(u, v),
+            4..=8 => self.fast_d3::<9, 18>(u, v),
+            9..=25 => self.fast_d3::<26, 52>(u, v),
+            _ => {
+                let g = self.derivatives_to(u, v, 3, 3, 3);
+                let mut d = [[[0.0; 3]; 4]; 4];
+                for k in 0..4 {
+                    for l in 0..4 - k {
+                        d[k][l] = g[k][l];
+                    }
+                }
+                d
+            }
+        };
+        let d = [0, 1, 2, 3].map(|k| [0, 1, 2, 3].map(|l| at(&d, k, l)));
         let vec = |c: [f64; 3]| crate::math::Vector::new(c[0], c[1], c[2]);
         crate::geometry::SurfaceD3 {
             point: Point::new(d[0][0][0], d[0][0][1], d[0][0][2]),

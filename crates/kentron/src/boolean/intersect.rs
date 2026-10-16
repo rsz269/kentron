@@ -2271,8 +2271,38 @@ fn segments_gap(x0: Point, x1: Point, y0: Point, y1: Point) -> f64 {
     (x0 + d1 * s).distance(y0 + d2 * t)
 }
 
+/// Whether two sections on circles (whole or arcs) cannot meet within the tolerance: a
+/// point on one within it of the other lies (nearly) on both circles' spheres and planes, so
+/// the spheres meet and each circle reaches the other's plane.
+fn circles_apart(a: &Section, b: &Section) -> bool {
+    let circle = |s: &Section| match s {
+        Section::Open(Curve::Circle(c), ..) | Section::Closed(Curve::Circle(c)) => Some(c.clone()),
+        _ => None,
+    };
+    let (Some(p), Some(q)) = (circle(a), circle(b)) else { return false };
+    let normal = |c: &Circle| {
+        let f = c.frame();
+        Vector::from(f.x()).cross(Vector::from(f.y()))
+    };
+    let (np, nq) = (normal(&p), normal(&q));
+    let between = q.center() - p.center();
+    let d = between.length();
+    let (rp, rq) = (p.radius(), q.radius());
+    // (Twice the tolerance, and a little for rounding.)
+    let slack = 2.0 * on_tol() + 1e-9 * (1.0 + d + rp + rq);
+    if d > rp + rq + slack || d < (rp - rq).abs() - slack {
+        return true;
+    }
+    // How far a circle reaches from its centre along the other's normal.
+    let reach = |r: f64, n: Vector, other: Vector| r * (1.0 - n.dot(other).powi(2)).max(0.0).sqrt();
+    between.dot(nq).abs() > reach(rp, np, nq) + slack || between.dot(np).abs() > reach(rq, nq, np) + slack
+}
+
 /// Points where two section curves meet.
 fn section_crossings(a: &Section, b: &Section) -> Vec<Point> {
+    if circles_apart(a, b) {
+        return Vec::new();
+    }
     if let (Section::Sampled(pa, ca, _), Section::Sampled(pb, cb, _)) = (a, b) {
         // Two traced curves: where their polylines come close, refined near there.
         let segments = |p: &Vec<Point>, closed: bool| if closed { p.len() } else { p.len() - 1 };
