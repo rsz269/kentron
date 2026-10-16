@@ -275,6 +275,64 @@ impl<P: ControlPoint> BSplineCurve<P> {
         out
     }
 
+    /// [`Self::derivatives`] of orders up to 3, on the stack (degrees below `N`): the same
+    /// steps, so the same values.
+    fn derivatives_fixed<const N: usize>(&self, t: f64, order: usize) -> [[f64; 3]; 4] {
+        let flat = self.evaluation_knots();
+        let p = self.degree;
+        let poles = self.poles.len();
+        let n = if self.periodic { poles + p } else { poles };
+        let (lo, hi) = (flat[p], flat[n]);
+        let t = if self.periodic && !(lo..=hi).contains(&t) { lo + (t - lo).rem_euclid(hi - lo) } else { t };
+        let span = (flat[..n].partition_point(|&k| k <= t)).saturating_sub(1).clamp(p, n - 1);
+        let basis = basis_derivatives_fixed::<N>(flat, span, t, p, order.min(p));
+        let rows = order.min(p) + 1;
+        let mut homogeneous = [[0.0f64; 4]; 4];
+        for (k, row) in basis.iter().enumerate().take(rows) {
+            for (j, &b) in row.iter().enumerate().take(p + 1) {
+                let i = (span - p + j) % poles;
+                let w = self.weight(i);
+                let c = self.poles[i].coords();
+                for d in 0..3 {
+                    homogeneous[k][d] += b * w * c[d];
+                }
+                homogeneous[k][3] += b * w;
+            }
+        }
+        let mut out = [[0.0f64; 3]; 4];
+        for k in 0..=order {
+            let mut c = [homogeneous[k][0], homogeneous[k][1], homogeneous[k][2]];
+            let mut binom = 1.0;
+            for i in 1..=k {
+                binom = binom * (k - i + 1) as f64 / i as f64;
+                for d in 0..3 {
+                    c[d] -= binom * homogeneous[i][3] * out[k - i][d];
+                }
+            }
+            for v in &mut c {
+                *v /= homogeneous[0][3];
+            }
+            out[k] = c;
+        }
+        out
+    }
+
+    /// [`Self::derivatives`] of orders up to 3, without allocating where the degree allows.
+    fn derivatives_upto3(&self, t: f64, order: usize) -> [[f64; 3]; 4] {
+        match self.degree {
+            0..=3 => self.derivatives_fixed::<4>(t, order),
+            4..=8 => self.derivatives_fixed::<9>(t, order),
+            9..=25 => self.derivatives_fixed::<26>(t, order),
+            _ => {
+                let mut out = [[0.0; 3]; 4];
+                for (k, d) in self.derivatives(t, order).into_iter().enumerate() {
+                    out[k] = d;
+                }
+                out
+            }
+        }
+    }
+
     /// Derivatives of orders `0..=order` (at most 2) as [`Self::derivatives`] gives them, on
     /// the stack.
     fn fast_derivatives<const N: usize>(&self, t: f64, order: usize) -> [[f64; 3]; 3] {
@@ -1170,11 +1228,14 @@ impl<P: ControlPoint> ParametricCurve for BSplineCurve<P> {
         (P::from_coords(d[0]), P::vector_from_coords(d[1]), P::vector_from_coords(d[2]))
     }
     fn d3(&self, t: f64) -> (P, P::Vector, P::Vector, P::Vector) {
-        let d = self.derivatives(t, 3);
+        let d = self.derivatives_upto3(t, 3);
         (P::from_coords(d[0]), P::vector_from_coords(d[1]), P::vector_from_coords(d[2]), P::vector_from_coords(d[3]))
     }
     fn dn(&self, t: f64, n: u32) -> P::Vector {
         assert!(n > 0, "derivative of order 0");
+        if n <= 3 {
+            return P::vector_from_coords(self.derivatives_upto3(t, n as usize)[n as usize]);
+        }
         P::vector_from_coords(self.derivatives(t, n as usize)[n as usize])
     }
     fn reversed_parameter(&self, t: f64) -> f64 {

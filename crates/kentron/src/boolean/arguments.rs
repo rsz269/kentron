@@ -387,6 +387,16 @@ fn on_argument(model: &mut Model, classifier: &Option<PointClassifier>, shape: S
     Ok(match classifier {
         Some(c) => c.locate(p) == PointLocation::Boundary,
         None => {
+            // (A face on an elementary surface farther from the point than the tolerance,
+            // as its surface is: off it, without measuring.)
+            if shape.kind() == NodeKind::Face {
+                use crate::geometry::surface::Surface;
+                if let Some(surface @ (Surface::Plane(_) | Surface::Cylinder(_) | Surface::Cone(_) | Surface::Sphere(_))) = model.surface(shape) {
+                    if geom::signed_distance(surface, p).abs() > 2.0 * tolerance {
+                        return Ok(false);
+                    }
+                }
+            }
             let v = crate::make::vertex(model, p);
             crate::distance::distance(model, v, shape)?.value <= tolerance
         }

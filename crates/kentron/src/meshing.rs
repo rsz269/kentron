@@ -324,7 +324,9 @@ fn face_mesh(model: &Model, face: Shape, options: MeshOptions) -> Result<Option<
         }
         // Inner edges whose chords sag from the surface by more than the deflection get a
         // point at their middle.
-        let point3 = |i: usize| if i < boundary_3d.len() { boundary_3d[i] } else { let uv = inside[i - boundary_3d.len()]; surface.point(uv.x, uv.y) };
+        // (The inside points evaluated once each.)
+        let inside_3d: Vec<Point> = inside.iter().map(|uv| surface.point(uv.x, uv.y)).collect();
+        let point3 = |i: usize| if i < boundary_3d.len() { boundary_3d[i] } else { inside_3d[i - boundary_3d.len()] };
         let mut added: FastSet<(usize, usize)> = FastSet::default();
         let mut new_points = Vec::new();
         for t in &triangles {
