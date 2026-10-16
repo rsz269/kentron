@@ -133,6 +133,10 @@ An existing CadQuery script runs unchanged with `pykentron-run script.py`, or af
 - Rust 1.88 or later.
 - `cargo test` runs everything. Most of OCCT's converted tests read its test dataset, an
   external download: see `crates/occt-tests/README.md`. Without it those tests fail.
+- `tools/run_tests.py` runs the same tests with every test binary at once (about 20 s on 16
+  threads, against about 30 s for `cargo test`, which runs them one after another).
+  `--quick` leaves out the tests expected to fail (about 12 s); a fix that makes one pass
+  then goes unnoticed.
 - pykentron from source: `python3 crates/pykentron/build.py` (see
   `crates/pykentron/README.md`).
 

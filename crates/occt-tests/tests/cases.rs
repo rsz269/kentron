@@ -5,7 +5,9 @@
 //! takes under 20 s), or six times that in wall time, fails; with `KENTRON_CASE_TIMES` set, each case's time is reported. With
 //! `KENTRON_CASE_ORDER` naming a file of such times (`<seconds> <case>` lines, as
 //! `tools/run_tests.py` keeps them), the slowest cases start first, so that the run does
-//! not end waiting for a few long ones started last.
+//! not end waiting for a few long ones started last. With
+//! `KENTRON_SKIP_EXPECTED_FAILURES` set, `expect: not_done` cases are ignored (a quicker run,
+//! which does not notice one starting to pass).
 
 use std::path::Path;
 
@@ -17,6 +19,7 @@ fn main() {
     // The runner turns panics (kentron's `todo!`s) into failures with their message.
     std::panic::set_hook(Box::new(cases::quiet_panic_hook));
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("cases");
+    let skip_expected = occt_tests::skip_expected_failures();
     let mut trials = Vec::new();
     for file in cases::files(&root) {
         let prefix = file.strip_prefix(&root).unwrap_or(&file).with_extension("").to_string_lossy().replace('/', "::");
@@ -29,7 +32,7 @@ fn main() {
         };
         for case in loaded {
             let name = format!("{prefix}::{}", case.name);
-            let ignored = case.skip.is_some();
+            let ignored = case.skip.is_some() || (skip_expected && case.not_done);
             let timed = name.clone();
             let trial = Trial::test(name, move || {
                 let not_done = case.not_done;

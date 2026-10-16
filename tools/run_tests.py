@@ -4,7 +4,10 @@ and of occt-tests at once, rather than one after another as `cargo test` runs th
 slowest tests would otherwise leave most cores idle), with any other commands given
 alongside.
 
-Usage: tools/run_tests.py [--log FILE] [--also COMMAND]... [--before COMMAND]...
+Usage: tools/run_tests.py [--quick] [--log FILE] [--also COMMAND]... [--before COMMAND]...
+
+- `--quick` leaves out the OCCT tests expected to fail (`KENTRON_SKIP_EXPECTED_FAILURES`):
+  about a third of the work, but a test starting to pass goes unnoticed.
 
 - The binaries' outputs are joined into one log (default target/test-run.log) in the order
   and with the `Running <source> (<binary>)` headers that `cargo test` prints.
@@ -30,6 +33,7 @@ ROOT = Path(__file__).resolve().parent.parent
 TIMES = ROOT / "target" / "case-times.txt"
 
 ap = argparse.ArgumentParser()
+ap.add_argument("--quick", action="store_true", help="leave out the tests expected to fail")
 ap.add_argument("--log", default=str(ROOT / "target" / "test-run.log"))
 ap.add_argument("--also", action="append", default=[], help="a shell command run alongside the tests")
 ap.add_argument("--before", action="append", default=[], help="a shell command run after the build, before the tests")
@@ -65,6 +69,8 @@ for command in args.before:
     timed(command, started)
 
 env = dict(os.environ, KENTRON_CASE_TIMES="1", KENTRON_CASE_ORDER=str(TIMES))
+if args.quick:
+    env["KENTRON_SKIP_EXPECTED_FAILURES"] = "1"
 
 
 def run_binary(entry):
@@ -100,6 +106,12 @@ passed = sum(int(m) for _, lines in summary for line in lines for m in re.findal
 failing = sum(int(m) for _, lines in summary for line in lines for m in re.findall(r"(\d+) failed", line))
 print(f"tests: {passed} passed, {failing} failed (log: {args.log})")
 if times:
+    # (Cases not run this time, as with --quick, keep their times from before.)
+    if TIMES.exists():
+        for line in TIMES.read_text().splitlines():
+            t, _, name = line.partition(" ")
+            if name and name not in times:
+                times[name] = float(t)
     TIMES.write_text("".join(f"{t:.3f} {name}\n" for name, t in sorted(times.items(), key=lambda x: -x[1])))
 for command, code, output in commands:
     print(f"--- {command} (exit {code})\n{output.rstrip()}")

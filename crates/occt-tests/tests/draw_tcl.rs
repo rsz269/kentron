@@ -4,6 +4,7 @@
 //! it fails and is reported when it starts to pass. Scripts needing a data file that is
 //! missing, or declaring a known failure of OCCT's (a TODO for this platform), are ignored.
 //! Each has the YAML cases' limit on its processor time (`KENTRON_CASE_TIMEOUT`, 40 s).
+//! With `KENTRON_SKIP_EXPECTED_FAILURES` set, the listed scripts are ignored.
 
 use std::path::{Path, PathBuf};
 
@@ -22,6 +23,7 @@ fn main() {
         .filter(|l| !l.is_empty() && !l.starts_with('#'))
         .collect();
     let data_file = regex::Regex::new(r"locate_data_file\s+([^\]\s}]+)").expect("a pattern");
+    let skip_expected = occt_tests::skip_expected_failures();
     let limit: f64 = std::env::var("KENTRON_CASE_TIMEOUT").ok().and_then(|s| s.parse().ok()).unwrap_or(40.0);
     let mut trials = Vec::new();
     for (group, grid, case) in scripts(&root) {
@@ -30,7 +32,7 @@ fn main() {
         let known = occt_tests::draw::tcl::known_failure(&text);
         let listed = expected.contains(&format!("tests/{group}/{grid}/{case}"));
         let name = format!("{group}::{grid}::{case}");
-        let ignored = missing.is_some() || known.is_some();
+        let ignored = missing.is_some() || known.is_some() || (skip_expected && listed);
         let root = root.clone();
         let trial = Trial::test(name, move || {
             let outcome = occt_tests::limit::run_limited(limit, move || run_script(&root, &group, &grid, &case));

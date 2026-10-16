@@ -23,6 +23,11 @@ and fail once they pass, so that a fix shows as clearly as a regression.
 - Hand-written tests carry their own marks: `expect: not_done` in YAML, `#[should_panic]`
   with a comment in Rust.
 
+They take about a third of the suite's time. With `KENTRON_SKIP_EXPECTED_FAILURES=1` (or
+`tools/run_tests.py --quick`) the listed scripts and `expect: not_done` cases are ignored,
+and the generated `#[should_panic]` tests panic without running: a quicker run, which
+does not notice one starting to pass.
+
 ## OCCT test data
 
 Many OCCT tests read shapes from OCCT's test dataset, which is not part of this repository

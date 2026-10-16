@@ -206,8 +206,12 @@ pub type DrawResult<T = String> = Result<T, DrawError>;
 
 /// Runs the body of a test expected to fail (its script is in `expected_failures.txt`; the
 /// test is `#[should_panic]`): a failure becomes a panic, so the test passes while it fails
-/// and fails ("did not panic") once it passes.
+/// and fails ("did not panic") once it passes. With `KENTRON_SKIP_EXPECTED_FAILURES` set,
+/// it panics without running.
 pub fn expected_failure(test: impl FnOnce() -> DrawResult<()>) {
+    if crate::skip_expected_failures() {
+        panic!("expected failure, not run (KENTRON_SKIP_EXPECTED_FAILURES)");
+    }
     if let Err(e) = test() {
         panic!("expected failure: {e}");
     }

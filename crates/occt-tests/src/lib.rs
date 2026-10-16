@@ -9,3 +9,10 @@ pub mod cases;
 pub mod draw;
 pub mod gtest;
 pub mod limit;
+
+/// Whether tests expected to fail (`expected_failures.txt`, `expect: not_done`) are left out:
+/// with `KENTRON_SKIP_EXPECTED_FAILURES` set (to anything but `0`), for a quicker run, which
+/// does not notice one starting to pass.
+pub fn skip_expected_failures() -> bool {
+    std::env::var("KENTRON_SKIP_EXPECTED_FAILURES").is_ok_and(|v| v != "0")
+}
