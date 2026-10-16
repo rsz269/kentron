@@ -76,24 +76,25 @@ as surely as a regression.
 
 ## Performance
 
-A complex five-part CadQuery model, built on pykentron and on CadQuery 2.8 (OCCT):
+A complex five-part CadQuery model, built on pykentron under each of its profiles and on
+CadQuery 2.8 (OCCT), median of 5 runs:
 
 | | wall time | CPU time | peak memory |
 |---|---|---|---|
-| pykentron (`fast` profile) | 4.9 s | 5.9 s | 460 MB |
-| CadQuery 2.8 / OCCT | 41.8 s | 122.4 s | 1,097 MB |
-| | **8.5× faster** | **21× less** | **2.4× less** |
+| pykentron, `fast` profile | 4.8 s | 5.9 s | 420 MB |
+| pykentron, `balanced` profile (default) | 5.4 s | 6.4 s | 339 MB |
+| pykentron, `low-memory` profile | 5.4 s | 6.4 s | 292 MB |
+| CadQuery 2.8 / OCCT | 40.9 s | 125.8 s | 1,094 MB |
 
-## Memory or speed: profiles
+With the `fast` profile, that is 8.6× faster than CadQuery, with 21× less CPU time and 2.6×
+less memory.
 
 pykentron frees shapes that Python no longer refers to. How much it frees, and which
 allocator it uses, is chosen with `PYKENTRON_PROFILE`:
 
-| profile | what it does | the same model, against no collection |
-|---|---|---|
-| `low-memory` | also drops cached data of removed shapes | 58% of the peak memory, ~3% slower |
-| `balanced` (default) | removes unreachable shapes | 68% of the peak memory, ~2% slower |
-| `fast` | as `balanced`, with mimalloc as allocator | 89% of the peak memory, ~14% faster |
+- `low-memory`: also drops cached data of removed shapes.
+- `balanced` (default): removes unreachable shapes.
+- `fast`: as `balanced`, with mimalloc as allocator.
 
 Rust programs using kentron directly make the same choice by declaring their allocator and
 passing `CollectOptions` to `Model::collect_garbage_with`.
