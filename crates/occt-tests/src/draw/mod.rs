@@ -177,8 +177,17 @@ pub enum DrawObject {
     Surface(Surface),
     Point(kentron::math::Point),
     Point2(kentron::math::Point2),
-    /// An operation's history (`savehistory`): the shapes generated from each input.
-    History(Vec<(kentron::topology::NodeId, Vec<Shape>)>),
+    /// An operation's history (`savehistory`).
+    History(DrawHistory),
+}
+
+/// What an operation made of its inputs: the shapes generated from each, those each was
+/// modified into, and those deleted.
+#[derive(Debug, Clone, Default)]
+pub struct DrawHistory {
+    pub generated: Vec<(kentron::topology::NodeId, Vec<Shape>)>,
+    pub modified: Vec<(kentron::topology::NodeId, Vec<Shape>)>,
+    pub deleted: Vec<kentron::topology::NodeId>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -260,7 +269,7 @@ pub struct Draw {
     /// Whether `bapibop` unifies its result's edges and faces (`bsimplify -e`, `-f`).
     pub(crate) simplify: (bool, bool),
     /// The history of the last operation that keeps one (`savehistory` saves it).
-    pub(crate) last_history: Vec<(kentron::topology::NodeId, Vec<Shape>)>,
+    pub(crate) last_history: DrawHistory,
     /// The variables created since last taken (the Tcl runner makes each a Tcl variable
     /// too, as DRAW does).
     pub(crate) created: Vec<String>,

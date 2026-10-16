@@ -452,7 +452,12 @@ fn merge_edges(model: &mut Model, specs: &mut [Spec]) -> Result<bool> {
             }
         }
     }
-    let curves: HashMap<EdgeId, (Curve, f64, f64)> = edges.iter().filter_map(|&e| Some((e, model.edge_curve(Shape::from(e))?))).collect();
+    // (A trimmed line or circle as that line or circle, over the same parameters.)
+    let untrimmed = |(c, a, b): (Curve, f64, f64)| match c {
+        Curve::Trimmed(t) if matches!(t.basis(), Curve::Line(_) | Curve::Circle(_)) => (t.basis().clone(), a, b),
+        c => (c, a, b),
+    };
+    let curves: HashMap<EdgeId, (Curve, f64, f64)> = edges.iter().filter_map(|&e| Some((e, untrimmed(model.edge_curve(Shape::from(e))?)))).collect();
     // The faces using each edge.
     let mut faces_of: HashMap<EdgeId, Vec<usize>> = HashMap::default();
     for (si, spec) in specs.iter().enumerate() {

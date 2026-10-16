@@ -39,6 +39,7 @@ pub mod blend;
 pub mod boolean;
 pub mod convert;
 pub mod distance;
+pub mod defeature;
 pub mod divide;
 pub mod draft;
 pub mod feature;

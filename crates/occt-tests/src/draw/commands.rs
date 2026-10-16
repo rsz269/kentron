@@ -11,7 +11,7 @@ use kentron::sketch::{Outcome, Step};
 use kentron::geometry::convert as gconvert;
 use kentron::{blend, boolean, convert, make, modify, properties, sketch, sweep, tolerance, validity};
 
-use super::{need, Draw, DrawError, DrawObject, DrawResult};
+use super::{need, Draw, DrawError, DrawHistory, DrawObject, DrawResult};
 
 /// A real as DRAW prints it (here the shortest form that reads back exactly).
 fn format_real(x: f64) -> String {
@@ -2816,7 +2816,7 @@ impl Draw {
         // `generated result history shape`: a compound of the shapes generated from `shape`.
         need(args, 3, "generated result history shape")?;
         let generated = match self.get(args[1]) {
-            Some(DrawObject::History(h)) => h.clone(),
+            Some(DrawObject::History(h)) => h.generated.clone(),
             _ => return Err(DrawError::Failed(format!("{} is not a history", args[1]))),
         };
         let mut input = self.shape_var(args[2])?;
@@ -3515,7 +3515,64 @@ impl Draw {
     ///
     /// Example: `modified f_mod h b2_12`
     pub fn modified(&mut self, args: &[&str]) -> DrawResult {
-        self.not_implemented("modified", args)
+        // `modified result history shape`: the shapes `shape` was modified into (one alone,
+        // else a compound of them).
+        need(args, 3, "modified result history shape")?;
+        let history = self.draw_history(args[1])?;
+        let input = self.shape_var(args[2])?;
+        let shapes: Vec<Shape> = history.modified.iter().filter(|(node, _)| *node == input.node).flat_map(|(_, s)| s.clone()).collect();
+        match shapes[..] {
+            [] => Ok("The shape has not been modified\n".into()),
+            [one] => self.set_shape_var(args[0], one),
+            _ => {
+                let compound = self.compound_of(&shapes)?;
+                self.set_shape_var(args[0], compound)
+            }
+        }
+    }
+    /// DRAW command `isdeleted`.
+    ///
+    /// Example: `isdeleted rf_hist s_2`
+    pub fn isdeleted(&mut self, args: &[&str]) -> DrawResult {
+        // `isdeleted history shape`: whether the operation deleted `shape`.
+        need(args, 2, "isdeleted history shape")?;
+        let history = self.draw_history(args[0])?;
+        let input = self.shape_var(args[1])?;
+        Ok(if history.deleted.contains(&input.node) { "Deleted." } else { "Not deleted." }.into())
+    }
+    /// DRAW command `removefeatures`.
+    ///
+    /// Example: `removefeatures result s s_2 s_3`
+    pub fn removefeatures(&mut self, args: &[&str]) -> DrawResult {
+        // `removefeatures result shape features... [-parallel]`: the shape without the faces
+        // of the features (faces, or compounds of them).
+        let names: Vec<&str> = args.iter().copied().filter(|a| !a.starts_with('-')).collect();
+        if names.len() < 3 {
+            return self.not_implemented("removefeatures", args);
+        }
+        let shape = self.shape_var(names[1])?;
+        let mut faces = Vec::new();
+        for name in &names[2..] {
+            let feature = self.shape_var(name)?;
+            faces.extend(self.model.unique_subshapes(feature, NodeKind::Face));
+        }
+        let removed = kentron::defeature::remove_faces(&mut self.model, shape, &faces)?;
+        let shapes_of = |model: &kentron::topology::Model, nodes: &[kentron::topology::NodeId]| -> Vec<Shape> {
+            nodes.iter().filter_map(|&n| model.unique_subshapes(removed.shape, n.kind).into_iter().find(|s| s.node == n)).collect()
+        };
+        let mut modified = Vec::new();
+        let mut deleted = Vec::new();
+        for kind in [NodeKind::Face, NodeKind::Edge, NodeKind::Vertex] {
+            for s in self.model.unique_subshapes(shape, kind) {
+                if removed.history.is_deleted(s.node) {
+                    deleted.push(s.node);
+                } else if let Some(images) = removed.history.modified(s.node) {
+                    modified.push((s.node, shapes_of(&self.model, images)));
+                }
+            }
+        }
+        self.last_history = DrawHistory { modified, deleted, ..Default::default() };
+        self.set_shape_var(names[0], removed.shape)
     }
     /// DRAW command `movep`: 4 uses in 4 converted scripts.
     ///
@@ -4518,6 +4575,13 @@ impl Draw {
     /// DRAW command `savehistory`: 47 uses in 43 converted scripts.
     ///
     /// Example: `savehistory hist`
+    /// The history saved as `name`.
+    fn draw_history(&self, name: &str) -> Result<DrawHistory, DrawError> {
+        match self.get(name) {
+            Some(DrawObject::History(h)) => Ok(h.clone()),
+            _ => Err(DrawError::Failed(format!("{name} is not a history"))),
+        }
+    }
     pub fn savehistory(&mut self, args: &[&str]) -> DrawResult {
         // `savehistory name`: the last operation's history (of those keeping one).
         need(args, 1, "savehistory name")?;
@@ -4866,10 +4930,11 @@ impl Draw {
         let options = kentron::loft::LoftOptions { solid: flag(args[1])?, ruled: flag(args[2])?, matching: if as_given { kentron::loft::Matching::AsGiven } else { kentron::loft::Matching::ByRays } };
         let sections = args[3..].iter().map(|a| self.shape_var(a)).collect::<Result<Vec<_>, _>>()?;
         let result = kentron::loft::loft(&mut self.model, &sections, &options)?;
-        self.last_history = sections.iter().flat_map(|&s| {
+        let generated = sections.iter().flat_map(|&s| {
             let parts = self.model.unique_subshapes(s, NodeKind::Edge).into_iter().chain(self.model.unique_subshapes(s, NodeKind::Vertex));
             parts.map(|p| (p.node, result.generated(p))).filter(|(_, g)| !g.is_empty()).collect::<Vec<_>>()
         }).collect();
+        self.last_history = DrawHistory { generated, ..Default::default() };
         // (OCCT flags its solids closed.)
         if result.shape.kind() == NodeKind::Solid {
             self.closed_solids.insert(result.shape.node);

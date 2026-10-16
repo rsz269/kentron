@@ -2134,17 +2134,14 @@ fn bug26418_4() -> DrawResult<()> {
 /// `tests/bugs/modalg_6/bug26427`
 /// kentron: sub-shapes named by OCCT's enumeration are selected by position (draw_selectors.json)
 #[test]
-#[should_panic]
-fn bug26427() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.restore(&[data_file("OCC26426-prism_shape.brep").as_str(), "b1"])?;
-        d.explode(&["b1", "f"])?;
-        d.nearest(&["b1_1", "b1", "F", "-11.25", "-93.5", "-50.0", "260.0"])?;
-        d.depouille(&["result", "b1", "0", "0", "-1", "b1_1", "-10", "0", "0", "-40", "0", "0", "1"])?;
-        d.checknbshapes(&["result", "-ref", "\nNumber of shapes in shape\n VERTEX    : 16\n EDGE      : 24\n WIRE      : 10\n FACE      : 10\n SHELL     : 1\n SOLID     : 1\n COMPSOLID : 0\n COMPOUND  : 0\n SHAPE     : 62\n", "-t", "-m", "Shape produced by Draft angle algorithm"])?;
-        Ok(())
-    })
+fn bug26427() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.restore(&[data_file("OCC26426-prism_shape.brep").as_str(), "b1"])?;
+    d.explode(&["b1", "f"])?;
+    d.nearest(&["b1_1", "b1", "F", "-11.25", "-93.5", "-50.0", "260.0"])?;
+    d.depouille(&["result", "b1", "0", "0", "-1", "b1_1", "-10", "0", "0", "-40", "0", "0", "1"])?;
+    d.checknbshapes(&["result", "-ref", "\nNumber of shapes in shape\n VERTEX    : 16\n EDGE      : 24\n WIRE      : 10\n FACE      : 10\n SHELL     : 1\n SOLID     : 1\n COMPSOLID : 0\n COMPOUND  : 0\n SHAPE     : 62\n", "-t", "-m", "Shape produced by Draft angle algorithm"])?;
+    Ok(())
 }
 
 /// `tests/bugs/modalg_6/bug26440_1`

@@ -654,6 +654,8 @@ fn curve_on_plane_parameters(curve: &Curve, plane: &Plane) -> Option<Curve2> {
             let frame = Frame2::from_axes(uv(f.origin()), in_plane(f.x())?, in_plane(f.y())?)?;
             Some(Curve2::Parabola(crate::geometry::curve2::Parabola2::new(frame, c.focal())))
         }
+        // (A trimmed curve runs over its basis's parameters: the basis's pcurve.)
+        Curve::Trimmed(t) => curve_on_plane_parameters(t.basis(), plane),
         Curve::Hyperbola(c) => {
             let f = c.frame();
             let frame = Frame2::from_axes(uv(f.origin()), in_plane(f.x())?, in_plane(f.y())?)?;

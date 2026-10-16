@@ -2442,7 +2442,6 @@ ported_from:
   file: tests/sewing/tol_0_01/Q9
 notes:
   - "kentron deviation: Checking the source needs the properties of faces that have no pcurves on curved surfaces, which kentron does not compute."
-expect: not_done
 build:
   - a: {load: {brep: "CFE900_ger60gdc.rle"}}
   - result: {sew: {shapes: [a], tolerance: 0.01}}

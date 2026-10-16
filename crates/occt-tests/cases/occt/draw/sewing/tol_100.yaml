@@ -1684,7 +1684,6 @@ ported_from:
   file: tests/sewing/tol_100/L4
 notes:
   - "kentron deviation: Checking the source needs the properties of faces that have no pcurves on curved surfaces, which kentron does not compute."
-expect: not_done
 build:
   - a: {load: {brep: "CTO900_cts20212-part.rle"}}
   - result: {sew: {shapes: [a], tolerance: 100}}
