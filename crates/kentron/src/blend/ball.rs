@@ -299,10 +299,29 @@ fn rolling_with(model: &Model, shape: Shape, edge: Shape, profile: &Profile, far
         let past_n = if closed { 0 } else { far * (PAST_END * n / SECTIONS).max(PAST_END) };
         // Past each end, outwards as far as the ball still fits between the faces (their
         // surfaces may end or degenerate further on).
+        // (Not where the spine runs off: a curve carried on past its range, onto the faces'
+        // surfaces, may leap away; no farther from the end than twice the reach.)
         let past = |end: f64, far: f64| -> Vec<Section> {
-            (1..=past_n).map(|j| end + (far - end) * j as f64 / past_n as f64).map_while(|t| section_at(t).ok()).collect()
+            let at = curve.point(end);
+            (1..=past_n)
+                .map(|j| end + (far - end) * j as f64 / past_n as f64)
+                .map_while(|t| {
+                    let near = spine_at(t).ok().is_some_and(|(o, _)| o.distance(at) <= 2.0 * reach.max(crate::tolerance::LINEAR));
+                    if near { section_at(t).ok() } else { None }
+                })
+                .collect()
         };
+        // (A chamfer's sections, each run from where it starts: a section is solved from the
+        // one before it, which must be its neighbour, else it may find the points on the
+        // faces' surfaces carried on past the edge, on its other side. A ball's from the one
+        // before, as found.)
+        let restart = |from: Option<&Section>| {
+            let spine = from.and_then(|s| spine_at(s.t).ok().map(|(o, _)| (s, o)));
+            last_contacts.set(spine.map(|(s, o)| [s.contacts[0] - o, s.contacts[1] - o]));
+        };
+        restart(None);
         let before = past(t0, t_min);
+        restart(before.first());
         let mut sections: Vec<Section> = before.into_iter().rev().collect();
         // (Where no ball fits near an end of an open edge (a face's surface singular there,
         // as at a cone's apex), the sections stop short of it: the fillet must end on the
@@ -332,6 +351,7 @@ fn rolling_with(model: &Model, shape: Shape, edge: Shape, profile: &Profile, far
         };
         let contacts = [contact(0)?, contact(1)?];
         let mut worst: f64 = 0.0;
+        restart(sections.first());
         for w in ts.windows(2) {
             // (Past the edge's ends, where the faces' surfaces may end between two sections
             // found, a section not found midway is left out of the measure.)

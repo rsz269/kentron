@@ -643,14 +643,19 @@ fn tangent_chains(model: &Model, shape: Shape, edges: &[(Shape, f64)]) -> Vec<(S
                 continue;
             }
             let theirs = ends(other);
+            let their_faces = faces_of(other);
+            // (Between the same two faces, as nearly tangent as the faces' normals below: an
+            // edge carried on by a fitted curve leaves its vertex very nearly, not exactly, as
+            // the edge arrives.)
+            let same_faces = their_faces.len() == 2 && their_faces.iter().all(|f| my_faces.contains(f));
+            let tangent = if same_faces { tolerance::ANGULAR.sqrt() } else { tolerance::ANGULAR };
             let Some(at) = mine.iter().find_map(|(v, d)| {
-                theirs.iter().any(|(w, e)| w == v && d.dot(*e).abs() >= 1.0 - tolerance::ANGULAR).then_some(*v)
+                theirs.iter().any(|(w, e)| w == v && d.dot(*e).abs() >= 1.0 - tangent).then_some(*v)
             }) else {
                 continue;
             };
             // Between the same faces, or one of them and one tangent there to the other (a
             // rounded outline's line and arc): the fillet carries on smoothly.
-            let their_faces = faces_of(other);
             let point = model.point(Shape::from(crate::topology::VertexId::try_from(at).expect("a vertex")));
             let carries_on = their_faces.iter().any(|f| my_faces.contains(f))
                 && their_faces.iter().filter(|f| !my_faces.contains(f)).all(|f| {
@@ -1540,6 +1545,38 @@ mod tests {
         check_volume(&model, lopsided, 1.0 - 0.2 * 0.1 / 2.0);
         let angled = chamfer_edges(&mut model, cube, &[ChamferedEdge { edge: top[0], size: ChamferSize::DistanceAngle(0.1, PI / 4.0), face: Some(top_face) }]).unwrap();
         check_volume(&model, angled, 1.0 - d * d / 2.0);
+    }
+
+    #[test]
+    fn chamfer_joined_across_a_split_face() {
+        // A cube of B-spline faces whose top is split in two across the edge along y = 0:
+        // that edge in two halves between the front and each half of the top, chamfered as
+        // one (the halves' chamfers joined where the top's halves meet).
+        let mut model = Model::new();
+        let planes = Cuboid::new(1.0, 1.0, 1.0).build(&mut model).unwrap();
+        let cube = crate::convert::to_nurbs(&mut model, planes).unwrap();
+        let top = model
+            .unique_subshapes(cube, NodeKind::Face)
+            .into_iter()
+            .find(|&f| model.unique_subshapes(f, NodeKind::Vertex).iter().all(|&v| (model.point(v).z - 1.0).abs() < 1e-9))
+            .unwrap();
+        let surface = model.surface(top).unwrap().clone();
+        let (u0, u1, v0, v1) = model.face_uv_bounds(top);
+        // (Across x = 0.5, whichever parameter runs along x.)
+        let along_u = (surface.point(u1, v0).x - surface.point(u0, v0).x).abs() > 0.5;
+        let cut = if along_u { crate::divide::Cut::iso(&surface, true, 0.5 * (u0 + u1), v0, v1) } else { crate::divide::Cut::iso(&surface, false, 0.5 * (v0 + v1), u0, u1) };
+        assert_eq!(crate::divide::divide_face(&mut model, top, &[cut]).unwrap().len(), 2);
+        let front: Vec<Shape> = edges_at(&model, cube, 1.0)
+            .into_iter()
+            .filter(|&e| {
+                let (p, q) = model.edge_vertices(e);
+                model.point(p).y.abs() < 1e-9 && model.point(q).y.abs() < 1e-9
+            })
+            .collect();
+        assert_eq!(front.len(), 2);
+        let d = 0.1;
+        let chamfered = chamfer(&mut model, cube, &front[..1], d).unwrap();
+        check_volume(&model, chamfered, 1.0 - d * d / 2.0);
     }
 
     #[test]

@@ -265,20 +265,17 @@ fn bug26_2() -> DrawResult<()> {
 /// `tests/bugs/moddata_2/bug27_2`
 /// kentron: sub-shapes named by OCCT's enumeration are selected by position (draw_selectors.json)
 #[test]
-#[should_panic]
-fn bug27_2() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.restore(&[data_file("shading_128.brep").as_str(), "a"])?;
-        d.checkshape(&["a"])?;
-        d.explode(&["a", "e"])?;
-        d.explode(&["a", "f"])?;
-        d.nearest(&["a_1", "a", "F", "-1.33972", "1.46778e-08", "5.0", "80.7314"])?;
-        d.chamf(&["result", "a", "a_5", "a_1", "A", "1", "45", "a_6", "a_1", "A", "1", "45", "a_7", "a_1", "A", "1", "45", "a_8", "a_1", "A", "1", "45"])?;
-        d.checkshape(&["result"])?;
-        d.checkprops(&["result", "-s", "154.145"])?;
-        Ok(())
-    })
+fn bug27_2() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.restore(&[data_file("shading_128.brep").as_str(), "a"])?;
+    d.checkshape(&["a"])?;
+    d.explode(&["a", "e"])?;
+    d.explode(&["a", "f"])?;
+    d.nearest(&["a_1", "a", "F", "-1.33972", "1.46778e-08", "5.0", "80.7314"])?;
+    d.chamf(&["result", "a", "a_5", "a_1", "A", "1", "45", "a_6", "a_1", "A", "1", "45", "a_7", "a_1", "A", "1", "45", "a_8", "a_1", "A", "1", "45"])?;
+    d.checkshape(&["result"])?;
+    d.checkprops(&["result", "-s", "154.145"])?;
+    Ok(())
 }
 
 /// `tests/bugs/moddata_2/bug28_1`

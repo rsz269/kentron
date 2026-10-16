@@ -67,8 +67,8 @@ struct Mitre {
     curve: BSplineCurve,
     cut: Option<MitreCut>,
     /// The edge between the far faces: its vertex at the corner, and the parameter of the
-    /// last point.
-    edge: (EdgeId, VertexId, f64),
+    /// last point (none where the fillets share both faces, joined across a section).
+    edge: Option<(EdgeId, VertexId, f64)>,
     deviation: f64,
 }
 
@@ -133,7 +133,12 @@ fn blend_network_past(model: &mut Model, shape: Shape, edges: &[(Shape, Profile)
                 ends[i][k] = Some(End::Face(cut));
             }
             [a, b] => {
-                let (m, ea, eb) = mitre(model, shape, vertex, &stripes, a, b)?;
+                // (Edges going on into one another: the fillets join across, else they meet
+                // in a mitre.)
+                let (m, ea, eb) = match joint(model, shape, vertex, &stripes, a, b) {
+                    Some(joined) => joined?,
+                    None => mitre(model, shape, vertex, &stripes, a, b)?,
+                };
                 ends[a.0][a.1] = Some(ea.into_end(mitres.len()));
                 ends[b.0][b.1] = Some(eb.into_end(mitres.len()));
                 mitres.push(m);
@@ -268,7 +273,7 @@ fn mitre(model: &Model, shape: Shape, vertex: VertexId, stripes: &[Stripe], a: (
     if faces_at.len() != 3 {
         return Err(Error::InvalidInput("two fillets meeting at a vertex of other than three faces are not supported yet".into()));
     }
-    let (va1, vb1, p1) = crossing(&sa.rolling.contacts[ia], &sa.ts, a.1, &sb.rolling.contacts[ib], &sb.ts, b.1)?;
+    let (va1, vb1, p1) = crossing(&sa.rolling.contacts[ia], &sa.ts, a.1, &sb.rolling.contacts[ib], &sb.ts, b.1, model.point(Shape::from(vertex)))?;
     // Across the one that gets to its far face first (`s`), `l` crossing that face after.
     let by_a = far_meeting(sa, ia, a.1, sb, ib, vb1).and_then(|far| march(sa, ia, sb, far, [va1, across(ib, 0.0), vb1]));
     let (s_is_a, path) = match by_a {
@@ -384,8 +389,170 @@ fn mitre(model: &Model, shape: Shape, vertex: VertexId, stripes: &[Stripe], a: (
         l_pieces.push((1, Orientation::Forward, on));
     }
     let pl = stop(cl, vl1, last.1, mitre_points.len() - 1, l_pieces);
-    let m = Mitre { points: mitre_points, curve, cut, edge: (third, vertex, on_edge.parameter), deviation };
+    let m = Mitre { points: mitre_points, curve, cut, edge: Some((third, vertex, on_edge.parameter)), deviation };
     Ok(if s_is_a { (m, ps, pl) } else { (m, pl, ps) })
+}
+
+/// Where fillets `a` and `b` (fillet, end) meet at `vertex` along edges going on into one
+/// another (tangent there), sharing one face whose contact curves join there, and their
+/// other two faces meeting along an edge at the vertex: the fillets joined across, from the
+/// common face's contact at the vertex to where the far contacts cross that edge, straight
+/// in each fillet's parameters (a mitre whose curve is that). `None` where the edges are not
+/// tangent there.
+fn joint(model: &Model, shape: Shape, vertex: VertexId, stripes: &[Stripe], a: (usize, usize), b: (usize, usize)) -> Option<Result<(Mitre, PendingMitre, PendingMitre)>> {
+    let (sa, sb) = (&stripes[a.0], &stripes[b.0]);
+    // The edges' directions away from the vertex: opposite where one goes on into the other.
+    let away = |s: &Stripe, k: usize| -> Option<crate::math::Vector> {
+        let (curve, first, last) = model.edge_curve(Shape::from(s.rolling.id))?;
+        let (_, d) = curve.d1(if k == 0 { first } else { last });
+        Some(if k == 0 { d } else { -d }.normalized())
+    };
+    let (da, db) = (away(sa, a.1)?, away(sb, b.1)?);
+    if da.dot(db) > -1.0 + 1e-4 {
+        return None;
+    }
+    Some((|| {
+        if sa.rolling.convex != sb.rolling.convex {
+            return Err(Error::InvalidInput("two fillets of opposite kinds meeting at a vertex are not supported yet".into()));
+        }
+        let common = (0..2).flat_map(|i| (0..2).map(move |j| (i, j))).filter(|&(i, j)| sa.rolling.sides[i].face.node == sb.rolling.sides[j].face.node).collect::<Vec<_>>();
+        let at_end = |s: &Stripe, k: usize| if k == 0 { s.rolling.t0 } else { s.rolling.t1 };
+        // (Both faces in common: one edge going on between the same faces, the fillets
+        // joined across their sections at the vertex.)
+        let (va1, vb1) = (at_end(sa, a.1), at_end(sb, b.1));
+        if common.len() == 2 {
+            let jb = common.iter().find(|&&(i, _)| i == 0).expect("side 0 in common").1;
+            let ends: Vec<Point> = (0..2).map(|i| {
+                let (pa, pb) = (sa.rolling.contacts[i].point(va1), sb.rolling.contacts[if i == 0 { jb } else { 1 - jb }].point(vb1));
+                pa + (pb - pa) * 0.5
+            }).collect();
+            let n = ACROSS;
+            let ws: Vec<f64> = (0..=n).map(|k| k as f64 / n as f64).collect();
+            let (uv_a, uv_b): (Vec<Point2>, Vec<Point2>) = ws.iter().map(|&w| (Point2::new(w, va1), Point2::new(across(jb, w), vb1))).unzip();
+            let points: Vec<Point> = uv_a.iter().zip(&uv_b).map(|(p, q)| {
+                let (x, y) = (sa.surface.point(p.x, p.y), sb.surface.point(q.x, q.y));
+                x + (y - x) * 0.5
+            }).collect();
+            let curve = fit::interpolate_with_parameters(&points, &ws)?;
+            let mut deviation: f64 = 0.0;
+            for (k, &w) in ws.iter().enumerate() {
+                let p = curve.point(w);
+                deviation = deviation.max(sa.surface.point(uv_a[k].x, uv_a[k].y).distance(p)).max(sb.surface.point(uv_b[k].x, uv_b[k].y).distance(p));
+            }
+            for (i, e) in ends.iter().enumerate() {
+                deviation = deviation.max(sa.rolling.contacts[i].point(va1).distance(*e));
+            }
+            let on_a = BSplineCurve2::new(vec![uv_a[0], uv_a[n]], vec![0.0, 1.0], vec![2, 2], 1);
+            let on_b = BSplineCurve2::new(vec![uv_b[0], uv_b[n]], vec![0.0, 1.0], vec![2, 2], 1);
+            let stop = |c: usize, v_at: f64, on: BSplineCurve2| {
+                let mut at = [0; 2];
+                (at[c], at[1 - c]) = (0, 1);
+                let mut pieces = vec![(0, Orientation::Forward, on)];
+                if c == 1 {
+                    pieces[0].1 = pieces[0].1.reversed();
+                }
+                PendingMitre { v: [v_at, v_at], at, pieces }
+            };
+            let m = Mitre { points: ends, curve, cut: None, edge: None, deviation };
+            return Ok((m, stop(0, va1, on_a), stop(jb, vb1, on_b)));
+        }
+        let [(ia, ib)] = common[..] else {
+            return Err(Error::InvalidInput("two fillets joining at a vertex without one common face".into()));
+        };
+        let v_node: crate::topology::NodeId = vertex.into();
+        let at_vertex = |e: Shape| {
+            let (p, q) = model.edge_vertices(e);
+            p.node == v_node || q.node == v_node
+        };
+        let edges_of = |face: Shape| -> Vec<EdgeId> { model.explore(face, NodeKind::Edge).filter(|&e| at_vertex(e)).filter_map(|e| EdgeId::try_from(e.node).ok()).collect() };
+        let (on_a, on_b) = (edges_of(sa.rolling.sides[1 - ia].face), edges_of(sb.rolling.sides[1 - ib].face));
+        let shared: Vec<EdgeId> = on_a.iter().copied().filter(|e| on_b.contains(e) && *e != sa.rolling.id && *e != sb.rolling.id).collect();
+        let [third] = shared[..] else {
+            return Err(Error::InvalidInput("two fillets joining at a vertex whose other faces do not meet along an edge there".into()));
+        };
+        let (curve3, first3, last3) = model.edge_curve(Shape::from(third)).ok_or_else(|| Error::InvalidInput("a degenerate edge at a joint".into()))?;
+        // Each fillet's spine parameter at the vertex, and where its far contact comes
+        // nearest the edge between the far faces (from the middle of the fillet to that end).
+        let far_crossing = |s: &Stripe, c: usize, k: usize| -> (f64, f64, Point) {
+            let contact = &s.rolling.contacts[1 - c];
+            let (mid, end) = (0.5 * (s.rolling.t0 + s.rolling.t1), at_end(s, k));
+            let (lo, hi) = (s.ts[0], s.ts[s.ts.len() - 1]);
+            // (Some way past the vertex too: the far contact may cross the edge beyond it.)
+            let far = (end + (end - mid)).clamp(lo.min(hi), lo.max(hi));
+            let gap = |w: f64| crate::geometry::extrema::nearest_on_curve(contact.point(w), &curve3, first3, last3).distance;
+            let n = 256;
+            let (mut best, mut at) = (f64::INFINITY, mid);
+            for j in 0..=n {
+                let w = mid + (far - mid) * j as f64 / n as f64;
+                let d = gap(w);
+                if d < best {
+                    (best, at) = (d, w);
+                }
+            }
+            let step = (far - mid).abs() / n as f64;
+            let (mut x, mut y) = (at - step, at + step);
+            for _ in 0..100 {
+                let (p, q) = (x + (y - x) / 3.0, y - (y - x) / 3.0);
+                if gap(p) < gap(q) { y = q } else { x = p }
+            }
+            let w = 0.5 * (x + y);
+            (w, gap(w), contact.point(w))
+        };
+        let (wa, gap_a, qa) = far_crossing(sa, ia, a.1);
+        let (wb, gap_b, qb) = far_crossing(sb, ib, b.1);
+        let q = qa + (qb - qa) * 0.5;
+        let size = 1.0 + (q - Point::ORIGIN).length();
+        let near = (1e-6 * size).max(1e3 * sa.rolling.target.max(sb.rolling.target)).max(2.0 * model.tolerance(Shape::from(third)));
+        // (The far contacts, each square to its own spine, cross the edge a little apart:
+        // within a twentieth of the fillets' width, the joint's tolerance covers that.)
+        let width = sa.rolling.contacts[0].point(at_end(sa, a.1)).distance(sa.rolling.contacts[1].point(at_end(sa, a.1)));
+        if gap_a.max(gap_b) > near || qa.distance(qb) > near.max(0.05 * width) {
+            return Err(Error::InvalidInput("two fillets joining at a vertex whose far contacts miss the edge between their far faces".into()));
+        }
+        let on_edge = crate::geometry::extrema::nearest_on_curve(q, &curve3, first3, last3);
+        // The common face's point: both contacts at the vertex.
+        let p1 = {
+            let (pa, pb) = (sa.rolling.contacts[ia].point(va1), sb.rolling.contacts[ib].point(vb1));
+            pa + (pb - pa) * 0.5
+        };
+        // Across each, straight in its parameters from the common side to the far one.
+        let n = ACROSS;
+        let ws: Vec<f64> = (0..=n).map(|k| k as f64 / n as f64).collect();
+        let line = |c: usize, v0: f64, v1: f64| -> Vec<Point2> { ws.iter().map(|&w| Point2::new(across(c, w), v0 + (v1 - v0) * w)).collect() };
+        let (uv_a, uv_b) = (line(ia, va1, wa), line(ib, vb1, wb));
+        let points: Vec<Point> = uv_a.iter().zip(&uv_b).map(|(p, q)| {
+            let (x, y) = (sa.surface.point(p.x, p.y), sb.surface.point(q.x, q.y));
+            x + (y - x) * 0.5
+        }).collect();
+        let curve = fit::interpolate_with_parameters(&points, &ws)?;
+        let on_a_fillet = BSplineCurve2::new(vec![uv_a[0], uv_a[n]], vec![0.0, 1.0], vec![2, 2], 1);
+        let on_b_fillet = BSplineCurve2::new(vec![uv_b[0], uv_b[n]], vec![0.0, 1.0], vec![2, 2], 1);
+        let mut deviation: f64 = p1.distance(sa.rolling.contacts[ia].point(va1)).max(q.distance(qa)).max(q.distance(qb));
+        for k in 0..=4 * n {
+            let w = k as f64 / (4 * n) as f64;
+            let p = curve.point(w);
+            let (x, y) = (on_a_fillet.point(w), on_b_fillet.point(w));
+            deviation = deviation.max(sa.surface.point(x.x, x.y).distance(p)).max(sb.surface.point(y.x, y.y).distance(p));
+        }
+        let stop = |c: usize, v_common: f64, v_far: f64, on: BSplineCurve2| {
+            let mut v = [0.0; 2];
+            let mut at = [0; 2];
+            (v[c], at[c]) = (v_common, 0);
+            (v[1 - c], at[1 - c]) = (v_far, 1);
+            let mut pieces = vec![(0, Orientation::Forward, on)];
+            if c == 1 {
+                pieces.reverse();
+                for piece in &mut pieces {
+                    piece.1 = piece.1.reversed();
+                }
+            }
+            PendingMitre { v, at, pieces }
+        };
+        let pa = stop(ia, va1, wa, on_a_fillet);
+        let pb = stop(ib, vb1, wb, on_b_fillet);
+        let m = Mitre { points: vec![p1, q], curve, cut: None, edge: Some((third, vertex, on_edge.parameter)), deviation };
+        Ok((m, pa, pb))
+    })())
 }
 
 /// Fillet `s`'s end `k` (0 at its edge's start), where from its vertex each face goes on
@@ -463,7 +630,7 @@ impl PendingEnd {
 
 /// The corner where three fillets (`meeting`: fillet and end) meet at `vertex`.
 fn corner(model: &Model, shape: Shape, vertex: VertexId, stripes: &[Stripe], meeting: &[(usize, usize)]) -> Result<(Corner, Vec<PendingEnd>)> {
-    let _ = (shape, vertex);
+    let _ = shape;
     // The faces: each shared by two of the fillets.
     let mut faces: Vec<Shape> = Vec::new();
     for &(i, _) in meeting {
@@ -486,7 +653,7 @@ fn corner(model: &Model, shape: Shape, vertex: VertexId, stripes: &[Stripe], mee
             return Err(Error::InvalidInput("a corner face not shared by two of its fillets".into()));
         };
         let (a, b) = (&stripes[meeting[n1].0], &stripes[meeting[n2].0]);
-        let (t1, t2, p) = crossing(&a.rolling.contacts[s1], &a.ts, meeting[n1].1, &b.rolling.contacts[s2], &b.ts, meeting[n2].1)?;
+        let (t1, t2, p) = crossing(&a.rolling.contacts[s1], &a.ts, meeting[n1].1, &b.rolling.contacts[s2], &b.ts, meeting[n2].1, model.point(Shape::from(vertex)))?;
         let _ = model;
         points.push((face, p));
         (v[n1][s1], at[n1][s1]) = (t1, f);
@@ -497,8 +664,9 @@ fn corner(model: &Model, shape: Shape, vertex: VertexId, stripes: &[Stripe], mee
 }
 
 /// Where two contact curves on one face cross near the ends `end_a`, `end_b` of their
-/// fillets (0 the start of the edge, 1 its end): their parameters and the point.
-fn crossing(a: &BSplineCurve, ts_a: &[f64], end_a: usize, b: &BSplineCurve, ts_b: &[f64], end_b: usize) -> Result<(f64, f64, Point)> {
+/// fillets (0 the start of the edge, 1 its end): their parameters and the point. Of several
+/// crossings, the one nearest `corner` (the fillets' vertex).
+fn crossing(a: &BSplineCurve, ts_a: &[f64], end_a: usize, b: &BSplineCurve, ts_b: &[f64], end_b: usize, corner: Point) -> Result<(f64, f64, Point)> {
     // Over the half of each curve towards the corner (its ends past the edge included).
     let half = |ts: &[f64], end: usize| {
         let (lo, hi) = (ts[0], ts[ts.len() - 1]);
@@ -507,42 +675,52 @@ fn crossing(a: &BSplineCurve, ts_a: &[f64], end_a: usize, b: &BSplineCurve, ts_b
     };
     let ((a0, a1), (b0, b1)) = (half(ts_a, end_a), half(ts_b, end_b));
     let n = 64;
-    let mut best = (f64::INFINITY, a0, b0);
+    let at = |i: usize, j: usize| (a0 + (a1 - a0) * i as f64 / n as f64, b0 + (b1 - b0) * j as f64 / n as f64);
+    let grid: Vec<Vec<f64>> = (0..=n).map(|i| (0..=n).map(|j| { let (ta, tb) = at(i, j); a.point(ta).distance(b.point(tb)) }).collect()).collect();
+    // Newton on the gap's square, from a sample.
+    let refine = |(mut ta, mut tb): (f64, f64)| -> (f64, f64) {
+        for _ in 0..50 {
+            let (pa, da, dda) = a.d2(ta);
+            let (pb, db, ddb) = b.d2(tb);
+            let r = pa - pb;
+            let g = [r.dot(da), -r.dot(db)];
+            let h = [[da.dot(da) + r.dot(dda), -da.dot(db)], [-da.dot(db), db.dot(db) - r.dot(ddb)]];
+            let det = h[0][0] * h[1][1] - h[0][1] * h[1][0];
+            if det.abs() <= 1e-300 {
+                break;
+            }
+            let (dx, dy) = ((g[0] * h[1][1] - g[1] * h[0][1]) / det, (h[0][0] * g[1] - h[1][0] * g[0]) / det);
+            ta = (ta - dx).clamp(a0.min(a1), a0.max(a1));
+            tb = (tb - dy).clamp(b0.min(b1), b0.max(b1));
+            if dx.abs() + dy.abs() <= 1e-14 * (1.0 + ta.abs() + tb.abs()) {
+                break;
+            }
+        }
+        (ta, tb)
+    };
+    // (Fitted through sections, two contact curves on one face may pass a few millionths
+    // apart where they cross.) From each of the samples' local minima, the crossings found.
+    let close = |ta: f64, tb: f64| {
+        let (pa, pb) = (a.point(ta), b.point(tb));
+        pa.distance(pb) <= 1e-5 * (1.0 + (pa - Point::ORIGIN).length())
+    };
+    let mut found: Vec<(f64, f64)> = Vec::new();
     for i in 0..=n {
-        let ta = a0 + (a1 - a0) * i as f64 / n as f64;
-        let pa = a.point(ta);
         for j in 0..=n {
-            let tb = b0 + (b1 - b0) * j as f64 / n as f64;
-            let d = pa.distance(b.point(tb));
-            if d < best.0 {
-                best = (d, ta, tb);
+            let d = grid[i][j];
+            let local = (i.saturating_sub(1)..=(i + 1).min(n)).all(|x| (j.saturating_sub(1)..=(j + 1).min(n)).all(|y| grid[x][y] >= d));
+            if local {
+                let (ta, tb) = refine(at(i, j));
+                if close(ta, tb) {
+                    found.push((ta, tb));
+                }
             }
         }
     }
-    // Newton on the gap's square.
-    let (mut ta, mut tb) = (best.1, best.2);
-    for _ in 0..50 {
-        let (pa, da, dda) = a.d2(ta);
-        let (pb, db, ddb) = b.d2(tb);
-        let r = pa - pb;
-        let g = [r.dot(da), -r.dot(db)];
-        let h = [[da.dot(da) + r.dot(dda), -da.dot(db)], [-da.dot(db), db.dot(db) - r.dot(ddb)]];
-        let det = h[0][0] * h[1][1] - h[0][1] * h[1][0];
-        if det.abs() <= 1e-300 {
-            break;
-        }
-        let (dx, dy) = ((g[0] * h[1][1] - g[1] * h[0][1]) / det, (h[0][0] * g[1] - h[1][0] * g[0]) / det);
-        ta = (ta - dx).clamp(a0.min(a1), a0.max(a1));
-        tb = (tb - dy).clamp(b0.min(b1), b0.max(b1));
-        if dx.abs() + dy.abs() <= 1e-14 * (1.0 + ta.abs() + tb.abs()) {
-            break;
-        }
-    }
-    let (pa, pb) = (a.point(ta), b.point(tb));
-    let size = 1.0 + (pa - Point::ORIGIN).length();
-    if pa.distance(pb) > 1e-6 * size {
+    let Some(&(ta, tb)) = found.iter().min_by(|x, y| a.point(x.0).distance(corner).total_cmp(&a.point(y.0).distance(corner))) else {
         return Err(Error::InvalidInput("fillets at a corner whose contact curves do not cross".into()));
-    }
+    };
+    let (pa, pb) = (a.point(ta), b.point(tb));
     Ok((ta, tb, pa + (pb - pa) * 0.5))
 }
 
@@ -668,7 +846,8 @@ fn build(model: &mut Model, shape: Shape, stripes: &[Stripe], ends: &[[End; 2]],
         stops.push([a, b]);
     }
     for (m, vs) in mitres.iter().zip(&mitre_vertices) {
-        trims.push((m.edge.0, m.edge.1, *vs.last().expect("mitre points"), m.edge.2));
+        let Some(edge) = m.edge else { continue };
+        trims.push((edge.0, edge.1, *vs.last().expect("mitre points"), edge.2));
     }
     // The contact curves as edges, between the fillets' stops.
     let mut contact_edges: Vec<[EdgeId; 2]> = Vec::with_capacity(stripes.len());
