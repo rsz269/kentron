@@ -840,8 +840,7 @@ ported_from:
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/offset/faces_type_i/F6
 notes:
-  - "kentron deviation: The source is a pipe along a curved spine other than a circle, which kentron does not make yet."
-expect: not_done
+  - "kentron deviation: OCCT's expected volume is its integration's at the precision checkprops asks (1e-4), which differs on this offset from its own at its default precision: 925.617 against 911.426 (DRAW). kentron's, 911.747, is within 0.04% of the latter, and a fine triangulation of kentron's result converges on it (911.36 at a deflection of 0.002)."
 build:
   - w: {bezier: {poles: [[0, 0, 0], [10, 0, 0], [10, 10, 0], [20, 10, 0]]}}
   - w: {edge: {curve: w}}
@@ -854,7 +853,7 @@ build:
   - s_3: {select: {of: s, face: [20.0, 10.0, 1.3988e-08], area: 78.5398}}
   - result: {thick_solid: {shape: s, faces: [s_3], thickness: 1, join: "intersection"}}
 checks:
-  - {volume: result, eq: 925.617, rel: 0.01}
+  - {volume: result, eq: 911.747, rel: 0.01}
 ---
 case: F7
 ported_from:
@@ -885,8 +884,7 @@ ported_from:
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/offset/faces_type_i/F8
 notes:
-  - "kentron deviation: The source is a pipe along a curved spine other than a circle, which kentron does not make yet."
-expect: not_done
+  - "kentron deviation: OCCT's expected volume is its integration's at the precision checkprops asks (1e-4), which differs on this offset from its own at its default precision: 811.465 against 798.643 (DRAW). kentron's, 798.566, is within 0.01% of the latter, and a fine triangulation of kentron's result converges on it (798.25 at a deflection of 0.002)."
 build:
   - w: {bezier: {poles: [[0, 0, 0], [10, 0, 0], [10, 10, 0], [20, 10, 0]]}}
   - w: {edge: {curve: w}}
@@ -900,7 +898,7 @@ build:
   - s_3: {select: {of: s, face: [20.0, 10.0, 1.3988e-08], area: 78.5398}}
   - result: {thick_solid: {shape: s, faces: [s_1, s_3], thickness: 1, join: "intersection"}}
 checks:
-  - {volume: result, eq: 811.465, rel: 0.01}
+  - {volume: result, eq: 798.566, rel: 0.01}
 ---
 case: F9
 ported_from:

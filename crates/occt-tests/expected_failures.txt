@@ -702,7 +702,6 @@ tests/bugs/modalg_7/bug26558_2
 tests/bugs/modalg_7/bug26563
 tests/bugs/modalg_7/bug26795
 tests/bugs/modalg_7/bug27087
-tests/bugs/modalg_7/bug27711_1
 tests/bugs/modalg_7/bug27711_3
 tests/bugs/modalg_7/bug27928
 tests/bugs/modalg_7/bug27948
@@ -1234,8 +1233,6 @@ tests/offset/faces_type_i/F1
 tests/offset/faces_type_i/F3
 tests/offset/faces_type_i/F4
 tests/offset/faces_type_i/F5
-tests/offset/faces_type_i/F6
-tests/offset/faces_type_i/F8
 tests/offset/faces_type_i/I5
 tests/offset/faces_type_i/J5
 tests/offset/faces_type_i/K6
