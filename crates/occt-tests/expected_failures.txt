@@ -8,16 +8,9 @@ tests/blend/bfuseblend/A9
 tests/blend/bfuseblend/B6
 tests/blend/buildevol/B3
 tests/blend/buildevol/E3
-tests/blend/buildevol/H9
-tests/blend/buildevol/I3
-tests/blend/buildevol/I6
-tests/blend/buildevol/I9
 tests/blend/buildevol/J3
-tests/blend/buildevol/J6
 tests/blend/buildevol/J9
-tests/blend/buildevol/K1
 tests/blend/buildevol/K2
-tests/blend/buildevol/K3
 tests/blend/buildevol/K5
 tests/blend/buildevol/K6
 tests/blend/buildevol/K7

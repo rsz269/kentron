@@ -107,8 +107,8 @@ struct Boundary {
     across: Option<Curve2>,
 }
 
-/// `shape` (which this edits: a copy) with its `edge` rounded by the ball of `radius` in
-/// `sections` (around a closed edge, the last the first again), touching what `supports`
+/// `shape` (which this edits: a copy) with its `edge` rounded by the ball (of radius up to
+/// `radius`) in `sections` (around a closed edge, the last the first again), touching what `supports`
 /// say, switching at `breaks`, on the faces of `sides`; along an open edge, `tangents` are
 /// its directions at its ends.
 #[allow(clippy::too_many_arguments)]
@@ -131,7 +131,7 @@ pub(super) fn build(model: &mut Model, shape: Shape, edge: Shape, sections: &[Se
         let carry = |s: &Section, direction: Vector, step: f64| {
             let by = direction * (2.0 * radius);
             let flat = |p: Point| p - direction * (p - s.at).dot(direction);
-            Section { t: s.t + step, at: s.at + by, center: flat(s.center) + by, contacts: [flat(s.contacts[0]) + by, flat(s.contacts[1]) + by], uv: [None, None] }
+            Section { t: s.t + step, at: s.at + by, center: flat(s.center) + by, contacts: [flat(s.contacts[0]) + by, flat(s.contacts[1]) + by], uv: [None, None], ..*s }
         };
         // (Its parameter on as fast as it runs at the end.)
         let rate = |a: &Section, b: &Section| (b.t - a.t) / a.at.distance(b.at).max(1e-300);

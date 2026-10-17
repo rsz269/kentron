@@ -794,9 +794,15 @@ fn fillet_solid_evolving(model: &mut Model, shape: Shape, edges: &[(Shape, Vec<(
         };
         let built = roll(model, result, &group_edges);
         // (Where a face's boundary now crosses itself, the fillet runs over another
-        // feature on its faces: rounded without it, the feature then put back.)
+        // feature on its faces: rounded without it, the feature then put back; or off its
+        // faces: rolling on onto the faces beyond.)
         let built = match built {
-            Ok(rounded) if crosses_itself(model, rounded) && !crosses_itself(model, result) => over_features(model, result, rounded, &group_edges, &roll, 3),
+            Ok(rounded) if crosses_itself(model, rounded) && !crosses_itself(model, result) => {
+                over_features(model, result, rounded, &group_edges, &roll, 3).or_else(|e| match &group_edges[..] {
+                    [(edge, law)] => runover::fillet_along(model, result, *edge, *law),
+                    _ => Err(e),
+                })
+            }
             other => other,
         };
         result = match built {

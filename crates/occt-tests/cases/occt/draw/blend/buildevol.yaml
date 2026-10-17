@@ -1196,7 +1196,6 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/buildevol/H9
-expect: not_done
 build:
   - s: {load: {brep: "CFI_6_a12fgr.rle"}}
   - s: {scale: {shape: s, center: [0, 0, 0], factor: 1}}
@@ -1242,7 +1241,6 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/buildevol/I3
-expect: not_done
 build:
   - s: {load: {brep: "CFI_6_b12fgt.rle"}}
   - s: {scale: {shape: s, center: [0, 0, 0], factor: 1}}
@@ -1288,7 +1286,6 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/buildevol/I6
-expect: not_done
 build:
   - s: {load: {brep: "CFI_6_c12fgv.rle"}}
   - s: {scale: {shape: s, center: [0, 0, 0], factor: 1}}
@@ -1334,7 +1331,6 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/buildevol/I9
-expect: not_done
 build:
   - s: {load: {brep: "CFI_6_d12fgx.rle"}}
   - s: {scale: {shape: s, center: [0, 0, 0], factor: 1}}
@@ -1426,7 +1422,6 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/buildevol/J6
-expect: not_done
 build:
   - s: {load: {brep: "CFI_6_f12fhb.rle"}}
   - s: {scale: {shape: s, center: [0, 0, 0], factor: 1}}
@@ -1488,7 +1483,6 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/buildevol/K1
-expect: not_done
 build:
   - s: {load: {brep: "CFI_6_g12fhd.rle"}}
   - s: {scale: {shape: s, center: [0, 0, 0], factor: 1}}
@@ -1522,7 +1516,6 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/buildevol/K3
-expect: not_done
 build:
   - s: {load: {brep: "CFI_6_h12fhf.rle"}}
   - s: {scale: {shape: s, center: [0, 0, 0], factor: 1}}

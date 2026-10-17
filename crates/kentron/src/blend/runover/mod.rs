@@ -221,6 +221,8 @@ struct Section {
     contacts: [Point; 2],
     /// The contacts' parameters on the faces they lie on (not on edges).
     uv: [Option<Point2>; 2],
+    /// The ball's radius there.
+    radius: f64,
 }
 
 /// Where [`roll`] puts a section at each switch of what the contacts lie on: nowhere, or
@@ -247,11 +249,11 @@ struct Rolled {
     tangents: [Vector; 2],
 }
 
-/// The ball of `radius` along `edge` of `shape`, in `count` sections and one more where the
-/// contacts change what they lie on (the ball rolling onto another face, or over an edge;
-/// found by bisection, where the fillet's faces end). Around a closed edge the last
-/// section is the first.
-fn roll(model: &Model, shape: Shape, edge: Shape, radius: f64, count: usize, switches: Switches) -> Result<Rolled> {
+/// The ball of radius `radius(s)` along `edge` of `shape` (`s` the fraction of the edge's
+/// length from its start), in `count` sections and one more where the contacts change what
+/// they lie on (the ball rolling onto another face, or over an edge; found by bisection,
+/// where the fillet's faces end). Around a closed edge the last section is the first.
+fn roll(model: &Model, shape: Shape, edge: Shape, radius: &dyn Fn(f64) -> f64, count: usize, switches: Switches) -> Result<Rolled> {
     // The two faces, each with the direction of the edge in its boundary (+1 along the
     // edge's own).
     let mut faces: Vec<(Shape, f64)> = Vec::new();
@@ -272,6 +274,23 @@ fn roll(model: &Model, shape: Shape, edge: Shape, radius: f64, count: usize, swi
     let (va, vb) = model.edge_vertices(Shape { orientation: Orientation::Forward, ..edge });
     let closed = va.node == vb.node;
     let side_set = sides(model, shape, edge, [f0, f1]);
+    // The radius at a parameter of the edge (by the fraction of its length up to there),
+    // and the largest, for scales.
+    let lengths: Vec<f64> = {
+        const N: usize = 64;
+        let points: Vec<Point> = (0..=N).map(|i| curve.point(t0 + (t1 - t0) * i as f64 / N as f64)).collect();
+        std::iter::once(0.0).chain(points.windows(2).scan(0.0, |l, w| { *l += w[0].distance(w[1]); Some(*l) })).collect()
+    };
+    let radius_at = |t: f64| {
+        let x = ((t - t0) / (t1 - t0)).clamp(0.0, 1.0) * (lengths.len() - 1) as f64;
+        let k = (x.floor() as usize).min(lengths.len() - 2);
+        let l = lengths[k] + (lengths[k + 1] - lengths[k]) * (x - k as f64);
+        radius(l / lengths[lengths.len() - 1].max(1e-300))
+    };
+    let largest = largest(radius);
+    if !(largest > 0.0) {
+        return Err(Error::InvalidInput(format!("fillet radius must be positive, got {largest}")));
+    }
     // The faces' outward normals at the start of the edge, for the ball's first place.
     let outward = |model: &Model, face: Shape, p: Point| -> Option<Vector> {
         let surface = model.surface(face)?.transformed(&face.placement);
@@ -304,11 +323,12 @@ fn roll(model: &Model, shape: Shape, edge: Shape, radius: f64, count: usize, swi
     // the ball lies between the faces either way, in the material or out of it.)
     let convex = n0.dot(w1) < 0.0;
     let half = 0.5 * w0.dot(w1).clamp(-1.0, 1.0).acos();
-    let mut offset = (w0 + w1).normalized() * (radius / half.sin().max(1e-3));
+    let mut offset = (w0 + w1).normalized() * (radius_at(t0) / half.sin().max(1e-3));
     // In the section through a point of the edge, Newton steps from a nearby centre (as an
     // offset from the edge): the section, and what the contacts lie on.
     let solve = |t: f64, offset: Vector| -> Result<(Section, [Support; 2])> {
         let (at, tangent) = spine(t);
+        let radius = radius_at(t);
         let ex = (offset - tangent * offset.dot(tangent)).normalized();
         let ey = tangent.cross(ex);
         // The distances to the sides less the radius, the nearest points and what they lie
@@ -323,7 +343,7 @@ fn roll(model: &Model, shape: Shape, edge: Shape, radius: f64, count: usize, swi
             let (p, v, feet, on) = f(x, y);
             if v[0].abs().max(v[1].abs()) <= 1e-10 * radius.max(1.0) {
                 let uv = |k: usize, (face, rim): Support| if rim.is_none() { side_set[k].0[face].near.get().map(|(u, v)| Point2::new(u, v)) } else { None };
-                return Ok((Section { t, at, center: p, contacts: feet, uv: [uv(0, on[0]), uv(1, on[1])] }, on));
+                return Ok((Section { t, at, center: p, contacts: feet, uv: [uv(0, on[0]), uv(1, on[1])], radius }, on));
             }
             // (Nothing on a side facing the edge, or the centre on it: no section here.)
             let (d0, d1) = (p - feet[0], p - feet[1]);
@@ -398,7 +418,7 @@ fn roll(model: &Model, shape: Shape, edge: Shape, radius: f64, count: usize, swi
                             let mid = secant.filter(|&x| between(x)).or(Some(falsi).filter(|&x| between(x))).unwrap_or(0.5 * (a + b));
                             let (s, _) = solve(mid, start)?;
                             let g = measure(&s);
-                            if g.abs() <= 1e-9 * (1.0 + radius) || (b - a).abs() <= 1e-9 * (t1 - t0).abs() {
+                            if g.abs() <= 1e-9 * (1.0 + largest) || (b - a).abs() <= 1e-9 * (t1 - t0).abs() {
                                 found = Some(s);
                                 break;
                             }
@@ -455,6 +475,11 @@ fn roll(model: &Model, shape: Shape, edge: Shape, radius: f64, count: usize, swi
 /// Whether the ball of `radius` along `edge` of `shape` touches anything but the edge's two
 /// faces somewhere (where the fillet must roll on onto the faces beyond).
 pub(super) fn needed(model: &Model, shape: Shape, edge: Shape, radius: f64) -> bool {
+    needed_along(model, shape, edge, &|_| radius)
+}
+
+/// [`needed`] for the ball of radius `radius(s)` (`s` the fraction of the edge's length).
+pub(super) fn needed_along(model: &Model, shape: Shape, edge: Shape, radius: &dyn Fn(f64) -> f64) -> bool {
     let Ok(rolled) = roll(model, shape, edge, radius, 16, Switches::Ignored) else { return false };
     // (Not at the ends of an open edge, where the contacts meet the faces there.)
     let n = rolled.supports.len();
@@ -462,17 +487,30 @@ pub(super) fn needed(model: &Model, shape: Shape, edge: Shape, radius: f64) -> b
     inner.iter().any(|s| s.iter().any(|&support| support != (0, None)))
 }
 
+/// The largest of `radius(s)` along an edge (`s` from 0 to 1), sampled.
+fn largest(radius: &dyn Fn(f64) -> f64) -> f64 {
+    (0..=32).map(|i| radius(i as f64 / 32.0)).fold(0.0, f64::max)
+}
+
 /// `shape` with `edge` rounded by a ball of `radius` rolling on the faces at the edge and on
 /// beyond them (see the [module](self) documentation).
 pub(super) fn fillet(model: &mut Model, shape: Shape, edge: Shape, radius: f64) -> Result<Shape> {
+    fillet_along(model, shape, edge, &|_| radius)
+}
+
+/// [`fillet`] by a ball of radius `radius(s)` (`s` the fraction of the edge's length from
+/// its start).
+pub(super) fn fillet_along(model: &mut Model, shape: Shape, edge: Shape, law: &dyn Fn(f64) -> f64) -> Result<Shape> {
+    // (Its largest radius, for scales.)
+    let radius = largest(law);
     // Built directly (on a copy, whose edges it splits), where it can be; otherwise by
     // boolean operations.
-    if let Ok(result) = directly(model, shape, edge, radius) {
+    if let Ok(result) = directly(model, shape, edge, law) {
         return Ok(result);
     }
     // (Finer along curved edges, where the faces through the sections are smooth.)
     let straight = matches!(model.edge_curve(edge), Some((Curve::Line(_), _, _)));
-    let Rolled { mut sections, supports, breaks, side_set, convex, closed, tangents } = roll(model, shape, edge, radius, if straight { 48 } else { 192 }, Switches::Bisected)?;
+    let Rolled { mut sections, supports, breaks, side_set, convex, closed, tangents } = roll(model, shape, edge, law, if straight { 48 } else { 192 }, Switches::Bisected)?;
     if !convex && !closed {
         return Err(Error::InvalidInput("run-over fillets of open concave edges are not supported yet".into()));
     }
@@ -489,7 +527,7 @@ pub(super) fn fillet(model: &mut Model, shape: Shape, edge: Shape, radius: f64) 
             if side_set[k].0[face].beyond[rim].iter().all(quadric) {
                 continue;
             }
-            let past = section.contacts[k] + (section.contacts[k] - section.center).normalized() * (1e-3 * radius);
+            let past = section.contacts[k] + (section.contacts[k] - section.center).normalized() * (1e-3 * section.radius);
             if !matches!(boolean::classify_point(model, shape, past), Ok(boolean::PointLocation::Outside)) {
                 return Err(Error::InvalidInput("run-over fillets past bosses that are not quadrics are not supported yet".into()));
             }
@@ -506,8 +544,8 @@ pub(super) fn fillet(model: &mut Model, shape: Shape, edge: Shape, radius: f64) 
             let flat = |p: Point| p - t * (p - s.at).dot(t);
             Section { at: s.at + by, center: flat(s.center) + by, contacts: [flat(s.contacts[0]) + by, flat(s.contacts[1]) + by], ..s }
         };
-        sections.insert(0, carry(first, tangents[0] * -radius));
-        sections.push(carry(last, tangents[1] * radius));
+        sections.insert(0, carry(first, tangents[0] * -first.radius));
+        sections.push(carry(last, tangents[1] * last.radius));
         (sections, breaks.into_iter().map(|b| b + 1).collect())
     };
     // Only the sections the faces need: where the fillet runs straight (the ball on planes),
@@ -523,20 +561,20 @@ pub(super) fn fillet(model: &mut Model, shape: Shape, edge: Shape, radius: f64) 
     let mut lens_wires = Vec::new();
     for s in &sections[..if closed { sections.len() - 1 } else { sections.len() }] {
         let toward = (s.at - s.center).normalized();
-        let beyond = s.at + toward * (0.5 * radius);
+        let beyond = s.at + toward * (0.5 * s.radius);
         if convex {
-            let out = |c: Point| c + toward * (0.5 * radius);
+            let out = |c: Point| c + toward * (0.5 * s.radius);
             wedge_wires.push(polygon(model, &[s.contacts[0], out(s.contacts[0]), beyond, out(s.contacts[1]), s.contacts[1]])?);
-            lens_wires.push(lens(model, s, radius)?);
+            lens_wires.push(lens(model, s)?);
         } else {
             // (At a concave edge, the wedge along a line from within the ball out through
             // each contact, crossing the face there: the solid is cut exactly along the
             // contacts. The line leans from the ball's radius toward the edge, into the
             // solid even where the ball stands over a rim. And the ball's arc alone.)
-            let across = |c: Point| ((c - s.center).normalized() + toward).normalized() * radius;
+            let across = |c: Point| ((c - s.center).normalized() + toward).normalized() * s.radius;
             let (inner, deep) = (|c: Point| c - across(c) * 0.25, |c: Point| c + across(c) * 0.5);
             wedge_wires.push(polygon(model, &[inner(s.contacts[0]), deep(s.contacts[0]), beyond, deep(s.contacts[1]), inner(s.contacts[1])])?);
-            lens_wires.push(arc(model, s, radius)?);
+            lens_wires.push(arc(model, s)?);
         }
     }
     if closed {
@@ -613,12 +651,12 @@ pub(super) fn fillet(model: &mut Model, shape: Shape, edge: Shape, radius: f64) 
     Ok(result)
 }
 
-/// [`fillet`] built directly (see [`trim`]).
-fn directly(model: &mut Model, shape: Shape, edge: Shape, radius: f64) -> Result<Shape> {
+/// [`fillet_along`] built directly (see [`trim`]).
+fn directly(model: &mut Model, shape: Shape, edge: Shape, law: &dyn Fn(f64) -> f64) -> Result<Shape> {
     let (copy, edge) = copied(model, shape, edge)?;
     let straight = matches!(model.edge_curve(edge), Some((Curve::Line(_), _, _)));
-    let Rolled { sections, supports, breaks, side_set, convex, closed, tangents } = roll(model, copy, edge, radius, if straight { 32 } else { 64 }, Switches::Found)?;
-    let result = trim::build(model, copy, edge, &sections, &supports, &breaks, &side_set, radius, convex, closed, tangents)?;
+    let Rolled { sections, supports, breaks, side_set, convex, closed, tangents } = roll(model, copy, edge, law, if straight { 32 } else { 64 }, Switches::Found)?;
+    let result = trim::build(model, copy, edge, &sections, &supports, &breaks, &side_set, largest(law), convex, closed, tangents)?;
     // (Checked: what is kept or dropped amiss leaves the shell open. Built this way it is
     // turned out, its faces as they were and the fillet's facing out.)
     if !closed_shells(model, result) {
@@ -743,21 +781,21 @@ fn polygon(model: &mut Model, points: &[Point]) -> Result<Shape> {
 }
 
 /// The ball's arc in a section, from the first contact to the second on the edge's side.
-fn arc(model: &mut Model, s: &Section, radius: f64) -> Result<Shape> {
+fn arc(model: &mut Model, s: &Section) -> Result<Shape> {
     let (a, b) = (s.contacts[0] - s.center, s.contacts[1] - s.center);
     let angle = a.cross(b).length().atan2(a.dot(b));
-    let circle = Circle::new(Frame::new(s.center, Direction::from_vector(a.cross(b)), Direction::from_vector(a)), radius);
+    let circle = Circle::new(Frame::new(s.center, Direction::from_vector(a.cross(b)), Direction::from_vector(a)), s.radius);
     let edge = make::edge_from_curve_range(model, Curve::Circle(circle), 0.0, angle)?;
     make::wire(model, &[edge])
 }
 
 /// The lens in a section between the ball's arc (from the first contact to the second,
 /// on the edge's side) and the chord back.
-fn lens(model: &mut Model, s: &Section, radius: f64) -> Result<Shape> {
+fn lens(model: &mut Model, s: &Section) -> Result<Shape> {
     let (a, b) = (s.contacts[0] - s.center, s.contacts[1] - s.center);
     let angle = a.cross(b).length().atan2(a.dot(b));
     let normal = a.cross(b);
-    let circle = Circle::new(Frame::new(s.center, Direction::from_vector(normal), Direction::from_vector(a)), radius);
+    let circle = Circle::new(Frame::new(s.center, Direction::from_vector(normal), Direction::from_vector(a)), s.radius);
     let arc = make::edge_from_curve_range(model, Curve::Circle(circle), 0.0, angle)?;
     let (start, end) = model.edge_vertices(arc);
     let chord = make::edge(model, end, start)?;
