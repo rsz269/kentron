@@ -451,88 +451,8 @@ impl Checker<'_> {
     /// loop or two) cross, nor one itself, other than at a vertex they share (OCCT's
     /// `BRepCheck_SelfIntersectingWire`, `BRepCheck_IntersectingWires`).
     fn boundary_crossings(&mut self, face: FaceId, coedges: &[CoEdgeId], surface: &Surface) {
-        // Each pcurve as a polyline; the crossings of their sides refined on the pcurves.
-        struct Run {
-            edge: EdgeId,
-            curve: Curve2,
-            params: Vec<f64>,
-            points: Vec<Point2>,
-        }
-        let mut runs = Vec::new();
-        for &c in coedges {
-            let Some(coedge) = self.model.get(c) else { continue };
-            let edge = coedge.edge;
-            let Some((curve, first, last)) = self.model.effective_pcurve(c) else { continue };
-            let n = match &curve {
-                Curve2::Line(_) => 1,
-                other => (8 * (other.breaks().iter().filter(|&&t| t > first && t < last).count() + 1)).clamp(16, 512),
-            };
-            let params: Vec<f64> = (0..=n).map(|i| first + (last - first) * i as f64 / n as f64).collect();
-            let points = params.iter().map(|&t| curve.point(t)).collect();
-            runs.push(Run { edge, curve, params, points });
-        }
-        let mut sides: Vec<(usize, usize, f64, f64)> = Vec::new();
-        let (mut lo, mut hi) = (Point2::new(f64::INFINITY, f64::INFINITY), Point2::new(f64::NEG_INFINITY, f64::NEG_INFINITY));
-        for (r, run) in runs.iter().enumerate() {
-            for (i, w) in run.points.windows(2).enumerate() {
-                sides.push((r, i, w[0].x.min(w[1].x), w[0].x.max(w[1].x)));
-            }
-            for p in &run.points {
-                lo = Point2::new(lo.x.min(p.x), lo.y.min(p.y));
-                hi = Point2::new(hi.x.max(p.x), hi.y.max(p.y));
-            }
-        }
-        if !(lo.x <= hi.x) {
-            return;
-        }
-        let size = (hi - lo).length().max(1e-12);
-        sides.sort_by(|a, b| a.2.total_cmp(&b.2));
-        let cross = |a: Point2, b: Point2, c: Point2| (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
-        for k in 0..sides.len() {
-            let (r1, i1, _, x1) = sides[k];
-            for &(r2, i2, x0, _) in &sides[k + 1..] {
-                if x0 > x1 {
-                    break;
-                }
-                let (run1, run2) = (&runs[r1], &runs[r2]);
-                if r1 == r2 && i1.abs_diff(i2) <= 1 || r1 != r2 && run1.edge == run2.edge {
-                    continue;
-                }
-                let (a, b) = (run1.points[i1], run1.points[i1 + 1]);
-                let (c, d) = (run2.points[i2], run2.points[i2 + 1]);
-                let (d1, d2, d3, d4) = (cross(c, d, a), cross(c, d, b), cross(a, b, c), cross(a, b, d));
-                if !(d1 * d2 < 0.0 && d3 * d4 < 0.0) {
-                    continue;
-                }
-                // Where the pcurves themselves cross, from where the sides do (none where
-                // they only come close).
-                let (alpha, beta) = (d1 / (d1 - d2), d3 / (d3 - d4));
-                let span = |run: &Run, i: usize, f: f64| run.params[i] + f * (run.params[i + 1] - run.params[i]);
-                let range = |r: &Run| (r.params[0], *r.params.last().unwrap());
-                let Some((s, t)) = pcurves_crossing((&run1.curve, range(run1)), (&run2.curve, range(run2)), span(run1, i1, alpha), span(run2, i2, beta), size) else {
-                    continue;
-                };
-                if r1 == r2 && (s - t).abs() <= 1e-6 * (run1.params.last().unwrap() - run1.params[0]).abs() {
-                    continue;
-                }
-                // (Not at a vertex the two edges share.)
-                let uv = run1.curve.point(s);
-                let p = surface.point(uv.x, uv.y);
-                let reach = self.model.get(run1.edge).map_or(0.0, |e| e.tolerance) + self.model.get(run2.edge).map_or(0.0, |e| e.tolerance);
-                let ends = |e: EdgeId| -> Vec<VertexId> {
-                    self.model.get(e).map_or(Vec::new(), |e| [e.start, e.end].iter().filter_map(|&u| self.model.get(u).map(|u| u.vertex)).collect())
-                };
-                let (ends1, ends2) = (ends(run1.edge), ends(run2.edge));
-                let at_vertex = ends1.iter().filter(|v| ends2.contains(v)).filter_map(|&v| self.model.get(v)).any(|v| v.point.distance(p) <= v.tolerance + reach + LINEAR);
-                if at_vertex {
-                    continue;
-                }
-                return self.error(
-                    face,
-                    ProblemKind::SelfIntersection,
-                    format!("the boundary of {face:?} crosses itself ({:?} and {:?}) at {p:?}", run1.edge, run2.edge),
-                );
-            }
+        if let Some((e1, e2, p)) = boundary_crossing(self.model, coedges, surface) {
+            self.error(face, ProblemKind::SelfIntersection, format!("the boundary of {face:?} crosses itself ({e1:?} and {e2:?}) at {p:?}"));
         }
     }
 
@@ -594,6 +514,108 @@ impl Checker<'_> {
         }
     }
 }
+
+/// The faces of `shape` whose boundaries cross themselves (see [`check`]), each with two
+/// edges crossing there (or one edge twice).
+pub fn boundary_crossings(model: &Model, shape: Shape) -> Vec<(Shape, [Shape; 2])> {
+    let mut out = Vec::new();
+    for face in model.unique_subshapes(shape, NodeKind::Face) {
+        let Some(surface) = model.surface(face) else { continue };
+        let Ok(id) = FaceId::try_from(face.node) else { continue };
+        let Some(record) = model.get(id) else { continue };
+        let coedges: Vec<CoEdgeId> = record.wires.iter().filter_map(|&u| model.get(u)).filter_map(|u| model.get(u.wire)).flat_map(|w| w.coedges.iter().copied()).collect();
+        if let Some((e1, e2, _)) = boundary_crossing(model, &coedges, surface) {
+            out.push((face, [Shape::from(NodeId::from(e1)), Shape::from(NodeId::from(e2))]));
+        }
+    }
+    out
+}
+
+/// Two edges whose pcurves cross on `surface` (or one crossing itself), and where, among the
+/// coedges `coedges` of a face: away from a vertex they share, and not only touching.
+fn boundary_crossing(model: &Model, coedges: &[CoEdgeId], surface: &Surface) -> Option<(EdgeId, EdgeId, Point)> {
+    // Each pcurve as a polyline; the crossings of their sides refined on the pcurves.
+    struct Run {
+        edge: EdgeId,
+        curve: Curve2,
+        params: Vec<f64>,
+        points: Vec<Point2>,
+    }
+    let mut runs = Vec::new();
+    for &c in coedges {
+        let Some(coedge) = model.get(c) else { continue };
+        let edge = coedge.edge;
+        let Some((curve, first, last)) = model.effective_pcurve(c) else { continue };
+        let n = match &curve {
+            Curve2::Line(_) => 1,
+            other => (8 * (other.breaks().iter().filter(|&&t| t > first && t < last).count() + 1)).clamp(16, 512),
+        };
+        let params: Vec<f64> = (0..=n).map(|i| first + (last - first) * i as f64 / n as f64).collect();
+        let points = params.iter().map(|&t| curve.point(t)).collect();
+        runs.push(Run { edge, curve, params, points });
+    }
+    let mut sides: Vec<(usize, usize, f64, f64)> = Vec::new();
+    let (mut lo, mut hi) = (Point2::new(f64::INFINITY, f64::INFINITY), Point2::new(f64::NEG_INFINITY, f64::NEG_INFINITY));
+    for (r, run) in runs.iter().enumerate() {
+        for (i, w) in run.points.windows(2).enumerate() {
+            sides.push((r, i, w[0].x.min(w[1].x), w[0].x.max(w[1].x)));
+        }
+        for p in &run.points {
+            lo = Point2::new(lo.x.min(p.x), lo.y.min(p.y));
+            hi = Point2::new(hi.x.max(p.x), hi.y.max(p.y));
+        }
+    }
+    if !(lo.x <= hi.x) {
+        return None;
+    }
+    let size = (hi - lo).length().max(1e-12);
+    sides.sort_by(|a, b| a.2.total_cmp(&b.2));
+    let cross = |a: Point2, b: Point2, c: Point2| (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+    for k in 0..sides.len() {
+        let (r1, i1, _, x1) = sides[k];
+        for &(r2, i2, x0, _) in &sides[k + 1..] {
+            if x0 > x1 {
+                break;
+            }
+            let (run1, run2) = (&runs[r1], &runs[r2]);
+            if r1 == r2 && i1.abs_diff(i2) <= 1 || r1 != r2 && run1.edge == run2.edge {
+                continue;
+            }
+            let (a, b) = (run1.points[i1], run1.points[i1 + 1]);
+            let (c, d) = (run2.points[i2], run2.points[i2 + 1]);
+            let (d1, d2, d3, d4) = (cross(c, d, a), cross(c, d, b), cross(a, b, c), cross(a, b, d));
+            if !(d1 * d2 < 0.0 && d3 * d4 < 0.0) {
+                continue;
+            }
+            // Where the pcurves themselves cross, from where the sides do (none where
+            // they only come close).
+            let (alpha, beta) = (d1 / (d1 - d2), d3 / (d3 - d4));
+            let span = |run: &Run, i: usize, f: f64| run.params[i] + f * (run.params[i + 1] - run.params[i]);
+            let range = |r: &Run| (r.params[0], *r.params.last().unwrap());
+            let Some((s, t)) = pcurves_crossing((&run1.curve, range(run1)), (&run2.curve, range(run2)), span(run1, i1, alpha), span(run2, i2, beta), size) else {
+                continue;
+            };
+            if r1 == r2 && (s - t).abs() <= 1e-6 * (run1.params.last().unwrap() - run1.params[0]).abs() {
+                continue;
+            }
+            // (Not at a vertex the two edges share.)
+            let uv = run1.curve.point(s);
+            let p = surface.point(uv.x, uv.y);
+            let reach = model.get(run1.edge).map_or(0.0, |e| e.tolerance) + model.get(run2.edge).map_or(0.0, |e| e.tolerance);
+            let ends = |e: EdgeId| -> Vec<VertexId> {
+                model.get(e).map_or(Vec::new(), |e| [e.start, e.end].iter().filter_map(|&u| model.get(u).map(|u| u.vertex)).collect())
+            };
+            let (ends1, ends2) = (ends(run1.edge), ends(run2.edge));
+            let at_vertex = ends1.iter().filter(|v| ends2.contains(v)).filter_map(|&v| model.get(v)).any(|v| v.point.distance(p) <= v.tolerance + reach + LINEAR);
+            if at_vertex {
+                continue;
+            }
+            return Some((run1.edge, run2.edge, p));
+        }
+    }
+None
+}
+
 
 /// Where two pcurves cross near the parameters `s` and `t` (Newton's method, within their
 /// ranges): none if it does not settle on a crossing (to `size`'s precision), or the

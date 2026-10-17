@@ -788,9 +788,16 @@ fn fillet_solid_evolving(model: &mut Model, shape: Shape, edges: &[(Shape, Vec<(
     for r in roots {
         let members: Vec<usize> = (0..n).filter(|&i| root(&mut group, i) == r).collect();
         let group_edges: Vec<(Shape, &dyn Fn(f64) -> f64)> = members.iter().map(|&i| (Shape { placement: Transform::IDENTITY, ..edges[i].0 }, radii[i].as_ref())).collect();
-        let built = match &group_edges[..] {
-            [(edge, law)] => ball::rolling_ball(model, result, *edge, *law),
-            _ => ball::fillet_network(model, result, &group_edges).or_else(|_| fillet_in_turn(model, result, &group_edges, false)),
+        let roll = |model: &mut Model, shape: Shape, edges: &[(Shape, &dyn Fn(f64) -> f64)]| match edges {
+            [(edge, law)] => ball::rolling_ball(model, shape, *edge, *law),
+            _ => ball::fillet_network(model, shape, edges).or_else(|_| fillet_in_turn(model, shape, edges, false)),
+        };
+        let built = roll(model, result, &group_edges);
+        // (Where a face's boundary now crosses itself, the fillet runs over another
+        // feature on its faces: rounded without it, the feature then put back.)
+        let built = match built {
+            Ok(rounded) if crosses_itself(model, rounded) && !crosses_itself(model, result) => over_features(model, result, rounded, &group_edges, &roll, 3),
+            other => other,
         };
         result = match built {
             Ok(rounded) => rounded,
@@ -807,6 +814,132 @@ fn fillet_solid_evolving(model: &mut Model, shape: Shape, edges: &[(Shape, Vec<(
         };
     }
     Ok(result.moved(&placement))
+}
+
+/// `solid` with `edges` rounded by `fillet` where the fillets run over other features on
+/// their faces (a boss or a pocket whose loop the ball's contacts cross, which `fillet`
+/// leaves whole, as in `crossed`): the features beyond the loops crossed removed, the
+/// edges rounded on what remains, and the features put back (the pockets cut again, the
+/// bosses joined again and carried on down to the fillets).
+fn over_features(
+    model: &mut Model,
+    solid: Shape,
+    crossed: Shape,
+    edges: &[(Shape, &dyn Fn(f64) -> f64)],
+    fillet: &dyn Fn(&mut Model, Shape, &[(Shape, &dyn Fn(f64) -> f64)]) -> Result<Shape>,
+    depth: usize,
+) -> Result<Shape> {
+    let failed = || Error::Failed("a fillet running over other features of its faces".into());
+    let is_edge = |e: &Shape| edges.iter().any(|(f, _)| f.node == e.node);
+    // The faces along the edges, the inner loops of theirs the fillets cross, and the faces
+    // beyond those.
+    let faces = model.unique_subshapes(solid, NodeKind::Face);
+    let along: Vec<Shape> = faces.iter().copied().filter(|&f| model.unique_subshapes(f, NodeKind::Edge).iter().any(is_edge)).collect();
+    let crossing: std::collections::HashSet<NodeId> =
+        crate::validity::boundary_crossings(model, crossed).into_iter().flat_map(|(_, pair)| pair.map(|e| e.node)).collect();
+    let mut loops = std::collections::HashSet::new();
+    for &face in &along {
+        for wire in model.explore(face, NodeKind::Wire).skip(1).collect::<Vec<_>>() {
+            let wire_edges = model.unique_subshapes(wire, NodeKind::Edge);
+            if !wire_edges.iter().any(is_edge) && wire_edges.iter().any(|e| crossing.contains(&e.node)) {
+                loops.extend(wire_edges.into_iter().map(|e| e.node));
+            }
+        }
+    }
+    let features: Vec<Shape> = faces
+        .iter()
+        .copied()
+        .filter(|f| !along.iter().any(|g| g.node == f.node))
+        .filter(|&f| model.unique_subshapes(f, NodeKind::Edge).iter().any(|e| loops.contains(&e.node)))
+        .collect();
+    if features.is_empty() {
+        return Err(failed());
+    }
+    let plain = crate::defeature::remove_faces(model, solid, &features)?.shape;
+    let [plain] = model.unique_subshapes(plain, NodeKind::Solid)[..] else { return Err(failed()) };
+    // The edges again on the plain solid (by their ends and middles), each radius law
+    // turned round where its edge is.
+    let ends = |model: &Model, e: Shape| -> Option<[Point; 3]> {
+        let (a, b) = model.edge_vertices(e);
+        let (curve, t0, t1) = model.edge_curve(e)?;
+        Some([model.point(a), crate::geometry::ParametricCurve::point(&curve, 0.5 * (t0 + t1)), model.point(b)])
+    };
+    let candidates = model.unique_subshapes(plain, NodeKind::Edge);
+    let mut found: Vec<(Shape, bool)> = Vec::new();
+    for &(edge, _) in edges {
+        let [a, m, b] = ends(model, edge).ok_or_else(failed)?;
+        let reach = 10.0 * model.tolerance(edge).max(tolerance::LINEAR);
+        let same = candidates.iter().find_map(|&c| {
+            let [p, n, q] = ends(model, c)?;
+            (n.distance(m) <= reach).then_some(())?;
+            match (p.distance(a) <= reach && q.distance(b) <= reach, p.distance(b) <= reach && q.distance(a) <= reach) {
+                (true, _) => Some((c, false)),
+                (_, true) => Some((c, true)),
+                _ => None,
+            }
+        });
+        found.push(same.ok_or_else(failed)?);
+    }
+    let laws: Vec<Box<dyn Fn(f64) -> f64 + '_>> = found
+        .iter()
+        .zip(edges)
+        .map(|(&(_, turned), &(_, law))| if turned { Box::new(move |s: f64| law(1.0 - s)) as Box<dyn Fn(f64) -> f64> } else { Box::new(law) })
+        .collect();
+    let plain_edges: Vec<(Shape, &dyn Fn(f64) -> f64)> = found.iter().zip(&laws).map(|(&(e, _), law)| (e, law.as_ref())).collect();
+    let mut rounded = fillet(model, plain, &plain_edges)?;
+    // (Running over more features: those taken away in turn.)
+    if crosses_itself(model, rounded) {
+        if depth <= 1 {
+            return Err(failed());
+        }
+        rounded = over_features(model, plain, rounded, &plain_edges, fillet, depth - 1)?;
+    }
+    // The pockets (in the plain solid, not in `solid`) and the bosses (the other way).
+    let pockets = boolean::difference(model, plain, solid)?;
+    let bosses = boolean::difference(model, solid, plain)?;
+    let some = |model: &Model, s: Shape| crate::properties::volume(model, s).mass.abs() > tolerance::LINEAR.powi(3);
+    if some(model, pockets) {
+        rounded = boolean::difference(model, rounded, pockets)?;
+    }
+    if some(model, bosses) {
+        // (A boss standing on a face along the edges is carried on down to the fillet, as
+        // its footprint on the face, pushed into the plain solid past the fillet's reach.)
+        let reach = 4.0 * edges.iter().flat_map(|(_, law)| (0..=8).map(move |i| law(i as f64 / 8.0))).fold(0.0, f64::max);
+        let planes: Vec<(crate::geometry::surface::Plane, Vector)> = along
+            .iter()
+            .filter_map(|&f| match model.surface(f)? {
+                Surface::Plane(plane) => {
+                    let outward = Vector::from(plane.normal()) * if f.orientation == Orientation::Reversed { -1.0 } else { 1.0 };
+                    Some((plane.clone(), outward))
+                }
+                _ => None,
+            })
+            .collect();
+        for face in model.unique_subshapes(bosses, NodeKind::Face) {
+            let Some(Surface::Plane(own)) = model.surface(face) else { continue };
+            let Some(&(_, outward)) = planes.iter().find(|(plane, _)| {
+                Vector::from(plane.normal()).cross(Vector::from(own.normal())).length() <= tolerance::ANGULAR && plane.distance(own.frame().origin()) <= tolerance::LINEAR
+            }) else {
+                continue;
+            };
+            let footprint = crate::modify::copy(model, face, false)?;
+            let prism = crate::sweep::extrude(model, footprint, outward * -reach)?.shape;
+            let below = boolean::intersection(model, prism, plain)?;
+            if some(model, below) {
+                rounded = boolean::union(model, rounded, below)?;
+            }
+        }
+        rounded = boolean::union(model, rounded, bosses)?;
+    }
+    match crate::validity::check(model, rounded).is_valid() {
+        true => Ok(rounded),
+        false => Err(failed()),
+    }
+}
+
+/// Whether a face of `shape` has a boundary crossing itself.
+fn crosses_itself(model: &Model, shape: Shape) -> bool {
+    crate::validity::check(model, shape).errors().any(|p| p.kind == crate::validity::ProblemKind::SelfIntersection)
 }
 
 /// A radius along an edge: the cubic spline through `(s, r)` pairs (`s` from 0 to 1) with
@@ -1426,6 +1559,32 @@ mod tests {
     use super::*;
     use crate::primitives::Cuboid;
     use crate::{properties, validity};
+
+    /// A 20 x 20 x 20 box with a boss (a cylinder of radius 3 and height 5) standing on its
+    /// top face 3.5 from its front edge: rounding that edge (R 4) runs under the boss, which
+    /// stands on the fillet, carried on down to it.
+    #[test]
+    fn rounding_runs_under_a_boss() {
+        use crate::primitives::Cylinder;
+        let mut model = Model::new();
+        let block = Cuboid::new(20.0, 20.0, 20.0).build(&mut model).unwrap();
+        let frame = Frame::from_z(Point::new(10.0, 3.5, 20.0), Direction::Z);
+        let boss = Cylinder::new(3.0, 5.0).with_frame(frame).build(&mut model).unwrap();
+        let shape = boolean::union(&mut model, block, boss).unwrap();
+        let front = model.unique_subshapes(shape, NodeKind::Edge).into_iter().find(|&e| {
+            let (a, b) = model.edge_vertices(e);
+            let (p, q) = (model.point(a), model.point(b));
+            p.y.abs() < 1e-9 && q.y.abs() < 1e-9 && (p.z - 20.0).abs() < 1e-9 && (q.z - 20.0).abs() < 1e-9
+        }).unwrap();
+        let rounded = fillet_evolving(&mut model, shape, &[(front, vec![(0.0, 4.0)])]).unwrap();
+        let report = validity::check(&model, rounded);
+        assert!(report.is_valid(), "{report:?}");
+        // The box less the fillet's corner, the boss, and the boss's footprint carried down
+        // between the top and the fillet (less than its area times the radius).
+        let volume = properties::volume(&model, rounded).mass;
+        let without = 8000.0 - 20.0 * 16.0 * (1.0 - PI / 4.0) + PI * 9.0 * 5.0;
+        assert!(volume > without + 1.0 && volume < without + PI * 9.0 * 4.0, "{volume} {without}");
+    }
 
     #[test]
     fn rounding_runs_along_tangent_edges() {
