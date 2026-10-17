@@ -1967,10 +1967,24 @@ impl Graph {
                     b.enlarged(spacing + on_tol())
                 })
                 .collect();
+            // (A plane meets a cone clear of its apex in one conic, whose pieces and branches
+            // do not cross: through it, in lines crossing there, which are found below.)
+            let one_conic = |p: &Surface, c: &Surface| match (p, c) {
+                (Surface::Plane(p), Surface::Cone(c)) => {
+                    let n = Vector::from(geom::plane_normal(p));
+                    let apex = c.apex();
+                    n.dot(apex - p.origin()).abs() > 1e3 * on_tol() * (1.0 + (apex - Point::ORIGIN).length())
+                }
+                _ => false,
+            };
+            let conic = one_conic(&x.surface, &y.surface) || one_conic(&y.surface, &x.surface);
             let mut crossings = Vec::new();
             for i in 0..curves.len() {
                 for j in i + 1..curves.len() {
                     if boxes[i].distance_to_box(&boxes[j]) > 0.0 {
+                        continue;
+                    }
+                    if conic && matches!((&curves[i], &curves[j]), (Section::Chain(..), Section::Chain(..))) {
                         continue;
                     }
                     crossings.extend(section_crossings(&curves[i], &curves[j]));
@@ -2494,7 +2508,8 @@ fn section_crossings(a: &Section, b: &Section) -> Vec<Point> {
         return out;
     }
     // Two chains (slow to project onto): distances from samples of `a` to a polyline of
-    // `b`, then, where they are least, alternate projections between the curves.
+    // `b`, then, where they are least, the nearest points of the curves from there (see
+    // `crossing_near`).
     let (blo, bhi) = b.range();
     let m = 1024;
     let bt: Vec<f64> = (0..=m).map(|j| blo + (bhi - blo) * j as f64 / m as f64).collect();
@@ -2520,8 +2535,18 @@ fn section_crossings(a: &Section, b: &Section) -> Vec<Point> {
     // farther than the best so far.
     const BLOCK: usize = 32;
     let blocks: Vec<(usize, crate::math::BoundingBox)> = (0..m).step_by(BLOCK).map(|j| (j, bbox(&bp[j..(j + BLOCK + 1).min(m + 1)]))).collect();
+    // (From the segment nearest the sample before, whose foot is near: a small best so far
+    // skips most blocks.)
+    let hint = std::cell::Cell::new(0usize);
     let near_b = |q: Point| {
         let mut best = (f64::INFINITY, blo);
+        let mut at = hint.get();
+        for j in hint.get().saturating_sub(2)..(hint.get() + 3).min(m) {
+            let (d, s) = segment_gap(bp[j], bp[j + 1], q);
+            if d < best.0 {
+                (best, at) = ((d, bt[j] + s * (bt[j + 1] - bt[j])), j);
+            }
+        }
         for &(start, ref bx) in &blocks {
             if bx.distance_to_point(q) >= best.0 {
                 continue;
@@ -2529,10 +2554,11 @@ fn section_crossings(a: &Section, b: &Section) -> Vec<Point> {
             for j in start..(start + BLOCK).min(m) {
                 let (d, s) = segment_gap(bp[j], bp[j + 1], q);
                 if d < best.0 {
-                    best = (d, bt[j] + s * (bt[j + 1] - bt[j]));
+                    (best, at) = ((d, bt[j] + s * (bt[j + 1] - bt[j])), j);
                 }
             }
         }
+        hint.set(at);
         best
     };
     let gaps: Vec<(f64, f64)> = pa.iter().map(|&q| near_b(q)).collect();
@@ -2550,8 +2576,68 @@ fn section_crossings(a: &Section, b: &Section) -> Vec<Point> {
     minima.sort_unstable();
     let mut out: Vec<Point> = Vec::new();
     for i in minima {
-        let (mut sa, mut sb) = (ta[i], gaps[i].1);
-        let mut q = pa[i];
+        let (sa, sb) = crossing_near(a, b, ta[i], gaps[i].1, 2.0 * (hi - lo).abs() / n as f64, 2.0 * (bhi - blo).abs() / m as f64);
+        let q = a.point(sa);
+        // (A point found already first: the projection onto all of `b` costs most.)
+        if b.point(sb).distance(q) <= on_tol() && !out.iter().any(|x| x.distance(q) <= on_tol()) && b.project(q).1 <= on_tol() {
+            out.push(q);
+        }
+    }
+    out
+}
+
+/// Where curves `a` and `b` come nearest from `(sa, sb)` on them: Gauss–Newton on both
+/// parameters at once (damped where a step would not bring them nearer), which converges
+/// fast where they cross at however small an angle; alternate projections between them,
+/// converging slowly there, where it stalls short or strays farther than `within_a` and
+/// `within_b` (in their parameters) from where it started, nearer another crossing.
+fn crossing_near(a: &Section, b: &Section, start_a: f64, start_b: f64, within_a: f64, within_b: f64) -> (f64, f64) {
+    let (mut sa, mut sb) = (start_a, start_b);
+    let ((alo, ahi), (blo, bhi)) = (a.range(), b.range());
+    let clamp = |s: f64, lo: f64, hi: f64| s.clamp(lo.min(hi), lo.max(hi));
+    let tangent = |c: &Section, s: f64, lo: f64, hi: f64| {
+        let h = 1e-7 * (hi - lo).abs().max(1e-12);
+        let (x, y) = (clamp(s - h, lo, hi), clamp(s + h, lo, hi));
+        (c.point(y) - c.point(x)) * (1.0 / (y - x).max(1e-300))
+    };
+    let mut gap = a.point(sa).distance(b.point(sb));
+    let mut damping = 0.0;
+    for _ in 0..40 {
+        if gap <= 1e-3 * on_tol() {
+            break;
+        }
+        let (da, db) = (tangent(a, sa, alo, ahi), tangent(b, sb, blo, bhi));
+        let r = a.point(sa) - b.point(sb);
+        // (J = [da, -db]: Jᵀ J + λ diag, Jᵀ r.)
+        let (m11, m12, m22) = (da.dot(da), -da.dot(db), db.dot(db));
+        let (g1, g2) = (da.dot(r), -db.dot(r));
+        let mut stepped = false;
+        for _ in 0..8 {
+            let (k11, k22) = (m11 * (1.0 + damping), m22 * (1.0 + damping));
+            let det = k11 * k22 - m12 * m12;
+            if !(det.abs() > 1e-300) {
+                damping = damping.max(1e-6) * 10.0;
+                continue;
+            }
+            let (x1, x2) = ((k22 * g1 - m12 * g2) / det, (k11 * g2 - m12 * g1) / det);
+            let (na, nb) = (clamp(sa - x1, alo, ahi), clamp(sb - x2, blo, bhi));
+            let now = a.point(na).distance(b.point(nb));
+            if now < gap {
+                (sa, sb, gap) = (na, nb, now);
+                damping *= 0.1;
+                stepped = true;
+                break;
+            }
+            damping = damping.max(1e-6) * 10.0;
+        }
+        if !stepped {
+            break;
+        }
+    }
+    // (Where it stalls short of meeting, or strays, alternate projections from the start.)
+    if gap > on_tol() || (sa - start_a).abs() > within_a || (sb - start_b).abs() > within_b {
+        (sa, sb) = (start_a, start_b);
+        let mut q = a.point(sa);
         for _ in 0..60 {
             let previous = q;
             (sb, _) = b.project_near(q, sb);
@@ -2561,11 +2647,8 @@ fn section_crossings(a: &Section, b: &Section) -> Vec<Point> {
                 break;
             }
         }
-        if b.point(sb).distance(q) <= on_tol() && b.project(q).1 <= on_tol() && !out.iter().any(|x| x.distance(q) <= on_tol()) {
-            out.push(q);
-        }
     }
-    out
+    (sa, sb)
 }
 
 /// Points where two edges cross (pass within `tolerance`) away from their ends: `(t on e1,
