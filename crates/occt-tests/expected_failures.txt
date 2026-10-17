@@ -946,7 +946,6 @@ tests/bugs/moddata_3/bug33318
 tests/bugs/moddata_3/bug5145
 tests/chamfer/dist_angle/A2
 tests/chamfer/dist_angle/A7
-tests/chamfer/dist_angle/E5
 tests/chamfer/dist_angle/E9
 tests/chamfer/dist_angle/F1
 tests/chamfer/dist_angle_sequence/B3
@@ -955,9 +954,7 @@ tests/chamfer/dist_angle_sequence/C1
 tests/chamfer/dist_dist/A2
 tests/chamfer/dist_dist/A7
 tests/chamfer/dist_dist/C1
-tests/chamfer/dist_dist/E5
 tests/chamfer/dist_dist/E9
-tests/chamfer/dist_dist/F1
 tests/chamfer/dist_dist_complex/B8
 tests/chamfer/dist_dist_complex/C3
 tests/chamfer/dist_dist_sequence/C1

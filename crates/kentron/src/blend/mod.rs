@@ -405,18 +405,19 @@ fn chamfer_solid_edges(model: &mut Model, shape: Shape, edges: &[ChamferedEdge])
             break;
         }
     }
+    let firsts = chain_faces(model, shape, &chains, edges);
     if !elementary {
-        return chamfer_in_turn(model, shape, &chains, edges);
+        return chamfer_in_turn(model, shape, &chains, edges, &firsts);
     }
     let mut corners: Vec<(Corner, [f64; 2])> = Vec::new();
-    for (edge, index) in chains {
+    for (k, (edge, index)) in chains.into_iter().enumerate() {
         let wanted = edges[index as usize];
         let Some(corner) = Corner::of(model, shape, edge, true)? else {
             return Err(Error::Failed("a chamfered edge's faces changed kind".into()));
         };
         // The first distance along the chosen face (for an edge carrying the chosen one on,
-        // the face it shares with it, if any).
-        let chosen = wanted.face.map(|f| f.node);
+        // the face on the same side).
+        let chosen = firsts[k];
         let first_on_second = chosen.is_some_and(|f| corner.faces[1].0 == f);
         let (d1, d2) = match wanted.size {
             ChamferSize::Distances(a, b) => (a, b),
@@ -447,9 +448,69 @@ fn chamfer_solid_edges(model: &mut Model, shape: Shape, edges: &[ChamferedEdge])
     Ok(result)
 }
 
+/// Each of `chains`' edges' face for its chamfer's first distance: the chosen face of the
+/// edge it carries on (`edges`, by index), carried along the chain from vertex to vertex:
+/// the same face where the next edge has it, else the face across from the other one, else
+/// the face tangent to it there.
+fn chain_faces(model: &Model, shape: Shape, chains: &[(Shape, f64)], edges: &[ChamferedEdge]) -> Vec<Option<NodeId>> {
+    let faces_of = |edge: Shape| -> Vec<NodeId> {
+        model.explore(shape, NodeKind::Face).filter(|&f| model.explore(f, NodeKind::Edge).any(|e| e.node == edge.node)).map(|f| f.node).collect()
+    };
+    let faces: Vec<Vec<NodeId>> = chains.iter().map(|&(e, _)| faces_of(e)).collect();
+    let mut firsts: Vec<Option<NodeId>> = chains
+        .iter()
+        .map(|&(e, index)| {
+            let chosen = edges[index as usize].face.map(|f| f.node)?;
+            faces_of(e).contains(&chosen).then_some(chosen)
+        })
+        .collect();
+    // (Never set where none was chosen.)
+    let chosen_any = |k: usize| edges[chains[k].1 as usize].face.is_some();
+    loop {
+        let mut changed = false;
+        for k in 0..chains.len() {
+            if firsts[k].is_some() || !chosen_any(k) || faces[k].len() != 2 {
+                continue;
+            }
+            let (a, b) = model.edge_vertices(chains[k].0);
+            for j in 0..chains.len() {
+                let Some(f) = firsts[j] else { continue };
+                if chains[j].1 != chains[k].1 || faces[j].len() != 2 {
+                    continue;
+                }
+                let (c, d) = model.edge_vertices(chains[j].0);
+                let shared = [a, b].into_iter().find(|v| v.node == c.node || v.node == d.node);
+                let Some(v) = shared else { continue };
+                let other = if faces[j][0] == f { faces[j][1] } else { faces[j][0] };
+                let face = if faces[k].contains(&f) {
+                    Some(f)
+                } else if faces[k].contains(&other) {
+                    faces[k].iter().copied().find(|&g| g != other)
+                } else {
+                    // (The one whose normal there is nearer the chosen face's.)
+                    let p = model.point(v);
+                    let n = normal_at(model, shape, f, p);
+                    faces[k].iter().copied().max_by(|&x, &y| {
+                        let m = |g| n.zip(normal_at(model, shape, g, p)).map_or(0.0, |(n, q)| n.dot(q).abs());
+                        m(x).total_cmp(&m(y))
+                    })
+                };
+                if face.is_some() {
+                    firsts[k] = face;
+                    changed = true;
+                    break;
+                }
+            }
+        }
+        if !changed {
+            return firsts;
+        }
+    }
+}
+
 /// [`chamfer_solid_edges`] edge by edge on the solid as it is rebuilt (each found again by
 /// its curve), section by section along it; in the order given, else in reverse.
-fn chamfer_in_turn(model: &mut Model, shape: Shape, chains: &[(Shape, f64)], edges: &[ChamferedEdge]) -> Result<Shape> {
+fn chamfer_in_turn(model: &mut Model, shape: Shape, chains: &[(Shape, f64)], edges: &[ChamferedEdge], firsts: &[Option<NodeId>]) -> Result<Shape> {
     // (On the shape unplaced, in its own units, the result placed as the shape is.)
     let placement = shape.placement;
     if chains.iter().any(|(e, _)| e.placement != placement) {
@@ -458,7 +519,7 @@ fn chamfer_in_turn(model: &mut Model, shape: Shape, chains: &[(Shape, f64)], edg
     let unscale = 1.0 / placement.scale_factor().abs();
     let shape = Shape { placement: Transform::IDENTITY, ..shape };
     let mut wanted = Vec::with_capacity(chains.len());
-    for &(edge, index) in chains {
+    for (k, &(edge, index)) in chains.iter().enumerate() {
         let edge = Shape { placement: Transform::IDENTITY, orientation: Orientation::Forward, ..edge };
         let (curve, first, last) = model.edge_curve(edge).ok_or_else(|| Error::InvalidInput("a degenerate edge has no chamfer".into()))?;
         let e = edges[index as usize];
@@ -466,7 +527,7 @@ fn chamfer_in_turn(model: &mut Model, shape: Shape, chains: &[(Shape, f64)], edg
             ChamferSize::Distances(a, b) => (a * unscale, ball::ChamferSecond::Distance(b * unscale)),
             ChamferSize::DistanceAngle(d, angle) => (d * unscale, ball::ChamferSecond::Angle(angle)),
         };
-        wanted.push((curve, first, last, e.face.map(|f| f.node), distance, second));
+        wanted.push((curve, first, last, firsts[k], distance, second));
     }
     // All together first (meeting in mitres and corners, ending on free boundaries).
     let profiles: Vec<(Shape, ball::Profile)> = chains
