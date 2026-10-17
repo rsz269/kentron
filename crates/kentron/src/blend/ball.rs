@@ -268,9 +268,16 @@ fn rolling_on(model: &Model, shape: Shape, edge: Shape, profile: &Profile, far: 
     let reach = if closed { 0.0 } else { 4.0 * far as f64 * (0..=8).map(|i| radius(i as f64 / 8.0)).fold(0.0, f64::max) };
     let past = |t_end: f64| -> f64 { reach / curve.d1(t_end).1.length() };
     let (t_min, t_max) = (t0 - past(t0), t1 + past(t1));
+    // (Along a closed edge whose curve turns a little where it closes on itself, both its
+    // ends square to the mean of its directions there: its sections there one, the fillet
+    // closing on itself.)
+    let seam = closed.then(|| (curve.d1(t0).1.normalized() + curve.d1(t1).1.normalized()).normalized());
     let spine_at = |t: f64| -> Result<(Point, Vector)> {
         if (t0..=t1).contains(&t) {
             let (p, d) = curve.d1(t);
+            if let Some(mean) = seam.filter(|_| t == t0 || t == t1) {
+                return Ok((p, mean));
+            }
             return Ok((p, d.normalized()));
         }
         // Past an end: the edge's curve continued (keeping its parametrization smooth),

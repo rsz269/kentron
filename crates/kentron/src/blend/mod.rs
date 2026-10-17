@@ -48,11 +48,12 @@ fn fillet_solid_edges(model: &mut Model, shape: Shape, edges: &[(Shape, f64)]) -
     // (Where the cylinder and torus fillets' tools leave a face's boundary crossing itself,
     // as where a fillet runs over another feature of its faces: all rolled instead, which
     // goes round such features.)
-    if crosses_itself(model, rounded) && !crosses_itself(model, shape) {
-        if let Ok(rolled) = fillet_solid_edges_as(model, shape, edges, false) {
-            if !crosses_itself(model, rolled) {
-                return Ok(rolled);
-            }
+    // (Either taken only where it leaves the solid as sound as it was.)
+    let before = fault_kinds(model, shape);
+    let crossing = crate::validity::ProblemKind::SelfIntersection;
+    if !before.contains(&crossing) && crosses_itself(model, rounded) {
+        if let Ok(rolled) = fillet_solid_edges_as(model, shape, edges, false).and_then(|r| sound(model, &before, r)) {
+            return Ok(rolled);
         }
     }
     Ok(rounded)
@@ -127,7 +128,8 @@ fn fillet_solid_edges_as(model: &mut Model, shape: Shape, edges: &[(Shape, f64)]
                     _ => runover::needed(model, local, local_edge, radius * unscale),
                 };
                 if rolls {
-                    if let Ok(rounded) = runover::fillet(model, local, local_edge, radius * unscale) {
+                    let before = fault_kinds(model, local);
+                    if let Ok(rounded) = runover::fillet(model, local, local_edge, radius * unscale).and_then(|r| sound(model, &before, r)) {
                         local = rounded;
                         continue;
                     }
@@ -144,13 +146,15 @@ fn fillet_solid_edges_as(model: &mut Model, shape: Shape, edges: &[(Shape, f64)]
         let radii: Vec<f64> = members.iter().map(|&i| classified[i].1 * unscale).collect();
         let laws: Vec<Box<dyn Fn(f64) -> f64>> = radii.iter().map(|&r| Box::new(move |_| r) as Box<dyn Fn(f64) -> f64>).collect();
         let edges: Vec<(Shape, &dyn Fn(f64) -> f64)> = members.iter().zip(&laws).map(|(&i, law)| (Shape { placement: Transform::IDENTITY, ..classified[i].0 }, law.as_ref())).collect();
+        // (Each way taken only where it leaves the solid as sound as it was.)
+        let before = fault_kinds(model, local);
         // (One edge whose ball touches the faces beyond: rolling on onto them first.)
         let mut rolled_over = false;
         if let [i] = members[..] {
             let edge = Shape { placement: Transform::IDENTITY, ..classified[i].0 };
             if runover::needed(model, local, edge, radii[0]) {
                 rolled_over = true;
-                if let Ok(rounded) = runover::fillet(model, local, edge, radii[0]) {
+                if let Ok(rounded) = runover::fillet(model, local, edge, radii[0]).and_then(|r| sound(model, &before, r)) {
                     local = rounded;
                     continue;
                 }
@@ -168,13 +172,15 @@ fn fillet_solid_edges_as(model: &mut Model, shape: Shape, edges: &[(Shape, f64)]
         // (Where a face's boundary now crosses itself, the fillets run over another feature
         // on their faces: rounded without it, the feature then put back; or one runs off its
         // faces: on onto the faces beyond.)
+        let crossing = crate::validity::ProblemKind::SelfIntersection;
         let rounded = match rounded {
-            Ok(r) if crosses_itself(model, r) && !crosses_itself(model, local) => over_features(model, local, r, &edges, &roll, 3).or_else(|e| match &members[..] {
+            Ok(r) if !before.contains(&crossing) && fault_kinds(model, r).contains(&crossing) => over_features(model, local, r, &edges, &roll, 3).or_else(|e| match &members[..] {
                 [i] if !rolled_over => runover::fillet(model, local, Shape { placement: Transform::IDENTITY, ..classified[*i].0 }, radii[0]),
                 _ => Err(e),
             }),
             other => other,
         };
+        let rounded = rounded.and_then(|r| sound(model, &before, r));
         match rounded {
             Ok(rounded) => local = rounded,
             Err(_) => {
@@ -468,17 +474,12 @@ fn chamfer_in_turn(model: &mut Model, shape: Shape, chains: &[(Shape, f64)], edg
         .zip(&wanted)
         .map(|(&(edge, _), (_, _, _, face, distance, second))| (Shape { placement: Transform::IDENTITY, ..edge }, ball::Profile::Chamfer { first: *face, distance: *distance, second: *second }))
         .collect();
-    // (Each way taken only where what it makes is valid, the shape being so: the first
-    // invalid one kept for last.)
-    let valid = |model: &Model, s: Shape| crate::validity::check(model, s).is_valid();
-    let was_valid = valid(model, shape);
-    let mut invalid = None;
-    match ball::blend_network(model, shape, &profiles) {
-        Ok(done) if !was_valid || valid(model, done) => return Ok(done.moved(&placement)),
-        Ok(done) => invalid = Some(done),
-        Err(_) => {}
-    }
-    let mut failure = None;
+    // (Each way taken only where it leaves the shape as sound as it was.)
+    let before = fault_kinds(model, shape);
+    let mut failure = match ball::blend_network(model, shape, &profiles).and_then(|done| sound(model, &before, done)) {
+        Ok(done) => return Ok(done.moved(&placement)),
+        Err(e) => Some(e),
+    };
     let orders: &[bool] = if wanted.len() > 1 { &[false, true] } else { &[false] };
     'orders: for &reverse in orders {
         let mut sequence: Vec<_> = wanted.iter().collect();
@@ -500,15 +501,12 @@ fn chamfer_in_turn(model: &mut Model, shape: Shape, chains: &[(Shape, f64)], edg
                 }
             }
         }
-        if !was_valid || valid(model, result) {
-            return Ok(result.moved(&placement));
+        match sound(model, &before, result) {
+            Ok(result) => return Ok(result.moved(&placement)),
+            Err(e) => failure = Some(e),
         }
-        invalid.get_or_insert(result);
     }
-    match invalid {
-        Some(result) => Ok(result.moved(&placement)),
-        None => Err(failure.expect("a failure")),
-    }
+    Err(failure.expect("a failure"))
 }
 
 /// Where three convex chamfers of straight edges between planes meet at a vertex, the
@@ -837,11 +835,13 @@ fn fillet_solid_evolving(model: &mut Model, shape: Shape, edges: &[(Shape, Vec<(
             _ => ball::fillet_network(model, shape, edges).or_else(|_| fillet_in_turn(model, shape, edges, false)),
         };
         let built = roll(model, result, &group_edges);
+        let before = fault_kinds(model, result);
+        let crossing = crate::validity::ProblemKind::SelfIntersection;
         // (Where a face's boundary now crosses itself, the fillet runs over another
         // feature on its faces: rounded without it, the feature then put back; or off its
         // faces: rolling on onto the faces beyond.)
         let built = match built {
-            Ok(rounded) if crosses_itself(model, rounded) && !crosses_itself(model, result) => {
+            Ok(rounded) if !before.contains(&crossing) && fault_kinds(model, rounded).contains(&crossing) => {
                 over_features(model, result, rounded, &group_edges, &roll, 3).or_else(|e| match &group_edges[..] {
                     [(edge, law)] => runover::fillet_along(model, result, *edge, *law),
                     _ => Err(e),
@@ -849,6 +849,8 @@ fn fillet_solid_evolving(model: &mut Model, shape: Shape, edges: &[(Shape, Vec<(
             }
             other => other,
         };
+        // (Taken only where it leaves the solid as sound as it was.)
+        let built = built.and_then(|r| sound(model, &before, r));
         result = match built {
             Ok(rounded) => rounded,
             // Else as tools, cut away or added (the booleans meeting them).
@@ -997,6 +999,21 @@ fn over_features(
     match crate::validity::check(model, rounded).is_valid() {
         true => Ok(rounded),
         false => Err(failed()),
+    }
+}
+
+/// The kinds of fault `shape` has.
+fn fault_kinds(model: &Model, shape: Shape) -> std::collections::HashSet<crate::validity::ProblemKind> {
+    crate::validity::check(model, shape).errors().map(|p| p.kind).collect()
+}
+
+/// `result` if it has no kind of fault the shape it was made from had not (`before`, that
+/// shape's): an operation leaves a shape as sound as it found it, else fails.
+fn sound(model: &Model, before: &std::collections::HashSet<crate::validity::ProblemKind>, result: Shape) -> Result<Shape> {
+    let new: Vec<_> = fault_kinds(model, result).into_iter().filter(|k| !before.contains(k)).collect();
+    match new[..] {
+        [] => Ok(result),
+        _ => Err(Error::Failed(format!("the fillet left the shape with faults it had not: {new:?}"))),
     }
 }
 
