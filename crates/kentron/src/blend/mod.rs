@@ -690,7 +690,9 @@ fn tangent_chains(model: &Model, shape: Shape, edges: &[(Shape, f64)]) -> Vec<(S
             // edge carried on by a fitted curve leaves its vertex very nearly, not exactly, as
             // the edge arrives.)
             let same_faces = their_faces.len() == 2 && their_faces.iter().all(|f| my_faces.contains(f));
-            let tangent = if same_faces { tolerance::ANGULAR.sqrt() } else { tolerance::ANGULAR };
+            // (Elsewhere within about 1/2000 rad: edges of models made elsewhere meet that nearly
+            // tangent, as continuous as the faces either side.)
+            let tangent = if same_faces { tolerance::ANGULAR.sqrt() } else { 1e5 * tolerance::ANGULAR };
             let Some(at) = mine.iter().find_map(|(v, d)| {
                 theirs.iter().any(|(w, e)| w == v && d.dot(*e).abs() >= 1.0 - tangent).then_some(*v)
             }) else {

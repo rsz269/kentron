@@ -992,7 +992,6 @@ tests/chamfer/dist_dist_sequence/C3
 tests/chamfer/equal_dist/A2
 tests/chamfer/equal_dist/A7
 tests/chamfer/equal_dist/E9
-tests/chamfer/equal_dist/F1
 tests/chamfer/equal_dist_complex/A5
 tests/chamfer/equal_dist_complex/B4
 tests/chamfer/equal_dist_sequence/B1
