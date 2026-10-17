@@ -18,7 +18,7 @@ use crate::geometry::{fit, project, ParametricCurve, ParametricSurface};
 use crate::math::{Direction2, Point, Point2};
 use crate::topology::{EdgeId, Model, NodeKind, Orientation, Shape, VertexId};
 
-use super::{cover_pcurve, end_cut, extension, fillet_surface, new_face, rebuild_face, rolling_with, unwrapped, EndCut, Profile, Rolling, Use, NOT_REACHED};
+use super::{contact_vertex, cover_pcurve, end_cut, extension, fillet_surface, new_face, rebuild_face, rolling_with, unwrapped, EndCut, Profile, Rolling, Use, NOT_REACHED};
 
 /// Samples along a fillet's stop curve at a corner, and across a corner patch.
 const ACROSS: usize = 32;
@@ -785,15 +785,22 @@ fn build(model: &mut Model, shape: Shape, stripes: &[Stripe], ends: &[[End; 2]],
     let mut stops: Vec<[Stop; 2]> = Vec::with_capacity(stripes.len());
     // (edge, its vertex at a fillet's end, the vertex replacing it, the parameter there)
     let mut trims: Vec<(EdgeId, VertexId, VertexId, f64)> = Vec::new();
+    // (edges a fillet takes away whole, its contact ending at their far vertex)
+    let mut removed: Vec<EdgeId> = Vec::new();
     let mut across_edges: Vec<[EdgeId; 2]> = Vec::with_capacity(stripes.len());
     for (i, s) in stripes.iter().enumerate() {
         let mut pair = Vec::with_capacity(2);
         for end in &ends[i] {
             pair.push(match end {
                 End::Face(cut) => {
-                    let vertices = [0, 1].map(|j| model.add_vertex(s.rolling.contacts[j].point(cut.v[j]), tolerance));
+                    if cut.beyond.is_some() {
+                        return Err(Error::InvalidInput("a fillet running over onto the next face is not supported yet in a network".into()));
+                    }
+                    let vertices = [contact_vertex(model, Some(cut), 0, s.rolling.contacts[0].point(cut.v[0]), tolerance)?, contact_vertex(model, Some(cut), 1, s.rolling.contacts[1].point(cut.v[1]), tolerance)?];
                     for (j, &(old, t)) in cut.edges.iter().enumerate() {
-                        if cut.extended[j] {
+                        if cut.onto[j].is_some() {
+                            removed.push(old);
+                        } else if cut.extended[j] {
                             let (e, on_side, on_end, vs) = extension(model, cut, j, &s.rolling.sides[j], vertices[j], tolerance)?;
                             inserts.push((s.rolling.sides[j].face, (e, on_side, vs)));
                             inserts.push((cut.face.face, (e, on_end, vs)));
@@ -866,7 +873,7 @@ fn build(model: &mut Model, shape: Shape, stripes: &[Stripe], ends: &[[End; 2]],
     let mut shortened: Vec<(EdgeId, EdgeId, f64, f64)> = Vec::new();
     let mut done: Vec<EdgeId> = Vec::new();
     for &(old, ..) in &trims {
-        if done.contains(&old) {
+        if done.contains(&old) || removed.contains(&old) {
             continue;
         }
         done.push(old);
@@ -921,7 +928,7 @@ fn build(model: &mut Model, shape: Shape, stripes: &[Stripe], ends: &[[End; 2]],
         }
         let replace_refs: Vec<(EdgeId, &[(EdgeId, f64, f64)], Curve2)> = replaces.iter().map(|(old, pieces, p)| (*old, pieces.as_slice(), p.clone())).collect();
         let face_inserts: Vec<(EdgeId, Curve2, [VertexId; 2])> = inserts.iter().filter(|(f, _)| f.node == face.node).map(|(_, x)| x.clone()).collect();
-        let new = rebuild_face(model, face, &replace_refs, &shortened, &[], &face_inserts)?;
+        let new = rebuild_face(model, face, &replace_refs, &shortened, &removed, &face_inserts)?;
         rebuilt.push((face, new));
     }
     // The fillet faces: across at the start (u from 0 to 1), along the second contact, back

@@ -777,6 +777,9 @@ struct EndCut {
     /// meets it there (as near as a fraction of the fillet's width): the contact ends at
     /// that vertex and the edge is taken away whole.
     onto: [Option<VertexId>; 2],
+    /// Where a contact runs over the end face's edge onto the face beyond: the crossing
+    /// (`curve` and the rest) is the end face's piece, from where the two meet.
+    beyond: Option<Beyond>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -844,7 +847,7 @@ fn end_cut(
     // across it: the end face may lie on either side of the fillet. Of several, the one
     // nearest the edge's vertex.)
     let vertex_point = model.point(vertex);
-    let crossing = |u: f64| -> Result<(f64, f64)> {
+    let crossing_on = |end: &Side, u: f64| -> Result<(f64, f64)> {
         let d = |v: f64| -> Result<f64> { Ok(end.distance(fillet.point(u, v))?.0) };
         // (Into the end face's outside first, as the fillet usually leaves the solid there.)
         let mut best: Option<(f64, f64)> = None;
@@ -880,6 +883,7 @@ fn end_cut(
         }
         best.map(|(_, v)| (u, v)).ok_or_else(|| Error::InvalidInput(NOT_REACHED.into()))
     };
+    let crossing = |u: f64| crossing_on(&end, u);
     // Where the contact curves meet the edges at the vertex.
     // (Where a contact curve would meet the edge past its far end, the fillet is wider than
     // the face there: it would run over onto the next face, which is not built here. Told
@@ -896,15 +900,75 @@ fn end_cut(
         let far = if a.node == vertex.node { b } else { a };
         (far.node != vertex.node && model.point(far).distance(p) <= ONTO_VERTEX * width).then(|| VertexId::try_from(far.node).expect("a vertex"))
     };
+    let near_to = |p: Point| (1e3 * target).max(1e-6 * (1.0 + (p - Point::ORIGIN).length()));
+    let on_edge = |e: EdgeId, p: Point| -> Result<Option<f64>> {
+        let (c, first, last) = model.edge_curve(Shape::from(e)).ok_or_else(|| Error::InvalidInput("a degenerate edge at a fillet's end".into()))?;
+        let t = parameter_on(&c, first, last, p);
+        Ok((c.point(t).distance(p) <= near_to(p)).then_some(t))
+    };
+    // (Where the contact on face `i` passes the far vertex of its edge `e` at the vertex, the
+    // fillet runs over the end face's edge from there onto the face beyond: cut by that face
+    // from the contact to where it crosses that edge, by the end face from there on.)
+    let run_over = |i: usize, e: EdgeId| -> Result<Option<Beyond>> {
+        let (ea, eb) = model.edge_vertices(Shape::from(e));
+        let far = if ea.node == vertex.node { eb } else { ea };
+        if far.node == vertex.node {
+            return Ok(None);
+        }
+        let at_far = |face: Shape| -> Vec<EdgeId> {
+            model
+                .explore(face, NodeKind::Edge)
+                .filter_map(|x| EdgeId::try_from(x.node).ok())
+                .filter(|&x| x != e && model.edge_curve(Shape::from(x)).is_some())
+                .filter(|&x| {
+                    let (a, b) = model.edge_vertices(Shape::from(x));
+                    a.node == far.node || b.node == far.node
+                })
+                .collect()
+        };
+        let (on_side, on_end) = (at_far(sides[i].face), at_far(end.face));
+        let ([cut_side], [cut_end]) = (&on_side[..], &on_end[..]) else { return Ok(None) };
+        let beyond_faces: Vec<Shape> = model
+            .explore(shape, NodeKind::Face)
+            .filter(|&f| f.node != sides[i].face.node && f.node != end.face.node)
+            .filter(|&f| {
+                let edges: Vec<EdgeId> = model.explore(f, NodeKind::Edge).filter_map(|x| EdgeId::try_from(x.node).ok()).collect();
+                edges.contains(cut_side) && edges.contains(cut_end)
+            })
+            .collect();
+        let [g] = beyond_faces[..] else { return Ok(None) };
+        let sign = if g.orientation == Orientation::Reversed { -1.0 } else { 1.0 };
+        let next = Side { face: g, surface: model.surface(g).expect("a face's surface").clone(), sign, along: 1.0, last: Default::default(), v_range: { let b = model.face_uv_bounds(g); (b.2, b.3) }, own_range: Default::default() };
+        // Across the fillet from this contact, the crossing with the end face's surface
+        // outside the face beyond, then inside it: where it goes in, the end face's edge.
+        let outside = |u: f64| -> Result<f64> {
+            let (u, v) = crossing(u)?;
+            Ok(next.distance(fillet.point(u, v))?.0)
+        };
+        let (u_side, u_other) = (i as f64, 1.0 - i as f64);
+        if !(outside(u_side)? > 0.0 && outside(u_other)? < 0.0) {
+            return Ok(None);
+        }
+        let (mut lo, mut hi) = (u_side, u_other);
+        for _ in 0..80 {
+            let m = 0.5 * (lo + hi);
+            if outside(m)? > 0.0 { lo = m } else { hi = m }
+        }
+        let at = 0.5 * (lo + hi);
+        let meeting = { let (u, v) = crossing(at)?; fillet.point(u, v) };
+        let Some(t_end) = on_edge(*cut_end, meeting)? else { return Ok(None) };
+        let contact = { let (u, v) = crossing_on(&next, u_side)?; fillet.point(u, v) };
+        let Some(t_side) = on_edge(*cut_side, contact)? else { return Ok(None) };
+        Ok(Some(Beyond { side: i, face: next, at, far: VertexId::try_from(far.node).expect("a vertex"), split: (*cut_end, t_end), trimmed: (*cut_side, t_side), removed: e, piece: None }))
+    };
     let meet = |e: EdgeId, p: Point| -> Result<(f64, bool)> {
         let (c, first, last) = model.edge_curve(Shape::from(e)).ok_or_else(|| Error::InvalidInput("a degenerate edge at a fillet's end".into()))?;
         if onto(e, p).is_some() {
             let (a, _) = model.edge_vertices(Shape::from(e));
             return Ok((if a.node == vertex.node { last } else { first }, false));
         }
-        let near = (1e3 * target).max(1e-6 * (1.0 + (p - Point::ORIGIN).length()));
-        let t = parameter_on(&c, first, last, p);
-        if c.point(t).distance(p) <= near {
+        let near = near_to(p);
+        if let Some(t) = on_edge(e, p)? {
             return Ok((t, false));
         }
         let (a, _) = model.edge_vertices(Shape::from(e));
@@ -924,38 +988,95 @@ fn end_cut(
         Err(Error::InvalidInput("a fillet running over onto the next face is not supported yet".into()))
     };
     let (pa, pb) = (fillet.point(ends[0].0, ends[0].1), fillet.point(ends[1].0, ends[1].1));
-    let (ma, mb) = (meet(a, pa)?, meet(b, pb)?);
     let onto = [onto(a, pa), onto(b, pb)];
+    // (A run-over where the contact is neither on its edge nor at its far vertex.)
+    let mut beyond = None;
+    for (i, e, p) in [(0, a, pa), (1, b, pb)] {
+        if onto[i].is_none() && on_edge(e, p)?.is_none() && beyond.is_none() {
+            beyond = run_over(i, e)?;
+        }
+    }
+    let (ma, mb) = match &beyond {
+        Some(r) if r.side == 0 => ((f64::NAN, false), meet(b, pb)?),
+        Some(_) => (meet(a, pa)?, (f64::NAN, false)),
+        None => (meet(a, pa)?, meet(b, pb)?),
+    };
     let edges = [(a, ma.0), (b, mb.0)];
     let extended = [ma.1, mb.1];
-    // More samples across until the interpolated crossing stays on the end face (or doubling
-    // them hardly helps).
-    let mut across = ACROSS;
-    let mut previous_worst = f64::INFINITY;
-    let (uv, curve, on_fillet) = loop {
-        let uv: Vec<(f64, f64)> = (0..=across).map(|j| crossing(j as f64 / across as f64)).collect::<Result<_>>()?;
-        let params: Vec<f64> = uv.iter().map(|&(u, _)| u).collect();
-        let points: Vec<Point> = uv.iter().map(|&(u, v)| fillet.point(u, v)).collect();
-        let curve = fit::interpolate_with_parameters(&points, &params)?;
-        let on_fillet = fit::interpolate_with_parameters(&uv.iter().map(|&(u, v)| Point2::new(u, v)).collect::<Vec<_>>(), &params)?;
-        let mut worst: f64 = 0.0;
-        for w in params.windows(2) {
-            let u = 0.5 * (w[0] + w[1]);
-            let p = curve.point(u);
-            let q = on_fillet.point(u);
-            worst = worst.max(end.distance(p)?.0.abs()).max(fillet.point(q.x, q.y).distance(p));
-        }
-        let stalled = across >= 4 * ACROSS && worst > 0.25 * previous_worst;
-        if worst <= target || stalled || across >= 64 * ACROSS {
-            break (uv, curve, on_fillet);
-        }
-        previous_worst = worst;
-        across *= 2;
+    // The crossing with `side`'s surface for u from `lo` to `hi`, over [0, 1]: more samples
+    // across until the interpolated crossing stays on the face (or doubling them hardly
+    // helps).
+    let piece = |side: &Side, lo: f64, hi: f64| -> Result<Piece> {
+        let mut across = ACROSS;
+        let mut previous_worst = f64::INFINITY;
+        let (uv, curve, on_fillet) = loop {
+            let uv: Vec<(f64, f64)> = (0..=across).map(|j| crossing_on(side, lo + (hi - lo) * j as f64 / across as f64)).collect::<Result<_>>()?;
+            let params: Vec<f64> = (0..=across).map(|j| j as f64 / across as f64).collect();
+            let points: Vec<Point> = uv.iter().map(|&(u, v)| fillet.point(u, v)).collect();
+            let curve = fit::interpolate_with_parameters(&points, &params)?;
+            let on_fillet = fit::interpolate_with_parameters(&uv.iter().map(|&(u, v)| Point2::new(u, v)).collect::<Vec<_>>(), &params)?;
+            let mut worst: f64 = 0.0;
+            for w in params.windows(2) {
+                let s = 0.5 * (w[0] + w[1]);
+                let p = curve.point(s);
+                let q = on_fillet.point(s);
+                worst = worst.max(side.distance(p)?.0.abs()).max(fillet.point(q.x, q.y).distance(p));
+            }
+            let stalled = across >= 4 * ACROSS && worst > 0.25 * previous_worst;
+            if worst <= target || stalled || across >= 64 * ACROSS {
+                break (uv, curve, on_fillet);
+            }
+            previous_worst = worst;
+            across *= 2;
+        };
+        let params: Vec<f64> = (0..uv.len()).map(|j| j as f64 / (uv.len() - 1) as f64).collect();
+        let face_uv: Vec<Point2> = uv.iter().map(|&(u, v)| side.uv(fillet.point(u, v))).collect::<Result<_>>()?;
+        let on_face = fit::interpolate_with_parameters(&unwrapped(face_uv, &side.surface), &params)?;
+        Ok(Piece { curve, on_fillet, on_face, v: [uv[0].1, uv[uv.len() - 1].1] })
     };
-    let params: Vec<f64> = uv.iter().map(|&(u, _)| u).collect();
-    let face_uv: Vec<Point2> = uv.iter().map(|&(u, v)| end.uv(fillet.point(u, v))).collect::<Result<_>>()?;
-    let on_face = fit::interpolate_with_parameters(&unwrapped(face_uv, &end.surface), &params)?;
-    Ok(EndCut { vertex: v_id, face: end, curve, on_fillet, on_face, v: [uv[0].1, uv[across].1], edges, extended, open: false, onto })
+    match beyond {
+        None => {
+            let Piece { curve, on_fillet, on_face, v } = piece(&end, 0.0, 1.0)?;
+            Ok(EndCut { vertex: v_id, face: end, curve, on_fillet, on_face, v, edges, extended, open: false, onto, beyond: None })
+        }
+        Some(mut r) => {
+            // (Each piece in the order u runs: the end face's from the meeting on, the face
+            // beyond's up to it, or the other way round.)
+            let (Piece { curve, on_fillet, on_face, v: v_end }, next) = if r.side == 0 {
+                (piece(&end, r.at, 1.0)?, piece(&r.face, 0.0, r.at)?)
+            } else {
+                (piece(&end, 0.0, r.at)?, piece(&r.face, r.at, 1.0)?)
+            };
+            let v = if r.side == 0 { [next.v[0], v_end[1]] } else { [v_end[0], next.v[1]] };
+            r.piece = Some(next);
+            Ok(EndCut { vertex: v_id, face: end, curve, on_fillet, on_face, v, edges, extended, open: false, onto, beyond: Some(r) })
+        }
+    }
+}
+
+/// A crossing of the fillet with a face's surface, over [0, 1] in the order u runs: as a 3D
+/// curve, on the fillet and on the face; and the fillet's v at its ends.
+struct Piece {
+    curve: BSplineCurve,
+    on_fillet: BSplineCurve2,
+    on_face: BSplineCurve2,
+    v: [f64; 2],
+}
+
+/// Where a fillet's contact on face `side` runs over the end face's edge at the far vertex
+/// `far` onto the face beyond (`face`): the fillet cut by it up to where it crosses that
+/// edge (`split`, at u = `at`), the end face's edge from the vertex (`removed`) taken away,
+/// and the face's edge there (`trimmed`) ending at the contact.
+struct Beyond {
+    side: usize,
+    face: Side,
+    at: f64,
+    far: VertexId,
+    split: (EdgeId, f64),
+    trimmed: (EdgeId, f64),
+    removed: EdgeId,
+    /// The crossing with the face beyond.
+    piece: Option<Piece>,
 }
 
 /// [`end_cut`] where the faces along the edge go on from `vertex` along free edges `free`
@@ -1002,7 +1123,20 @@ fn open_end(model: &Model, vertex: VertexId, free: [EdgeId; 2], sides: &[Side; 2
     let points: Vec<Point> = uv.iter().map(|q| fillet.point(q.x, q.y)).collect();
     let curve = fit::interpolate_with_parameters(&points, &params)?;
     let on_fillet = BSplineCurve2::new(vec![uv[0], uv[ACROSS]], vec![0.0, 1.0], vec![2, 2], 1);
-    Ok(EndCut { vertex, face: sides[0].clone(), curve, on_fillet: on_fillet.clone(), on_face: on_fillet, v, edges, extended: [false; 2], open: true, onto: [None; 2] })
+    Ok(EndCut { vertex, face: sides[0].clone(), curve, on_fillet: on_fillet.clone(), on_face: on_fillet, v, edges, extended: [false; 2], open: true, onto: [None; 2], beyond: None })
+}
+
+/// The vertex where contact `i` ends at `p`, at an end cut `cut` (if any): the vertex the
+/// contact ends on there, its tolerance reaching `p`, else a new one.
+fn contact_vertex(model: &mut Model, cut: Option<&EndCut>, i: usize, p: Point, tolerance: f64) -> Result<VertexId> {
+    match cut.and_then(|cut| cut.onto[i]) {
+        Some(x) => {
+            let reach = model.tolerance(x).max(tolerance).max(1.01 * model.point(x).distance(p));
+            model.set_vertex_tolerance(x, reach)?;
+            Ok(x)
+        }
+        None => Ok(model.add_vertex(p, tolerance)),
+    }
 }
 
 /// The edge carrying edge `i` of `cut` (along the fillet's face `side`) on past the vertex to
@@ -1139,19 +1273,7 @@ impl Rebuild<'_> {
             _ => ([self.ts[0]; 2], [*self.ts.last().expect("sections"); 2]),
         };
         // Vertices at the ends of the contact curves.
-        // (Or the vertex the contact ends on, its tolerance reaching the contact's end.)
-        let corner = |model: &mut Model, k: usize, i: usize, v: f64| -> Result<VertexId> {
-            let p = self.contacts[i].point(v);
-            match self.ends.get(k).and_then(|cut| cut.onto[i]) {
-                Some(x) => {
-                    let gap = model.point(x).distance(p);
-                    let reach = model.tolerance(x).max(tolerance).max(1.01 * gap);
-                    model.set_vertex_tolerance(x, reach)?;
-                    Ok(x)
-                }
-                None => Ok(model.add_vertex(p, tolerance)),
-            }
-        };
+        let corner = |model: &mut Model, k: usize, i: usize, v: f64| contact_vertex(model, self.ends.get(k), i, self.contacts[i].point(v), tolerance);
         let starts = [corner(self.model, 0, 0, v_start[0])?, corner(self.model, 0, 1, v_start[1])?];
         let finishes = if closed { starts } else { [corner(self.model, 1, 0, v_end[0])?, corner(self.model, 1, 1, v_end[1])?] };
         // Along a closed edge, where each contact curve crosses the other edges of its face
@@ -1220,8 +1342,13 @@ impl Rebuild<'_> {
         let mut end_inserts: Vec<(Shape, (EdgeId, Curve2, [VertexId; 2]))> = Vec::new();
         // (edge, its vertex at a fillet's end, the vertex replacing it, the parameter there)
         let mut trims: Vec<(EdgeId, VertexId, VertexId, f64)> = Vec::new();
-        // (edges the fillet takes away whole, its contact ending at their far vertex)
+        // (edges the fillet takes away whole, its contact ending at their far vertex or
+        // running past it)
         let mut removed: Vec<EdgeId> = Vec::new();
+        // (per end cut, the vertices of its piece on the end face; and the pieces across the
+        // faces beyond: the end, the side running over, the edge and its pcurve on the fillet)
+        let mut across_ends: Vec<[VertexId; 2]> = Vec::new();
+        let mut beyond_across: Vec<(usize, usize, EdgeId, Curve2)> = Vec::new();
         if closed {
             let s = &sections[0];
             let arc = arc_curve(s);
@@ -1263,13 +1390,47 @@ impl Rebuild<'_> {
         } else {
             for (k, cut) in self.ends.iter().enumerate() {
                 let vs = if k == 0 { starts } else { finishes };
-                let e = self.model.add_edge(vs[0], vs[1], tolerance)?;
+                // (Where the fillet runs over onto the face beyond, the end face's piece runs
+                // from where the two meet, the face beyond's piece to it, in the order u runs.)
+                let ends = match &cut.beyond {
+                    None => vs,
+                    Some(r) => {
+                        let next = r.piece.as_ref().expect("the piece beyond");
+                        let meeting = cut.curve.point(if r.side == 0 { 0.0 } else { 1.0 });
+                        let s = self.model.add_vertex(meeting, tolerance);
+                        let ends = if r.side == 0 { [s, vs[1]] } else { [vs[0], s] };
+                        let next_ends = if r.side == 0 { [vs[0], s] } else { [s, vs[1]] };
+                        let e = self.model.add_edge(next_ends[0], next_ends[1], tolerance)?;
+                        self.model.set_edge_curve(e.into(), Curve::BSpline(next.curve.clone()), tolerance)?;
+                        self.model.set_edge_range(e.into(), 0.0, 1.0)?;
+                        let pcurve = project::analytic_pcurve(&Curve::BSpline(next.curve.clone()), &r.face.surface).unwrap_or_else(|| Curve2::BSpline(next.on_face.clone()));
+                        end_inserts.push((r.face.face, (e, pcurve, next_ends)));
+                        beyond_across.push((k, r.side, e, Curve2::BSpline(next.on_fillet.clone())));
+                        // The end face's edge from the vertex goes; the face's edge there and
+                        // the end face's edge onto it now end at the contact and the meeting.
+                        removed.push(r.removed);
+                        trims.push((r.trimmed.0, r.far, vs[r.side], r.trimmed.1));
+                        trims.push((r.split.0, r.far, s, r.split.1));
+                        for (edge, at, x) in [(r.trimmed.0, r.trimmed.1, vs[r.side]), (r.split.0, r.split.1, s)] {
+                            if let Some((c, ..)) = self.model.edge_curve(Shape::from(edge)) {
+                                let reach = self.model.tolerance(x).max(1.01 * c.point(at).distance(self.model.point(x)));
+                                self.model.set_vertex_tolerance(x, reach)?;
+                            }
+                        }
+                        ends
+                    }
+                };
+                let e = self.model.add_edge(ends[0], ends[1], tolerance)?;
                 self.model.set_edge_curve(e.into(), Curve::BSpline(cut.curve.clone()), tolerance)?;
                 self.model.set_edge_range(e.into(), 0.0, 1.0)?;
                 across.push(e);
+                across_ends.push(ends);
                 // The edges at the vertex now end where the contact curves meet them (or are
                 // carried on to them).
                 for (i, &(old, t)) in cut.edges.iter().enumerate() {
+                    if cut.beyond.as_ref().is_some_and(|r| r.side == i) {
+                        continue;
+                    }
                     if cut.onto[i].is_some() {
                         removed.push(old);
                     } else if cut.extended[i] {
@@ -1335,8 +1496,7 @@ impl Rebuild<'_> {
                 Some(p) => p,
                 None => Curve2::BSpline(cut.on_face.clone()),
             };
-            let vs = if k == 0 { starts } else { finishes };
-            let insert = (across[k], pcurve, vs);
+            let insert = (across[k], pcurve, across_ends[k]);
             match end_faces.iter_mut().find(|(f, _)| f.node == cut.face.face.node) {
                 Some((_, inserts)) => inserts.push(insert),
                 None => end_faces.push((cut.face.face, vec![insert])),
@@ -1367,11 +1527,21 @@ impl Rebuild<'_> {
             }
         };
         let last_across = if closed { across[0] } else { across[1] };
-        let mut uses: Vec<Use> = vec![(across[0], Orientation::Forward, across_pcurve(0), 0.0, 1.0)];
+        // (Each end's pieces in the order u runs.)
+        let pieces = |k: usize, edge: EdgeId| -> Vec<(EdgeId, Curve2)> {
+            let mut pieces = vec![(edge, across_pcurve(k))];
+            for (_, side, e, p) in beyond_across.iter().filter(|b| b.0 == k) {
+                if *side == 0 { pieces.insert(0, (*e, p.clone())) } else { pieces.push((*e, p.clone())) }
+            }
+            pieces
+        };
+        let mut uses: Vec<Use> = pieces(0, across[0]).into_iter().map(|(e, p)| (e, Orientation::Forward, p, 0.0, 1.0)).collect();
         for &(e, lo, hi) in &contact_edges[1] {
             uses.push((e, Orientation::Forward, line((1.0, 0.0), (0.0, 1.0)), lo, hi));
         }
-        uses.push((last_across, Orientation::Reversed, across_pcurve(1), 0.0, 1.0));
+        for (e, p) in pieces(1, last_across).into_iter().rev() {
+            uses.push((e, Orientation::Reversed, p, 0.0, 1.0));
+        }
         for &(e, lo, hi) in contact_edges[0].iter().rev() {
             uses.push((e, Orientation::Reversed, line((0.0, 0.0), (0.0, 1.0)), lo, hi));
         }
