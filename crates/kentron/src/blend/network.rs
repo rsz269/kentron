@@ -803,6 +803,9 @@ fn build(model: &mut Model, shape: Shape, stripes: &[Stripe], ends: &[[End; 2]],
                     if cut.beyond.is_some() {
                         return Err(Error::InvalidInput("a fillet running over onto the next face is not supported yet in a network".into()));
                     }
+                    if cut.fan.is_some() {
+                        return Err(Error::InvalidInput("a fillet ending across several faces is not supported yet in a network".into()));
+                    }
                     let vertices = [contact_vertex(model, Some(cut), 0, s.rolling.contacts[0].point(cut.v[0]), tolerance)?, contact_vertex(model, Some(cut), 1, s.rolling.contacts[1].point(cut.v[1]), tolerance)?];
                     for (j, &(old, t)) in cut.edges.iter().enumerate() {
                         if cut.onto[j].is_some() {

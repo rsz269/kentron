@@ -52,8 +52,6 @@ tests/blend/simple/U4
 tests/blend/simple/U5
 tests/blend/simple/U6
 tests/blend/simple/U7
-tests/blend/simple/V2
-tests/blend/simple/V4
 tests/blend/simple/V6
 tests/blend/simple/W5
 tests/blend/simple/W7
@@ -85,7 +83,6 @@ tests/blend/tolblend_simple/D2
 tests/blend/tolblend_simple/D6
 tests/blend/tolblend_simple/D8
 tests/blend/tolblend_simple/D9
-tests/blend/tolblend_simple/E1
 tests/blend/tolblend_simple/E2
 tests/blend/tolblend_simple/E3
 tests/blend/tolblend_simple/E5

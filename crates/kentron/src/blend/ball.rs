@@ -880,6 +880,50 @@ struct EndCut {
     /// Whether `face`'s surface is the end face's carried on past its patch's bounds (for
     /// the face rebuilt to take).
     carried: bool,
+    /// Where the fillet ends across a fan of faces round the vertex: the crossing (`curve`
+    /// and the rest) is the first face's piece, these the others'.
+    fan: Option<Fan>,
+}
+
+/// The faces of a fan after the first (in the order u runs), the crossing with each, and the
+/// edges between each two (from the first) with where the crossing passes them.
+struct Fan {
+    faces: Vec<Side>,
+    pieces: Vec<Piece>,
+    splits: Vec<(EdgeId, f64)>,
+}
+
+/// The faces round `vertex` from the face across edge `a` from the first side to the face
+/// across edge `b` from the second, each sharing an edge at the vertex with the one before
+/// (those edges given too); `None` where they do not go round so.
+fn fan_round(model: &Model, shape: Shape, vertex: Shape, sides: &[Side; 2], a: EdgeId, b: EdgeId) -> Option<(Vec<Shape>, Vec<EdgeId>)> {
+    let faces_of = |e: EdgeId| -> Vec<Shape> { model.explore(shape, NodeKind::Face).filter(|f| model.explore(*f, NodeKind::Edge).any(|x| x.node == crate::topology::NodeId::from(e))).collect() };
+    let at_vertex = |e: EdgeId| {
+        let (p, q) = model.edge_vertices(Shape::from(e));
+        p.node == vertex.node || q.node == vertex.node
+    };
+    let mut face = faces_of(a).into_iter().find(|f| f.node != sides[0].face.node)?;
+    let (mut faces, mut inner) = (vec![face], Vec::new());
+    let mut came = a;
+    for _ in 0..8 {
+        let edges: Vec<EdgeId> = model
+            .explore(face, NodeKind::Edge)
+            .filter_map(|e| EdgeId::try_from(e.node).ok())
+            .filter(|&e| e != came && at_vertex(e) && model.edge_curve(Shape::from(e)).is_some())
+            .collect();
+        let [next] = edges[..] else { return None };
+        if next == b {
+            return faces_of(b).iter().any(|f| f.node == sides[1].face.node).then_some((faces, inner));
+        }
+        face = faces_of(next).into_iter().find(|f| f.node != face.node)?;
+        if faces.iter().any(|f| f.node == face.node) {
+            return None;
+        }
+        faces.push(face);
+        inner.push(next);
+        came = next;
+    }
+    None
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -991,9 +1035,27 @@ fn end_cut_on(
             edges.contains(&a) && edges.contains(&b)
         })
         .collect();
-    let [face] = end_faces[..] else {
-        return Err(Error::InvalidInput("rolling-ball fillets ending at vertices with more than three faces are not supported yet".into()));
+    // (Else the faces round the vertex from the first face's edge to the second's: a fan,
+    // the fillet cut by each in turn.)
+    let (face, fan) = match end_faces[..] {
+        [face] => (face, None),
+        _ => {
+            let (faces, inner) = fan_round(model, shape, vertex, sides, a, b)
+                .ok_or_else(|| Error::InvalidInput("rolling-ball fillets ending at vertices with more than three faces are not supported yet".into()))?;
+            (faces[0], Some((faces, inner)))
+        }
     };
+    let side_of = |face: Shape| Side {
+        face,
+        surface: model.surface(face).expect("a face's surface").clone(),
+        sign: if face.orientation == Orientation::Reversed { -1.0 } else { 1.0 },
+        along: 1.0,
+        last: Default::default(),
+        v_range: { let b = model.face_uv_bounds(face); (b.2, b.3) },
+        own_range: Default::default(),
+    };
+    let fan_sides: Vec<Side> = fan.as_ref().map(|(faces, _)| faces.iter().map(|&f| side_of(f)).collect()).unwrap_or_default();
+    let carry = carry && fan.is_none();
     let sign = if face.orientation == Orientation::Reversed { -1.0 } else { 1.0 };
     let surface = model.surface(face).expect("a face's surface").clone();
     // (By twice the fillet's width across the middle of the edge.)
@@ -1066,7 +1128,8 @@ fn end_cut_on(
     // from the crossing's ends before it is refined.)
     // (On the edge, or on its curve carried on past the vertex: the end face then grows to
     // reach the contact, as where the fillet ends wider than its end face's edge.)
-    let ends = [crossing(0.0)?, crossing(1.0)?];
+    let last = fan_sides.last().unwrap_or(&end);
+    let ends = [crossing(0.0)?, crossing_on(last, 1.0)?];
     let width = fillet.point(ends[0].0, ends[0].1).distance(fillet.point(ends[1].0, ends[1].1));
     // (Where the contact meets the edge at its far vertex, or as good as, a little short
     // or past it: the edge is taken away whole, rather than leave a sliver of it or of the
@@ -1170,7 +1233,7 @@ fn end_cut_on(
     // (A run-over where the contact is neither on its edge nor at its far vertex.)
     let mut beyond = None;
     for (i, e, p) in [(0, a, pa), (1, b, pb)] {
-        if onto[i].is_none() && on_edge(e, p)?.is_none() && beyond.is_none() {
+        if fan.is_none() && onto[i].is_none() && on_edge(e, p)?.is_none() && beyond.is_none() {
             beyond = run_over(i, e)?;
         }
     }
@@ -1212,10 +1275,61 @@ fn end_cut_on(
         let on_face = fit::interpolate_with_parameters(&unwrapped(face_uv, &side.surface), &params)?;
         Ok(Piece { curve, on_fillet, on_face, v: [uv[0].1, uv[uv.len() - 1].1] })
     };
+    if let Some((_, inner)) = &fan {
+        // Across the fan: on each face's surface from where it took over from the face before
+        // to where the next takes over (the crossing passes the edge between them).
+        if extended.iter().any(|&x| x) {
+            return Err(Error::InvalidInput("a fillet ending across several faces where a contact misses its edge is not supported yet".into()));
+        }
+        let mut at = vec![0.0];
+        for (k, w) in fan_sides.windows(2).enumerate() {
+            let over = |u: f64| -> Result<f64> {
+                let (u, v) = crossing_on(&w[0], u)?;
+                Ok(w[1].distance(fillet.point(u, v))?.0)
+            };
+            let from = at[k];
+            let n = 64;
+            let mut found = None;
+            let mut before = over(from + (1.0 - from) * 1e-9)?;
+            for j in 1..=n {
+                let u = from + (1.0 - from) * j as f64 / n as f64;
+                let now = over(u)?;
+                if (now > 0.0) != (before > 0.0) {
+                    let (mut lo, mut hi) = (from + (1.0 - from) * (j - 1) as f64 / n as f64, u);
+                    for _ in 0..80 {
+                        let m = 0.5 * (lo + hi);
+                        if (over(m)? > 0.0) == (before > 0.0) { lo = m } else { hi = m }
+                    }
+                    found = Some(0.5 * (lo + hi));
+                    break;
+                }
+                before = now;
+            }
+            at.push(found.ok_or_else(|| Error::InvalidInput("a fillet's end not found passing from face to face round its vertex".into()))?);
+        }
+        at.push(1.0);
+        let mut pieces = Vec::new();
+        for (k, s) in fan_sides.iter().enumerate() {
+            pieces.push(piece(s, at[k], at[k + 1])?);
+        }
+        // Where each passes to the next: on the edge between them.
+        let mut splits = Vec::new();
+        for (k, &e) in inner.iter().enumerate() {
+            let p = pieces[k].curve.point(1.0);
+            let t = on_edge(e, p)?.ok_or_else(|| Error::InvalidInput("a fillet's end passing from face to face away from the edge between them".into()))?;
+            splits.push((e, t));
+        }
+        let mut pieces = pieces.into_iter();
+        let Piece { curve, on_fillet, on_face, v: v_first } = pieces.next().expect("a piece");
+        let rest: Vec<Piece> = pieces.collect();
+        let v = [v_first[0], rest.last().map_or(v_first[1], |p| p.v[1])];
+        let next = fan_sides[1..].to_vec();
+        return Ok(EndCut { vertex: v_id, face: end, curve, on_fillet, on_face, v, edges, extended, open: false, onto, beyond: None, carried: false, fan: Some(Fan { faces: next, pieces: rest, splits }) });
+    }
     match beyond {
         None => {
             let Piece { curve, on_fillet, on_face, v } = piece(&end, 0.0, 1.0)?;
-            Ok(EndCut { vertex: v_id, face: end, curve, on_fillet, on_face, v, edges, extended, open: false, onto, beyond: None, carried: carries })
+            Ok(EndCut { vertex: v_id, face: end, curve, on_fillet, on_face, v, edges, extended, open: false, onto, beyond: None, carried: carries, fan: None })
         }
         Some(mut r) => {
             // (Each piece in the order u runs: the end face's from the meeting on, the face
@@ -1227,7 +1341,7 @@ fn end_cut_on(
             };
             let v = if r.side == 0 { [next.v[0], v_end[1]] } else { [v_end[0], next.v[1]] };
             r.piece = Some(next);
-            Ok(EndCut { vertex: v_id, face: end, curve, on_fillet, on_face, v, edges, extended, open: false, onto, beyond: Some(r), carried: carries })
+            Ok(EndCut { vertex: v_id, face: end, curve, on_fillet, on_face, v, edges, extended, open: false, onto, beyond: Some(r), carried: carries, fan: None })
         }
     }
 }
@@ -1301,7 +1415,7 @@ fn open_end(model: &Model, vertex: VertexId, free: [EdgeId; 2], sides: &[Side; 2
     let points: Vec<Point> = uv.iter().map(|q| fillet.point(q.x, q.y)).collect();
     let curve = fit::interpolate_with_parameters(&points, &params)?;
     let on_fillet = BSplineCurve2::new(vec![uv[0], uv[ACROSS]], vec![0.0, 1.0], vec![2, 2], 1);
-    Ok(EndCut { vertex, face: sides[0].clone(), curve, on_fillet: on_fillet.clone(), on_face: on_fillet, v, edges, extended: [false; 2], open: true, onto: [None; 2], beyond: None, carried: false })
+    Ok(EndCut { vertex, face: sides[0].clone(), curve, on_fillet: on_fillet.clone(), on_face: on_fillet, v, edges, extended: [false; 2], open: true, onto: [None; 2], beyond: None, carried: false, fan: None })
 }
 
 /// `result`, where edges were carried on past a fillet's end (`extended`), with each joined
@@ -1628,12 +1742,35 @@ impl Rebuild<'_> {
             }
         } else {
             for (k, cut) in self.ends.iter().enumerate() {
+                let k_end = k;
                 let vs = if k == 0 { starts } else { finishes };
                 // (Where the fillet runs over onto the face beyond, the end face's piece runs
                 // from where the two meet, the face beyond's piece to it, in the order u runs.)
-                let ends = match &cut.beyond {
-                    None => vs,
-                    Some(r) => {
+                let ends = match (&cut.beyond, &cut.fan) {
+                    (None, Some(fan)) => {
+                        // Across a fan: a vertex where each piece passes to the next (on the edge
+                        // between their faces, which now ends there), each piece but the first an
+                        // edge of its own, in its face.
+                        let splits: Vec<VertexId> = fan.splits.iter().enumerate().map(|(k, &(edge, at))| {
+                            let point = if k == 0 { cut.curve.point(1.0) } else { fan.pieces[k - 1].curve.point(1.0) };
+                            let s = self.model.add_vertex(point, tolerance);
+                            trims.push((edge, cut.vertex, s, at));
+                            s
+                        }).collect();
+                        for (k, (piece, side)) in fan.pieces.iter().zip(&fan.faces).enumerate() {
+                            let from = splits[k];
+                            let to = if k + 1 < splits.len() { splits[k + 1] } else { vs[1] };
+                            let e = self.model.add_edge(from, to, tolerance)?;
+                            self.model.set_edge_curve(e.into(), Curve::BSpline(piece.curve.clone()), tolerance)?;
+                            self.model.set_edge_range(e.into(), 0.0, 1.0)?;
+                            let pcurve = project::analytic_pcurve(&Curve::BSpline(piece.curve.clone()), &side.surface).unwrap_or_else(|| Curve2::BSpline(piece.on_face.clone()));
+                            end_inserts.push((side.face, (e, pcurve, [from, to])));
+                            beyond_across.push((k_end, 1, e, Curve2::BSpline(piece.on_fillet.clone())));
+                        }
+                        [vs[0], splits[0]]
+                    }
+                    (None, None) => vs,
+                    (Some(r), _) => {
                         let next = r.piece.as_ref().expect("the piece beyond");
                         let meeting = cut.curve.point(if r.side == 0 { 0.0 } else { 1.0 });
                         let s = self.model.add_vertex(meeting, tolerance);
