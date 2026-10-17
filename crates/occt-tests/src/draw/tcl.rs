@@ -762,6 +762,25 @@ fn file(args: &[String]) -> MoltResult {
     }
 }
 
+/// A directory for one script's run, removed after it.
+struct RunDir(PathBuf);
+
+impl RunDir {
+    fn new(group: &str, grid: &str, case: &str) -> RunDir {
+        static RUNS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = RUNS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("kentron-tcl-{}-{n}-{group}-{grid}-{case}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        RunDir(dir)
+    }
+}
+
+impl Drop for RunDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 /// The sub-shapes OCCT's run of the script `<group>/<grid>/<case>` makes by explode, by
 /// position (`tcl_selectors.json`, written by tools/occt_selectors.py --tcl).
 fn selectors(group: &str, grid: &str, case: &str) -> Vec<(usize, String, String, [f64; 4])> {
@@ -887,7 +906,10 @@ pub fn run_script(tests: &Path, group: &str, grid: &str, case: &str) -> Outcome 
     };
     let set = CommandSet::new(execute, command_type, &[], &[]);
     let mut interp = InterpBuilder::new(session, set).standard_library(StandardLibrary::Full).environment(true).build();
-    let temp = std::env::temp_dir();
+    // (A directory of its own for what the script writes, as OCCT's harness gives each test:
+    // scripts name their files after the case, which grids sharing scripts share.)
+    let temp = RunDir::new(group, grid, case);
+    let temp = &temp.0;
     for (var, value) in [
         ("groupname", group.to_string()),
         ("gridname", grid.to_string()),
