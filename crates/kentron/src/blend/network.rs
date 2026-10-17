@@ -18,7 +18,7 @@ use crate::geometry::{fit, project, ParametricCurve, ParametricSurface};
 use crate::math::{Direction2, Point, Point2};
 use crate::topology::{EdgeId, Model, NodeKind, Orientation, Shape, VertexId};
 
-use super::{contact_vertex, cover_pcurve, end_cut, extension, fillet_surface, new_face, rebuild_face, rolling_with, unwrapped, EndCut, Profile, Rolling, Use, NOT_REACHED};
+use super::{contact_vertex, cover_pcurve, joined_extensions, reach_curve, reach_snapped, end_cut, extension, fillet_surface, new_face, rebuild_face, rolling_with, unwrapped, EndCut, Profile, Rolling, Use, NOT_REACHED};
 
 /// Samples along a fillet's stop curve at a corner, and across a corner patch.
 const ACROSS: usize = 32;
@@ -735,12 +735,19 @@ fn stop_curve(stripe: &Stripe, v0: f64, v1: f64) -> Result<(BSplineCurve, BSplin
 
 /// Builds the rounded solid.
 fn build(model: &mut Model, shape: Shape, stripes: &[Stripe], ends: &[[End; 2]], corners: &[Corner], mitres: &[Mitre]) -> Result<Shape> {
-    // Within twice the contact curves' distance from their faces.
+    // Within twice the contact curves' distance from their faces (between the fillet's
+    // ends: past them the contacts run on through sections past the edge's ends, which may
+    // stray from the faces' surfaces).
     let mut deviation: f64 = 0.0;
     let mut size: f64 = 1.0;
-    for s in stripes {
-        let (a, b) = (s.ts[0], s.ts[s.ts.len() - 1]);
+    let v_of = |end: &End| match end {
+        End::Face(cut) => cut.v,
+        End::Free { v, .. } | End::Mitre { v, .. } | End::Corner { v, .. } => *v,
+    };
+    for (s, ends) in stripes.iter().zip(ends) {
+        let (from, to) = (v_of(&ends[0]), v_of(&ends[1]));
         for i in 0..2 {
+            let (a, b) = (from[i], to[i]);
             for k in 0..=100 {
                 let p = s.rolling.contacts[i].point(a + (b - a) * k as f64 / 100.0);
                 deviation = deviation.max(s.rolling.sides[i].distance(p)?.0.abs());
@@ -887,9 +894,12 @@ fn build(model: &mut Model, shape: Shape, stripes: &[Stripe], ends: &[[End; 2]],
             } else if at == b_id {
                 (to, hi) = (new_vertex, t);
             }
+            reach_curve(model, new_vertex, &curve, t)?;
         }
-        let e = model.add_edge(from, to, tolerance.max(model.tolerance(Shape::from(old))))?;
-        model.set_edge_curve(e.into(), curve, tolerance)?;
+        // (No closer than the edge it replaces holds to its faces.)
+        let kept = tolerance.max(model.tolerance(Shape::from(old)));
+        let e = model.add_edge(from, to, kept)?;
+        model.set_edge_curve(e.into(), curve, kept)?;
         model.set_edge_range(e.into(), lo, hi)?;
         shortened.push((old, e, lo, hi));
     }
@@ -928,7 +938,12 @@ fn build(model: &mut Model, shape: Shape, stripes: &[Stripe], ends: &[[End; 2]],
         }
         let replace_refs: Vec<(EdgeId, &[(EdgeId, f64, f64)], Curve2)> = replaces.iter().map(|(old, pieces, p)| (*old, pieces.as_slice(), p.clone())).collect();
         let face_inserts: Vec<(EdgeId, Curve2, [VertexId; 2])> = inserts.iter().filter(|(f, _)| f.node == face.node).map(|(_, x)| x.clone()).collect();
-        let new = rebuild_face(model, face, &replace_refs, &shortened, &removed, &face_inserts)?;
+        // (An end face whose surface a cut carried on past its patch takes it.)
+        let carried = ends.iter().flatten().find_map(|end| match end {
+            End::Face(cut) if cut.carried && cut.face.face.node == face.node => Some(&cut.face.surface),
+            _ => None,
+        });
+        let new = rebuild_face(model, face, &replace_refs, &shortened, &removed, &face_inserts, carried)?;
         rebuilt.push((face, new));
     }
     // The fillet faces: across at the start (u from 0 to 1), along the second contact, back
@@ -1006,7 +1021,10 @@ fn build(model: &mut Model, shape: Shape, stripes: &[Stripe], ends: &[[End; 2]],
     for s in solids {
         model.add(compound, s)?;
     }
-    Ok(compound)
+    let snapped: Vec<VertexId> = ends.iter().flatten().filter_map(|end| if let End::Face(cut) = end { Some(cut.onto) } else { None }).flat_map(|o| o.into_iter().flatten()).collect();
+    reach_snapped(model, shape, compound, &snapped)?;
+    let extended = ends.iter().flatten().any(|end| matches!(end, End::Face(cut) if cut.extended.iter().any(|&x| x)));
+    joined_extensions(model, compound, extended)
 }
 
 /// The patch closing a corner: a Coons surface through the three fillets' stop curves

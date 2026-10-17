@@ -36,7 +36,6 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/complex/A4
-expect: not_done
 build:
   - s: {load: {brep: "CCH_indushep.rle"}}
   - s: {scale: {shape: s, center: [0, 0, 0], factor: 1000}}

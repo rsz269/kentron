@@ -12,7 +12,7 @@ use crate::error::{Error, Result};
 use crate::geometry::curve::{BSplineCurve, Curve};
 use crate::geometry::curve2::{BSplineCurve2, Curve2, Line2};
 use crate::geometry::surface::{BSplineSurface, KnotVector, Surface};
-use crate::geometry::{fit, project, ParametricCurve, ParametricSurface};
+use crate::geometry::{extend, fit, project, ParametricCurve, ParametricSurface};
 use crate::math::{Direction2, Point, Point2, Vector};
 use crate::topology::{CoEdgeId, EdgeId, Model, NodeKind, Orientation, Shape, VertexId};
 
@@ -29,6 +29,9 @@ const ACROSS: usize = 16;
 /// How near (a fraction of the fillet's width) a contact meeting an edge at the fillet's
 /// end passes the edge's far vertex for it to end there.
 const ONTO_VERTEX: f64 = 2e-3;
+/// How near (a fraction of the fillet's width) a contact passes an edge at the fillet's end
+/// to meet it.
+const ON_EDGE: f64 = 1e-3;
 
 /// A face along the edge: its surface, +1 where the surface's normal points out of the
 /// solid (-1 otherwise), and the direction of the edge in its boundary (+1 if the face's
@@ -233,6 +236,12 @@ fn rolling_with(model: &Model, shape: Shape, edge: Shape, profile: &Profile, far
             Some(if swapped { [other, *distance] } else { [*distance, other] })
         }
     };
+    // (At an angle: the face it is to, and the angle; the second distance above only a
+    // first guess, each section cut at the angle to the first face there.)
+    let cut_angle: Option<(usize, f64)> = match profile {
+        Profile::Chamfer { first, second: ChamferSecond::Angle(angle), .. } => Some((if first.is_some_and(|f| sides[1].face.node == f) { 1 } else { 0 }, *angle)),
+        _ => None,
+    };
     let chamfer_size = chamfer.map(|d| d[0].max(d[1]));
     let ball_law = |s: f64| match profile {
         Profile::Ball(law) => law(s),
@@ -269,8 +278,8 @@ fn rolling_with(model: &Model, shape: Shape, edge: Shape, profile: &Profile, far
         if let Some(distances) = chamfer {
             let near = last_contacts.get();
             let on_edge = (t0.min(t1)..=t0.max(t1)).contains(&t);
-            let s = chamfer_section(&sides, o, tangent, distances, near, on_edge).or_else(|e| match near {
-                Some(_) => chamfer_section(&sides, o, tangent, distances, None, on_edge),
+            let s = chamfer_section(&sides, o, tangent, distances, cut_angle, near, on_edge).or_else(|e| match near {
+                Some(_) => chamfer_section(&sides, o, tangent, distances, cut_angle, None, on_edge),
                 None => Err(e),
             })?;
             last_contacts.set(Some([s.contacts[0] - o, s.contacts[1] - o]));
@@ -609,13 +618,18 @@ fn section(sides: &[Side; 2], o: Point, tangent: Vector, r: f64, side: f64, near
 /// `near` from `o` (a neighbouring section's), else from along the faces' tangent planes.
 /// (Off a face's patch, in its parameters, only for a section `on_edge`: past the edge's
 /// ends the sections stop where the faces do.)
-fn chamfer_section(sides: &[Side; 2], o: Point, tangent: Vector, distances: [f64; 2], near: Option<[Vector; 2]>, on_edge: bool) -> Result<Section> {
+fn chamfer_section(sides: &[Side; 2], o: Point, tangent: Vector, distances: [f64; 2], angle: Option<(usize, f64)>, near: Option<[Vector; 2]>, on_edge: bool) -> Result<Section> {
     let normal = |i: usize| -> Result<Vector> {
         let reach = 1e-6 * (1.0 + (o - Point::ORIGIN).length());
         sides[i].distance(o).or_else(|e| sides[i].distance(o + tangent * reach).or_else(|_| sides[i].distance(o - tangent * reach)).map_err(|_| e)).map(|d| d.2)
     };
     let mut contacts = [o; 2];
-    for i in 0..2 {
+    // (At an angle to the first face, that face's contact first.)
+    let order = match angle {
+        Some((first, _)) => [first, 1 - first],
+        None => [0, 1],
+    };
+    for i in order {
         let d = distances[i];
         let start = match near {
             Some(offsets) => o + (offsets[i] - tangent * offsets[i].dot(tangent)),
@@ -627,6 +641,15 @@ fn chamfer_section(sides: &[Side; 2], o: Point, tangent: Vector, distances: [f64
                 o + into.normalized() * d
             }
         };
+        // At an angle to the first face: where the cut from its contact meets this face,
+        // turned by the angle from the first face's way back to the edge there (from the
+        // distance the faces' tangents at the edge give).
+        if let Some((first, angle)) = angle.filter(|&(first, _)| first != i) {
+            if let Some(x) = cut_at_angle(sides, o, tangent, contacts[first], first, angle, start) {
+                contacts[i] = x;
+                continue;
+            }
+        }
         // (Else in the face's parameters: past a patch's bounds a point's distance from the
         // surface jumps; its parametric form carries on.)
         contacts[i] = match newton(start, |x| Ok([sides[i].distance(x)?.0, (x - o).dot(tangent), (x - o).length() - d])) {
@@ -639,6 +662,44 @@ fn chamfer_section(sides: &[Side; 2], o: Point, tangent: Vector, distances: [f64
     let center = middle + (middle - o);
     let contact_uv = [sides[0].uv(contacts[0])?, sides[1].uv(contacts[1])?];
     Ok(Section { t: 0.0, center, contacts, contact_uv, radius: distances[0].max(distances[1]), straight: true })
+}
+
+/// Where the cut from `from` (on face `first`'s surface, in the plane through `o` square to
+/// `tangent`) meets the other face's surface: turned by `angle` from the first face's way
+/// back towards `o` there, towards `guess` (a point on the other face near it).
+fn cut_at_angle(sides: &[Side; 2], o: Point, tangent: Vector, from: Point, first: usize, angle: f64, guess: Point) -> Option<Point> {
+    let n = sides[first].distance(from).ok()?.2;
+    let back = n.cross(tangent);
+    let back = if back.dot(o - from) >= 0.0 { back } else { -back };
+    if back.length() <= 1e-12 {
+        return None;
+    }
+    let back = back.normalized();
+    // (Turned about the edge's tangent, either way: the one heading nearer the guess.)
+    let turned = |a: f64| back * a.cos() + tangent.cross(back) * a.sin();
+    let towards = (guess - from).normalized();
+    let way = [turned(angle), turned(-angle)].into_iter().max_by(|x, y| x.dot(towards).total_cmp(&y.dot(towards)))?;
+    let other = &sides[1 - first];
+    let at = |l: f64| other.distance(from + way * l).map(|d| d.0);
+    // Secant steps along the cut from the guess's distance.
+    let (mut l0, mut l1) = (0.9 * (guess - from).length(), (guess - from).length());
+    let (mut f0, mut f1) = (at(l0).ok()?, at(l1).ok()?);
+    for _ in 0..60 {
+        if f1.abs() <= 1e-13 * (1.0 + l1) {
+            break;
+        }
+        if f1 == f0 {
+            return None;
+        }
+        let l2 = l1 - f1 * (l1 - l0) / (f1 - f0);
+        if !(l2.is_finite() && l2 > 0.0) {
+            return None;
+        }
+        (l0, f0) = (l1, f1);
+        l1 = l2;
+        f1 = at(l1).ok()?;
+    }
+    (f1.abs() <= 1e-9 * (1.0 + l1)).then(|| from + way * l1)
 }
 
 /// The point of `side`'s surface in the plane through `o` square to `tangent`, `d` from
@@ -780,6 +841,9 @@ struct EndCut {
     /// Where a contact runs over the end face's edge onto the face beyond: the crossing
     /// (`curve` and the rest) is the end face's piece, from where the two meet.
     beyond: Option<Beyond>,
+    /// Whether `face`'s surface is the end face's carried on past its patch's bounds (for
+    /// the face rebuilt to take).
+    carried: bool,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -793,6 +857,47 @@ fn end_cut(
     ts: &[f64],
     at_end: bool,
     target: f64,
+) -> Result<EndCut> {
+    // (Where the end face grows to reach a contact and its surface is a patch: on its
+    // surface carried on past the patch's bounds (the same over them), which the face then
+    // takes, as points off the patch are not found on the patch itself. Where no crossing
+    // is found, again with each crossing's feet on the end face searched afresh.)
+    let on = |carry: bool, fresh: bool| end_cut_on(model, shape, id, vertex, sides, fillet, ts, at_end, target, carry, fresh);
+    match on(false, false) {
+        Ok(cut) if cut.open || !cut.extended.iter().any(|&x| x) => Ok(cut),
+        Ok(cut) => Ok(on(true, false).ok().filter(|c| c.carried).unwrap_or(cut)),
+        Err(e) => on(false, true).map_err(|_| e),
+    }
+}
+
+/// `surface` carried on past each bound by about `length`, if it is a patch (a Bezier or
+/// B-spline surface).
+fn carried_on(surface: &Surface, length: f64) -> Option<Surface> {
+    if !matches!(surface, Surface::Bezier(_) | Surface::BSpline(_)) {
+        return None;
+    }
+    let mut carried = surface.clone();
+    for side in [extend::SurfaceSide::UMin, extend::SurfaceSide::UMax, extend::SurfaceSide::VMin, extend::SurfaceSide::VMax] {
+        carried = Surface::BSpline(extend::surface_by_length(&carried, length, 2, side)?);
+    }
+    Some(carried)
+}
+
+/// [`end_cut`], on the end face's surface carried on past its patch (`carry`, where it is
+/// one), its feet there searched afresh for each crossing (`fresh`).
+#[allow(clippy::too_many_arguments)]
+fn end_cut_on(
+    model: &Model,
+    shape: Shape,
+    id: EdgeId,
+    vertex: Shape,
+    sides: &[Side; 2],
+    fillet: &Surface,
+    ts: &[f64],
+    at_end: bool,
+    target: f64,
+    carry: bool,
+    fresh: bool,
 ) -> Result<EndCut> {
     let v_id = VertexId::try_from(vertex.node).expect("a vertex");
     // The other edges at the vertex: one on each face along the edge.
@@ -833,7 +938,16 @@ fn end_cut(
         return Err(Error::InvalidInput("rolling-ball fillets ending at vertices with more than three faces are not supported yet".into()));
     };
     let sign = if face.orientation == Orientation::Reversed { -1.0 } else { 1.0 };
-    let end = Side { face, surface: model.surface(face).expect("a face's surface").clone(), sign, along: 1.0, last: Default::default(), v_range: { let b = model.face_uv_bounds(face); (b.2, b.3) }, own_range: Default::default() };
+    let surface = model.surface(face).expect("a face's surface").clone();
+    // (By twice the fillet's width across the middle of the edge.)
+    let carried = if carry {
+        let v = ts[ts.len() / 2];
+        carried_on(&surface, 2.0 * fillet.point(0.0, v).distance(fillet.point(1.0, v)))
+    } else {
+        None
+    };
+    let carries = carried.is_some();
+    let end = Side { face, surface: carried.unwrap_or(surface), sign, along: 1.0, last: Default::default(), v_range: { let b = model.face_uv_bounds(face); (b.2, b.3) }, own_range: Default::default() };
 
     // Across the fillet, where it leaves the end face's surface: going from the middle of
     // the edge towards this end, the outward distance turns positive.
@@ -848,6 +962,11 @@ fn end_cut(
     // nearest the edge's vertex.)
     let vertex_point = model.point(vertex);
     let crossing_on = |end: &Side, u: f64| -> Result<(f64, f64)> {
+        // (Afresh: from a search of the whole surface, then each point from the one before,
+        // as a foot found for another crossing may lead to a far one.)
+        if fresh {
+            end.last.set(None);
+        }
         let d = |v: f64| -> Result<f64> { Ok(end.distance(fillet.point(u, v))?.0) };
         // (Into the end face's outside first, as the fillet usually leaves the solid there.)
         let mut best: Option<(f64, f64)> = None;
@@ -904,7 +1023,9 @@ fn end_cut(
     let on_edge = |e: EdgeId, p: Point| -> Result<Option<f64>> {
         let (c, first, last) = model.edge_curve(Shape::from(e)).ok_or_else(|| Error::InvalidInput("a degenerate edge at a fillet's end".into()))?;
         let t = parameter_on(&c, first, last, p);
-        Ok((c.point(t).distance(p) <= near_to(p)).then_some(t))
+        // (Or as good as: the end face's surface and the edge's curve each hold to the faces
+        // only so closely.)
+        Ok((c.point(t).distance(p) <= near_to(p).max(ON_EDGE * width)).then_some(t))
     };
     // (Where the contact on face `i` passes the far vertex of its edge `e` at the vertex, the
     // fillet runs over the end face's edge from there onto the face beyond: cut by that face
@@ -1037,7 +1158,7 @@ fn end_cut(
     match beyond {
         None => {
             let Piece { curve, on_fillet, on_face, v } = piece(&end, 0.0, 1.0)?;
-            Ok(EndCut { vertex: v_id, face: end, curve, on_fillet, on_face, v, edges, extended, open: false, onto, beyond: None })
+            Ok(EndCut { vertex: v_id, face: end, curve, on_fillet, on_face, v, edges, extended, open: false, onto, beyond: None, carried: carries })
         }
         Some(mut r) => {
             // (Each piece in the order u runs: the end face's from the meeting on, the face
@@ -1049,7 +1170,7 @@ fn end_cut(
             };
             let v = if r.side == 0 { [next.v[0], v_end[1]] } else { [v_end[0], next.v[1]] };
             r.piece = Some(next);
-            Ok(EndCut { vertex: v_id, face: end, curve, on_fillet, on_face, v, edges, extended, open: false, onto, beyond: Some(r) })
+            Ok(EndCut { vertex: v_id, face: end, curve, on_fillet, on_face, v, edges, extended, open: false, onto, beyond: Some(r), carried: carries })
         }
     }
 }
@@ -1123,7 +1244,47 @@ fn open_end(model: &Model, vertex: VertexId, free: [EdgeId; 2], sides: &[Side; 2
     let points: Vec<Point> = uv.iter().map(|q| fillet.point(q.x, q.y)).collect();
     let curve = fit::interpolate_with_parameters(&points, &params)?;
     let on_fillet = BSplineCurve2::new(vec![uv[0], uv[ACROSS]], vec![0.0, 1.0], vec![2, 2], 1);
-    Ok(EndCut { vertex, face: sides[0].clone(), curve, on_fillet: on_fillet.clone(), on_face: on_fillet, v, edges, extended: [false; 2], open: true, onto: [None; 2], beyond: None })
+    Ok(EndCut { vertex, face: sides[0].clone(), curve, on_fillet: on_fillet.clone(), on_face: on_fillet, v, edges, extended: [false; 2], open: true, onto: [None; 2], beyond: None, carried: false })
+}
+
+/// `result`, where edges were carried on past a fillet's end (`extended`), with each joined
+/// to the edge it carries on: one edge between the same two faces, without a vertex of
+/// theirs alone between (which a fillet along them later could not get past).
+fn joined_extensions(model: &mut Model, result: Shape, extended: bool) -> Result<Shape> {
+    if !extended {
+        return Ok(result);
+    }
+    let options = crate::unify::UnifyOptions { faces: false, edges: true, same_surface_only: false };
+    crate::unify::unify_same_domain_with(model, result, options)
+}
+
+/// The new edges of `result` (not `shape`'s) at the vertices `snapped` (contacts ended on
+/// them, a little off): no tighter than the vertex, which reaches the contacts' ends.
+fn reach_snapped(model: &mut Model, shape: Shape, result: Shape, snapped: &[VertexId]) -> Result<()> {
+    if snapped.is_empty() {
+        return Ok(());
+    }
+    let old: std::collections::HashSet<crate::topology::NodeId> = model.unique_subshapes(shape, NodeKind::Edge).iter().map(|e| e.node).collect();
+    for e in model.unique_subshapes(result, NodeKind::Edge) {
+        if old.contains(&e.node) {
+            continue;
+        }
+        let (a, b) = model.edge_vertices(e);
+        let reach = [a, b].iter().filter(|v| snapped.iter().any(|&x| crate::topology::NodeId::from(x) == v.node)).map(|&v| model.tolerance(v)).fold(0.0, f64::max);
+        if reach > model.tolerance(e) {
+            model.set_edge_tolerance(EdgeId::try_from(e.node).expect("an edge"), reach)?;
+        }
+    }
+    Ok(())
+}
+
+/// `vertex`'s tolerance widened to reach `curve` at `t` (an edge shortened to end there).
+fn reach_curve(model: &mut Model, vertex: VertexId, curve: &Curve, t: f64) -> Result<()> {
+    let gap = curve.point(t).distance(model.point(vertex));
+    if gap > model.tolerance(vertex) {
+        model.set_vertex_tolerance(vertex, 1.01 * gap)?;
+    }
+    Ok(())
 }
 
 /// The vertex where contact `i` ends at `p`, at an end cut `cut` (if any): the vertex the
@@ -1168,7 +1329,26 @@ fn extension(model: &mut Model, cut: &EndCut, i: usize, side: &Side, to: VertexI
         let uv: Vec<Point2> = points.iter().map(|&p| s.uv(p)).collect::<Result<_>>()?;
         Ok(Curve2::BSpline(fit::interpolate_with_parameters(&unwrapped(uv, &s.surface), &ws)?))
     };
-    Ok((e, on(side)?, on(&cut.face)?, [cut.vertex, to]))
+    let (on_side, on_end) = (on(side)?, on(&cut.face)?);
+    // (As loose as its curve and pcurves are apart at its ends, and its vertices with it: the
+    // carried curve reaches the contact as nearly as it was found on it.)
+    let mut gap: f64 = 0.0;
+    for (w, v) in [(0.0, cut.vertex), (1.0, to)] {
+        let q = model.point(Shape::from(v));
+        let mut far = curve.point(w).distance(q);
+        for (pcurve, s) in [(&on_side, side), (&on_end, &cut.face)] {
+            let uv = pcurve.point(w);
+            far = far.max(s.surface.point(uv.x, uv.y).distance(q));
+        }
+        gap = gap.max(far);
+        if far > model.tolerance(Shape::from(v)) {
+            model.set_vertex_tolerance(v, 1.01 * far)?;
+        }
+    }
+    if gap > tolerance {
+        model.set_edge_tolerance(e, 1.01 * gap)?;
+    }
+    Ok((e, on_side, on_end, [cut.vertex, to]))
 }
 
 /// Raises `edge`'s tolerance (and its vertices') to cover how far `surface` at `pcurve`
@@ -1266,12 +1446,12 @@ impl Rebuild<'_> {
             let (p, q) = (self.contacts[0].point(a), self.contacts[0].point(b));
             p.distance(q) + (p - Point::ORIGIN).length() + 1.0
         };
-        let tolerance = (self.deviation()? * 2.0).max(crate::tolerance::LINEAR).max(1e-8 * size);
         // The fillet's v range along each contact curve.
         let (v_start, v_end) = match self.ends {
             [start, end] => ([start.v[0], start.v[1]], [end.v[0], end.v[1]]),
             _ => ([self.ts[0]; 2], [*self.ts.last().expect("sections"); 2]),
         };
+        let tolerance = (self.deviation(v_start, v_end)? * 2.0).max(crate::tolerance::LINEAR).max(1e-8 * size);
         // Vertices at the ends of the contact curves.
         let corner = |model: &mut Model, k: usize, i: usize, v: f64| contact_vertex(model, self.ends.get(k), i, self.contacts[i].point(v), tolerance);
         let starts = [corner(self.model, 0, 0, v_start[0])?, corner(self.model, 0, 1, v_start[1])?];
@@ -1381,8 +1561,10 @@ impl Rebuild<'_> {
                     };
                     let t = parameter_on(&curve, first, last, at);
                     let (from, to, lo, hi) = if a_id == v_id { (meet, b_id, t, last) } else { (a_id, meet, first, t) };
-                    let e = self.model.add_edge(from, to, tolerance.max(self.model.tolerance(Shape::from(old))))?;
-                    self.model.set_edge_curve(e.into(), curve, tolerance)?;
+                    // (No closer than the edge it replaces holds to its faces.)
+                    let kept = tolerance.max(self.model.tolerance(Shape::from(old)));
+                    let e = self.model.add_edge(from, to, kept)?;
+                    self.model.set_edge_curve(e.into(), curve, kept)?;
                     self.model.set_edge_range(e.into(), lo, hi)?;
                     shortened.push((old, e, lo, hi));
                 }
@@ -1460,9 +1642,12 @@ impl Rebuild<'_> {
                     } else if at == b_id {
                         (to, hi) = (new_vertex, t);
                     }
+                    reach_curve(self.model, new_vertex, &curve, t)?;
                 }
-                let e = self.model.add_edge(from, to, tolerance.max(self.model.tolerance(Shape::from(old))))?;
-                self.model.set_edge_curve(e.into(), curve, tolerance)?;
+                // (No closer than the edge it replaces holds to its faces.)
+                let kept = tolerance.max(self.model.tolerance(Shape::from(old)));
+                let e = self.model.add_edge(from, to, kept)?;
+                self.model.set_edge_curve(e.into(), curve, kept)?;
                 self.model.set_edge_range(e.into(), lo, hi)?;
                 shortened.push((old, e, lo, hi));
             }
@@ -1483,7 +1668,7 @@ impl Rebuild<'_> {
                 cover_pcurve(self.model, e, &Curve::BSpline(self.contacts[i].clone()), &pcurve, &side.surface, lo, hi)?;
             }
             let extra: Vec<(EdgeId, Curve2, [VertexId; 2])> = side_inserts.iter().filter(|(f, _)| f.node == side.face.node).map(|(_, x)| x.clone()).collect();
-            let face = rebuild_face(self.model, side.face, &[(self.id, &contact_edges[i], pcurve)], &shortened, &removed, &extra)?;
+            let face = rebuild_face(self.model, side.face, &[(self.id, &contact_edges[i], pcurve)], &shortened, &removed, &extra, None)?;
             rebuilt.push((side.face, face));
         }
         // Each end face once, with the cuts of both ends where it is at both.
@@ -1512,7 +1697,8 @@ impl Rebuild<'_> {
             if self.sides.iter().any(|s| s.face.node == face.node) {
                 todo!("rolling-ball fillets ending on one of their own faces");
             }
-            let new = rebuild_face(self.model, face, &[], &shortened, &removed, &inserts)?;
+            let carried = self.ends.iter().find(|cut| cut.carried && cut.face.face.node == face.node).map(|cut| &cut.face.surface);
+            let new = rebuild_face(self.model, face, &[], &shortened, &removed, &inserts, carried)?;
             rebuilt.push((face, new));
         }
 
@@ -1587,14 +1773,19 @@ impl Rebuild<'_> {
         for s in solids {
             self.model.add(compound, s)?;
         }
-        Ok(compound)
+        let snapped: Vec<VertexId> = self.ends.iter().flat_map(|cut| cut.onto.into_iter().flatten()).collect();
+        reach_snapped(self.model, shape, compound, &snapped)?;
+        let extended = self.ends.iter().any(|cut| cut.extended.iter().any(|&x| x));
+        joined_extensions(self.model, compound, extended)
     }
 
     /// The largest distance of the contact curves from their faces' surfaces.
-    fn deviation(&self) -> Result<f64> {
+    /// (Between `from` and `to` along each: past the fillet's ends the contact curves run
+    /// on through sections past the edge's ends, which may stray from the faces' surfaces.)
+    fn deviation(&self, from: [f64; 2], to: [f64; 2]) -> Result<f64> {
         let mut worst: f64 = 0.0;
         for i in 0..2 {
-            let (a, b) = (self.ts[0], *self.ts.last().expect("sections"));
+            let (a, b) = (from[i], to[i]);
             for k in 0..=200 {
                 let p = self.contacts[i].point(a + (b - a) * k as f64 / 200.0);
                 worst = worst.max(self.sides[i].distance(p)?.0.abs());
@@ -1607,7 +1798,8 @@ impl Rebuild<'_> {
 
 /// A copy of `face` (same surface, forward) whose boundary has `replace`'s edge for the
 /// filleted one, the shortened edges for the old ones, without the `removed` ones, and
-/// `insert`'s edge between the two shortened edges (which end at `insert`'s vertices).
+/// `insert`'s edge between the two shortened edges (which end at `insert`'s vertices); on
+/// its surface `carried` on past its patch, if given.
 fn rebuild_face(
     model: &mut Model,
     face: Shape,
@@ -1615,9 +1807,13 @@ fn rebuild_face(
     shortened: &[(EdgeId, EdgeId, f64, f64)],
     removed: &[EdgeId],
     inserts: &[(EdgeId, Curve2, [VertexId; 2])],
+    carried: Option<&Surface>,
 ) -> Result<Shape> {
     let forward = Shape { orientation: Orientation::Forward, ..face };
-    let surface = model.surface(forward).expect("a face's surface").clone();
+    let surface = match carried {
+        Some(s) => s.clone(),
+        None => model.surface(forward).expect("a face's surface").clone(),
+    };
     let tolerance = model.tolerance(forward);
     let mut wires = Vec::new();
     for wire in model.children(forward).collect::<Vec<_>>() {
