@@ -9,6 +9,9 @@ Tests ported from Open CASCADE Technology (OCCT), run against kentron:
   interpreter (Molt, `src/draw/tcl.rs`), each with its group's and grid's `begin` and `end`
   files and judged by OCCT's `parse.rules`, as OCCT's own harness runs them. Those needing a
   data file that is missing, or declaring a known failure of OCCT's, are ignored.
+  Sub-shapes such scripts name by `explode` order are bound where OCCT's are
+  (`tcl_selectors.json`, from `tools/occt_selectors.py --tcl`), and `tcl_checks.txt` adds
+  checks of kentron's after a script where its own fall short (the chamfer groups' areas).
 - `tests/gtest_*`: hand translations of OCCT's GTests (`GTEST_PORTING.md`).
 
 ## Expected failures

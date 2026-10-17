@@ -9,8 +9,14 @@ for vertices), and writes those the script uses afterwards to
 crates/occt-tests/draw_selectors.json. tools/draw2rs.py then rebinds the names to the
 sub-shapes at those positions (kentron's `nearest` command).
 
+With `--tcl`, the same for the Tcl scripts run as they are (crates/occt-tests/scripts, run
+by draw_tcl): each run as OCCT's harness runs it (the group's and grid's begin and end files
+around it), every sub-shape every explode makes recorded (such scripts name them as they
+run), into crates/occt-tests/tcl_selectors.json, which the Tcl runner rebinds after each
+explode.
+
 Usage:
-    tools/occt_selectors.py [--occt ~/OCCT] [--draw DIR] [--tcl-lib DIR] [--groups blend,...]
+    tools/occt_selectors.py [--occt ~/OCCT] [--draw DIR] [--tcl-lib DIR] [--groups blend,...] [--tcl]
 
 `--draw` is DRAW's install directory (default `$OCCT_DRAW`, else `~/occt-build/install`);
 `--tcl-lib` the Tcl libraries DRAW was built with, if not the system's (default
@@ -29,6 +35,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "crates" / "occt-tests" / "draw_selectors.json"
+TCL_OUT = ROOT / "crates" / "occt-tests" / "tcl_selectors.json"
+SCRIPTS = ROOT / "crates" / "occt-tests" / "scripts"
 # OCCT's test dataset (an external download, see crates/occt-tests/README.md).
 DATA = os.environ.get("OCCT_TEST_DATA", str(Path.home() / "occt-data"))
 
@@ -137,16 +145,70 @@ def run_draw(draw: Path, tcl_lib: Path | None, script: str) -> str:
         os.unlink(path)
 
 
+def positions_of(output: str) -> dict:
+    """The KENTRON_SEL lines of a run: (explode index, name) -> [kind, x, y, z, measure]."""
+    positions: dict = {}
+    for line in output.splitlines():
+        m = re.match(r"KENTRON_SEL (\d+) (\S+) (E|F|V|W|SO|SH) (.*)$", line.strip())
+        if m:
+            values = [float(x) for x in m.group(4).split()]
+            if m.group(3) == "V":
+                values = values[1:] + [0.0]
+            positions[(int(m.group(1)), m.group(2))] = [m.group(3)] + values
+    return positions
+
+
+def tcl_cases(group: Path):
+    """The vendored Tcl scripts of a group: (grid directory, case name, case file)."""
+    for grid in sorted(p for p in group.iterdir() if p.is_dir()):
+        listed = grid / "cases.list"
+        source = (grid / listed.read_text().strip()).resolve() if listed.exists() else grid
+        for case in sorted(p for p in source.iterdir() if p.is_file() and p.name not in ("begin", "end", "parse.rules", "cases.list")):
+            yield grid, case.name, case
+
+
+def tcl_main(groups: list, draw: Path, tcl_lib: Path | None) -> None:
+    data = json.loads(TCL_OUT.read_text()) if TCL_OUT.exists() else {}
+    data["_comment"] = ("Sub-shapes that OCCT's Tcl scripts make by explode, by position, for the Tcl runner "
+                        "to name as OCCT does (written by tools/occt_selectors.py --tcl).")
+    for name in groups:
+        gdir = SCRIPTS / name
+        for grid, case, path in tcl_cases(gdir):
+            files = [gdir / "begin", grid / "begin", path, grid / "end", gdir / "end"]
+            if not any(f.exists() and "explode" in f.read_text(errors="replace") for f in files):
+                continue
+            harness = (f"set dirname {{{SCRIPTS}}}; set groupname {name}; set gridname {grid.name}; set casename {case}; "
+                       "set imagedir /tmp; set test_image x; set logdir /tmp\nproc checkview {args} {}\n")
+            body = "".join(f"if {{[catch {{source {{{f}}}}} m]}} {{puts \"TCLERROR $m\"}}\n" for f in files if f.exists())
+            output = run_draw(draw, tcl_lib, "pload ALL\n" + harness + WRAPPER + body + "exit\n")
+            positions = positions_of(output)
+            entries = {}
+            for (k, n), value in sorted(positions.items()):
+                entries.setdefault(k, {})[n] = value
+            rel = f"tests/{name}/{grid.name}/{case}"
+            if entries:
+                data[rel] = [{"explode": k, "names": names} for k, names in sorted(entries.items())]
+                print(f"{rel}: {sum(len(v) for v in entries.values())} names")
+            else:
+                data.pop(rel, None)
+                print(f"{rel}: nothing recorded")
+    TCL_OUT.write_text(json.dumps(data, indent=1, sort_keys=True) + "\n")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--occt", default=str(Path.home() / "OCCT"))
     ap.add_argument("--draw", default=os.environ.get("OCCT_DRAW", str(Path.home() / "occt-build" / "install")))
     ap.add_argument("--tcl-lib", default=os.environ.get("OCCT_TCL_LIB"))
     ap.add_argument("--groups", default="blend")
+    ap.add_argument("--tcl", action="store_true", help="the vendored Tcl scripts, into tcl_selectors.json")
     args = ap.parse_args()
     occt, draw = Path(args.occt).expanduser(), Path(args.draw).expanduser()
     beside = draw.parent / "tcl" / "lib"
     tcl_lib = Path(args.tcl_lib).expanduser() if args.tcl_lib else beside if beside.is_dir() else None
+    if args.tcl:
+        tcl_main(args.groups.split(","), draw, tcl_lib)
+        return
     data = json.loads(OUT.read_text()) if OUT.exists() else {}
     data["_comment"] = ("Sub-shapes that OCCT scripts name by enumeration order, by position "
                         "(written by tools/occt_selectors.py from OCCT's DRAW; see tools/draw2rs.py).")
@@ -162,14 +224,7 @@ def main() -> None:
                     continue
                 prelude = "pload ALL\n" + "".join(b.read_text() for b in begin + [grid / "begin"] if b.exists())
                 output = run_draw(draw, tcl_lib, prelude + WRAPPER + text + "\nexit\n")
-                positions: dict = {}
-                for line in output.splitlines():
-                    m = re.match(r"KENTRON_SEL (\d+) (\S+) (E|F|V|W|SO|SH) (.*)$", line.strip())
-                    if m:
-                        values = [float(x) for x in m.group(4).split()]
-                        if m.group(3) == "V":
-                            values = values[1:] + [0.0]
-                        positions[(int(m.group(1)), m.group(2))] = [m.group(3)] + values
+                positions = positions_of(output)
                 entries = []
                 for k, wanted in enumerate(names):
                     picked = {n: positions[(k, n)] for n in sorted(wanted) if (k, n) in positions}

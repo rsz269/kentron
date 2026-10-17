@@ -468,8 +468,14 @@ fn chamfer_in_turn(model: &mut Model, shape: Shape, chains: &[(Shape, f64)], edg
         .zip(&wanted)
         .map(|(&(edge, _), (_, _, _, face, distance, second))| (Shape { placement: Transform::IDENTITY, ..edge }, ball::Profile::Chamfer { first: *face, distance: *distance, second: *second }))
         .collect();
+    // (Each way taken only where what it makes is valid, the shape being so: the first
+    // invalid one kept for last.)
+    let valid = |model: &Model, s: Shape| crate::validity::check(model, s).is_valid();
+    let was_valid = valid(model, shape);
+    let mut invalid = None;
     match ball::blend_network(model, shape, &profiles) {
-        Ok(done) => return Ok(done.moved(&placement)),
+        Ok(done) if !was_valid || valid(model, done) => return Ok(done.moved(&placement)),
+        Ok(done) => invalid = Some(done),
         Err(_) => {}
     }
     let mut failure = None;
@@ -494,9 +500,15 @@ fn chamfer_in_turn(model: &mut Model, shape: Shape, chains: &[(Shape, f64)], edg
                 }
             }
         }
-        return Ok(result.moved(&placement));
+        if !was_valid || valid(model, result) {
+            return Ok(result.moved(&placement));
+        }
+        invalid.get_or_insert(result);
     }
-    Err(failure.expect("a failure"))
+    match invalid {
+        Some(result) => Ok(result.moved(&placement)),
+        None => Err(failure.expect("a failure")),
+    }
 }
 
 /// Where three convex chamfers of straight edges between planes meet at a vertex, the

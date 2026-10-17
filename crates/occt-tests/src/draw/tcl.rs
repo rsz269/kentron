@@ -39,6 +39,10 @@ pub struct Session {
     /// The OCCT TODOs the script declares (`puts "TODO id platforms: message"`) that apply.
     pub todos: Vec<String>,
     pub exited: bool,
+    /// How many explodes the script ran, and the sub-shapes each makes as OCCT names them,
+    /// by position (`tcl_selectors.json`): (explode, name, kind, x, y, z, measure).
+    pub explodes: usize,
+    pub selectors: Vec<(usize, String, String, [f64; 4])>,
 }
 
 /// Commands that only show or time things (DRAW's viewers and the like): they do nothing.
@@ -126,6 +130,23 @@ fn run_draw_command(interp: &mut Interp<Session>, name: &str, args: &[&str]) -> 
         Some(Err(DrawError::Failed(m))) if name == "checkshape" && m.starts_with("Faulty shape ") => Some(Ok(faulty_report(args, &m))),
         other => other,
     };
+    // (After an explode, the names bound as OCCT's explorer would: its sub-shapes at the
+    // positions recorded in OCCT, where one is there.)
+    if matches!(name, "explode" | "nexplode") {
+        let k = session.explodes;
+        session.explodes += 1;
+        if matches!(ran, Some(Ok(_))) {
+            for (_, var, kind, v) in session.selectors.iter().filter(|s| s.0 == k) {
+                let values = v.map(|x| x.to_string());
+                let mut argv = vec![var.as_str(), args[0], kind.as_str()];
+                argv.extend(values.iter().map(|x| x.as_str()));
+                if kind == "V" {
+                    argv.pop();
+                }
+                let _ = session.draw.nearest(&argv);
+            }
+        }
+    }
     match ran {
         Some(Ok(out)) => {
             // (DRAW echoes what a command reports.)
@@ -741,6 +762,47 @@ fn file(args: &[String]) -> MoltResult {
     }
 }
 
+/// The sub-shapes OCCT's run of the script `<group>/<grid>/<case>` makes by explode, by
+/// position (`tcl_selectors.json`, written by tools/occt_selectors.py --tcl).
+fn selectors(group: &str, grid: &str, case: &str) -> Vec<(usize, String, String, [f64; 4])> {
+    use yaml_rust2::Yaml;
+    // (JSON, read as the YAML it also is.)
+    static ALL: std::sync::OnceLock<Yaml> = std::sync::OnceLock::new();
+    let all = ALL.get_or_init(|| {
+        let text = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tcl_selectors.json")).unwrap_or_default();
+        yaml_rust2::YamlLoader::load_from_str(&text).ok().and_then(|mut d| d.pop()).unwrap_or(Yaml::Null)
+    });
+    let mut out = Vec::new();
+    let Some(entries) = all[format!("tests/{group}/{grid}/{case}").as_str()].as_vec() else { return out };
+    let number = |y: &Yaml| y.as_f64().or_else(|| y.as_i64().map(|i| i as f64));
+    for entry in entries {
+        let (Some(k), Some(names)) = (entry["explode"].as_i64(), entry["names"].as_hash()) else { continue };
+        for (name, value) in names {
+            let (Some(name), Some(v)) = (name.as_str(), value.as_vec()) else { continue };
+            let (Some(kind), Some(x), Some(y), Some(z)) = (v[0].as_str(), number(&v[1]), number(&v[2]), number(&v[3])) else { continue };
+            let m = v.get(4).and_then(number).unwrap_or(0.0);
+            out.push((k as usize, name.to_string(), kind.to_string(), [x, y, z, m]));
+        }
+    }
+    out
+}
+
+/// The checks kentron adds to the script `<group>/<grid>/<case>`, as Tcl lines to run after
+/// it (`tcl_checks.txt`: a script's path, a tab, a line).
+fn extra_checks(group: &str, grid: &str, case: &str) -> Vec<String> {
+    static CHECKS: std::sync::OnceLock<Vec<(String, String)>> = std::sync::OnceLock::new();
+    let checks = CHECKS.get_or_init(|| {
+        let text = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tcl_checks.txt")).unwrap_or_default();
+        text.lines()
+            .filter(|l| !l.starts_with('#'))
+            .filter_map(|l| l.split_once('\t'))
+            .map(|(script, line)| (script.to_string(), line.to_string()))
+            .collect()
+    });
+    let script = format!("{group}/{grid}/{case}");
+    checks.iter().filter(|(s, _)| *s == script).map(|(_, line)| line.clone()).collect()
+}
+
 /// The rules telling a failure in the log: OCCT's `parse.rules` (`FAILED` and `IGNORE`, in
 /// order), the group's and grid's before the global ones.
 fn rules(tests: &Path, group: &str, grid: &str) -> Vec<(bool, regex::Regex)> {
@@ -820,6 +882,8 @@ pub fn run_script(tests: &Path, group: &str, grid: &str, case: &str) -> Outcome 
         missing: None,
         todos: Vec::new(),
         exited: false,
+        explodes: 0,
+        selectors: selectors(group, grid, case),
     };
     let set = CommandSet::new(execute, command_type, &[], &[]);
     let mut interp = InterpBuilder::new(session, set).standard_library(StandardLibrary::Full).environment(true).build();
@@ -856,6 +920,16 @@ pub fn run_script(tests: &Path, group: &str, grid: &str, case: &str) -> Outcome 
         }
         if session.exited || !errors.is_empty() {
             break;
+        }
+    }
+    // Kentron's own checks of what the script made, where its own checks fall short (see
+    // `tcl_checks.txt`).
+    let session = interp.context_mut();
+    if errors.is_empty() && !session.exited {
+        for line in extra_checks(group, grid, case) {
+            if let Err(e) = interp.eval(&line) {
+                errors.push(e.value().as_str().to_string());
+            }
         }
     }
     let rules = rules(tests, group, grid);
