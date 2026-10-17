@@ -179,12 +179,26 @@ fn rolling_past(model: &Model, shape: Shape, edge: Shape, radius: &dyn Fn(f64) -
 
 /// [`rolling_past`] for a ball or a chamfer.
 fn rolling_with(model: &Model, shape: Shape, edge: Shape, profile: &Profile, far: usize) -> Result<Rolling> {
+    // (On the faces' surfaces carried on past their patches, else, where a section is not
+    // found so, on the patches themselves.)
+    rolling_on(model, shape, edge, profile, far, true).or_else(|e| rolling_on(model, shape, edge, profile, far, false).map_err(|_| e))
+}
+
+/// [`rolling_with`], on the faces' surfaces carried on past their patches (`carry`) or not.
+fn rolling_on(model: &Model, shape: Shape, edge: Shape, profile: &Profile, far: usize, carry: bool) -> Result<Rolling> {
     let id = EdgeId::try_from(edge.node).map_err(|n| Error::InvalidInput(format!("{n:?} is not an edge")))?;
     let forward = Shape { orientation: Orientation::Forward, ..edge };
     let (curve, t0, t1) = model.edge_curve(forward).ok_or_else(|| Error::InvalidInput("a degenerate edge has no fillet".into()))?;
     let (va, vb) = model.edge_vertices(forward);
     let closed = va.node == vb.node;
-    let sides = sides_of(model, shape, id)?;
+    // (Their surfaces carried on past their patches as far as the sections past the edge's
+    // ends reach.)
+    let size = match profile {
+        Profile::Ball(law) => (0..=8).map(|i| law(i as f64 / 8.0)).fold(0.0, f64::max),
+        Profile::Chamfer { distance, second: ChamferSecond::Distance(d), .. } => distance.max(*d),
+        Profile::Chamfer { distance, .. } => 2.0 * distance,
+    };
+    let sides = sides_of(model, shape, id, carry.then_some((4 * far + 1) as f64 * size))?;
     // The fraction of the edge's length from its start, for the radius law.
     let lengths: Vec<f64> = {
         let n = 256;
@@ -465,7 +479,9 @@ pub(super) fn rolling_chamfer(model: &mut Model, shape: Shape, edge: Shape, prof
 pub(super) fn rolling_tool(model: &mut Model, shape: Shape, edge: Shape, radius: &dyn Fn(f64) -> f64) -> Result<(Shape, bool)> {
     use crate::geometry::curve::Circle;
     use crate::math::{Direction, Frame};
-    let Rolling { sections, convex, closed, t0, t1, .. } = rolling(model, shape, edge, radius)?;
+    // (On the faces' own surfaces: the tool goes on past the edge's ends, where a boolean
+    // meets it with the faces as they are.)
+    let Rolling { sections, convex, closed, t0, t1, .. } = rolling_on(model, shape, edge, &Profile::Ball(radius), 1, false)?;
     if closed {
         return Err(Error::InvalidInput("rolling-ball tools along closed edges are not supported yet".into()));
     }
@@ -510,7 +526,7 @@ pub(super) fn rolling_tool(model: &mut Model, shape: Shape, edge: Shape, radius:
 /// the shape finds its edges on the faces only within that much.
 fn cover_sides(model: &mut Model, tool: Shape, shape: Shape, edge: Shape, reach: f64) -> Result<()> {
     let Ok(id) = EdgeId::try_from(edge.node) else { return Ok(()) };
-    let sides = sides_of(model, shape, id)?;
+    let sides = sides_of(model, shape, id, None)?;
     for e in model.unique_subshapes(tool, NodeKind::Edge) {
         let Some((curve, first, last)) = model.edge_curve(e) else { continue };
         let points: Vec<Point> = (0..=32).map(|k| curve.point(first + (last - first) * k as f64 / 32.0)).collect();
@@ -539,7 +555,7 @@ fn cover_sides(model: &mut Model, tool: Shape, shape: Shape, edge: Shape, reach:
 }
 
 /// The two faces along the edge.
-fn sides_of(model: &Model, shape: Shape, id: EdgeId) -> Result<[Side; 2]> {
+fn sides_of(model: &Model, shape: Shape, id: EdgeId, carry: Option<f64>) -> Result<[Side; 2]> {
     let mut sides = Vec::new();
     for face in model.explore(shape, NodeKind::Face) {
         for wire in model.children(face) {
@@ -549,6 +565,19 @@ fn sides_of(model: &Model, shape: Shape, id: EdgeId) -> Result<[Side; 2]> {
                     continue;
                 }
                 let surface = model.surface(face).ok_or_else(|| Error::InvalidInput("a face without a surface".into()))?.clone();
+                // (A patch carried on past its bounds, the same over them: the
+                // sections past the edge's ends then follow the faces on smoothly, as
+                // projected onto the patch itself they would stop at its bounds.)
+                // (By `carry`, no more than half the face's size: farther, the surface carried
+                // on may curl round.)
+                let surface = match carry {
+                    Some(reach) => {
+                        let size = { let b = crate::properties::bounding_box(model, face); (b.max - b.min).length() };
+                        let _ = reach;
+                        carried_on(&surface, 0.5 * size).unwrap_or(surface)
+                    }
+                    None => surface,
+                };
                 let sign = |o: Orientation| if o == Orientation::Reversed { -1.0 } else { 1.0 };
                 sides.push(Side {
                     face,
@@ -865,15 +894,36 @@ fn end_cut(
     let on = |carry: bool, fresh: bool| end_cut_on(model, shape, id, vertex, sides, fillet, ts, at_end, target, carry, fresh);
     match on(false, false) {
         Ok(cut) if cut.open || !cut.extended.iter().any(|&x| x) => Ok(cut),
-        Ok(cut) => Ok(on(true, false).ok().filter(|c| c.carried).unwrap_or(cut)),
+        Ok(cut) => Ok(on(true, false).or_else(|_| on(true, true)).ok().filter(|c| c.carried).unwrap_or(cut)),
         Err(e) => on(false, true).map_err(|_| e),
     }
+}
+
+/// Whether `pcurve` over [`lo`, `hi`] leaves the patch of `side`'s face (its surface
+/// carried on past it, the face then to take that surface).
+fn off_patch(model: &Model, side: &Side, pcurve: &Curve2, lo: f64, hi: f64) -> bool {
+    let Some(own) = model.surface(side.face) else { return false };
+    if !matches!(own, Surface::Bezier(_) | Surface::BSpline(_)) || own == &side.surface {
+        return false;
+    }
+    let (u0, u1, v0, v1) = own.bounds();
+    let (du, dv) = (1e-9 * (u1 - u0), 1e-9 * (v1 - v0));
+    (0..=32).any(|k| {
+        let q = pcurve.point(lo + (hi - lo) * k as f64 / 32.0);
+        q.x < u0 - du || q.x > u1 + du || q.y < v0 - dv || q.y > v1 + dv
+    })
 }
 
 /// `surface` carried on past each bound by about `length`, if it is a patch (a Bezier or
 /// B-spline surface).
 fn carried_on(surface: &Surface, length: f64) -> Option<Surface> {
     if !matches!(surface, Surface::Bezier(_) | Surface::BSpline(_)) {
+        return None;
+    }
+    // (Not round a period, which has no bound: carried on across it, it would be closed no
+    // longer.)
+    let (u_periodic, v_periodic) = (surface.is_u_periodic(), surface.is_v_periodic());
+    if u_periodic || v_periodic {
         return None;
     }
     let mut carried = surface.clone();
@@ -1668,7 +1718,9 @@ impl Rebuild<'_> {
                 cover_pcurve(self.model, e, &Curve::BSpline(self.contacts[i].clone()), &pcurve, &side.surface, lo, hi)?;
             }
             let extra: Vec<(EdgeId, Curve2, [VertexId; 2])> = side_inserts.iter().filter(|(f, _)| f.node == side.face.node).map(|(_, x)| x.clone()).collect();
-            let face = rebuild_face(self.model, side.face, &[(self.id, &contact_edges[i], pcurve)], &shortened, &removed, &extra, None)?;
+            let (lo, hi) = (v_start[i].min(v_end[i]), v_start[i].max(v_end[i]));
+            let carried = off_patch(self.model, side, &pcurve, lo, hi).then_some(&side.surface);
+            let face = rebuild_face(self.model, side.face, &[(self.id, &contact_edges[i], pcurve)], &shortened, &removed, &extra, carried)?;
             rebuilt.push((side.face, face));
         }
         // Each end face once, with the cuts of both ends where it is at both.

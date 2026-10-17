@@ -18,7 +18,7 @@ use crate::geometry::{fit, project, ParametricCurve, ParametricSurface};
 use crate::math::{Direction2, Point, Point2};
 use crate::topology::{EdgeId, Model, NodeKind, Orientation, Shape, VertexId};
 
-use super::{contact_vertex, cover_pcurve, joined_extensions, reach_curve, reach_snapped, end_cut, extension, fillet_surface, new_face, rebuild_face, rolling_with, unwrapped, EndCut, Profile, Rolling, Use, NOT_REACHED};
+use super::{contact_vertex, cover_pcurve, joined_extensions, off_patch, reach_curve, reach_snapped, end_cut, extension, fillet_surface, new_face, rebuild_face, rolling_with, unwrapped, EndCut, Profile, Rolling, Use, NOT_REACHED};
 
 /// Samples along a fillet's stop curve at a corner, and across a corner patch.
 const ACROSS: usize = 32;
@@ -920,6 +920,8 @@ fn build(model: &mut Model, shape: Shape, stripes: &[Stripe], ends: &[[End; 2]],
     let mut rebuilt: Vec<(Shape, Shape)> = Vec::new();
     for &face in &touched {
         let mut replaces: Vec<(EdgeId, Vec<(EdgeId, f64, f64)>, Curve2)> = Vec::new();
+        // (A side face whose contact leaves its patch takes its surface carried on.)
+        let mut side_carried: Option<Surface> = None;
         for (i, s) in stripes.iter().enumerate() {
             for (j, side) in s.rolling.sides.iter().enumerate() {
                 if side.face.node != face.node {
@@ -933,6 +935,10 @@ fn build(model: &mut Model, shape: Shape, stripes: &[Stripe], ends: &[[End; 2]],
                     )?),
                 };
                 cover_pcurve(model, contact_edges[i][j], &Curve::BSpline(s.rolling.contacts[j].clone()), &pcurve, &side.surface, stops[i][0].v[j], stops[i][1].v[j])?;
+                let (a, b) = (stops[i][0].v[j], stops[i][1].v[j]);
+                if off_patch(model, side, &pcurve, a.min(b), a.max(b)) {
+                    side_carried = Some(side.surface.clone());
+                }
                 replaces.push((s.rolling.id, vec![(contact_edges[i][j], stops[i][0].v[j], stops[i][1].v[j])], pcurve));
             }
         }
@@ -942,7 +948,7 @@ fn build(model: &mut Model, shape: Shape, stripes: &[Stripe], ends: &[[End; 2]],
         let carried = ends.iter().flatten().find_map(|end| match end {
             End::Face(cut) if cut.carried && cut.face.face.node == face.node => Some(&cut.face.surface),
             _ => None,
-        });
+        }).or(side_carried.as_ref());
         let new = rebuild_face(model, face, &replace_refs, &shortened, &removed, &face_inserts, carried)?;
         rebuilt.push((face, new));
     }
