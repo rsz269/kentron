@@ -136,15 +136,8 @@ fn run_draw_command(interp: &mut Interp<Session>, name: &str, args: &[&str]) -> 
         let k = session.explodes;
         session.explodes += 1;
         if matches!(ran, Some(Ok(_))) {
-            for (_, var, kind, v) in session.selectors.iter().filter(|s| s.0 == k) {
-                let values = v.map(|x| x.to_string());
-                let mut argv = vec![var.as_str(), args[0], kind.as_str()];
-                argv.extend(values.iter().map(|x| x.as_str()));
-                if kind == "V" {
-                    argv.pop();
-                }
-                let _ = session.draw.nearest(&argv);
-            }
+            let wanted: Vec<(String, String, [f64; 4])> = session.selectors.iter().filter(|s| s.0 == k).map(|(_, var, kind, v)| (var.clone(), kind.clone(), *v)).collect();
+            session.draw.bind_nearest(args[0], &wanted);
         }
     }
     match ran {

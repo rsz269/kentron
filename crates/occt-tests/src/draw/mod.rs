@@ -536,6 +536,66 @@ impl Draw {
         }
     }
 
+    /// Binds each of `wanted` (name, kind, position and measure as [`Draw::nearest`] takes
+    /// them) to the sub-shape of `shape` there; those with none there exactly (kentron's
+    /// shape a little off OCCT's), to the nearest sub-shape no other name took, if that is
+    /// near (within a quarter of its size), nearest first. The names of neither keep what
+    /// they had.
+    pub fn bind_nearest(&mut self, shape: &str, wanted: &[(String, String, [f64; 4])]) {
+        use kentron::topology::NodeKind;
+        let mut taken: std::collections::HashSet<kentron::topology::NodeId> = Default::default();
+        let mut missed = Vec::new();
+        for (var, kind, v) in wanted {
+            let values = v.map(|x| x.to_string());
+            let mut argv = vec![var.as_str(), shape, kind.as_str()];
+            argv.extend(values.iter().map(|x| x.as_str()));
+            if kind == "V" {
+                argv.pop();
+            }
+            match self.nearest(&argv) {
+                Ok(_) => {
+                    if let Ok(s) = self.shape_var(var) {
+                        taken.insert(s.node);
+                    }
+                }
+                Err(_) => missed.push((var, kind, v)),
+            }
+        }
+        let Ok(whole) = self.shape_var(shape) else { return };
+        // (Each missed name with its nearest free sub-shape and how near, nearest first.)
+        let mut pairs: Vec<(f64, &String, Shape)> = Vec::new();
+        for (var, kind, v) in missed {
+            let kind = match kind.as_str() {
+                "E" => NodeKind::Edge,
+                "F" => NodeKind::Face,
+                "V" => NodeKind::Vertex,
+                _ => continue,
+            };
+            let target = kentron::math::Point::new(v[0], v[1], v[2]);
+            for s in self.model.unique_subshapes(whole, kind) {
+                let (at, size) = match kind {
+                    NodeKind::Vertex => (self.model.point(s), 1e-3 * (1.0 + (target - kentron::math::Point::ORIGIN).length())),
+                    NodeKind::Edge => { let m = kentron::properties::length(&self.model, s); (m.center_of_mass, 0.25 * m.mass) }
+                    _ => { let m = kentron::properties::area(&self.model, s); (m.center_of_mass, 0.25 * m.mass.sqrt()) }
+                };
+                let d = at.distance(target);
+                if d <= size {
+                    pairs.push((d, var, s));
+                }
+            }
+        }
+        pairs.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut bound: std::collections::HashSet<&String> = Default::default();
+        for (_, var, s) in pairs {
+            if bound.contains(var) || taken.contains(&s.node) {
+                continue;
+            }
+            bound.insert(var);
+            taken.insert(s.node);
+            self.set(var, DrawObject::Shape(s));
+        }
+    }
+
     /// The values of numeric arguments.
     pub fn numbers(&self, args: &[&str]) -> DrawResult<Vec<f64>> {
         args.iter().map(|a| self.number(a)).collect()
