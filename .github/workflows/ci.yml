@@ -36,7 +36,30 @@ jobs:
             curl -fsSL -o ~/occt-data/occ/$f https://raw.githubusercontent.com/Open-Cascade-SAS/OCCT/3d097a0328e71b826377d4814ab05ec3c3d23871/data/occ/$f
           done
       - name: Test
-        run: cargo test --release --workspace
+        run: |
+          set -o pipefail
+          cargo test --release --workspace --no-fail-fast 2>&1 | tee test.log
+      # The failing tests and how each failed, as annotations and in the run's summary
+      # (readable without the log), and the whole log kept.
+      - name: Report failing tests
+        if: failure()
+        run: |
+          awk '/^---- .* ----$/ { name = $2; n = 0; next }
+               name != "" && n < 3 && NF { msg[name] = msg[name] " " $0; n++ }
+               /^test .* FAILED$/ { failed[$2] = 1 }
+               END { for (t in failed) print t "\t" msg[t] }' test.log | sort > failures.txt
+          { echo "## Failing tests"; echo '```'; cut -c1-400 failures.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          # (In a workflow command a title escapes ':' and ',', a message '%'.)
+          head -40 failures.txt | while IFS=$'\t' read -r name message; do
+            title=$(printf '%s' "$name" | sed 's/%/%25/g; s/:/%3A/g; s/,/%2C/g')
+            echo "::error title=$title::$(printf '%s' "$message" | cut -c1-300 | sed 's/%/%25/g')"
+          done
+      - name: Keep the test log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-log
+          path: test.log
 
   msrv:
     name: Minimum Rust version (1.88)
