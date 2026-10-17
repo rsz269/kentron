@@ -921,7 +921,7 @@ fn build(model: &mut Model, shape: Shape, stripes: &[Stripe], ends: &[[End; 2]],
         }
         let replace_refs: Vec<(EdgeId, &[(EdgeId, f64, f64)], Curve2)> = replaces.iter().map(|(old, pieces, p)| (*old, pieces.as_slice(), p.clone())).collect();
         let face_inserts: Vec<(EdgeId, Curve2, [VertexId; 2])> = inserts.iter().filter(|(f, _)| f.node == face.node).map(|(_, x)| x.clone()).collect();
-        let new = rebuild_face(model, face, &replace_refs, &shortened, &face_inserts)?;
+        let new = rebuild_face(model, face, &replace_refs, &shortened, &[], &face_inserts)?;
         rebuilt.push((face, new));
     }
     // The fillet faces: across at the start (u from 0 to 1), along the second contact, back

@@ -26,6 +26,9 @@ const SECTIONS: usize = 48;
 const PAST_END: usize = 8;
 /// Samples across the fillet where it meets an end face.
 const ACROSS: usize = 16;
+/// How near (a fraction of the fillet's width) a contact meeting an edge at the fillet's
+/// end passes the edge's far vertex for it to end there.
+const ONTO_VERTEX: f64 = 2e-3;
 
 /// A face along the edge: its surface, +1 where the surface's normal points out of the
 /// solid (-1 otherwise), and the direction of the edge in its boundary (+1 if the face's
@@ -770,6 +773,10 @@ struct EndCut {
     /// rebuilt); the crossing runs straight across the fillet's parameters between where
     /// the contact curves meet the two free edges, and is left free.
     open: bool,
+    /// Per face along the edge: the far vertex of the edge at the vertex, where the contact
+    /// meets it there (as near as a fraction of the fillet's width): the contact ends at
+    /// that vertex and the edge is taken away whole.
+    onto: [Option<VertexId>; 2],
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -879,8 +886,22 @@ fn end_cut(
     // from the crossing's ends before it is refined.)
     // (On the edge, or on its curve carried on past the vertex: the end face then grows to
     // reach the contact, as where the fillet ends wider than its end face's edge.)
+    let ends = [crossing(0.0)?, crossing(1.0)?];
+    let width = fillet.point(ends[0].0, ends[0].1).distance(fillet.point(ends[1].0, ends[1].1));
+    // (Where the contact meets the edge at its far vertex, or as good as, a little short
+    // or past it: the edge is taken away whole, rather than leave a sliver of it or of the
+    // face beyond.)
+    let onto = |e: EdgeId, p: Point| -> Option<VertexId> {
+        let (a, b) = model.edge_vertices(Shape::from(e));
+        let far = if a.node == vertex.node { b } else { a };
+        (far.node != vertex.node && model.point(far).distance(p) <= ONTO_VERTEX * width).then(|| VertexId::try_from(far.node).expect("a vertex"))
+    };
     let meet = |e: EdgeId, p: Point| -> Result<(f64, bool)> {
         let (c, first, last) = model.edge_curve(Shape::from(e)).ok_or_else(|| Error::InvalidInput("a degenerate edge at a fillet's end".into()))?;
+        if onto(e, p).is_some() {
+            let (a, _) = model.edge_vertices(Shape::from(e));
+            return Ok((if a.node == vertex.node { last } else { first }, false));
+        }
         let near = (1e3 * target).max(1e-6 * (1.0 + (p - Point::ORIGIN).length()));
         let t = parameter_on(&c, first, last, p);
         if c.point(t).distance(p) <= near {
@@ -902,8 +923,9 @@ fn end_cut(
         }
         Err(Error::InvalidInput("a fillet running over onto the next face is not supported yet".into()))
     };
-    let ends = [crossing(0.0)?, crossing(1.0)?];
-    let (ma, mb) = (meet(a, fillet.point(ends[0].0, ends[0].1))?, meet(b, fillet.point(ends[1].0, ends[1].1))?);
+    let (pa, pb) = (fillet.point(ends[0].0, ends[0].1), fillet.point(ends[1].0, ends[1].1));
+    let (ma, mb) = (meet(a, pa)?, meet(b, pb)?);
+    let onto = [onto(a, pa), onto(b, pb)];
     let edges = [(a, ma.0), (b, mb.0)];
     let extended = [ma.1, mb.1];
     // More samples across until the interpolated crossing stays on the end face (or doubling
@@ -933,7 +955,7 @@ fn end_cut(
     let params: Vec<f64> = uv.iter().map(|&(u, _)| u).collect();
     let face_uv: Vec<Point2> = uv.iter().map(|&(u, v)| end.uv(fillet.point(u, v))).collect::<Result<_>>()?;
     let on_face = fit::interpolate_with_parameters(&unwrapped(face_uv, &end.surface), &params)?;
-    Ok(EndCut { vertex: v_id, face: end, curve, on_fillet, on_face, v: [uv[0].1, uv[across].1], edges, extended, open: false })
+    Ok(EndCut { vertex: v_id, face: end, curve, on_fillet, on_face, v: [uv[0].1, uv[across].1], edges, extended, open: false, onto })
 }
 
 /// [`end_cut`] where the faces along the edge go on from `vertex` along free edges `free`
@@ -980,7 +1002,7 @@ fn open_end(model: &Model, vertex: VertexId, free: [EdgeId; 2], sides: &[Side; 2
     let points: Vec<Point> = uv.iter().map(|q| fillet.point(q.x, q.y)).collect();
     let curve = fit::interpolate_with_parameters(&points, &params)?;
     let on_fillet = BSplineCurve2::new(vec![uv[0], uv[ACROSS]], vec![0.0, 1.0], vec![2, 2], 1);
-    Ok(EndCut { vertex, face: sides[0].clone(), curve, on_fillet: on_fillet.clone(), on_face: on_fillet, v, edges, extended: [false; 2], open: true })
+    Ok(EndCut { vertex, face: sides[0].clone(), curve, on_fillet: on_fillet.clone(), on_face: on_fillet, v, edges, extended: [false; 2], open: true, onto: [None; 2] })
 }
 
 /// The edge carrying edge `i` of `cut` (along the fillet's face `side`) on past the vertex to
@@ -1117,9 +1139,21 @@ impl Rebuild<'_> {
             _ => ([self.ts[0]; 2], [*self.ts.last().expect("sections"); 2]),
         };
         // Vertices at the ends of the contact curves.
-        let corner = |model: &mut Model, i: usize, v: f64| model.add_vertex(self.contacts[i].point(v), tolerance);
-        let starts = [corner(self.model, 0, v_start[0]), corner(self.model, 1, v_start[1])];
-        let finishes = if closed { starts } else { [corner(self.model, 0, v_end[0]), corner(self.model, 1, v_end[1])] };
+        // (Or the vertex the contact ends on, its tolerance reaching the contact's end.)
+        let corner = |model: &mut Model, k: usize, i: usize, v: f64| -> Result<VertexId> {
+            let p = self.contacts[i].point(v);
+            match self.ends.get(k).and_then(|cut| cut.onto[i]) {
+                Some(x) => {
+                    let gap = model.point(x).distance(p);
+                    let reach = model.tolerance(x).max(tolerance).max(1.01 * gap);
+                    model.set_vertex_tolerance(x, reach)?;
+                    Ok(x)
+                }
+                None => Ok(model.add_vertex(p, tolerance)),
+            }
+        };
+        let starts = [corner(self.model, 0, 0, v_start[0])?, corner(self.model, 0, 1, v_start[1])?];
+        let finishes = if closed { starts } else { [corner(self.model, 1, 0, v_end[0])?, corner(self.model, 1, 1, v_end[1])?] };
         // Along a closed edge, where each contact curve crosses the other edges of its face
         // at the edge's vertex (a seam): its vertex there.
         let vertex_id = VertexId::try_from(self.model.edge_vertices(Shape::from(self.id)).0.node).expect("a vertex");
@@ -1186,6 +1220,8 @@ impl Rebuild<'_> {
         let mut end_inserts: Vec<(Shape, (EdgeId, Curve2, [VertexId; 2]))> = Vec::new();
         // (edge, its vertex at a fillet's end, the vertex replacing it, the parameter there)
         let mut trims: Vec<(EdgeId, VertexId, VertexId, f64)> = Vec::new();
+        // (edges the fillet takes away whole, its contact ending at their far vertex)
+        let mut removed: Vec<EdgeId> = Vec::new();
         if closed {
             let s = &sections[0];
             let arc = arc_curve(s);
@@ -1234,7 +1270,9 @@ impl Rebuild<'_> {
                 // The edges at the vertex now end where the contact curves meet them (or are
                 // carried on to them).
                 for (i, &(old, t)) in cut.edges.iter().enumerate() {
-                    if cut.extended[i] {
+                    if cut.onto[i].is_some() {
+                        removed.push(old);
+                    } else if cut.extended[i] {
                         let (e, on_side, on_end, vs2) = extension(self.model, cut, i, &self.sides[i], vs[i], tolerance)?;
                         side_inserts.push((self.sides[i].face, (e, on_side, vs2)));
                         end_inserts.push((cut.face.face, (e, on_end, vs2)));
@@ -1246,7 +1284,7 @@ impl Rebuild<'_> {
             // Each trimmed edge once, at one end or both.
             let mut done: Vec<EdgeId> = Vec::new();
             for &(old, ..) in &trims {
-                if done.contains(&old) {
+                if done.contains(&old) || removed.contains(&old) {
                     continue;
                 }
                 done.push(old);
@@ -1284,7 +1322,7 @@ impl Rebuild<'_> {
                 cover_pcurve(self.model, e, &Curve::BSpline(self.contacts[i].clone()), &pcurve, &side.surface, lo, hi)?;
             }
             let extra: Vec<(EdgeId, Curve2, [VertexId; 2])> = side_inserts.iter().filter(|(f, _)| f.node == side.face.node).map(|(_, x)| x.clone()).collect();
-            let face = rebuild_face(self.model, side.face, &[(self.id, &contact_edges[i], pcurve)], &shortened, &extra)?;
+            let face = rebuild_face(self.model, side.face, &[(self.id, &contact_edges[i], pcurve)], &shortened, &removed, &extra)?;
             rebuilt.push((side.face, face));
         }
         // Each end face once, with the cuts of both ends where it is at both.
@@ -1314,7 +1352,7 @@ impl Rebuild<'_> {
             if self.sides.iter().any(|s| s.face.node == face.node) {
                 todo!("rolling-ball fillets ending on one of their own faces");
             }
-            let new = rebuild_face(self.model, face, &[], &shortened, &inserts)?;
+            let new = rebuild_face(self.model, face, &[], &shortened, &removed, &inserts)?;
             rebuilt.push((face, new));
         }
 
@@ -1398,13 +1436,14 @@ impl Rebuild<'_> {
 }
 
 /// A copy of `face` (same surface, forward) whose boundary has `replace`'s edge for the
-/// filleted one, the shortened edges for the old ones, and `insert`'s edge between the
-/// two shortened edges (which end at `insert`'s vertices).
+/// filleted one, the shortened edges for the old ones, without the `removed` ones, and
+/// `insert`'s edge between the two shortened edges (which end at `insert`'s vertices).
 fn rebuild_face(
     model: &mut Model,
     face: Shape,
     replaces: &[(EdgeId, &[(EdgeId, f64, f64)], Curve2)],
     shortened: &[(EdgeId, EdgeId, f64, f64)],
+    removed: &[EdgeId],
     inserts: &[(EdgeId, Curve2, [VertexId; 2])],
 ) -> Result<Shape> {
     let forward = Shape { orientation: Orientation::Forward, ..face };
@@ -1459,6 +1498,9 @@ fn rebuild_face(
                     }
                     continue;
                 }
+            }
+            if removed.contains(&edge) {
+                continue;
             }
             if let Some(&(_, new, a, b)) = shortened.iter().find(|s| s.0 == edge) {
                 uses.push((new, orientation, pcurve, a, b));
