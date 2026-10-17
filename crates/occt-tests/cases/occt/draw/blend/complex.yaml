@@ -52,6 +52,7 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/complex/A5
+expect: not_done
 build:
   - s: {load: {brep: "CCH_blendhdp.rle"}}
   - s: {scale: {shape: s, center: [0, 0, 0], factor: 1000}}
@@ -285,6 +286,7 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/complex/E1
+expect: not_done
 build:
   - a: {load: {brep: "CFI_pro8783.rle"}}
   - a_4: {select: {of: a, edge: [23.6279296875, -245.760986328, 150.0], length: 344.030761719}}
@@ -570,6 +572,7 @@ ported_from:
   file: tests/blend/complex/H4
 notes:
   - "OCCT TODO OCC22817 (All): Faulty shapes in variables faulty_1 to faulty_1"
+expect: not_done
 build:
   - a: {load: {brep: "CFI_buc60330.rle"}}
   - a_5: {select: {of: a, edge: [31.3072547913, 44.3186645508, 20.0], length: 127.777271522}}

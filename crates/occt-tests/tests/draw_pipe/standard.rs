@@ -132,31 +132,34 @@ fn g4() -> DrawResult<()> {
 /// `tests/pipe/standard/G5`
 /// kentron: sub-shapes named by OCCT's enumeration are selected by position (draw_selectors.json)
 #[test]
-fn g5() -> DrawResult<()> {
-    let mut d = Draw::new();
-    d.circle(&["c1", "0", "10", "0", "10"])?;
-    d.circle(&["c2", "0", "-9", "0", "9.01"])?;
-    d.circle(&["c3", "10", "10", "0", "0", "10", "0", "0.05"])?;
-    d.mkedge(&["e1", "c1"])?;
-    d.mkedge(&["e2", "c2"])?;
-    d.mkedge(&["profile", "c3"])?;
-    d.bclearobjects(&[])?;
-    d.baddobjects(&["e1", "e2"])?;
-    d.bfillds(&[])?;
-    d.bbuild(&["result"])?;
-    d.explode(&["result", "e"])?;
-    d.nearest(&["result_1", "result", "E", "-2.13500932873", "12.2017775185", "0.0", "46.8159959786"])?;
-    d.nearest(&["result_3", "result", "E", "6.4903984399", "3.70642078957", "0.0", "15.4000720197"])?;
-    d.nearest(&["result_4", "result", "E", "5.86008400122", "-3.33682961831", "0.0", "13.8449723834"])?;
-    d.nearest(&["result_6", "result", "E", "-1.92482332511", "-10.9917511945", "0.0", "42.150719875"])?;
-    d.wire(&["path", "result_1", "result_3", "result_4", "result_6"])?;
-    d.wire(&["profile", "profile"])?;
-    d.mksweep(&["path"])?;
-    d.addsweep(&["profile"])?;
-    d.buildsweep(&["result", "-C", "-R"])?;
-    d.checkprops(&["result", "-s", "37.4358"])?;
-    d.checkshape(&["result"])?;
-    Ok(())
+#[should_panic]
+fn g5() {
+    expected_failure(|| {
+        let mut d = Draw::new();
+        d.circle(&["c1", "0", "10", "0", "10"])?;
+        d.circle(&["c2", "0", "-9", "0", "9.01"])?;
+        d.circle(&["c3", "10", "10", "0", "0", "10", "0", "0.05"])?;
+        d.mkedge(&["e1", "c1"])?;
+        d.mkedge(&["e2", "c2"])?;
+        d.mkedge(&["profile", "c3"])?;
+        d.bclearobjects(&[])?;
+        d.baddobjects(&["e1", "e2"])?;
+        d.bfillds(&[])?;
+        d.bbuild(&["result"])?;
+        d.explode(&["result", "e"])?;
+        d.nearest(&["result_1", "result", "E", "-2.13500932873", "12.2017775185", "0.0", "46.8159959786"])?;
+        d.nearest(&["result_3", "result", "E", "6.4903984399", "3.70642078957", "0.0", "15.4000720197"])?;
+        d.nearest(&["result_4", "result", "E", "5.86008400122", "-3.33682961831", "0.0", "13.8449723834"])?;
+        d.nearest(&["result_6", "result", "E", "-1.92482332511", "-10.9917511945", "0.0", "42.150719875"])?;
+        d.wire(&["path", "result_1", "result_3", "result_4", "result_6"])?;
+        d.wire(&["profile", "profile"])?;
+        d.mksweep(&["path"])?;
+        d.addsweep(&["profile"])?;
+        d.buildsweep(&["result", "-C", "-R"])?;
+        d.checkprops(&["result", "-s", "37.4358"])?;
+        d.checkshape(&["result"])?;
+        Ok(())
+    })
 }
 
 /// `tests/pipe/standard/G6`

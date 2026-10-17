@@ -2,9 +2,10 @@
 
 use std::collections::{HashMap, HashSet};
 
+use crate::geometry::curve2::Curve2;
 use crate::geometry::surface::Surface;
 use crate::geometry::{ParametricCurve, ParametricSurface};
-use crate::math::{Point, Vector};
+use crate::math::{Point, Point2, Vector};
 use crate::tolerance::{LINEAR, PARAMETRIC};
 use crate::properties;
 use crate::topology::{
@@ -50,6 +51,9 @@ pub enum ProblemKind {
     NotClosed,
     /// A product graph cycle, or a root product that is also instantiated.
     ProductStructure,
+    /// A face's boundary crosses itself: two of its edges (or one) cross away from a vertex
+    /// they share (OCCT's `BRepCheck_SelfIntersectingWire`).
+    SelfIntersection,
     /// Any geometric defect found by [`check`].
     Geometry,
 }
@@ -326,6 +330,7 @@ impl Checker<'_> {
         if wire_uses.is_empty() && surface.is_some() {
             self.problem(id, ProblemKind::FaceWithoutBoundary, Severity::Warning, format!("{id:?} has no wires"));
         }
+        let mut all = Vec::new();
         for use_id in wire_uses {
             let Some(wire_use) = self.model.get(use_id) else {
                 self.error(id, ProblemKind::DanglingReference, format!("{id:?} has a missing wire use"));
@@ -356,6 +361,10 @@ impl Checker<'_> {
             if let Some(surface) = &surface {
                 self.closed_in_parameters(id, &coedges, surface, tolerance);
             }
+            all.extend(coedges);
+        }
+        if let Some(surface) = &surface {
+            self.boundary_crossings(id, &all, surface);
         }
     }
 
@@ -438,6 +447,95 @@ impl Checker<'_> {
         }
     }
 
+    /// The face's boundary does not cross itself: no two of its coedges' pcurves (in one
+    /// loop or two) cross, nor one itself, other than at a vertex they share (OCCT's
+    /// `BRepCheck_SelfIntersectingWire`, `BRepCheck_IntersectingWires`).
+    fn boundary_crossings(&mut self, face: FaceId, coedges: &[CoEdgeId], surface: &Surface) {
+        // Each pcurve as a polyline; the crossings of their sides refined on the pcurves.
+        struct Run {
+            edge: EdgeId,
+            curve: Curve2,
+            params: Vec<f64>,
+            points: Vec<Point2>,
+        }
+        let mut runs = Vec::new();
+        for &c in coedges {
+            let Some(coedge) = self.model.get(c) else { continue };
+            let edge = coedge.edge;
+            let Some((curve, first, last)) = self.model.effective_pcurve(c) else { continue };
+            let n = match &curve {
+                Curve2::Line(_) => 1,
+                other => (8 * (other.breaks().iter().filter(|&&t| t > first && t < last).count() + 1)).clamp(16, 512),
+            };
+            let params: Vec<f64> = (0..=n).map(|i| first + (last - first) * i as f64 / n as f64).collect();
+            let points = params.iter().map(|&t| curve.point(t)).collect();
+            runs.push(Run { edge, curve, params, points });
+        }
+        let mut sides: Vec<(usize, usize, f64, f64)> = Vec::new();
+        let (mut lo, mut hi) = (Point2::new(f64::INFINITY, f64::INFINITY), Point2::new(f64::NEG_INFINITY, f64::NEG_INFINITY));
+        for (r, run) in runs.iter().enumerate() {
+            for (i, w) in run.points.windows(2).enumerate() {
+                sides.push((r, i, w[0].x.min(w[1].x), w[0].x.max(w[1].x)));
+            }
+            for p in &run.points {
+                lo = Point2::new(lo.x.min(p.x), lo.y.min(p.y));
+                hi = Point2::new(hi.x.max(p.x), hi.y.max(p.y));
+            }
+        }
+        if !(lo.x <= hi.x) {
+            return;
+        }
+        let size = (hi - lo).length().max(1e-12);
+        sides.sort_by(|a, b| a.2.total_cmp(&b.2));
+        let cross = |a: Point2, b: Point2, c: Point2| (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+        for k in 0..sides.len() {
+            let (r1, i1, _, x1) = sides[k];
+            for &(r2, i2, x0, _) in &sides[k + 1..] {
+                if x0 > x1 {
+                    break;
+                }
+                let (run1, run2) = (&runs[r1], &runs[r2]);
+                if r1 == r2 && i1.abs_diff(i2) <= 1 || r1 != r2 && run1.edge == run2.edge {
+                    continue;
+                }
+                let (a, b) = (run1.points[i1], run1.points[i1 + 1]);
+                let (c, d) = (run2.points[i2], run2.points[i2 + 1]);
+                let (d1, d2, d3, d4) = (cross(c, d, a), cross(c, d, b), cross(a, b, c), cross(a, b, d));
+                if !(d1 * d2 < 0.0 && d3 * d4 < 0.0) {
+                    continue;
+                }
+                // Where the pcurves themselves cross, from where the sides do (none where
+                // they only come close).
+                let (alpha, beta) = (d1 / (d1 - d2), d3 / (d3 - d4));
+                let span = |run: &Run, i: usize, f: f64| run.params[i] + f * (run.params[i + 1] - run.params[i]);
+                let range = |r: &Run| (r.params[0], *r.params.last().unwrap());
+                let Some((s, t)) = pcurves_crossing((&run1.curve, range(run1)), (&run2.curve, range(run2)), span(run1, i1, alpha), span(run2, i2, beta), size) else {
+                    continue;
+                };
+                if r1 == r2 && (s - t).abs() <= 1e-6 * (run1.params.last().unwrap() - run1.params[0]).abs() {
+                    continue;
+                }
+                // (Not at a vertex the two edges share.)
+                let uv = run1.curve.point(s);
+                let p = surface.point(uv.x, uv.y);
+                let reach = self.model.get(run1.edge).map_or(0.0, |e| e.tolerance) + self.model.get(run2.edge).map_or(0.0, |e| e.tolerance);
+                let ends = |e: EdgeId| -> Vec<VertexId> {
+                    self.model.get(e).map_or(Vec::new(), |e| [e.start, e.end].iter().filter_map(|&u| self.model.get(u).map(|u| u.vertex)).collect())
+                };
+                let (ends1, ends2) = (ends(run1.edge), ends(run2.edge));
+                let at_vertex = ends1.iter().filter(|v| ends2.contains(v)).filter_map(|&v| self.model.get(v)).any(|v| v.point.distance(p) <= v.tolerance + reach + LINEAR);
+                if at_vertex {
+                    continue;
+                }
+                return self.error(
+                    face,
+                    ProblemKind::SelfIntersection,
+                    format!("the boundary of {face:?} crosses itself ({:?} and {:?}) at {p:?}", run1.edge, run2.edge),
+                );
+            }
+        }
+    }
+
     fn shell(&mut self, id: ShellId) {
         let Some(shell) = self.model.get(id) else {
             return self.error(id, ProblemKind::DanglingReference, format!("{id:?} is missing"));
@@ -495,6 +593,32 @@ impl Checker<'_> {
             }
         }
     }
+}
+
+/// Where two pcurves cross near the parameters `s` and `t` (Newton's method, within their
+/// ranges): none if it does not settle on a crossing (to `size`'s precision), or the
+/// pcurves only touch there.
+fn pcurves_crossing((c1, (a1, b1)): (&Curve2, (f64, f64)), (c2, (a2, b2)): (&Curve2, (f64, f64)), mut s: f64, mut t: f64, size: f64) -> Option<(f64, f64)> {
+    for _ in 0..30 {
+        let (p, dp) = c1.d1(s);
+        let (q, dq) = c2.d1(t);
+        let (fx, fy) = (p.x - q.x, p.y - q.y);
+        if fx.hypot(fy) <= 1e-10 * size {
+            // (Crossing, not touching: the pcurves running apart there.)
+            let sine = (dp.x * dq.y - dp.y * dq.x) / (dp.x.hypot(dp.y) * dq.x.hypot(dq.y));
+            return (sine.abs() > 1e-3).then_some((s, t));
+        }
+        // [dp, -dq] (ds, dt) = -(p - q)
+        let det = -dp.x * dq.y + dp.y * dq.x;
+        if det.abs() <= 1e-300 {
+            return None;
+        }
+        let ds = (-fx * -dq.y + dq.x * -fy) / det;
+        let dt = (dp.x * -fy - dp.y * -fx) / det;
+        s = (s + ds).clamp(a1.min(b1), a1.max(b1));
+        t = (t + dt).clamp(a2.min(b2), a2.max(b2));
+    }
+    None
 }
 
 /// How many times each (not degenerate) edge of a shell is used forward and reversed.
@@ -924,6 +1048,24 @@ mod tests {
         model.add(face, wire.into()).unwrap();
         let report = check(&model, face);
         assert!(report.has(ProblemKind::DisconnectedWire, Severity::Error), "{report:?}");
+    }
+
+    /// A bow tie: its boundary crosses itself in the middle.
+    #[test]
+    fn self_crossing_boundary_is_reported() {
+        let mut model = Model::new();
+        let p = |x, y| Point::new(x, y, 0.0);
+        let mut polygon = |points: &[Point]| {
+            let vertices: Vec<Shape> = points.iter().map(|&q| crate::make::vertex(&mut model, q)).collect();
+            let edges: Vec<Shape> = (0..vertices.len()).map(|i| crate::make::edge(&mut model, vertices[i], vertices[(i + 1) % vertices.len()]).unwrap()).collect();
+            let wire = crate::make::wire(&mut model, &edges).unwrap();
+            crate::make::face_on(&mut model, Surface::Plane(Plane::XY), wire).unwrap()
+        };
+        let square = polygon(&[p(0., 0.), p(1., 0.), p(1., 1.), p(0., 1.)]);
+        let bow_tie = polygon(&[p(0., 0.), p(1., 1.), p(1., 0.), p(0., 1.)]);
+        assert!(check(&model, square).problems.is_empty());
+        let report = check(&model, bow_tie);
+        assert!(report.has(ProblemKind::SelfIntersection, Severity::Error), "{report:?}");
     }
 
     #[test]

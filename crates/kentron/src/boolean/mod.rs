@@ -343,13 +343,16 @@ fn run_with_sections(model: &mut Model, a: Shape, b: Shape, operation: Operation
     }
     // Where the result's shells are not closed (or none could be built), again with the
     // looser tolerances: shapes read from files may put points meant to coincide (a
-    // cylinder through a box's corners) only nearly together. That result if it is valid.
+    // cylinder through a box's corners) only nearly together. That result if it is valid
+    // (or its only problem is a face's boundary crossing itself: still closed, better than
+    // the first).
     let first = run_tolerant(model, a, b, operation);
     if crate::tolerance::loosened() || first.as_ref().is_ok_and(|r| r.2) {
         return first.map(|(r, s, _)| (r, s));
     }
+    let crossing = |p: &crate::validity::Problem| p.kind == crate::validity::ProblemKind::SelfIntersection;
     match crate::tolerance::with_loosened(true, || run_tolerant(model, a, b, operation)) {
-        Ok((r, s, _)) if crate::validity::check(model, r).is_valid() => Ok((r, s)),
+        Ok((r, s, _)) if crate::validity::check(model, r).errors().all(crossing) => Ok((r, s)),
         _ => first.map(|(r, s, _)| (r, s)),
     }
 }

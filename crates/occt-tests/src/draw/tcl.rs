@@ -120,6 +120,12 @@ fn run_draw_command(interp: &mut Interp<Session>, name: &str, args: &[&str]) -> 
             return molt_err!(format!("An exception was caught: {what}"));
         }
     };
+    // (`checkshape` reports a faulty shape, as DRAW does, rather than failing: the script
+    // may look at what it says, and the log's rules tell it a failure.)
+    let ran = match ran {
+        Some(Err(DrawError::Failed(m))) if name == "checkshape" && m.starts_with("Faulty shape ") => Some(Ok(faulty_report(args, &m))),
+        other => other,
+    };
     match ran {
         Some(Ok(out)) => {
             // (DRAW echoes what a command reports.)
@@ -140,6 +146,22 @@ fn run_draw_command(interp: &mut Interp<Session>, name: &str, args: &[&str]) -> 
             })
         }
         None => molt_err!(format!("invalid command name \"{name}\"")),
+    }
+}
+
+/// What DRAW's `checkshape` says of a faulty shape, from the problems in `message` (the
+/// dispatcher's failure): each in a faulty shape of its own, or, given a prefix for their
+/// names, how many there are (without the word OCCT's log rules fail on).
+fn faulty_report(args: &[&str], message: &str) -> String {
+    let problems: Vec<&str> = message.split_once(": ").map_or(message, |(_, p)| p).split("; ").collect();
+    let names: Vec<&&str> = args.iter().filter(|a| !a.starts_with('-')).collect();
+    match names[..] {
+        // (Counted, as DRAW does, the same each time the shape is checked.)
+        [shape, prefix, ..] => format!(" -- The Shape {shape} has problems :\n*** Shapes with problems : {} (named {prefix}_*)\n", problems.len()),
+        _ => {
+            let lines: String = problems.iter().enumerate().map(|(i, p)| format!("On Shape faulty_{} :\n{p}\n", i + 1)).collect();
+            format!("{lines}Faulty shapes in variables faulty_1 to faulty_{} \n", problems.len())
+        }
     }
 }
 
@@ -741,6 +763,9 @@ fn rules(tests: &Path, group: &str, grid: &str) -> Vec<(bool, regex::Regex)> {
             }
         }
     }
+    // (A faulty shape fails a script in every group, not only those whose rules say so:
+    // kentron's results are to be valid wherever they are made.)
+    out.push((true, regex::Regex::new(r"\bFaulty\b").expect("a pattern")));
     out
 }
 

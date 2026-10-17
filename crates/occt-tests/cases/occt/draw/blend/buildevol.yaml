@@ -646,6 +646,7 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/buildevol/E3
+expect: not_done
 build:
   - w: {bezier: {poles: [[0, 0, 0], [5, 10, 0], [10, 15, 0]]}}
   - w: {edge: {curve: w}}
@@ -1196,6 +1197,7 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/buildevol/H9
+expect: not_done
 build:
   - s: {load: {brep: "CFI_6_a12fgr.rle"}}
   - s: {scale: {shape: s, center: [0, 0, 0], factor: 1}}
@@ -1211,6 +1213,7 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/buildevol/I1
+expect: not_done
 build:
   - s: {load: {brep: "CFI_6_a12fgr.rle"}}
   - s: {scale: {shape: s, center: [0, 0, 0], factor: 1}}
@@ -1226,6 +1229,7 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/buildevol/I2
+expect: not_done
 build:
   - s: {load: {brep: "CFI_6_a56fgs.rle"}}
   - s: {scale: {shape: s, center: [0, 0, 0], factor: 1}}
@@ -1241,6 +1245,7 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/buildevol/I3
+expect: not_done
 build:
   - s: {load: {brep: "CFI_6_b12fgt.rle"}}
   - s: {scale: {shape: s, center: [0, 0, 0], factor: 1}}
@@ -1256,6 +1261,7 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/buildevol/I4
+expect: not_done
 build:
   - s: {load: {brep: "CFI_6_b12fgt.rle"}}
   - s: {scale: {shape: s, center: [0, 0, 0], factor: 1}}
@@ -1271,6 +1277,7 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/buildevol/I5
+expect: not_done
 build:
   - s: {load: {brep: "CFI_6_b56fgu.rle"}}
   - s: {scale: {shape: s, center: [0, 0, 0], factor: 1}}
@@ -1286,6 +1293,7 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/buildevol/I6
+expect: not_done
 build:
   - s: {load: {brep: "CFI_6_c12fgv.rle"}}
   - s: {scale: {shape: s, center: [0, 0, 0], factor: 1}}
@@ -1301,6 +1309,7 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/buildevol/I7
+expect: not_done
 build:
   - s: {load: {brep: "CFI_6_c12fgv.rle"}}
   - s: {scale: {shape: s, center: [0, 0, 0], factor: 1}}
@@ -1316,6 +1325,7 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/buildevol/I8
+expect: not_done
 build:
   - s: {load: {brep: "CFI_6_c56fgw.rle"}}
   - s: {scale: {shape: s, center: [0, 0, 0], factor: 1}}
@@ -1331,6 +1341,7 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/buildevol/I9
+expect: not_done
 build:
   - s: {load: {brep: "CFI_6_d12fgx.rle"}}
   - s: {scale: {shape: s, center: [0, 0, 0], factor: 1}}
@@ -1346,6 +1357,7 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/buildevol/J1
+expect: not_done
 build:
   - s: {load: {brep: "CFI_6_d12fgx.rle"}}
   - s: {scale: {shape: s, center: [0, 0, 0], factor: 1}}
@@ -1361,6 +1373,7 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/buildevol/J2
+expect: not_done
 build:
   - s: {load: {brep: "CFI_6_d56fgy.rle"}}
   - s: {scale: {shape: s, center: [0, 0, 0], factor: 1}}
@@ -1376,6 +1389,7 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/buildevol/J3
+expect: not_done
 build:
   - s: {load: {brep: "CFI_6_e12fgz.rle"}}
   - s: {scale: {shape: s, center: [0, 0, 0], factor: 1}}
@@ -1391,6 +1405,7 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/buildevol/J4
+expect: not_done
 build:
   - s: {load: {brep: "CFI_6_e12fgz.rle"}}
   - s: {scale: {shape: s, center: [0, 0, 0], factor: 1}}
@@ -1406,6 +1421,7 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/buildevol/J5
+expect: not_done
 build:
   - s: {load: {brep: "CFI_6_e56fha.rle"}}
   - s: {scale: {shape: s, center: [0, 0, 0], factor: 1}}
@@ -1421,6 +1437,7 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/buildevol/J6
+expect: not_done
 build:
   - s: {load: {brep: "CFI_6_f12fhb.rle"}}
   - s: {scale: {shape: s, center: [0, 0, 0], factor: 1}}
@@ -1436,6 +1453,7 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/buildevol/J7
+expect: not_done
 build:
   - s: {load: {brep: "CFI_6_f12fhb.rle"}}
   - s: {scale: {shape: s, center: [0, 0, 0], factor: 1}}
@@ -1451,6 +1469,7 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/buildevol/J8
+expect: not_done
 build:
   - s: {load: {brep: "CFI_6_f56fhc.rle"}}
   - s: {scale: {shape: s, center: [0, 0, 0], factor: 1}}
@@ -1466,6 +1485,7 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/buildevol/J9
+expect: not_done
 build:
   - s: {load: {brep: "CFI_6_g12fhd.rle"}}
   - s: {scale: {shape: s, center: [0, 0, 0], factor: 1}}
@@ -1481,6 +1501,7 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/buildevol/K1
+expect: not_done
 build:
   - s: {load: {brep: "CFI_6_g12fhd.rle"}}
   - s: {scale: {shape: s, center: [0, 0, 0], factor: 1}}
@@ -1498,6 +1519,7 @@ ported_from:
   file: tests/blend/buildevol/K2
 notes:
   - "OCCT TODO OCC22817 (All): Faulty shapes in variables faulty_1 to faulty_2"
+expect: not_done
 build:
   - s: {load: {brep: "6_G56.draw"}}
   - s: {scale: {shape: s, center: [0, 0, 0], factor: 1}}
@@ -1513,6 +1535,7 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/buildevol/K3
+expect: not_done
 build:
   - s: {load: {brep: "CFI_6_h12fhf.rle"}}
   - s: {scale: {shape: s, center: [0, 0, 0], factor: 1}}
@@ -1528,6 +1551,7 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/buildevol/K4
+expect: not_done
 build:
   - s: {load: {brep: "CFI_6_h12fhf.rle"}}
   - s_3: {select: {of: s, edge: [0.0, 1.24159941587e-15, 15.0], length: 30.0}}
@@ -1574,6 +1598,7 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/buildevol/K7
+expect: not_done
 build:
   - s: {load: {brep: "CFI_6_i12fhh.rle"}}
   - s: {scale: {shape: s, center: [0, 0, 0], factor: 1}}
@@ -1589,6 +1614,7 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/buildevol/K8
+expect: not_done
 build:
   - s: {load: {brep: "CFI_6_i56fhi.rle"}}
   - s: {scale: {shape: s, center: [0, 0, 0], factor: 1}}

@@ -2699,6 +2699,7 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/simple/R3
+expect: not_done
 build:
   - s: {load: {brep: "4_N1(hlacg05).draw"}}
   - s: {scale: {shape: s, center: [0, 0, 0], factor: 1000}}
@@ -2734,6 +2735,7 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/simple/R5
+expect: not_done
 build:
   - s: {load: {brep: "4_P1(hlacg07).draw"}}
   - s: {scale: {shape: s, center: [0, 0, 0], factor: 1000}}
@@ -2949,6 +2951,7 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/simple/S9
+expect: not_done
 build:
   - s: {load: {brep: "CFI_6_d12fgx.rle"}}
   - s: {scale: {shape: s, center: [0, 0, 0], factor: 1}}
@@ -3446,6 +3449,7 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/simple/W4
+expect: not_done
 build:
   - s: {load: {brep: "CCV_1_c12gsf.rle"}}
   - s_1: {select: {of: s, edge: [1.49292910897, 0.0, 0.0], length: 2.98585821793}}
@@ -3523,6 +3527,7 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/simple/W9
+expect: not_done
 build:
   - s: {load: {brep: "CCV_1_e12gsh.rle"}}
   - s_5: {select: {of: s, edge: [-2.67472896377e-14, 9.07585774348e-15, 100.0], length: 188.495539836}}
