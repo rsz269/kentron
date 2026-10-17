@@ -25,16 +25,19 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/occt-data
-          key: occt-dataset-7.9.0-3d097a03
+          key: occt-dataset-7.9.0-source-data-3d097a03
       - name: Download OCCT's test dataset
         if: steps.dataset.outputs.cache-hit != 'true'
         run: |
-          mkdir -p ~/occt-data/occ
+          mkdir -p ~/occt-data
           curl -fsSL https://github.com/Open-Cascade-SAS/OCCT/releases/download/V7_9_0_beta1/opencascade-dataset-7.9.0.tar.xz | tar -xJ -C ~/occt-data
-          # Two shapes the tests read are in OCCT's source tree, not in the dataset.
-          for f in hammer.brep terrain.brep; do
-            curl -fsSL -o ~/occt-data/occ/$f https://raw.githubusercontent.com/Open-Cascade-SAS/OCCT/3d097a0328e71b826377d4814ab05ec3c3d23871/data/occ/$f
-          done
+          # Shapes the tests read from OCCT's source tree (its data directory), not the dataset.
+          git init -q /tmp/occt && cd /tmp/occt
+          git remote add origin https://github.com/Open-Cascade-SAS/OCCT.git
+          git sparse-checkout set data
+          git fetch -q --depth 1 --filter=blob:none origin 3d097a0328e71b826377d4814ab05ec3c3d23871
+          git checkout -q FETCH_HEAD
+          mv data ~/occt-data/occt-source-data
       - name: Test
         run: |
           set -o pipefail
