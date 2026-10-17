@@ -167,10 +167,12 @@ def tcl_cases(group: Path):
             yield grid, case.name, case
 
 
-def tcl_main(groups: list, draw: Path, tcl_lib: Path | None) -> None:
+def tcl_main(groups: list, draw: Path, tcl_lib: Path | None, jobs: int) -> None:
+    from concurrent.futures import ThreadPoolExecutor
     data = json.loads(TCL_OUT.read_text()) if TCL_OUT.exists() else {}
     data["_comment"] = ("Sub-shapes that OCCT's Tcl scripts make by explode, by position, for the Tcl runner "
                         "to name as OCCT does (written by tools/occt_selectors.py --tcl).")
+    runs = []
     for name in groups:
         gdir = SCRIPTS / name
         for grid, case, path in tcl_cases(gdir):
@@ -180,18 +182,21 @@ def tcl_main(groups: list, draw: Path, tcl_lib: Path | None) -> None:
             harness = (f"set dirname {{{SCRIPTS}}}; set groupname {name}; set gridname {grid.name}; set casename {case}; "
                        "set imagedir /tmp; set test_image x; set logdir /tmp\nproc checkview {args} {}\n")
             body = "".join(f"if {{[catch {{source {{{f}}}}} m]}} {{puts \"TCLERROR $m\"}}\n" for f in files if f.exists())
-            output = run_draw(draw, tcl_lib, "pload ALL\n" + harness + WRAPPER + body + "exit\n")
+            runs.append((f"tests/{name}/{grid.name}/{case}", "pload ALL\n" + harness + WRAPPER + body + "exit\n"))
+    # (Each run in its own DRAW process, several at once.)
+    with ThreadPoolExecutor(max_workers=jobs) as pool:
+        outputs = pool.map(lambda r: run_draw(draw, tcl_lib, r[1]), runs)
+        for (rel, _), output in zip(runs, outputs):
             positions = positions_of(output)
             entries = {}
             for (k, n), value in sorted(positions.items()):
                 entries.setdefault(k, {})[n] = value
-            rel = f"tests/{name}/{grid.name}/{case}"
             if entries:
                 data[rel] = [{"explode": k, "names": names} for k, names in sorted(entries.items())]
-                print(f"{rel}: {sum(len(v) for v in entries.values())} names")
+                print(f"{rel}: {sum(len(v) for v in entries.values())} names", flush=True)
             else:
                 data.pop(rel, None)
-                print(f"{rel}: nothing recorded")
+                print(f"{rel}: nothing recorded", flush=True)
     TCL_OUT.write_text(json.dumps(data, indent=1, sort_keys=True) + "\n")
 
 
@@ -202,12 +207,13 @@ def main() -> None:
     ap.add_argument("--tcl-lib", default=os.environ.get("OCCT_TCL_LIB"))
     ap.add_argument("--groups", default="blend")
     ap.add_argument("--tcl", action="store_true", help="the vendored Tcl scripts, into tcl_selectors.json")
+    ap.add_argument("--jobs", type=int, default=os.cpu_count() or 4, help="DRAW processes at once (with --tcl)")
     args = ap.parse_args()
     occt, draw = Path(args.occt).expanduser(), Path(args.draw).expanduser()
     beside = draw.parent / "tcl" / "lib"
     tcl_lib = Path(args.tcl_lib).expanduser() if args.tcl_lib else beside if beside.is_dir() else None
     if args.tcl:
-        tcl_main(args.groups.split(","), draw, tcl_lib)
+        tcl_main(args.groups.split(","), draw, tcl_lib, args.jobs)
         return
     data = json.loads(OUT.read_text()) if OUT.exists() else {}
     data["_comment"] = ("Sub-shapes that OCCT scripts name by enumeration order, by position "

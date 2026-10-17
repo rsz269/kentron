@@ -90,14 +90,10 @@ tests/blend/tolblend_simple/B2
 tests/blend/tolblend_simple/B4
 tests/blend/tolblend_simple/B5
 tests/blend/tolblend_simple/B6
-tests/blend/tolblend_simple/B7
-tests/blend/tolblend_simple/B8
 tests/blend/tolblend_simple/B9
 tests/blend/tolblend_simple/C1
-tests/blend/tolblend_simple/C2
 tests/blend/tolblend_simple/C3
 tests/blend/tolblend_simple/C5
-tests/blend/tolblend_simple/C6
 tests/blend/tolblend_simple/D2
 tests/blend/tolblend_simple/D6
 tests/blend/tolblend_simple/D8
@@ -105,7 +101,6 @@ tests/blend/tolblend_simple/D9
 tests/blend/tolblend_simple/E1
 tests/blend/tolblend_simple/E2
 tests/blend/tolblend_simple/E3
-tests/blend/tolblend_simple/E4
 tests/blend/tolblend_simple/E5
 tests/blend/tolblend_simple/E9
 tests/blend/tolblend_simple/F1
@@ -113,11 +108,8 @@ tests/blend/tolblend_simple/F2
 tests/blend/tolblend_simple/F3
 tests/blend/tolblend_simple/F4
 tests/blend/tolblend_simple/F5
-tests/blend/tolblend_simple/F6
 tests/blend/tolblend_simple/F7
 tests/blend/tolblend_simple/F8
-tests/blend/tolblend_simple/F9
-tests/blend/tolblend_simple/G1
 tests/boolean/bcommon_2d/N2
 tests/boolean/bcut_complex/E3
 tests/boolean/bcut_complex/F1
@@ -1224,7 +1216,6 @@ tests/lowalgos/intss/bug27079_1
 tests/lowalgos/intss/bug27079_2
 tests/lowalgos/intss/bug271
 tests/lowalgos/intss/bug27227
-tests/lowalgos/intss/bug27252_1
 tests/lowalgos/intss/bug27431
 tests/lowalgos/intss/bug27780
 tests/lowalgos/intss/bug27937_2
