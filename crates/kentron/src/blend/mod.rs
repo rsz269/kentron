@@ -44,6 +44,23 @@ pub fn fillet_edges(model: &mut Model, shape: Shape, edges: &[(Shape, f64)]) -> 
 
 /// [`fillet_edges`] of a shape with solids.
 fn fillet_solid_edges(model: &mut Model, shape: Shape, edges: &[(Shape, f64)]) -> Result<Shape> {
+    let rounded = fillet_solid_edges_as(model, shape, edges, true)?;
+    // (Where the cylinder and torus fillets' tools leave a face's boundary crossing itself,
+    // as where a fillet runs over another feature of its faces: all rolled instead, which
+    // goes round such features.)
+    if crosses_itself(model, rounded) && !crosses_itself(model, shape) {
+        if let Ok(rolled) = fillet_solid_edges_as(model, shape, edges, false) {
+            if !crosses_itself(model, rolled) {
+                return Ok(rolled);
+            }
+        }
+    }
+    Ok(rounded)
+}
+
+/// [`fillet_solid_edges`], the cylinder and torus fillets made as tools for boolean
+/// operations where `elementary`, else rolled as the others.
+fn fillet_solid_edges_as(model: &mut Model, shape: Shape, edges: &[(Shape, f64)], elementary: bool) -> Result<Shape> {
     if edges.is_empty() {
         return Err(Error::InvalidInput("no edges to fillet".into()));
     }
@@ -56,7 +73,7 @@ fn fillet_solid_edges(model: &mut Model, shape: Shape, edges: &[(Shape, f64)]) -
         if !(radius > tolerance::LINEAR) {
             return Err(Error::InvalidInput(format!("fillet radius must be positive, got {radius}")));
         }
-        let corner = Corner::of(model, shape, edge, false)?.filter(|_| elementary_around(model, shape, edge));
+        let corner = Corner::of(model, shape, edge, false)?.filter(|_| elementary && elementary_around(model, shape, edge));
         classified.push((edge, radius, corner));
     }
     // The edges meeting at their ends, in groups. A group with a rolling-ball edge is
@@ -139,12 +156,25 @@ fn fillet_solid_edges(model: &mut Model, shape: Shape, edges: &[(Shape, f64)]) -
                 }
             }
         }
-        let rounded = ball::fillet_network(model, local, &edges).or_else(|_| fillet_in_turn(model, local, &edges, rolled_over)).or_else(|e| match &members[..] {
+        let roll = |model: &mut Model, shape: Shape, edges: &[(Shape, &dyn Fn(f64) -> f64)]| {
+            ball::fillet_network(model, shape, edges).or_else(|_| fillet_in_turn(model, shape, edges, rolled_over))
+        };
+        let rounded = roll(model, local, &edges).or_else(|e| match &members[..] {
             // One edge whose ball rolls off its faces: on onto the faces beyond (unless that
             // was tried first, on the same shape).
             [i] if !rolled_over => runover::fillet(model, local, Shape { placement: Transform::IDENTITY, ..classified[*i].0 }, radii[0]).map_err(|_| e),
             _ => Err(e),
         });
+        // (Where a face's boundary now crosses itself, the fillets run over another feature
+        // on their faces: rounded without it, the feature then put back; or one runs off its
+        // faces: on onto the faces beyond.)
+        let rounded = match rounded {
+            Ok(r) if crosses_itself(model, r) && !crosses_itself(model, local) => over_features(model, local, r, &edges, &roll, 3).or_else(|e| match &members[..] {
+                [i] if !rolled_over => runover::fillet(model, local, Shape { placement: Transform::IDENTITY, ..classified[*i].0 }, radii[0]),
+                _ => Err(e),
+            }),
+            other => other,
+        };
         match rounded {
             Ok(rounded) => local = rounded,
             Err(_) => {
@@ -903,7 +933,19 @@ fn over_features(
     // The pockets (in the plain solid, not in `solid`) and the bosses (the other way).
     let pockets = boolean::difference(model, plain, solid)?;
     let bosses = boolean::difference(model, solid, plain)?;
-    let some = |model: &Model, s: Shape| crate::properties::volume(model, s).mass.abs() > tolerance::LINEAR.powi(3);
+    // (Only their solids: what else a difference leaves, as faces where the solids touch,
+    // is nothing to cut or join.)
+    let some = |model: &Model, s: Shape| {
+        !model.unique_subshapes(s, NodeKind::Solid).is_empty() && crate::properties::volume(model, s).mass.abs() > tolerance::LINEAR.powi(3)
+    };
+    let solids_of = |model: &mut Model, s: Shape| -> Result<Shape> {
+        let compound = model.new_empty(NodeKind::Compound);
+        for solid in model.unique_subshapes(s, NodeKind::Solid) {
+            model.add(compound, solid)?;
+        }
+        Ok(compound)
+    };
+    let (pockets, bosses) = (solids_of(model, pockets)?, solids_of(model, bosses)?);
     if some(model, pockets) {
         rounded = boolean::difference(model, rounded, pockets)?;
     }
@@ -931,6 +973,7 @@ fn over_features(
             let footprint = crate::modify::copy(model, face, false)?;
             let prism = crate::sweep::extrude(model, footprint, outward * -reach)?.shape;
             let below = boolean::intersection(model, prism, plain)?;
+            let below = solids_of(model, below)?;
             if some(model, below) {
                 rounded = boolean::union(model, rounded, below)?;
             }
