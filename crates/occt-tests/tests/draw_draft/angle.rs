@@ -1549,85 +1549,73 @@ fn j4() -> DrawResult<()> {
 /// `tests/draft/angle/J5`
 /// kentron: sub-shapes named by OCCT's enumeration are selected by position (draw_selectors.json)
 #[test]
-#[should_panic]
-fn j5() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.plane(&["p", "0", "0", "0", "1", "0", "0", "0", "-.5", "1"])?;
-        d.pcylinder(&["p", "p", "10", "20"])?;
-        d.plane(&["p2", "10", "-.2", "5", "0", "0", "1"])?;
-        d.pcylinder(&["p2", "p2", "4", "10"])?;
-        d.bfuse(&["f", "p", "p2"])?;
-        d.nexplode(&["f", "f"])?;
-        d.nearest(&["f_4", "f", "F", "10.0", "-0.231541", "12.2841", "136.096"])?;
-        d.depouille(&["result", "f", "0", "0", "1", "f_4", "4", "0", "0", "15", "0", "0", "1"])?;
-        d.checkprops(&["result", "-s", "2018.64"])?;
-        d.checkshape(&["result"])?;
-        Ok(())
-    })
+fn j5() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.plane(&["p", "0", "0", "0", "1", "0", "0", "0", "-.5", "1"])?;
+    d.pcylinder(&["p", "p", "10", "20"])?;
+    d.plane(&["p2", "10", "-.2", "5", "0", "0", "1"])?;
+    d.pcylinder(&["p2", "p2", "4", "10"])?;
+    d.bfuse(&["f", "p", "p2"])?;
+    d.nexplode(&["f", "f"])?;
+    d.nearest(&["f_4", "f", "F", "10.0", "-0.231541", "12.2841", "136.096"])?;
+    d.depouille(&["result", "f", "0", "0", "1", "f_4", "4", "0", "0", "15", "0", "0", "1"])?;
+    d.checkprops(&["result", "-s", "2018.64"])?;
+    d.checkshape(&["result"])?;
+    Ok(())
 }
 
 /// `tests/draft/angle/J6`
 /// kentron: sub-shapes named by OCCT's enumeration are selected by position (draw_selectors.json)
 #[test]
-#[should_panic]
-fn j6() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.plane(&["p", "0", "0", "0", "1", "0", "0"])?;
-        d.pcylinder(&["p", "p", "15", "20"])?;
-        d.profile(&["pf", "o", "5", "1", "7", "l", "10", "c", "2", "90", "l", "5", "d", "-1", "0", "l", "14", "d", "0", "-1", "l", "5", "c", "2", "90"])?;
-        d.prism(&["pr", "pf", "0", "0", "23"])?;
-        d.bfuse(&["f", "p", "pr"])?;
-        d.nexplode(&["f", "f"])?;
-        d.nearest(&["f_5", "f", "F", "10.0", "1.0", "22.4833", "150.334"])?;
-        d.depouille(&["result", "f", "0", "0", "1", "f_5", "5", "0", "0", "30", "0", "0", "1"])?;
-        d.checkprops(&["result", "-s", "3960.45"])?;
-        d.checkshape(&["result"])?;
-        Ok(())
-    })
+fn j6() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.plane(&["p", "0", "0", "0", "1", "0", "0"])?;
+    d.pcylinder(&["p", "p", "15", "20"])?;
+    d.profile(&["pf", "o", "5", "1", "7", "l", "10", "c", "2", "90", "l", "5", "d", "-1", "0", "l", "14", "d", "0", "-1", "l", "5", "c", "2", "90"])?;
+    d.prism(&["pr", "pf", "0", "0", "23"])?;
+    d.bfuse(&["f", "p", "pr"])?;
+    d.nexplode(&["f", "f"])?;
+    d.nearest(&["f_5", "f", "F", "10.0", "1.0", "22.4833", "150.334"])?;
+    d.depouille(&["result", "f", "0", "0", "1", "f_5", "5", "0", "0", "30", "0", "0", "1"])?;
+    d.checkprops(&["result", "-s", "3960.45"])?;
+    d.checkshape(&["result"])?;
+    Ok(())
 }
 
 /// `tests/draft/angle/J7`
 /// kentron: sub-shapes named by OCCT's enumeration are selected by position (draw_selectors.json)
 #[test]
-#[should_panic]
-fn j7() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.plane(&["p", "0", "0", "0", "1", "0", "0"])?;
-        d.pcylinder(&["p", "p", "15", "20"])?;
-        d.profile(&["pf", "o", "5", "1", "5", "l", "10", "c", "2", "90", "l", "5", "d", "-1", "0", "l", "14", "d", "0", "-1", "l", "5", "c", "2", "90"])?;
-        d.polyline(&["pl", "0", "0", "5", "0", "0", "30"])?;
-        d.pipe(&["p2", "pl", "pf"])?;
-        d.bfuse(&["f", "p", "p2"])?;
-        d.nexplode(&["f", "f"])?;
-        d.nearest(&["f_5", "f", "F", "10.0", "1.0", "22.4833", "150.334"])?;
-        d.depouille(&["result", "f", "0", "0", "1", "f_5", "5", "0", "0", "29", "0", "0", "1"])?;
-        d.checkprops(&["result", "-s", "3953.7"])?;
-        d.checkshape(&["result"])?;
-        Ok(())
-    })
+fn j7() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.plane(&["p", "0", "0", "0", "1", "0", "0"])?;
+    d.pcylinder(&["p", "p", "15", "20"])?;
+    d.profile(&["pf", "o", "5", "1", "5", "l", "10", "c", "2", "90", "l", "5", "d", "-1", "0", "l", "14", "d", "0", "-1", "l", "5", "c", "2", "90"])?;
+    d.polyline(&["pl", "0", "0", "5", "0", "0", "30"])?;
+    d.pipe(&["p2", "pl", "pf"])?;
+    d.bfuse(&["f", "p", "p2"])?;
+    d.nexplode(&["f", "f"])?;
+    d.nearest(&["f_5", "f", "F", "10.0", "1.0", "22.4833", "150.334"])?;
+    d.depouille(&["result", "f", "0", "0", "1", "f_5", "5", "0", "0", "29", "0", "0", "1"])?;
+    d.checkprops(&["result", "-s", "3953.7"])?;
+    d.checkshape(&["result"])?;
+    Ok(())
 }
 
 /// `tests/draft/angle/J8`
 /// kentron: sub-shapes named by OCCT's enumeration are selected by position (draw_selectors.json)
 #[test]
-#[should_panic]
-fn j8() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.plane(&["p", "0", "0", "0", "1", "0", "0"])?;
-        d.pcone(&["p", "p", "12", "10", "20"])?;
-        d.r#box(&["bx", "5", ".5", "0", "10", "5", "20"])?;
-        d.bfuse(&["f", "p", "bx"])?;
-        d.nexplode(&["f", "f"])?;
-        d.nearest(&["f_4", "f", "F", "10.0926", "0.5", "15.4897", "90.1138"])?;
-        d.depouille(&["result", "f", "0", "0", "1", "f_4", "5", "0", "0", "20", "0", "0", "1"])?;
-        d.checkprops(&["result", "-s", "2442.47"])?;
-        d.checkshape(&["result"])?;
-        Ok(())
-    })
+fn j8() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.plane(&["p", "0", "0", "0", "1", "0", "0"])?;
+    d.pcone(&["p", "p", "12", "10", "20"])?;
+    d.r#box(&["bx", "5", ".5", "0", "10", "5", "20"])?;
+    d.bfuse(&["f", "p", "bx"])?;
+    d.nexplode(&["f", "f"])?;
+    d.nearest(&["f_4", "f", "F", "10.0926", "0.5", "15.4897", "90.1138"])?;
+    d.depouille(&["result", "f", "0", "0", "1", "f_4", "5", "0", "0", "20", "0", "0", "1"])?;
+    d.checkprops(&["result", "-s", "2442.47"])?;
+    d.checkshape(&["result"])?;
+    Ok(())
 }
 
 /// `tests/draft/angle/J9`
@@ -1656,41 +1644,35 @@ fn j9() {
 /// `tests/draft/angle/K1`
 /// kentron: sub-shapes named by OCCT's enumeration are selected by position (draw_selectors.json)
 #[test]
-#[should_panic]
-fn k1() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.psphere(&["p", "20", "0", "90"])?;
-        d.r#box(&["bx", "5", ".5", "10", "10", "5", "20"])?;
-        d.bfuse(&["f", "p", "bx"])?;
-        d.nexplode(&["f", "f"])?;
-        d.nearest(&["f_5", "f", "F", "10.3831", "0.5", "23.372", "130.195"])?;
-        d.depouille(&["result", "f", "0", "0", "1", "f_5", "5", "0", "0", "30", "0", "0", "1"])?;
-        d.checkprops(&["result", "-s", "4173.36"])?;
-        d.checkshape(&["result"])?;
-        Ok(())
-    })
+fn k1() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.psphere(&["p", "20", "0", "90"])?;
+    d.r#box(&["bx", "5", ".5", "10", "10", "5", "20"])?;
+    d.bfuse(&["f", "p", "bx"])?;
+    d.nexplode(&["f", "f"])?;
+    d.nearest(&["f_5", "f", "F", "10.3831", "0.5", "23.372", "130.195"])?;
+    d.depouille(&["result", "f", "0", "0", "1", "f_5", "5", "0", "0", "30", "0", "0", "1"])?;
+    d.checkprops(&["result", "-s", "4173.36"])?;
+    d.checkshape(&["result"])?;
+    Ok(())
 }
 
 /// `tests/draft/angle/K2`
 /// kentron: sub-shapes named by OCCT's enumeration are selected by position (draw_selectors.json)
 #[test]
-#[should_panic]
-fn k2() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.plane(&["p", "0", "0", "0", "1", "0", "0", "0", "-.5", "1"])?;
-        d.psphere(&["p", "p", "20"])?;
-        d.plane(&["p2", "0", "0", "15", "0", "0", "1", "0", "-1", "0"])?;
-        d.pcylinder(&["p2", "p2", "7", "15"])?;
-        d.bfuse(&["f", "p", "p2"])?;
-        d.nexplode(&["f", "f"])?;
-        d.nearest(&["f_2", "f", "F", "-3.77714e-17", "8.88178e-16", "24.3675", "495.461"])?;
-        d.depouille(&["result", "f", "0", "0", "1", "f_2", "12", "0", "0", "30", "0", "0", "1"])?;
-        d.checkprops(&["result", "-s", "5536.07"])?;
-        d.checkshape(&["result"])?;
-        Ok(())
-    })
+fn k2() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.plane(&["p", "0", "0", "0", "1", "0", "0", "0", "-.5", "1"])?;
+    d.psphere(&["p", "p", "20"])?;
+    d.plane(&["p2", "0", "0", "15", "0", "0", "1", "0", "-1", "0"])?;
+    d.pcylinder(&["p2", "p2", "7", "15"])?;
+    d.bfuse(&["f", "p", "p2"])?;
+    d.nexplode(&["f", "f"])?;
+    d.nearest(&["f_2", "f", "F", "-3.77714e-17", "8.88178e-16", "24.3675", "495.461"])?;
+    d.depouille(&["result", "f", "0", "0", "1", "f_2", "12", "0", "0", "30", "0", "0", "1"])?;
+    d.checkprops(&["result", "-s", "5536.07"])?;
+    d.checkshape(&["result"])?;
+    Ok(())
 }
 
 /// `tests/draft/angle/K3`
@@ -1717,22 +1699,19 @@ fn k3() {
 /// `tests/draft/angle/K4`
 /// kentron: sub-shapes named by OCCT's enumeration are selected by position (draw_selectors.json)
 #[test]
-#[should_panic]
-fn k4() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.plane(&["ps", "10", "-3", "0", "1", "0", "0", "0", ".2", "1"])?;
-        d.psphere(&["ps", "ps", "20"])?;
-        d.profile(&["pf", "o", "5", "1", "5", "l", "10", "c", "2", "90", "l", "5", "d", "-1", "0", "l", "14", "d", "0", "-1", "l", "5", "c", "2", "90"])?;
-        d.prism(&["pr", "pf", "0", "0", "30"])?;
-        d.bfuse(&["f", "ps", "pr"])?;
-        d.nexplode(&["f", "f"])?;
-        d.nearest(&["f_4", "f", "F", "10.0", "1.0", "27.1894", "156.188"])?;
-        d.depouille(&["result", "f", "0", "0", "1", "f_4", "4", "0", "0", "30", "0", "0", "1"])?;
-        d.checkprops(&["result", "-s", "5719.09"])?;
-        d.checkshape(&["result"])?;
-        Ok(())
-    })
+fn k4() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.plane(&["ps", "10", "-3", "0", "1", "0", "0", "0", ".2", "1"])?;
+    d.psphere(&["ps", "ps", "20"])?;
+    d.profile(&["pf", "o", "5", "1", "5", "l", "10", "c", "2", "90", "l", "5", "d", "-1", "0", "l", "14", "d", "0", "-1", "l", "5", "c", "2", "90"])?;
+    d.prism(&["pr", "pf", "0", "0", "30"])?;
+    d.bfuse(&["f", "ps", "pr"])?;
+    d.nexplode(&["f", "f"])?;
+    d.nearest(&["f_4", "f", "F", "10.0", "1.0", "27.1894", "156.188"])?;
+    d.depouille(&["result", "f", "0", "0", "1", "f_4", "4", "0", "0", "30", "0", "0", "1"])?;
+    d.checkprops(&["result", "-s", "5719.09"])?;
+    d.checkshape(&["result"])?;
+    Ok(())
 }
 
 /// `tests/draft/angle/K5`
@@ -1761,21 +1740,18 @@ fn k5() {
 /// `tests/draft/angle/K6`
 /// kentron: sub-shapes named by OCCT's enumeration are selected by position (draw_selectors.json)
 #[test]
-#[should_panic]
-fn k6() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.ptorus(&["pt", "9", "7"])?;
-        d.plane(&["p2", "8", "4", "4", "0", "0", "1", "0", "-1", "0"])?;
-        d.pcylinder(&["p2", "p2", "3", "10"])?;
-        d.bfuse(&["f", "pt", "p2"])?;
-        d.nexplode(&["f", "f"])?;
-        d.nearest(&["f_2", "f", "F", "8.00587", "4.00294", "10.3316", "138.15"])?;
-        d.depouille(&["result", "f", "0", "0", "1", "f_2", "10", "0", "0", "15", "0", "0", "1"])?;
-        d.checkprops(&["result", "-s", "2642.63"])?;
-        d.checkshape(&["result"])?;
-        Ok(())
-    })
+fn k6() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.ptorus(&["pt", "9", "7"])?;
+    d.plane(&["p2", "8", "4", "4", "0", "0", "1", "0", "-1", "0"])?;
+    d.pcylinder(&["p2", "p2", "3", "10"])?;
+    d.bfuse(&["f", "pt", "p2"])?;
+    d.nexplode(&["f", "f"])?;
+    d.nearest(&["f_2", "f", "F", "8.00587", "4.00294", "10.3316", "138.15"])?;
+    d.depouille(&["result", "f", "0", "0", "1", "f_2", "10", "0", "0", "15", "0", "0", "1"])?;
+    d.checkprops(&["result", "-s", "2642.63"])?;
+    d.checkshape(&["result"])?;
+    Ok(())
 }
 
 /// `tests/draft/angle/K7`

@@ -1027,3 +1027,323 @@ mod tests {
         assert!(problems(&model, fixed).is_empty());
     }
 }
+
+/// Moves the seams of `shape`'s faces that their boundaries cross (an inner loop running
+/// over the seam of a cylinder, a cone or a torus, as a face moved by a draft or an offset
+/// comes to): each such seam to an iso-line of its surface that no inner loop reaches,
+/// where the closed edges across the face are split for it. Returns how many were moved.
+pub fn move_crossed_seams(model: &mut Model, shape: Shape) -> Result<usize> {
+    let mut moved = 0;
+    // (Again while any moves: a loop over both of a torus's seams crosses the second once
+    // the first is moved.)
+    for _ in 0..4 {
+        let before = moved;
+        for (face, pair) in crate::validity::boundary_crossings(model, shape) {
+            let Ok(id) = crate::topology::FaceId::try_from(face.node) else { continue };
+            let seam = pair.iter().filter_map(|e| EdgeId::try_from(e.node).ok()).find(|&e| model.is_seam_on_face(e, id));
+            let Some(seam) = seam else { continue };
+            if moved_seam(model, face, seam)? {
+                moved += 1;
+            }
+        }
+        if moved == before {
+            break;
+        }
+    }
+    Ok(moved)
+}
+
+/// [`move_crossed_seams`] for one face and its seam `seam`: whether it was moved (a face
+/// whose outer loop is not the seam and two runs of edges across the period, or whose inner
+/// loops leave no room, is left).
+fn moved_seam(model: &mut Model, face: Shape, seam: EdgeId) -> Result<bool> {
+    use crate::geometry::curve2::Curve2;
+    use crate::math::{Point2, Transform2, Transformable2, Vector2};
+    if face.placement != crate::math::Transform::IDENTITY {
+        return Ok(false);
+    }
+    let Some(surface) = model.surface(face).cloned() else { return Ok(false) };
+    // The coedges of the face's wires, in the directions the loops run, the outer wire
+    // being the one holding the seam.
+    let uses = |model: &Model, face: Shape| -> Vec<Vec<(CoEdgeId, EdgeId, Orientation)>> {
+        model
+            .explore(face, NodeKind::Wire)
+            .map(|w| {
+                model
+                    .children(w)
+                    .into_iter()
+                    .filter_map(|c| {
+                        let id = CoEdgeId::try_from(c.node).ok()?;
+                        Some((id, model[id].edge, model[id].orientation.compose(w.orientation).compose(c.orientation)))
+                    })
+                    .collect()
+            })
+            .collect()
+    };
+    let wires = uses(model, face);
+    let Some(outer) = wires.iter().position(|w| w.iter().any(|u| u.1 == seam)) else { return Ok(false) };
+    // Which parameter the seam is an iso-line of: the one its two pcurves differ in by a
+    // period.
+    let seam_uses: Vec<CoEdgeId> = wires[outer].iter().filter(|u| u.1 == seam).map(|u| u.0).collect();
+    let [s1, s2] = seam_uses[..] else { return Ok(false) };
+    let (Some((p1, a1, b1)), Some((p2, _, _))) = (model.effective_pcurve(s1), model.effective_pcurve(s2)) else { return Ok(false) };
+    let (m1, m2) = (p1.point(0.5 * (a1 + b1)), p2.point(0.5 * (a1 + b1)));
+    let periods = [surface.u_period(), surface.v_period()];
+    let k = match periods {
+        [Some(p), _] if ((m1.x - m2.x).abs() - p).abs() <= 1e-6 * p => 0,
+        [_, Some(p)] if ((m1.y - m2.y).abs() - p).abs() <= 1e-6 * p => 1,
+        _ => return Ok(false),
+    };
+    let period = periods[k].expect("periodic");
+    let coord = |p: Point2| if k == 0 { p.x } else { p.y };
+    let old = coord(m1).min(coord(m2));
+    // The outer loop: besides the seam, two runs of edges, each the period across (where
+    // the loop runs, the parameter at each use's start and end).
+    let along = |model: &Model, c: CoEdgeId, o: Orientation| -> Option<(f64, f64)> {
+        let (p, a, b) = model.effective_pcurve(c)?;
+        let (x, y) = (coord(p.point(a)), coord(p.point(b)));
+        Some(if o == Orientation::Reversed { (y, x) } else { (x, y) })
+    };
+    let n = wires[outer].len();
+    let Some(first_seam) = wires[outer].iter().position(|u| u.1 == seam) else { return Ok(false) };
+    let mut runs: Vec<Vec<(CoEdgeId, EdgeId, Orientation)>> = Vec::new();
+    for i in 1..=n {
+        let u = wires[outer][(first_seam + i) % n];
+        if u.1 == seam {
+            runs.push(Vec::new());
+        } else if let Some(run) = runs.last_mut() {
+            run.push(u);
+        } else {
+            runs.push(vec![u]);
+        }
+    }
+    runs.retain(|r| !r.is_empty());
+    if runs.len() != 2 {
+        return Ok(false);
+    }
+    for run in &runs {
+        let mut total = 0.0;
+        for &(c, _, o) in run {
+            let Some((x, y)) = along(model, c, o) else { return Ok(false) };
+            total += y - x;
+        }
+        if (total.abs() - period).abs() > 1e-6 * period {
+            return Ok(false);
+        }
+    }
+    // Where to put the seam: the middle of the widest stretch the inner loops leave.
+    let sample = |model: &Model, c: CoEdgeId| -> Vec<f64> { model.effective_pcurve(c).map_or(Vec::new(), |(p, a, b)| (0..=16).map(|i| coord(p.point(a + (b - a) * i as f64 / 16.0))).collect()) };
+    let mut covered: Vec<(f64, f64)> = Vec::new();
+    for (i, wire) in wires.iter().enumerate() {
+        if i == outer {
+            continue;
+        }
+        // (A loop runs on without jumps: its extent, unwrapped from its first point.)
+        let values: Vec<f64> = wire.iter().flat_map(|u| sample(model, u.0)).collect();
+        let Some(&first) = values.first() else { continue };
+        let (lo, hi) = values.iter().fold((first, first), |(a, b), &v| (a.min(v), b.max(v)));
+        if hi - lo >= period {
+            return Ok(false);
+        }
+        covered.push(((lo - old).rem_euclid(period), (lo - old).rem_euclid(period) + (hi - lo)));
+    }
+    let mut ends: Vec<(f64, f64)> = covered.iter().flat_map(|&(a, b)| if b > period { vec![(a, period), (0.0, b - period)] } else { vec![(a, b)] }).collect();
+    ends.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut gaps = Vec::new();
+    let mut reach = 0.0;
+    for &(a, b) in &ends {
+        if a > reach {
+            gaps.push((reach, a));
+        }
+        reach = f64::max(reach, b);
+    }
+    if reach < period {
+        gaps.push((reach, period));
+    }
+    // (The stretches at both ends of the period are one.)
+    if gaps.len() > 1 && gaps[0].0 == 0.0 && gaps[gaps.len() - 1].1 == period {
+        let last = gaps.pop().expect("a gap");
+        gaps[0] = (last.0 - period, gaps[0].1);
+    }
+    let Some(&(a, b)) = gaps.iter().max_by(|x, y| (x.1 - x.0).total_cmp(&(y.1 - y.0))) else { return Ok(false) };
+    if b - a <= 1e-3 * period {
+        return Ok(false);
+    }
+    let at = old + 0.5 * (a + b);
+    // Each run split where the new seam crosses it (at a vertex already there, or on a
+    // degenerate edge at its vertex).
+    let tolerance = model.tolerance(face);
+    let mut new_vertices = Vec::new();
+    let mut split: Vec<EdgeId> = Vec::new();
+    for run in &runs {
+        // (An edge in both runs, as a torus's other seam, split once: the new seam closes
+        // on itself at the vertex there.)
+        if let Some(&vertex) = run.iter().find(|u| split.contains(&u.1)).and(new_vertices.last()) {
+            new_vertices.push(vertex);
+            continue;
+        }
+        let Some(start) = along(model, run[0].0, run[0].2).map(|(x, _)| x) else { return Ok(false) };
+        let mut found = None;
+        for &(c, e, o) in run {
+            let Some((x, y)) = along(model, c, o) else { return Ok(false) };
+            let target = if y > x { start + (at - start).rem_euclid(period) } else { start - (start - at).rem_euclid(period) };
+            if (target - x) * (target - y) > 0.0 {
+                continue;
+            }
+            let edge_shape = Shape::from(crate::topology::NodeId::from(e));
+            let (v0, v1) = model.edge_vertices(edge_shape);
+            let ends = if o == Orientation::Reversed { (v1, v0) } else { (v0, v1) };
+            let close = 1e-9 * period;
+            let Some((curve, _, _)) = model.edge_curve(edge_shape) else {
+                found = Some(VertexId::try_from(v0.node).expect("a vertex"));
+                break;
+            };
+            if (target - x).abs() <= close {
+                found = Some(VertexId::try_from(ends.0.node).expect("a vertex"));
+                break;
+            }
+            if (target - y).abs() <= close {
+                found = Some(VertexId::try_from(ends.1.node).expect("a vertex"));
+                break;
+            }
+            let Some((pcurve, first, last)) = model.effective_pcurve(c) else { return Ok(false) };
+            let (from, to) = (coord(pcurve.point(first)), coord(pcurve.point(last)));
+            let (mut lo, mut hi) = (first, last);
+            for _ in 0..100 {
+                let mid = 0.5 * (lo + hi);
+                if (coord(pcurve.point(mid)) - target) * (to - from) < 0.0 { lo = mid } else { hi = mid }
+            }
+            let t = 0.5 * (lo + hi);
+            let vertex = model.add_vertex(curve.point(t), model.tolerance(edge_shape));
+            let halves = model.split_edge(e, vertex, t)?;
+            split.push(e);
+            // (On planes, the halves' pcurves made exact: one taken over from another
+            // operation may only approximate its edge, which the split's new ends show.)
+            for half in [halves.0, halves.1] {
+                let Some((curve, _, _)) = model.edge_curve(Shape::from(crate::topology::NodeId::from(half))) else { continue };
+                let coedges: Vec<CoEdgeId> = model.table::<crate::topology::CoEdge>().iter().filter(|(_, c)| c.edge == half).map(|(c, _)| c).collect();
+                for c in coedges {
+                    let Some(plane @ crate::geometry::surface::Surface::Plane(_)) = model.get(model[c].face).and_then(|f| model.get(f.surface)).map(|s| s.surface.clone()) else { continue };
+                    if let (Some(exact), Some((_, first, last))) = (crate::geometry::project::analytic_pcurve(&curve, &plane), model.effective_pcurve(c)) {
+                        model.set_pcurve_with_range(c, exact, first, last)?;
+                    }
+                }
+            }
+            found = Some(vertex);
+            break;
+        }
+        let Some(vertex) = found else { return Ok(false) };
+        new_vertices.push(vertex);
+    }
+    // The new seam: the iso-line between the new vertices (the other parameter's range as
+    // the old seam's).
+    let (seam_first, seam_last) = (a1, b1);
+    let cut = crate::divide::Cut::iso(&surface, k == 0, at, seam_first, seam_last);
+    let vertex_at = |model: &Model, p: crate::math::Point| new_vertices.iter().copied().min_by(|&x, &y| model[x].point.distance(p).total_cmp(&model[y].point.distance(p)));
+    let (Some(va), Some(vb)) = (vertex_at(model, cut.curve.point(seam_first)), vertex_at(model, cut.curve.point(seam_last))) else { return Ok(false) };
+    let new_seam = model.add_edge(va, vb, model.tolerance(Shape::from(crate::topology::NodeId::from(seam))))?;
+    model.set_edge_curve(new_seam.into(), cut.curve.clone(), model.tolerance(Shape::from(crate::topology::NodeId::from(seam))))?;
+    model.set_edge_range(new_seam.into(), seam_first, seam_last)?;
+    // Every pcurve brought into the period from the new seam on: an outer one by its middle,
+    // an inner loop as a whole.
+    let shift = |value: f64| -> f64 { (value - at).rem_euclid(period) - (value - at) };
+    let moved = |p: &Curve2, by: f64| -> Curve2 {
+        let v = if k == 0 { Vector2::new(by, 0.0) } else { Vector2::new(0.0, by) };
+        p.transformed(&Transform2::translation(v))
+    };
+    let wires = uses(model, face);
+    let mut loops: Vec<Vec<(EdgeId, Orientation, Curve2, f64, f64)>> = Vec::new();
+    for (i, wire) in wires.iter().enumerate() {
+        let mut out = Vec::new();
+        let whole = if i == outer { None } else { wire.first().and_then(|u| sample(model, u.0).first().copied()).map(shift) };
+        for &(c, e, o) in wire {
+            if e == seam {
+                continue;
+            }
+            let Some((pcurve, first, last)) = model.effective_pcurve(c) else { return Ok(false) };
+            let (x, y) = (coord(pcurve.point(first)), coord(pcurve.point(last)));
+            // (A degenerate edge the period across, as at a sphere's pole, runs from the new
+            // seam to the next.)
+            let degenerate = model.edge_curve(Shape::from(crate::topology::NodeId::from(e))).is_none();
+            let by = match whole {
+                Some(by) => by,
+                None if degenerate && ((y - x).abs() - period).abs() <= 1e-6 * period => at - x.min(y),
+                None => shift(coord(pcurve.point(0.5 * (first + last)))),
+            };
+            out.push((e, o, moved(&pcurve, by), first, last));
+        }
+        if i == outer {
+            // The seam's two uses: at the new seam's place and a period on (along the
+            // other parameter where the old seam ran, which may be a period off the iso-line's
+            // own).
+            let other = |p: Point2| if k == 0 { p.y } else { p.x };
+            let at_seam: Vec<f64> = out
+                .iter()
+                .flat_map(|u| [u.2.point(u.3), u.2.point(u.4)])
+                .filter(|&p| (coord(p) - at).abs() <= 1e-6 * period)
+                .map(other)
+                .collect();
+            let lowest = at_seam.iter().copied().fold(f64::INFINITY, f64::min);
+            let own = other(cut.pcurve.point(seam_first)).min(other(cut.pcurve.point(seam_last)));
+            let off = if lowest.is_finite() { lowest - own } else { other(p1.point(a1)) - other(cut.pcurve.point(a1)) };
+            let up = |by: f64| {
+                let v = if k == 0 { Vector2::new(by, off) } else { Vector2::new(off, by) };
+                cut.pcurve.transformed(&Transform2::translation(v))
+            };
+            out.push((new_seam, Orientation::Forward, up(0.0), seam_first, seam_last));
+            out.push((new_seam, Orientation::Reversed, up(period), seam_first, seam_last));
+        }
+        loops.push(out);
+    }
+    // The outer loop in order, by where each use starts and ends in the parameters (the
+    // seam's uses tried both ways round).
+    let ends_of = |u: &(EdgeId, Orientation, Curve2, f64, f64)| {
+        let (p, q) = (u.2.point(u.3), u.2.point(u.4));
+        if u.1 == Orientation::Reversed { (q, p) } else { (p, q) }
+    };
+    let near = 1e-6 * period;
+    let chain = |uses: &[(EdgeId, Orientation, Curve2, f64, f64)]| -> Option<Vec<usize>> {
+        let mut order = vec![uses.len() - 2];
+        let mut left: Vec<usize> = (0..uses.len()).filter(|&i| i != uses.len() - 2).collect();
+        while !left.is_empty() {
+            let end = ends_of(&uses[*order.last()?]).1;
+            let j = left.iter().position(|&i| ends_of(&uses[i]).0.distance(end) <= near)?;
+            order.push(left.remove(j));
+        }
+        (ends_of(&uses[*order.last()?]).1.distance(ends_of(&uses[order[0]]).0) <= near).then_some(order)
+    };
+    let mut outer_uses = std::mem::take(&mut loops[outer]);
+    let order = match chain(&outer_uses) {
+        Some(order) => order,
+        None => {
+            let n = outer_uses.len();
+            for u in &mut outer_uses[n - 2..] {
+                u.1 = u.1.reversed();
+            }
+            match chain(&outer_uses) {
+                Some(order) => order,
+                None => return Ok(false),
+            }
+        }
+    };
+    loops[outer] = order.into_iter().map(|i| outer_uses[i].clone()).collect();
+    // The face rebuilt with them, in the old one's place.
+    let new_face = model.new_empty(NodeKind::Face);
+    model.set_face_surface(new_face, surface, tolerance)?;
+    for uses in &loops {
+        let mut coedges = Vec::new();
+        for (e, o, pcurve, first, last) in uses {
+            let c = model.add_coedge(*e, *o)?;
+            model.set_pcurve_with_range(c, pcurve.clone(), *first, *last)?;
+            coedges.push(c);
+        }
+        let wire = model.add_wire(&coedges)?;
+        model.add(new_face, wire.into())?;
+    }
+    let old_wires: Vec<Shape> = model.explore(face, NodeKind::Wire).collect();
+    model.replace_node(face.node, new_face.node)?;
+    for w in old_wires {
+        model.remove_subtree(w.node);
+    }
+    Ok(true)
+}

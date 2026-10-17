@@ -2769,22 +2769,19 @@ fn bug422_1() -> DrawResult<()> {
 /// `tests/bugs/modalg_2/bug422_2`
 /// kentron: sub-shapes named by OCCT's enumeration are selected by position (draw_selectors.json)
 #[test]
-#[should_panic]
-fn bug422_2() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.plane(&["ps", "10", "-3", "0", "1", "0", "0", "0", ".2", "1"])?;
-        d.psphere(&["ps", "ps", "20"])?;
-        d.profile(&["pf", "o", "5", "1", "5", "l", "10", "c", "2", "90", "l", "5", "d", "-1", "0", "l", "14", "d", "0", "-1", "l", "5", "c", "2", "90"])?;
-        d.prism(&["pr", "pf", "0", "0", "30"])?;
-        d.bfuse(&["f", "ps", "pr"])?;
-        d.nexplode(&["f", "f"])?;
-        d.nearest(&["f_4", "f", "F", "10.0", "1.0", "27.1894", "156.188"])?;
-        d.depouille(&["result", "f", "0", "0", "1", "f_4", "4", "0", "0", "30", "0", "0", "1"])?;
-        d.checkprops(&["result", "-s", "5719.09"])?;
-        d.checkshape(&["result"])?;
-        Ok(())
-    })
+fn bug422_2() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.plane(&["ps", "10", "-3", "0", "1", "0", "0", "0", ".2", "1"])?;
+    d.psphere(&["ps", "ps", "20"])?;
+    d.profile(&["pf", "o", "5", "1", "5", "l", "10", "c", "2", "90", "l", "5", "d", "-1", "0", "l", "14", "d", "0", "-1", "l", "5", "c", "2", "90"])?;
+    d.prism(&["pr", "pf", "0", "0", "30"])?;
+    d.bfuse(&["f", "ps", "pr"])?;
+    d.nexplode(&["f", "f"])?;
+    d.nearest(&["f_4", "f", "F", "10.0", "1.0", "27.1894", "156.188"])?;
+    d.depouille(&["result", "f", "0", "0", "1", "f_4", "4", "0", "0", "30", "0", "0", "1"])?;
+    d.checkprops(&["result", "-s", "5719.09"])?;
+    d.checkshape(&["result"])?;
+    Ok(())
 }
 
 /// `tests/bugs/modalg_2/bug423_2`

@@ -393,7 +393,6 @@ tests/bugs/modalg_2/bug356
 tests/bugs/modalg_2/bug398
 tests/bugs/modalg_2/bug415
 tests/bugs/modalg_2/bug420
-tests/bugs/modalg_2/bug422_2
 tests/bugs/modalg_2/bug427_6
 tests/bugs/modalg_2/bug437
 tests/bugs/modalg_2/bug446_2
@@ -1026,17 +1025,9 @@ tests/draft/angle/H6
 tests/draft/angle/H7
 tests/draft/angle/I3
 tests/draft/angle/I9
-tests/draft/angle/J5
-tests/draft/angle/J6
-tests/draft/angle/J7
-tests/draft/angle/J8
 tests/draft/angle/J9
-tests/draft/angle/K1
-tests/draft/angle/K2
 tests/draft/angle/K3
-tests/draft/angle/K4
 tests/draft/angle/K5
-tests/draft/angle/K6
 tests/draft/angle/K8
 tests/draft/angle/K9
 tests/draft/angle/L4

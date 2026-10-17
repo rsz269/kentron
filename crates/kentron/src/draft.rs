@@ -62,7 +62,10 @@ pub fn draft(model: &mut Model, shape: Shape, direction: Direction, faces: &[Dra
             }
         }
     };
-    crate::offset::shape::with_surfaces(model, shape, &new_surface)
+    let drafted = crate::offset::shape::with_surfaces(model, shape, &new_surface)?;
+    // (A loop the draft moves over a seam: the seam moved off it.)
+    crate::heal::move_crossed_seams(model, drafted)?;
+    Ok(drafted)
 }
 
 /// For each face of `shape`, the faces meeting it tangentially along an edge.
@@ -282,6 +285,31 @@ mod tests {
         let expected = std::f64::consts::PI * 10.0 / 3.0 * (25.0 + 5.0 * top + top * top);
         assert!((volume(&model, drafted).mass - expected).abs() < 1e-6 * expected, "{}", volume(&model, drafted).mass);
         valid(&model, drafted);
+    }
+
+    /// OCCT's draft/angle J5: a cylinder lying along X (its seam turned toward -Y, +Z)
+    /// with a small upright one fused on; drafting the small one widens it below its top,
+    /// and its loop on the large one runs over that one's seam, which is moved off it.
+    #[test]
+    fn a_loop_drafted_over_a_seam_moves_it() {
+        use crate::math::Frame;
+        let mut model = Model::new();
+        let lying = Frame::new(Point::ORIGIN, Direction::X, Direction::from_vector(Vector::new(0.0, -0.5, 1.0)));
+        let large = CylinderPrimitive::new(10.0, 20.0).with_frame(lying).build(&mut model).unwrap();
+        let upright = Frame::from_z(Point::new(10.0, -0.2, 5.0), Direction::Z);
+        let small = CylinderPrimitive::new(4.0, 10.0).with_frame(upright).build(&mut model).unwrap();
+        let fused = crate::boolean::union(&mut model, large, small).unwrap();
+        let side = model
+            .unique_subshapes(fused, NodeKind::Face)
+            .into_iter()
+            .find(|&f| matches!(model.surface(f), Some(Surface::Cylinder(c)) if (c.radius() - 4.0).abs() < 1e-9))
+            .unwrap();
+        let top = Plane::new(Point::new(0.0, 0.0, 15.0), Direction::Z);
+        let drafted = draft(&mut model, fused, Direction::Z, &[DraftedFace { face: side, angle: 4f64.to_radians(), neutral: top }]).unwrap();
+        valid(&model, drafted);
+        // (OCCT: 2018.64.)
+        let area = crate::properties::area(&model, drafted).mass;
+        assert!((area - 2018.64).abs() < 1e-3 * 2018.64, "{area}");
     }
 
     #[test]
