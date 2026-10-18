@@ -149,9 +149,11 @@ pub(super) fn uv_within(surface: &Surface, p: Point, reach: f64) -> Option<Uv> {
 }
 
 /// The foot of `p` on a free-form surface: Newton steps from the nearest of a grid of the
-/// surface's points.
+/// surface's points. Where that leads astray (to a foot on the surface's bounds, or farther
+/// than the sample it started from) and another part of the surface passes nearly as near
+/// (the next turn of one winding round), from the nearest sample there too: the nearer foot.
 pub(super) fn foot_on(surface: &Surface, p: Point) -> crate::geometry::extrema::SurfaceFoot {
-    let start = with_samples(surface, |grid| {
+    let (best, start) = with_samples(surface, |grid| {
         let mut best = (f64::INFINITY, 0);
         for (k, &(_, _, q)) in grid.iter().enumerate() {
             let d = (q - p).dot(q - p);
@@ -159,9 +161,36 @@ pub(super) fn foot_on(surface: &Surface, p: Point) -> crate::geometry::extrema::
                 best = (d, k);
             }
         }
-        (grid[best.1].0, grid[best.1].1)
+        (best, (grid[best.1].0, grid[best.1].1))
     });
-    crate::geometry::extrema::newton_foot(p, surface, start)
+    let foot = crate::geometry::extrema::newton_foot(p, surface, start);
+    let (u0, u1, v0, v1) = surface.bounds();
+    let on_bound = |x: f64, a: f64, b: f64, periodic: bool| !periodic && ((x - a).abs() <= 1e-12 * (b - a).abs().max(1.0) || (x - b).abs() <= 1e-12 * (b - a).abs().max(1.0));
+    let distance = foot.point.distance(p);
+    let astray = distance > best.0.sqrt() * (1.0 + 1e-9) + 1e-12 || on_bound(foot.u, u0, u1, surface.u_period().is_some()) || on_bound(foot.v, v0, v1, surface.v_period().is_some());
+    if !astray || winding_samples(surface) == 0 {
+        return foot;
+    }
+    // (Away from the nearest sample by more than a cell either way.)
+    let (_, nv) = grid_steps(surface);
+    let other = with_samples(surface, |grid| {
+        let (bi, bj) = (best.1 / (nv + 1), best.1 % (nv + 1));
+        let mut other = (f64::INFINITY, 0);
+        for (k, &(_, _, q)) in grid.iter().enumerate() {
+            let (i, j) = (k / (nv + 1), k % (nv + 1));
+            if i.abs_diff(bi) <= 1 && j.abs_diff(bj) <= 1 {
+                continue;
+            }
+            let d = (q - p).dot(q - p);
+            if d < other.0 {
+                other = (d, k);
+            }
+        }
+        (other.0 < 4.0 * best.0).then(|| (grid[other.1].0, grid[other.1].1))
+    });
+    let Some(other) = other else { return foot };
+    let second = crate::geometry::extrema::newton_foot(p, surface, other);
+    if second.point.distance(p) < distance { second } else { foot }
 }
 
 /// Where the last point's foot was found on a free-form surface: its parameters, the point
@@ -236,13 +265,57 @@ fn fingerprint(surface: &Surface) -> [u64; 9] {
 
 /// The steps of a surface's sample grid along u and v.
 fn grid_steps(surface: &Surface) -> (usize, usize) {
-    // A few samples per knot span and degree (a bilinear patch needs few).
+    // A few samples per knot span and degree (a bilinear patch needs few); more on one
+    // winding round many times ([`windings`]).
     let by = |spans: usize, degree: usize| (4 * spans * degree.max(1)).clamp(4, 32);
     match surface {
-        Surface::BSpline(b) => (by(b.u_knots().len() - 1, b.u_degree()), by(b.v_knots().len() - 1, b.v_degree())),
+        Surface::BSpline(b) => {
+            let (wu, wv) = windings(surface);
+            (by(b.u_knots().len() - 1, b.u_degree()).max(wu), by(b.v_knots().len() - 1, b.v_degree()).max(wv))
+        }
         Surface::Bezier(b) => (by(1, b.u_degree()), by(1, b.v_degree())),
         _ => (32, 32),
     }
+}
+
+/// For a B-spline surface winding round six times or more along u or v (a helical sweep, its
+/// turns close together, more than its usual samples tell apart), sixteen samples a turn that way, so that a point's nearest sample
+/// is on the turn it is on; else 0. The turning is measured along the middle iso-lines.
+/// Kept for the surface.
+fn windings(surface: &Surface) -> (usize, usize) {
+    static FOUND: std::sync::Mutex<Vec<(SampleKey, (usize, usize))>> = std::sync::Mutex::new(Vec::new());
+    let Surface::BSpline(b) = surface else { return (0, 0) };
+    let key = sample_key(surface);
+    let lock = || FOUND.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(&(_, found)) = lock().iter().find(|(k, _)| *k == key) {
+        return found;
+    }
+    let (u0, u1, v0, v1) = surface.bounds();
+    let angle = |x: Vector, y: Vector| {
+        let (lx, ly) = (x.length(), y.length());
+        if lx > 0.0 && ly > 0.0 { (x.dot(y) / (lx * ly)).clamp(-1.0, 1.0).acos() } else { 0.0 }
+    };
+    let turned = |points: Vec<Point>| points.windows(3).map(|w| angle(w[1] - w[0], w[2] - w[1])).sum::<f64>();
+    // (Over chords long enough that a fitted surface's ripples between its knots do not
+    // add up: up to some forty turns told.)
+    let (nu, nv) = (128, 128);
+    let u_turn = turned((0..=nu).map(|i| surface.point(u0 + (u1 - u0) * i as f64 / nu as f64, 0.5 * (v0 + v1))).collect());
+    let v_turn = turned((0..=nv).map(|j| surface.point(0.5 * (u0 + u1), v0 + (v1 - v0) * j as f64 / nv as f64)).collect());
+    let winding = |turn: f64| if turn >= 6.0 * std::f64::consts::TAU { ((16.0 * turn / std::f64::consts::TAU).ceil() as usize).min(1024) } else { 0 };
+    let found = (winding(u_turn), winding(v_turn));
+    let mut cache = lock();
+    if cache.len() >= 256 {
+        cache.remove(0);
+    }
+    cache.push((key, found));
+    found
+}
+
+/// The samples of a surface winding round many times ([`windings`])
+/// along its more winding direction; 0 for others.
+pub(super) fn winding_samples(surface: &Surface) -> usize {
+    let (u, v) = windings(surface);
+    u.max(v)
 }
 
 /// Runs `f` on the surface's sample grid (points `(u, v, p)`, row by row along u), cached.

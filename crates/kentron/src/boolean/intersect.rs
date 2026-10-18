@@ -26,7 +26,9 @@ fn surface_contact(curve: &Curve, first: f64, last: f64, surface: &Surface, tole
     if let Some(contact) = plane_contact(curve, first, last, surface).or_else(|| coaxial_contact(curve, first, last, surface)) {
         return contact;
     }
-    let n = if matches!(curve, Curve::Line(_)) { 32 } else { 128 };
+    // (As many as the surface's sampling has, at least: one winding round many times may be
+    // crossed as often.)
+    let n = if matches!(curve, Curve::Line(_)) { 32 } else { 128 }.max(geom::winding_samples(surface));
     let ts: Vec<f64> = (0..=n).map(|i| first + (last - first) * i as f64 / n as f64).collect();
     let g = |t: f64| geom::signed_distance(surface, curve.point(t));
     let values: Vec<f64> = ts.iter().map(|&t| g(t)).collect();

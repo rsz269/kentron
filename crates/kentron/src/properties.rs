@@ -268,14 +268,31 @@ fn integrate_face(model: &Model, face: Shape, mut sample: impl FnMut(Point, Vect
             Surface::Cylinder(_) | Surface::Cone(_) => (angular, 0.0),
             Surface::Sphere(_) | Surface::Torus(_) => (angular, angular),
             // About a piece per knot span (at most 8 across the surface), so that each
-            // Gauss rule sees a few polynomial spans, not dozens.
+            // Gauss rule sees a few polynomial spans, not dozens; more where the surface
+            // turns further (a helical sweep winding many times), each piece short in angle.
             Surface::BSpline(b) => {
-                let density = |knots: &[f64]| {
+                use crate::geometry::ParametricSurface;
+                let angle = |x: Vector, y: Vector| {
+                    let (lx, ly) = (x.length(), y.length());
+                    if lx > 0.0 && ly > 0.0 { (x.dot(y) / (lx * ly)).clamp(-1.0, 1.0).acos() } else { 0.0 }
+                };
+                // (Along the middle iso-lines, over chords long enough that a fitted surface's
+                // ripples between its knots do not add up.)
+                let (u0, u1, v0, v1) = b.bounds();
+                const CHORDS: usize = 128;
+                let turned = |at: &dyn Fn(f64) -> Point| {
+                    let points: Vec<Point> = (0..=CHORDS).map(|i| at(i as f64 / CHORDS as f64)).collect();
+                    points.windows(3).map(|w| angle(w[1] - w[0], w[2] - w[1])).sum::<f64>()
+                };
+                let u_turn = turned(&|s| b.point(u0 + (u1 - u0) * s, 0.5 * (v0 + v1)));
+                let v_turn = turned(&|s| b.point(0.5 * (u0 + u1), v0 + (v1 - v0) * s));
+                let density = |knots: &[f64], turn: f64| {
                     let spans = knots.len().saturating_sub(1);
                     let range = knots[knots.len() - 1] - knots[0];
-                    if spans > 1 && range > 0.0 { spans.min(8) as f64 / range } else { 0.0 }
+                    let pieces = (spans.min(8) as f64).max((turn / MAX_ANGLE_STEP).ceil().min(4.0 * spans as f64));
+                    if spans > 1 && range > 0.0 { pieces / range } else { 0.0 }
                 };
-                (density(b.u_knots()), density(b.v_knots()))
+                (density(b.u_knots(), u_turn), density(b.v_knots(), v_turn))
             }
             Surface::Bezier(_) => (0.0, 0.0),
             Surface::Revolution(r) => (angular, along(r.basis())),
@@ -1338,6 +1355,39 @@ mod tests {
     use crate::math::Direction;
     use crate::primitives::Cuboid;
     use std::f64::consts::TAU;
+
+    /// The area of a helicoid strip winding twenty times in 63 spans (a B-spline ruled
+    /// between two helices, as a thread's flank): its Gauss rules each spanning only a little
+    /// of a turn, as a fine sum over the surface finds.
+    #[test]
+    fn areas_of_surfaces_winding_many_times() {
+        use crate::geometry::surface::{BSplineSurface, KnotVector};
+        use crate::geometry::ParametricSurface;
+        let (turns, n) = (20.0, 64);
+        let params: Vec<f64> = (0..n).map(|i| i as f64 / (n - 1) as f64).collect();
+        let helix = |r: f64| {
+            let points: Vec<Point> = params.iter().map(|&t| Point::new(r * (TAU * turns * t).cos(), r * (TAU * turns * t).sin(), turns * t)).collect();
+            crate::geometry::fit::interpolate_with_parameters(&points, &params).unwrap()
+        };
+        let (inner, outer) = (helix(2.0), helix(3.0));
+        let poles: Vec<Vec<Point>> = inner.poles().iter().zip(outer.poles()).map(|(&a, &b)| vec![a, b]).collect();
+        let u = KnotVector::new(inner.knots().to_vec(), inner.multiplicities().to_vec(), inner.degree());
+        let v = KnotVector::new(vec![0.0, 1.0], vec![2, 2], 1);
+        let strip = BSplineSurface::new(poles, u, v);
+        let (nu, nv) = (20000, 8);
+        let fine: f64 = (0..nu)
+            .flat_map(|i| (0..nv).map(move |j| ((i as f64 + 0.5) / nu as f64, (j as f64 + 0.5) / nv as f64)))
+            .map(|(u, v)| {
+                let (_, du, dv) = strip.d1(u, v);
+                du.cross(dv).length()
+            })
+            .sum::<f64>()
+            / (nu * nv) as f64;
+        let mut model = Model::new();
+        let face = crate::make::face_on_surface(&mut model, crate::geometry::surface::Surface::BSpline(strip)).unwrap();
+        let a = area(&model, face).mass;
+        assert!((a - fine).abs() <= 1e-5 * fine, "area {a} != {fine}");
+    }
 
     #[test]
     fn oriented_boxes_fit_turned_blocks() {
