@@ -195,6 +195,21 @@ def array_of_vectors(cq):
     return cq.Face.makeFromWires(cq.Wire.makePolygon(list(points[[0, 1, 2]]) * (points.size == 3), close=True))
 
 
+def sweep_through_three_circles(cq):
+    # (Sections blended smoothly, not linearly between neighbours; the ends' caps facing out.)
+    spine = cq.Wire.assembleEdges([cq.Edge.makeLine(cq.Vector(-10, 0, 0), cq.Vector(10, 0, 0))])
+    circles = [cq.Wire.makeCircle(r, cq.Vector(x, 0, 0), cq.Vector(1, 0, 0)) for x, r in ((-10, 2), (0, 1), (10, 2))]
+    return cq.Solid.sweep_multi(circles, spine)
+
+
+def sweep_from_circle_to_square(cq):
+    # (Sections of different numbers of edges, matched as a loft matches them.)
+    spine = cq.Wire.assembleEdges([cq.Edge.makeLine(cq.Vector(-10, 0, 0), cq.Vector(10, 0, 0))])
+    circle = cq.Wire.makeCircle(1, cq.Vector(-10, 0, 0), cq.Vector(1, 0, 0))
+    square = cq.Wire.makePolygon([(10, -1, -1), (10, 1, -1), (10, 1, 1), (10, -1, 1)], close=True)
+    return cq.Solid.sweep_multi([circle, square], spine)
+
+
 CASES = [
     box, cylinder_along_y, cone, workplane_box, fused_boxes, cut_bores, intersected,
     polyline_prism_xz, polyline_prism_custom_plane, hexagon, face_with_hole, loft,
@@ -202,7 +217,7 @@ CASES = [
     chamfered_arc_plate, mirrored_outline, fillet_with_bore_edges,
     loft_turned_aside, sweep_round_hexagon, frenet_sweep_round_helix, tapered_split_square,
     rotated_then_located, spline_surface_through_a_grid, plane_of_negative_size, subclassed_wire,
-    array_of_vectors,
+    array_of_vectors, sweep_through_three_circles, sweep_from_circle_to_square,
 ]
 
 

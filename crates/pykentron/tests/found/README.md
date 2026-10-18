@@ -82,6 +82,15 @@ Fixed since the cases were found (running them again):
   (`BRepBuilderAPI_Sewing`) as cq_gears calls it: its planetary gearsets build as on
   CadQuery; single spur, helical and bored gears too.
 
+- Sweeps through several sections: blended smoothly through them (a parabola through three,
+  as OCCT's), not linearly between neighbours; sections of different numbers of edges
+  matched as a loft's; the end caps facing out (CadQuery's Ex024 but its last sweep, whose
+  sections lie off the one edge it passes as the path; ten more of OCCT's cases pass).
+- Shape constructors called on subclasses make the subclass; vectors without a length (numpy
+  keeps arrays of them as objects); planes of negative size: cqMore's dice now build (their
+  engraved text differs, a font's), and the spindle vacuum shroud (CadQuery's result of it
+  is empty).
+
 Two scripts build differently on CadQuery for reasons of its own: cqterrain's magnet
 template queues its pending wire again (`toPending()`), and CadQuery's face counts it twice
 (double the volume); cqterrain's buildings stack storeys as touching solids, which CadQuery

@@ -48,17 +48,31 @@ fn section_poles(model: &Model, section: Shape, to_reference: &Transform, n: usi
     Ok(SectionPoles::Wire(out))
 }
 
-/// The value at `g` of the law through `(g_s, value_s)` (sorted): linear between
-/// neighbours, carried on linearly past the ends.
+/// The value at `g` of the law through `(g_s, value_s)` (sorted): the polynomial through
+/// them all where there are four or fewer (linear between two, as OCCT's; a parabola through
+/// three), else through the four nearest `g`; carried on past the ends.
 fn blend(at: &[(f64, Point)], g: f64) -> Point {
     match at {
         [] => Point::ORIGIN,
         [(_, p)] => *p,
         _ => {
-            let k = at.windows(2).position(|w| g <= w[1].0).unwrap_or(at.len() - 2);
-            let ((g0, p0), (g1, p1)) = (at[k], at[k + 1]);
-            let l = if (g1 - g0).abs() > 1e-300 { (g - g0) / (g1 - g0) } else { 0.0 };
-            p0 + (p1 - p0) * l
+            // The window of (up to) four sections around `g`.
+            let n = at.len();
+            let k = at.windows(2).position(|w| g <= w[1].0).unwrap_or(n - 2);
+            let lo = if n <= 4 { 0 } else { k.saturating_sub(1).min(n - 4) };
+            let window = &at[lo..(lo + 4).min(n)];
+            // Lagrange's form (Neville's would do as well for so few).
+            let mut out = crate::math::Vector::new(0.0, 0.0, 0.0);
+            for (j, &(gj, pj)) in window.iter().enumerate() {
+                let mut w = 1.0;
+                for (m, &(gm, _)) in window.iter().enumerate() {
+                    if m != j && (gj - gm).abs() > 1e-300 {
+                        w *= (g - gm) / (gj - gm);
+                    }
+                }
+                out = out + (pj - Point::ORIGIN) * w;
+            }
+            Point::ORIGIN + out
         }
     }
 }
@@ -81,6 +95,15 @@ pub(super) fn pipe_shell(model: &mut Model, sections: &[(Shape, PipeOptions)], p
         placed.push((k as f64 + s, section, at_anchor[0].transforms[0]));
     }
     placed.sort_by(|a, b| a.0.total_cmp(&b.0));
+    // (Wires of different numbers of edges: split to match, as a loft through them.)
+    let counts: Vec<usize> = placed.iter().filter(|(_, s, _)| s.kind() == NodeKind::Wire).map(|(_, s, _)| model.explore(*s, NodeKind::Edge).count()).collect();
+    if counts.iter().any(|&c| c != counts[0]) {
+        let shapes: Vec<Shape> = placed.iter().map(|(_, s, _)| *s).collect();
+        let matched = crate::loft::compatible_sections(model, &shapes, crate::loft::Matching::ByRays)?;
+        for (p, m) in placed.iter_mut().zip(matched) {
+            p.1 = m;
+        }
+    }
     // The sections' edges fitted alike (enough points for the closest fit).
     let mut n = 32;
     let poles = loop {
@@ -190,6 +213,11 @@ pub(super) fn pipe_shell(model: &mut Model, sections: &[(Shape, PipeOptions)], p
         }
         let wire = crate::make::wire(builder.model, &edges)?;
         let cap = crate::make::planar_face(builder.model, wire)?;
+        // (Using the section's edges the other way from the sides: those run along the
+        // first section's edges and against the last's.)
+        let first = edges[0].node;
+        let along = builder.model.explore(cap, NodeKind::Edge).find(|e| e.node == first).is_some_and(|e| e.orientation == Orientation::Forward);
+        let cap = if along == (j == 0) { cap.reversed() } else { cap };
         builder.model.add(shell, cap)?;
     }
     let volume = properties::closed_shell_volume(builder.model, shell);

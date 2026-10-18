@@ -316,10 +316,6 @@ tests/bugs/modalg_1/bug1477_8
 tests/bugs/modalg_1/bug15968_1
 tests/bugs/modalg_1/bug15968_2
 tests/bugs/modalg_2/bug20465
-tests/bugs/modalg_2/bug2083_1
-tests/bugs/modalg_2/bug2083_2
-tests/bugs/modalg_2/bug2083_3
-tests/bugs/modalg_2/bug2083_4
 tests/bugs/modalg_2/bug221
 tests/bugs/modalg_2/bug22695
 tests/bugs/modalg_2/bug22770_1
@@ -1380,12 +1376,6 @@ tests/sewing/tol_100/Y7
 tests/thrusection/not_solids/W7
 tests/thrusection/specific/H5
 tests/thrusection/specific/I1
-tests/thrusection/specific/I6
-tests/thrusection/specific/J2
-tests/thrusection/specific/J7
-tests/thrusection/specific/K3
-tests/thrusection/specific/K8
-tests/thrusection/specific/L4
 tests/thrusection/specific/M6
 tests/thrusection/specific/M7
 tests/thrusection/specific/M8

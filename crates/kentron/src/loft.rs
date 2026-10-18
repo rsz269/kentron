@@ -96,6 +96,34 @@ pub(crate) fn loft_breaking(model: &mut Model, sections: &[Shape], options: &Lof
     loft_traced(model, sections, options, breaks).map(|l| l.shape)
 }
 
+/// `sections` (wires, or vertices first and last) made to match as a loft matches them:
+/// wires of as many edges, split where `matching` says, turned and started alike. Vertex
+/// sections as they are.
+pub(crate) fn compatible_sections(model: &mut Model, sections: &[Shape], matching: Matching) -> Result<Vec<Shape>> {
+    let mut marks = Marks::default();
+    let mut parsed = sections.iter().map(|&s| Section::read(model, s, &mut marks)).collect::<Result<Vec<_>>>()?;
+    let closed = parsed.iter().find_map(|s| if let Section::Wire(w) = s { Some(w.closed) } else { None }).unwrap_or(false);
+    if parsed.iter().any(|s| matches!(s, Section::Wire(w) if w.closed != closed)) {
+        return Err(Error::InvalidInput("sections must be all closed or all open".into()));
+    }
+    make_compatible(&mut parsed, closed, false, matching, &mut marks);
+    let mut out = Vec::with_capacity(sections.len());
+    for (section, &original) in parsed.iter().zip(sections) {
+        match section {
+            Section::Point(..) => out.push(original),
+            Section::Wire(w) => {
+                let mut edges = Vec::with_capacity(w.pieces.len());
+                for piece in &w.pieces {
+                    let (curve, first, last) = piece.forward();
+                    edges.push(crate::make::edge_from_curve_range(model, curve, first, last)?);
+                }
+                out.push(crate::make::wire_within(model, &edges, 1e3 * crate::tolerance::LINEAR)?);
+            }
+        }
+    }
+    Ok(out)
+}
+
 fn loft_traced(model: &mut Model, sections: &[Shape], options: &LoftOptions, breaks: &[usize]) -> Result<Loft> {
     if sections.len() < 2 {
         return Err(Error::InvalidInput("a loft needs two sections or more".into()));

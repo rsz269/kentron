@@ -96,7 +96,6 @@ tests.test_cadquery.TestCadQuery::testNoClean
 tests.test_cadquery.TestCadQuery::testNullShape
 tests.test_cadquery.TestCadQuery::testOffset2D
 tests.test_cadquery.TestCadQuery::testParametricSurface
-tests.test_cadquery.TestCadQuery::testSketch
 tests.test_cadquery.TestCadQuery::testSplineApprox
 tests.test_cadquery.TestCadQuery::testSweep
 tests.test_cadquery.TestCadQuery::testToOCC
@@ -150,7 +149,6 @@ tests.test_free_functions::test_project
 tests.test_free_functions::test_revolve
 tests.test_free_functions::test_sewing
 tests.test_free_functions::test_solid
-tests.test_free_functions::test_sweep
 tests.test_free_functions::test_sweep_aux
 tests.test_free_functions::test_utils
 tests.test_importers.TestImporters::testBIN
