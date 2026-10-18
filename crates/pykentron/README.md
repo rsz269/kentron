@@ -45,8 +45,10 @@ Code written against OCP, as libraries like cq_warehouse are, finds some of OCCT
   the plate of least bending energy, as `Face.makeNSidedSurface` and `interpPlate` make),
   `BRepOffset_MakeOffset` (thickening a face into a solid), `BRepIntCurveSurface_Inter` with
   `gce_MakeLin` (where a line crosses a shape's faces), `ShapeAnalysis_FreeBounds`'
-  `ConnectEdgesToWires_s` with `TopTools_HSequenceOfShape`, and `StdFail_NotDone` (as
-  `ValueError`, what kentron's failures raise);
+  `ConnectEdgesToWires_s` with `TopTools_HSequenceOfShape`, `GeomAPI_IntSS` (on the faces
+  `BRepAdaptor_Surface` stands for), `BRepBuilderAPI_MakeEdge` and `MakeWire`, `TopoDS`'
+  casts, `ShapeFix_Face` (keeping the face), and `StdFail_NotDone` (as `ValueError`, what
+  kentron's failures raise);
 - `occ_impl.shapes`' `downcast`, `fix` and `shapetype`.
 
 Other names, of pykentron or OCP, import but raise `NotImplementedError` when used.

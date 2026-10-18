@@ -19,6 +19,15 @@ class TopTools_HSequenceOfShape(list):
     def Value(self, index: int):
         return self[index - 1]
 
+    def First(self):
+        return self[0]
+
+    def Last(self):
+        return self[-1]
+
+    def Extent(self) -> int:
+        return len(self)
+
 
 TopTools_ListOfShape = TopTools_HSequenceOfShape
 

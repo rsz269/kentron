@@ -126,6 +126,13 @@ Fixed since the cases were found (running them again):
   case projects text from a point in the text's own plane (every projected outline folded
   onto one circle): it stops there.
 
+- Spline surfaces fitted to grids with few points one way (no more than a span of the
+  greatest degree has poles): through them exactly that way, as OCCT's, so that gear teeth's
+  faces fitted to grids sharing a row meet along it; a shape split by something not cutting
+  it is itself, not a compound (as OCCT's); OCP's surface intersections (`GeomAPI_IntSS`, of
+  faces), edges and wires made from them: cq_gears' worm gear and gear rack build as on
+  CadQuery.
+
 Three scripts build differently on CadQuery for reasons of its own: cqterrain's magnet
 template queues its pending wire again (`toPending()`), and CadQuery's face counts it twice
 (double the volume); cqterrain's buildings stack storeys as touching solids, which CadQuery
@@ -137,5 +144,5 @@ With these, five more of OCCT's cases pass (four booleans and a Tcl bug script).
 Still open among them: the thread solids' unions with their core (nearly coincident
 surfaces, 0.001 apart) and two meshing helical gears' union (teeth touching), cq_warehouse's bolts (their threads' unions too, by the look of
 them), the contrib remote enclosure (a countersink through a wall thinner than it is deep:
-the cut loses the countersink's cone), and the rest of `cases.tsv`. 40 of the 85 now build
+the cut loses the countersink's cone), and the rest of `cases.tsv`. 42 of the 85 now build
 as on CadQuery.

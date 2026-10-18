@@ -254,8 +254,9 @@ class Shape:
 
     def split(self, *splitters: "Shape") -> "Shape":
         """This shape cut into pieces by `splitters` (BRepAlgoAPI_Splitter): a compound of
-        them."""
-        return Compound.makeCompound(_split_pieces(self, splitters))
+        them; the piece itself where it is not cut (as OCCT gives it)."""
+        pieces = _split_pieces(self, splitters)
+        return pieces[0] if len(pieces) == 1 else Compound.makeCompound(pieces)
 
     def __add__(self, other):
         from .occ_impl.shapes import fuse

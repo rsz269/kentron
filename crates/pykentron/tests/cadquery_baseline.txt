@@ -82,7 +82,6 @@ tests.test_assembly::test_vtkjs_export
 tests.test_cad_objects.TestCadObjects::testEdgeWrapperCenter
 tests.test_cad_objects.TestCadObjects::testEdgeWrapperEllipseCenter
 tests.test_cad_objects.TestCadObjects::testPlaneMethods
-tests.test_cad_objects.TestCadObjects::testVertices
 tests.test_cadquery.TestCadQuery::test2Dchamfer
 tests.test_cadquery.TestCadQuery::testClean
 tests.test_cadquery.TestCadQuery::testCompSolid

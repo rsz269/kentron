@@ -785,7 +785,11 @@ pub fn approximate_surface(points: &[Vec<crate::math::Point>], options: Approxim
     };
     let us = average(nu, nv, &|i, j| points[i][j])?;
     let vs = average(nv, nu, &|j, i| points[i][j])?;
-    let degree = |n: usize| 3usize.clamp(options.min_degree.max(1), options.max_degree.max(1)).min(n - 1);
+    // (A way with no more points than a span of the greatest degree has poles: that one
+    // span through all of them, exactly: as OCCT's, so that faces fitted to grids sharing a
+    // row of points share the curve through it.)
+    let whole = |n: usize| n <= options.max_degree.max(1) + 1;
+    let degree = |n: usize| if whole(n) { n - 1 } else { 3usize.clamp(options.min_degree.max(1), options.max_degree.max(1)).min(n - 1) };
     let (p, q) = (degree(nu), degree(nv));
     // The poles of every column fitted along u with `mu` poles, then every row of those along
     // v with `mv`: the surface, or `None` where a fit fails.
@@ -986,6 +990,23 @@ mod tests {
         }
         let length = crate::geometry::measure::length(&crate::geometry::curve::Curve::BSpline(curve));
         assert!((length - 94.332624).abs() < 1e-5, "{length}");
+    }
+
+    /// A grid of five points one way: the surface passes through every point exactly (one
+    /// span of degree four that way), as OCCT's does, so that faces fitted to grids sharing
+    /// a row of points meet along it (gear teeth's faces, sewn).
+    #[test]
+    fn short_ways_of_grids_are_interpolated() {
+        let at = |u: f64, v: f64| Point::new(u, 0.5 * (0.6 * v).sin() + 0.3 * u, v + 0.2 * (u * 1.3).cos());
+        let grid: Vec<Vec<Point>> = (0..12).map(|i| (0..5).map(|j| at(-4.0 + 4.0 * i as f64 / 11.0, j as f64)).collect()).collect();
+        let options = ApproximationOptions { min_degree: 3, max_degree: 8, tolerance: 1e-2, ..Default::default() };
+        let surface = Surface::BSpline(approximate_surface(&grid, options).unwrap());
+        for row in [&grid[0], &grid[11]] {
+            for p in row {
+                let (_, _, d) = crate::geometry::extrema::nearest_on_surface(*p, &surface, None);
+                assert!(d < 1e-9, "{d} from {p:?}");
+            }
+        }
     }
 
     #[test]

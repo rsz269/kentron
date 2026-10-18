@@ -103,6 +103,62 @@ class BRepBuilderAPI_MakeFace:
     Shape = Face
 
 
+class BRepBuilderAPI_MakeEdge:
+    """An edge: here, from an edge already made (what pykentron's curves of intersections
+    are, `GeomAPI_IntSS.Line`), or between two points."""
+
+    def __init__(self, *args):
+        from pykentron import _kentron
+
+        if len(args) == 1 and hasattr(args[0], "ShapeType"):
+            self._edge = args[0]
+        elif len(args) == 2 and all(hasattr(a, "X") for a in args):
+            self._edge = _kentron.make_line(*[(a.X(), a.Y(), a.Z()) for a in args])
+        else:
+            raise NotImplementedError("OCP.BRepBuilderAPI.BRepBuilderAPI_MakeEdge from curves is not provided by pykentron")
+
+    def IsDone(self) -> bool:
+        return True
+
+    def Edge(self):
+        return self._edge
+
+    Shape = Edge
+
+
+class BRepBuilderAPI_MakeWire:
+    """A wire of edges added end to end (not done where they do not join)."""
+
+    def __init__(self, *edges):
+        self._edges = []
+        for e in edges:
+            self.Add(e)
+
+    def Add(self, shapes) -> None:
+        from pykentron.shapes import Shape
+
+        if hasattr(shapes, "ShapeType"):
+            shapes = [shapes]
+        for s in shapes:
+            self._edges.extend(e.wrapped for e in Shape.cast(s).Edges())
+
+    def _wire(self):
+        from pykentron import _kentron
+
+        try:
+            return _kentron.make_wire(self._edges)
+        except ValueError:
+            return None
+
+    def IsDone(self) -> bool:
+        return bool(self._edges) and self._wire() is not None
+
+    def Wire(self):
+        return self._wire()
+
+    Shape = Wire
+
+
 from ._placeholder import fallback as _fallback  # noqa: E402
 
 __getattr__ = _fallback("BRepBuilderAPI")
