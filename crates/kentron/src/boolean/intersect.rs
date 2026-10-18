@@ -46,8 +46,24 @@ fn surface_contact(curve: &Curve, first: f64, last: f64, surface: &Surface, tole
         if values[i].abs() <= TOL {
             roots.push(ts[i]);
         }
-        if i < n && values[i] * values[i + 1] < 0.0 && values[i].abs() > TOL && values[i + 1].abs() > TOL {
-            let (mut lo, mut hi, mut glo) = (ts[i], ts[i + 1], values[i]);
+        // (Where a sample is itself a root, the interval beside it may hold another: the
+        // sign just inside from it tells, as a line through a cylinder whose one crossing
+        // falls on a sample.)
+        let bracket = if i == n {
+            None
+        } else if values[i].abs() > TOL && values[i + 1].abs() > TOL {
+            (values[i] * values[i + 1] < 0.0).then_some((ts[i], ts[i + 1], values[i]))
+        } else if (values[i].abs() > TOL) != (values[i + 1].abs() > TOL) {
+            let nudge = 1e-3 * (ts[i + 1] - ts[i]);
+            let (outer, root) = if values[i].abs() > TOL { (i, i + 1) } else { (i + 1, i) };
+            let inside = ts[root] + if root > outer { -nudge } else { nudge };
+            let g_inside = g(inside);
+            (g_inside.abs() > TOL && g_inside * values[outer] < 0.0).then(|| if outer < root { (ts[outer], inside, values[outer]) } else { (inside, ts[outer], g_inside) })
+        } else {
+            None
+        };
+        if let Some((lo, hi, glo)) = bracket {
+            let (mut lo, mut hi, mut glo) = (lo, hi, glo);
             for _ in 0..100 {
                 let mid = 0.5 * (lo + hi);
                 if mid == lo || mid == hi {

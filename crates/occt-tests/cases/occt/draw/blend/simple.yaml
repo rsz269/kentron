@@ -388,7 +388,6 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/simple/C8
-expect: not_done
 build:
   - s: {cone: {r1: 50, r2: 0, height: 120, angle: 90}}
   - s: {rotate: {shape: s, axis: {origin: [0, 0, 0], direction: [0, 0, 1]}, angle: 90}}

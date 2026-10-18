@@ -332,6 +332,27 @@ pub(super) fn split_face(arcs: &[ArcOnFace], pieces: &[Piece], face_polylines: &
         let end = node(p.end, *a.uv.last().expect("polyline"), &mut nodes);
         ends.push((start, end));
     }
+    // (The same vertex at two nodes, each ending one arc: the arcs' ends a little apart in
+    // (u, v), as edges meeting within their tolerances may be: one node.)
+    let mut degree = vec![0usize; nodes.len()];
+    for &(s, e) in &ends {
+        degree[s] += 1;
+        degree[e] += 1;
+    }
+    let near = 1e-3 * uv_scale.max(1.0);
+    let mut merged: Vec<usize> = (0..nodes.len()).collect();
+    for i in 0..nodes.len() {
+        let partners: Vec<usize> = (0..nodes.len()).filter(|&j| j != i && degree[i] == 1 && degree[j] == 1 && nodes[j].0 == nodes[i].0).collect();
+        if let [j] = partners[..] {
+            let (p, q) = (nodes[i].1, nodes[j].1);
+            if j > i && ((p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2)).sqrt() <= near {
+                merged[j] = i;
+            }
+        }
+    }
+    for e in &mut ends {
+        *e = (merged[e.0], merged[e.1]);
+    }
     // The same result edge between the same nodes twice (a piece of each operand) is one arc.
     let mut alive: Vec<bool> = vec![true; arcs.len()];
     let mut seen: HashSet<(usize, usize, usize)> = HashSet::default();

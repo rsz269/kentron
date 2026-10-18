@@ -957,16 +957,23 @@ fn tangent_chains(model: &Model, shape: Shape, edges: &[(Shape, f64)]) -> Vec<(S
             }) else {
                 continue;
             };
-            // Between the same faces, or one of them and one tangent there to the other (a
-            // rounded outline's line and arc): the fillet carries on smoothly.
+            // Between the same faces, or faces tangent there to the other edge's (a rounded
+            // outline's line and arc; a box's edge and the mitre where two fillets of its
+            // sides meet): the fillet carries on smoothly.
             let point = model.point(Shape::from(crate::topology::VertexId::try_from(at).expect("a vertex")));
-            let carries_on = their_faces.iter().any(|f| my_faces.contains(f))
-                && their_faces.iter().filter(|f| !my_faces.contains(f)).all(|f| {
-                    my_faces.iter().filter(|g| !their_faces.contains(g)).any(|g| match (normal_at(model, shape, *f, point), normal_at(model, shape, *g, point)) {
-                        (Some(a), Some(b)) => a.dot(b).abs() >= 1.0 - tolerance::ANGULAR.sqrt(),
-                        _ => false,
-                    })
-                });
+            let tangent_to = |f: NodeId, g: NodeId| match (normal_at(model, shape, f, point), normal_at(model, shape, g, point)) {
+                (Some(a), Some(b)) => a.dot(b).abs() >= 1.0 - tolerance::ANGULAR.sqrt(),
+                _ => false,
+            };
+            let (new, old): (Vec<NodeId>, Vec<NodeId>) = (
+                their_faces.iter().copied().filter(|f| !my_faces.contains(f)).collect(),
+                my_faces.iter().copied().filter(|g| !their_faces.contains(g)).collect(),
+            );
+            let carries_on = match (their_faces.len() - new.len(), &new[..], &old[..]) {
+                (1.., _, _) => new.iter().all(|&f| old.iter().any(|&g| tangent_to(f, g))),
+                (0, &[f1, f2], &[g1, g2]) => (tangent_to(f1, g1) && tangent_to(f2, g2)) || (tangent_to(f1, g2) && tangent_to(f2, g1)),
+                _ => false,
+            };
             if carries_on {
                 out.push((other, radius));
             }
@@ -2059,6 +2066,32 @@ mod tests {
             assert_eq!(model.unique_subshapes(result, NodeKind::Face).len(), 15);
             let volume = properties::volume(&model, result).mass;
             assert!((volume - expected).abs() < 1e-3, "{volume} not {expected}");
+        }
+    }
+
+    /// A 10 x 10 x 10 box with two of its top edges rounded (R 3): the mitre where those
+    /// fillets meet goes on smoothly from the box's edge between the two sides, and the
+    /// faces are tangent where it reaches the top. Rounding it rounds that edge too, the
+    /// fillet narrowing to nothing at the top (OCCT gives these values; with R 2 the balls'
+    /// centres lie beyond the mitre's centre of curvature near the box's edge).
+    #[test]
+    fn rounding_a_mitre_narrows_to_nothing_where_its_faces_turn_tangent() {
+        for (radius, expected, within) in [(0.5, 963.4820, 1e-4), (1.0, 962.0407, 1e-4), (2.0, 956.1815, 1e-3)] {
+            let mut model = Model::new();
+            let block = Cuboid::new(10.0, 10.0, 10.0).build(&mut model).unwrap();
+            let top: Vec<Shape> = model.unique_subshapes(block, NodeKind::Edge).into_iter().filter(|&e| {
+                let (a, b) = model.edge_vertices(e);
+                let (p, q) = (model.point(a), model.point(b));
+                p.z == 10.0 && q.z == 10.0 && ((p.x == 10.0 && q.x == 10.0) || (p.y == 10.0 && q.y == 10.0))
+            }).collect();
+            let block = fillet(&mut model, block, &top, 3.0).unwrap();
+            let mitre: Vec<Shape> = model.unique_subshapes(block, NodeKind::Edge).into_iter().filter(|&e| matches!(model.edge_curve(e), Some((Curve::Ellipse(_), ..)))).collect();
+            assert_eq!(mitre.len(), 1);
+            let rounded = fillet(&mut model, block, &mitre, radius).unwrap();
+            assert!(validity::check(&model, rounded).is_valid());
+            assert_eq!(model.unique_subshapes(rounded, NodeKind::Face).len(), 10);
+            let volume = properties::volume(&model, rounded).mass;
+            assert!((volume - expected).abs() < within * expected, "R {radius}: {volume} not {expected}");
         }
     }
 

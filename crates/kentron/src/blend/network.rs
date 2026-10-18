@@ -48,6 +48,9 @@ enum End {
     /// At the corner patch `corner`: stopping on each side at the point the two fillets
     /// on that face share (by face: the point's index in the corner).
     Corner { corner: usize, at: [usize; 2], v: [f64; 2] },
+    /// Narrowed to nothing at its edge's vertex, where the faces are tangent: both contacts
+    /// end there (at `v`), the fillet's face closing on a degenerate edge.
+    Point { vertex: VertexId, v: [f64; 2] },
 }
 
 /// Three fillets meeting at a vertex: the points where they stop on each face (with the
@@ -66,9 +69,12 @@ struct Mitre {
     points: Vec<Point>,
     curve: BSplineCurve,
     cut: Option<MitreCut>,
-    /// The edge between the far faces: its vertex at the corner, and the parameter of the
-    /// last point (none where the fillets share both faces, joined across a section).
-    edge: Option<(EdgeId, VertexId, f64)>,
+    /// The edges the mitre shortens: each with its vertex at the corner, the parameter of
+    /// the mitre's point it now ends at, and that point's index. The edge between the far
+    /// faces, to the last point; none where the fillets share both faces, joined across a
+    /// section; where their faces are tangent pairwise instead, the edges between each pair
+    /// to the points at their sides.
+    edges: Vec<(EdgeId, VertexId, f64, usize)>,
     deviation: f64,
 }
 
@@ -125,6 +131,11 @@ fn blend_network_past(model: &mut Model, shape: Shape, edges: &[(Shape, Profile)
         match meeting[..] {
             [(i, k)] => {
                 let s = &stripes[i];
+                if s.rolling.vanishing[k] {
+                    let t = if k == 0 { s.rolling.t0 } else { s.rolling.t1 };
+                    ends[i][k] = Some(End::Point { vertex, v: [t, t] });
+                    continue;
+                }
                 if let Some(end) = free_end(model, shape, s, k)? {
                     ends[i][k] = Some(end);
                     continue;
@@ -389,7 +400,8 @@ fn mitre(model: &Model, shape: Shape, vertex: VertexId, stripes: &[Stripe], a: (
         l_pieces.push((1, Orientation::Forward, on));
     }
     let pl = stop(cl, vl1, last.1, mitre_points.len() - 1, l_pieces);
-    let m = Mitre { points: mitre_points, curve, cut, edge: Some((third, vertex, on_edge.parameter)), deviation };
+    let last = mitre_points.len() - 1;
+    let m = Mitre { points: mitre_points, curve, cut, edges: vec![(third, vertex, on_edge.parameter, last)], deviation };
     Ok(if s_is_a { (m, ps, pl) } else { (m, pl, ps) })
 }
 
@@ -417,11 +429,29 @@ fn joint(model: &Model, shape: Shape, vertex: VertexId, stripes: &[Stripe], a: (
         }
         let common = (0..2).flat_map(|i| (0..2).map(move |j| (i, j))).filter(|&(i, j)| sa.rolling.sides[i].face.node == sb.rolling.sides[j].face.node).collect::<Vec<_>>();
         let at_end = |s: &Stripe, k: usize| if k == 0 { s.rolling.t0 } else { s.rolling.t1 };
-        // (Both faces in common: one edge going on between the same faces, the fillets
-        // joined across their sections at the vertex.)
+        // (Both faces in common, or each tangent there to one of the other's: one edge going
+        // on between the same faces, or faces going on smoothly, as a box's edge into the
+        // mitre where fillets of its two sides meet; the fillets joined across their
+        // sections at the vertex.)
         let (va1, vb1) = (at_end(sa, a.1), at_end(sb, b.1));
-        if common.len() == 2 {
-            let jb = common.iter().find(|&&(i, _)| i == 0).expect("side 0 in common").1;
+        let tangent_sides = || {
+            let p = model.point(Shape::from(vertex));
+            let normal = |s: &Stripe, i: usize| s.rolling.sides[i].distance(p).ok().map(|d| d.2);
+            let tangent = |i: usize, j: usize| matches!((normal(sa, i), normal(sb, j)), (Some(x), Some(y)) if x.dot(y) >= 1.0 - crate::tolerance::ANGULAR.sqrt());
+            if tangent(0, 0) && tangent(1, 1) {
+                Some(0)
+            } else if tangent(0, 1) && tangent(1, 0) {
+                Some(1)
+            } else {
+                None
+            }
+        };
+        let paired = match common.len() {
+            2 => Some(common.iter().find(|&&(i, _)| i == 0).expect("side 0 in common").1),
+            0 => tangent_sides(),
+            _ => None,
+        };
+        if let Some(jb) = paired {
             let ends: Vec<Point> = (0..2).map(|i| {
                 let (pa, pb) = (sa.rolling.contacts[i].point(va1), sb.rolling.contacts[if i == 0 { jb } else { 1 - jb }].point(vb1));
                 pa + (pb - pa) * 0.5
@@ -453,7 +483,27 @@ fn joint(model: &Model, shape: Shape, vertex: VertexId, stripes: &[Stripe], a: (
                 }
                 PendingMitre { v: [v_at, v_at], at, pieces }
             };
-            let m = Mitre { points: ends, curve, cut: None, edge: None, deviation };
+            // (Faces tangent pairwise: the edge between each pair, through the vertex, ends
+            // where the fillets' contacts meet it.)
+            let mut edges = Vec::new();
+            if common.is_empty() {
+                let v_node: crate::topology::NodeId = vertex.into();
+                for (i, end) in ends.iter().enumerate() {
+                    let (fa, fb) = (sa.rolling.sides[i].face, sb.rolling.sides[if i == 0 { jb } else { 1 - jb }].face);
+                    let at = |face: Shape| -> Vec<EdgeId> {
+                        model.explore(face, NodeKind::Edge).filter(|&e| { let (p, q) = model.edge_vertices(e); p.node == v_node || q.node == v_node }).filter_map(|e| EdgeId::try_from(e.node).ok()).collect()
+                    };
+                    let between: Vec<EdgeId> = at(fa).into_iter().filter(|e| at(fb).contains(e)).collect();
+                    let [edge] = between[..] else {
+                        return Err(Error::InvalidInput("two fillets joining at a vertex whose tangent faces do not meet along an edge there".into()));
+                    };
+                    let (curve, first, last) = model.edge_curve(Shape::from(edge)).ok_or_else(|| Error::InvalidInput("a degenerate edge at a joint".into()))?;
+                    let on = crate::geometry::extrema::nearest_on_curve(*end, &curve, first, last);
+                    deviation = deviation.max(on.distance);
+                    edges.push((edge, vertex, on.parameter, i));
+                }
+            }
+            let m = Mitre { points: ends, curve, cut: None, edges, deviation };
             return Ok((m, stop(0, va1, on_a), stop(jb, vb1, on_b)));
         }
         let [(ia, ib)] = common[..] else {
@@ -510,6 +560,16 @@ fn joint(model: &Model, shape: Shape, vertex: VertexId, stripes: &[Stripe], a: (
             return Err(Error::InvalidInput("two fillets joining at a vertex whose far contacts miss the edge between their far faces".into()));
         }
         let on_edge = crate::geometry::extrema::nearest_on_curve(q, &curve3, first3, last3);
+        // (Where the far faces are tangent along their edge (a side going on into a rounded
+        // corner), fillets' balls (not chamfers') where their far contacts cross it are one, touching
+        // the common face and that point: the fillets meet across its section, each running
+        // on to it.)
+        let balls = !(sa.rolling.sections.iter().any(|x| x.straight) || sb.rolling.sections.iter().any(|x| x.straight));
+        let smooth = balls && matches!(
+            (sa.rolling.sides[1 - ia].distance(q).map(|d| d.2), sb.rolling.sides[1 - ib].distance(q).map(|d| d.2)),
+            (Ok(x), Ok(y)) if x.dot(y) >= 1.0 - crate::tolerance::ANGULAR.sqrt()
+        );
+        let (va1, vb1) = if smooth { (wa, wb) } else { (va1, vb1) };
         // The common face's point: both contacts at the vertex.
         let p1 = {
             let (pa, pb) = (sa.rolling.contacts[ia].point(va1), sb.rolling.contacts[ib].point(vb1));
@@ -550,7 +610,7 @@ fn joint(model: &Model, shape: Shape, vertex: VertexId, stripes: &[Stripe], a: (
         };
         let pa = stop(ia, va1, wa, on_a_fillet);
         let pb = stop(ib, vb1, wb, on_b_fillet);
-        let m = Mitre { points: vec![p1, q], curve, cut: None, edge: Some((third, vertex, on_edge.parameter)), deviation };
+        let m = Mitre { points: vec![p1, q], curve, cut: None, edges: vec![(third, vertex, on_edge.parameter, 1)], deviation };
         Ok((m, pa, pb))
     })())
 }
@@ -742,7 +802,7 @@ fn build(model: &mut Model, shape: Shape, stripes: &[Stripe], ends: &[[End; 2]],
     let mut size: f64 = 1.0;
     let v_of = |end: &End| match end {
         End::Face(cut) => cut.v,
-        End::Free { v, .. } | End::Mitre { v, .. } | End::Corner { v, .. } => *v,
+        End::Free { v, .. } | End::Mitre { v, .. } | End::Corner { v, .. } | End::Point { v, .. } => *v,
     };
     for (s, ends) in stripes.iter().zip(ends) {
         let (from, to) = (v_of(&ends[0]), v_of(&ends[1]));
@@ -837,6 +897,10 @@ fn build(model: &mut Model, shape: Shape, stripes: &[Stripe], ends: &[[End; 2]],
                     let (curve, on_fillet) = stop_curve(s, v[0], v[1])?;
                     Stop { v: *v, vertices: [corner_vertices[*corner][at[0]], corner_vertices[*corner][at[1]]], curve, on_fillet: Curve2::BSpline(on_fillet), mitre: None }
                 }
+                End::Point { vertex, v } => {
+                    let (curve, on_fillet) = stop_curve(s, v[0], v[1])?;
+                    Stop { v: *v, vertices: [*vertex, *vertex], curve, on_fillet: Curve2::BSpline(on_fillet), mitre: None }
+                }
             });
         }
         let [a, b]: [Stop; 2] = pair.try_into().map_err(|_| Error::Failed("a fillet's ends".into()))?;
@@ -848,8 +912,11 @@ fn build(model: &mut Model, shape: Shape, stripes: &[Stripe], ends: &[[End; 2]],
                 continue;
             }
             let e = model.add_edge(stop.vertices[0], stop.vertices[1], tolerance)?;
-            model.set_edge_curve(e.into(), Curve::BSpline(stop.curve.clone()), tolerance)?;
-            model.set_edge_range(e.into(), 0.0, 1.0)?;
+            // (Where the fillet narrows to nothing: degenerate, without a curve.)
+            if !matches!(ends[i][k], End::Point { .. }) {
+                model.set_edge_curve(e.into(), Curve::BSpline(stop.curve.clone()), tolerance)?;
+                model.set_edge_range(e.into(), 0.0, 1.0)?;
+            }
             edges[k] = e;
             if let End::Face(cut) = &ends[i][k] {
                 let pcurve = match project::analytic_pcurve(&Curve::BSpline(cut.curve.clone()), &cut.face.surface) {
@@ -863,8 +930,9 @@ fn build(model: &mut Model, shape: Shape, stripes: &[Stripe], ends: &[[End; 2]],
         stops.push([a, b]);
     }
     for (m, vs) in mitres.iter().zip(&mitre_vertices) {
-        let Some(edge) = m.edge else { continue };
-        trims.push((edge.0, edge.1, *vs.last().expect("mitre points"), edge.2));
+        for &(edge, vertex, t, k) in &m.edges {
+            trims.push((edge, vertex, vs[k], t));
+        }
     }
     // The contact curves as edges, between the fillets' stops.
     let mut contact_edges: Vec<[EdgeId; 2]> = Vec::with_capacity(stripes.len());

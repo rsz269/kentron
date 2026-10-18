@@ -42,7 +42,6 @@ tests/blend/encoderegularity/A4
 tests/blend/encoderegularity/A5
 tests/blend/encoderegularity/A6
 tests/blend/encoderegularity/A7
-tests/blend/simple/C8
 tests/blend/simple/D1
 tests/blend/simple/D9
 tests/blend/simple/Q3
@@ -76,7 +75,6 @@ tests/blend/tolblend_simple/A9
 tests/blend/tolblend_simple/B2
 tests/blend/tolblend_simple/B5
 tests/blend/tolblend_simple/B6
-tests/blend/tolblend_simple/C1
 tests/blend/tolblend_simple/C3
 tests/blend/tolblend_simple/C5
 tests/blend/tolblend_simple/D2
@@ -725,7 +723,6 @@ tests/bugs/modalg_7/bug30092
 tests/bugs/modalg_7/bug30150
 tests/bugs/modalg_7/bug30154_1
 tests/bugs/modalg_7/bug30154_2
-tests/bugs/modalg_7/bug30202_1
 tests/bugs/modalg_7/bug30204_1
 tests/bugs/modalg_7/bug30206
 tests/bugs/modalg_7/bug30269
@@ -933,14 +930,12 @@ tests/bugs/moddata_3/bug33304
 tests/bugs/moddata_3/bug33318
 tests/bugs/moddata_3/bug5145
 tests/chamfer/dist_angle/A2
-tests/chamfer/dist_angle/A7
 tests/chamfer/dist_angle/E9
 tests/chamfer/dist_angle/F1
 tests/chamfer/dist_angle_sequence/B3
 tests/chamfer/dist_angle_sequence/B4
 tests/chamfer/dist_angle_sequence/C1
 tests/chamfer/dist_dist/A2
-tests/chamfer/dist_dist/A7
 tests/chamfer/dist_dist/C1
 tests/chamfer/dist_dist/E9
 tests/chamfer/dist_dist_complex/B8
@@ -948,7 +943,6 @@ tests/chamfer/dist_dist_complex/C3
 tests/chamfer/dist_dist_sequence/C1
 tests/chamfer/dist_dist_sequence/C3
 tests/chamfer/equal_dist/A2
-tests/chamfer/equal_dist/A7
 tests/chamfer/equal_dist/E9
 tests/chamfer/equal_dist_complex/A5
 tests/chamfer/equal_dist_complex/B4

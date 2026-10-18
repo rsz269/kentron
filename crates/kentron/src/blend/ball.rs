@@ -229,6 +229,16 @@ fn rolling_on(model: &Model, shape: Shape, edge: Shape, profile: &Profile, far: 
     }
     let convex = normals[0].dot(into(1)) < 0.0;
     let side_of_ball = if convex { -1.0 } else { 1.0 };
+    // Ends where the faces meet tangentially (the mitre between fillets of two sides,
+    // running up to the face both roll onto): a ball's fillet narrows to nothing there, its
+    // last section the vertex itself, none past it.
+    let vanishing: [bool; 2] = match profile {
+        Profile::Ball(_) if !closed => [t0, t1].map(|t| {
+            let p = curve.point(t);
+            matches!((sides[0].distance(p), sides[1].distance(p)), (Ok(a), Ok(b)) if a.2.dot(b.2) >= 1.0 - crate::tolerance::ANGULAR.sqrt())
+        }),
+        _ => [false; 2],
+    };
     // A chamfer's distances along the two sides (the second from the angle in the faces'
     // cross-section at the edge's middle, by the sines' law in its triangle).
     let chamfer: Option<[f64; 2]> = match profile {
@@ -287,6 +297,8 @@ fn rolling_on(model: &Model, shape: Shape, edge: Shape, profile: &Profile, far: 
         let n = sides[0].distance(q)?.2.cross(sides[1].distance(q)?.2);
         Ok((q, if n.dot(d) < 0.0 { -n.normalized() } else { n.normalized() }))
     };
+    // (Whether sections lie in the balls' own planes across, not square to the edge.)
+    let characteristic = std::cell::Cell::new(false);
     // (Each section from the centre of the last found, relative to its point of the spine.)
     let last_offset: std::cell::Cell<Option<Vector>> = std::cell::Cell::new(None);
     let last_contacts: std::cell::Cell<Option<[Vector; 2]>> = std::cell::Cell::new(None);
@@ -306,14 +318,14 @@ fn rolling_on(model: &Model, shape: Shape, edge: Shape, profile: &Profile, far: 
             last_contacts.set(Some([s.contacts[0] - o, s.contacts[1] - o]));
             return Ok(Section { t, ..s });
         }
-        let found = match section(&sides, o, tangent, r, side_of_ball, last_offset.get()) {
+        let found = match section(&sides, o, tangent, r, side_of_ball, last_offset.get(), characteristic.get()) {
             Ok(found) => Ok((o, Section { t, ..found })),
             // On the edge, where the faces' surfaces meet a seam or an end of theirs: just
             // inside it.
             Err(e) if (t0.min(t1)..=t0.max(t1)).contains(&t) => {
                 let inside = t + (0.5 * (t0 + t1) - t).signum() * 1e-4 * (t1 - t0).abs();
                 let (o, tangent) = spine_at(inside)?;
-                section(&sides, o, tangent, r, side_of_ball, last_offset.get()).map(|found| (o, Section { t: inside, ..found })).map_err(|_| e)
+                section(&sides, o, tangent, r, side_of_ball, last_offset.get(), characteristic.get()).map(|found| (o, Section { t: inside, ..found })).map_err(|_| e)
             }
             Err(e) => Err(e),
         };
@@ -321,97 +333,162 @@ fn rolling_on(model: &Model, shape: Shape, edge: Shape, profile: &Profile, far: 
         last_offset.set(Some(s.center - o));
         Ok(s)
     };
+    // (At a vanishing end: the ball touching both faces at the vertex.)
+    let vanished = |t: f64| -> Result<Section> {
+        let p = curve.point(t);
+        let n = sides[0].distance(p)?.2;
+        let center = p + n * (side_of_ball * radius(fraction(t)));
+        last_offset.set(Some(center - p));
+        Ok(Section { t, center, contacts: [p, p], contact_uv: [sides[0].uv(p)?, sides[1].uv(p)?], radius: radius(fraction(t)), straight: false })
+    };
     // More sections until the contact curves interpolated through them hold to fresh
     // sections midway.
     let size = curve.point(t0).distance(curve.point(0.5 * (t0 + t1))) + curve.point(t1).distance(curve.point(0.5 * (t0 + t1))) + reach;
     let target = 1e-9 * size.max(1.0);
-    let mut n = SECTIONS;
-    let mut previous_worst = f64::INFINITY;
-    let mut previous_poor = false;
-    let (sections, contacts) = loop {
-        let past_n = if closed { 0 } else { far * (PAST_END * n / SECTIONS).max(PAST_END) };
-        // Past each end, outwards as far as the ball still fits between the faces (their
-        // surfaces may end or degenerate further on).
-        // (Not where the spine runs off: a curve carried on past its range, onto the faces'
-        // surfaces, may leap away; no farther from the end than twice the reach.)
-        let past = |end: f64, far: f64| -> Vec<Section> {
-            let at = curve.point(end);
-            (1..=past_n)
-                .map(|j| end + (far - end) * j as f64 / past_n as f64)
-                .map_while(|t| {
-                    let near = spine_at(t).ok().is_some_and(|(o, _)| o.distance(at) <= 2.0 * reach.max(crate::tolerance::LINEAR));
-                    if near { section_at(t).ok() } else { None }
-                })
-                .collect()
-        };
-        // (A chamfer's sections, each run from where it starts: a section is solved from the
-        // one before it, which must be its neighbour, else it may find the points on the
-        // faces' surfaces carried on past the edge, on its other side. A ball's from the one
-        // before, as found.)
-        let restart = |from: Option<&Section>| {
-            let spine = from.and_then(|s| spine_at(s.t).ok().map(|(o, _)| (s, o)));
-            last_contacts.set(spine.map(|(s, o)| [s.contacts[0] - o, s.contacts[1] - o]));
-        };
-        restart(None);
-        let before = past(t0, t_min);
-        restart(before.first());
-        let mut sections: Vec<Section> = before.into_iter().rev().collect();
-        // (Where no ball fits near an end of an open edge (a face's surface singular there,
-        // as at a cone's apex), the sections stop short of it: the fillet must end on the
-        // face there before.)
-        let mut short = [false; 2];
-        for k in 0..=n {
-            match section_at(t0 + (t1 - t0) * k as f64 / n as f64) {
-                Ok(s) => sections.push(s),
-                Err(_) if !closed && 4 * k < n && (short[0] || k == 0) => {
-                    short[0] = true;
-                    sections.clear();
-                }
-                Err(_) if !closed && 4 * k > 3 * n => {
-                    short[1] = true;
-                    break;
-                }
-                Err(e) => return Err(e),
-            }
-        }
-        if !short[1] {
-            sections.extend(past(t1, t_max));
-        }
-        let ts: Vec<f64> = sections.iter().map(|s| s.t).collect();
-        let contact = |i: usize| -> Result<BSplineCurve> {
-            let points: Vec<Point> = sections.iter().map(|s| s.contacts[i]).collect();
-            fit::interpolate_with_parameters(&points, &ts)
-        };
-        let contacts = [contact(0)?, contact(1)?];
-        let mut worst: f64 = 0.0;
-        restart(sections.first());
-        for w in ts.windows(2) {
-            // (Past the edge's ends, where the faces' surfaces may end between two sections
-            // found, a section not found midway is left out of the measure.)
-            let mid = match section_at(0.5 * (w[0] + w[1])) {
-                Ok(mid) => mid,
-                Err(_) if w[1] <= t0.min(t1) || w[0] >= t0.max(t1) => continue,
-                Err(e) => return Err(e),
+    let sweep = || -> Result<(Vec<Section>, [BSplineCurve; 2])> {
+        let mut n = SECTIONS;
+        let mut previous_worst = f64::INFINITY;
+        let mut previous_poor = false;
+        loop {
+            let past_n = if closed { 0 } else { far * (PAST_END * n / SECTIONS).max(PAST_END) };
+            // Past each end, outwards as far as the ball still fits between the faces (their
+            // surfaces may end or degenerate further on).
+            // (Not where the spine runs off: a curve carried on past its range, onto the faces'
+            // surfaces, may leap away; no farther from the end than twice the reach.)
+            // (Nor past where the faces turn tangent and the ball's arc, shrunk to nothing,
+            // would open the other way round: a ball there is on the faces' other side.)
+            let turn = |s: &Section| (s.contacts[0] - s.center).cross(s.contacts[1] - s.center).dot(curve.d1(s.t).1);
+            let past = |end: f64, far: f64| -> Vec<Section> {
+                let at = curve.point(end);
+                // (The way the first section's arc turns and its width, and the narrowest yet.)
+                let mut way: Option<(f64, f64)> = None;
+                let mut narrowest = f64::INFINITY;
+                (1..=past_n)
+                    .map(|j| end + (far - end) * j as f64 / past_n as f64)
+                    .map_while(|t| {
+                        let near = spine_at(t).ok().is_some_and(|(o, _)| o.distance(at) <= 2.0 * reach.max(crate::tolerance::LINEAR));
+                        let s = if near { section_at(t).ok() } else { None }?;
+                        if s.straight {
+                            return Some(s);
+                        }
+                        let (w, width) = (turn(&s), s.contacts[0].distance(s.contacts[1]));
+                        match way {
+                            Some((first, wide)) if first * w < 0.0 && narrowest < 0.25 * wide => None,
+                            _ => {
+                                way = way.or(Some((w, width)));
+                                narrowest = narrowest.min(width);
+                                Some(s)
+                            }
+                        }
+                    })
+                    .collect()
             };
-            for i in 0..2 {
-                worst = worst.max(contacts[i].point(mid.t).distance(mid.contacts[i]));
+            // (A chamfer's sections, each run from where it starts: a section is solved from the
+            // one before it, which must be its neighbour, else it may find the points on the
+            // faces' surfaces carried on past the edge, on its other side. A ball's from the one
+            // before, as found.)
+            let restart = |from: Option<&Section>| {
+                let spine = from.and_then(|s| spine_at(s.t).ok().map(|(o, _)| (s, o)));
+                last_contacts.set(spine.map(|(s, o)| [s.contacts[0] - o, s.contacts[1] - o]));
+            };
+            restart(None);
+            let before = if vanishing[0] { Vec::new() } else { past(t0, t_min) };
+            restart(before.first());
+            // (On from the section past the start nearest it.)
+            let mut sections: Vec<Section> = before.into_iter().rev().collect();
+            // (Where no ball fits near an end of an open edge (a face's surface singular there,
+            // as at a cone's apex), the sections stop short of it: the fillet must end on the
+            // face there before.)
+            let mut short = [false; 2];
+            for k in 0..=n {
+                let t = t0 + (t1 - t0) * k as f64 / n as f64;
+                let found = match (k, vanishing) {
+                    (0, [true, _]) => vanished(t0),
+                    (k, [_, true]) if k == n => vanished(t1),
+                    _ => section_at(t),
+                };
+                match found {
+                    Ok(s) => sections.push(s),
+                    // (Next to a vanishing end, where the faces are all but tangent, a section
+                    // may not be found: left out.)
+                    Err(_) if (vanishing[0] && 8 * k < n) || (vanishing[1] && 8 * k > 7 * n) => {}
+                    Err(_) if !closed && 4 * k < n && (short[0] || k == 0) => {
+                        short[0] = true;
+                        sections.clear();
+                    }
+                    Err(_) if !closed && 4 * k > 3 * n => {
+                        short[1] = true;
+                        break;
+                    }
+                    Err(e) => return Err(e),
+                }
+            }
+            if !short[1] && !vanishing[1] {
+                sections.extend(past(t1, t_max));
+            }
+            let ts: Vec<f64> = sections.iter().map(|s| s.t).collect();
+            let contact = |i: usize| -> Result<BSplineCurve> {
+                let points: Vec<Point> = sections.iter().map(|s| s.contacts[i]).collect();
+                fit::interpolate_with_parameters(&points, &ts)
+            };
+            let contacts = [contact(0)?, contact(1)?];
+            let mut worst: f64 = 0.0;
+            restart(sections.first());
+            for w in ts.windows(2) {
+                // (Past the edge's ends, where the faces' surfaces may end between two sections
+                // found, a section not found midway is left out of the measure.)
+                let mid = match section_at(0.5 * (w[0] + w[1])) {
+                    Ok(mid) => mid,
+                    Err(_) if w[1] <= t0.min(t1) || w[0] >= t0.max(t1) => continue,
+                    Err(_) if (vanishing[0] && w[0] == t0) || (vanishing[1] && w[1] == t1) => continue,
+                    Err(e) => return Err(e),
+                };
+                for i in 0..2 {
+                    worst = worst.max(contacts[i].point(mid.t).distance(mid.contacts[i]));
+                }
+            }
+            // (Not further where doubling the sections has twice running hardly helped, and the
+            // gap is still far from closed: the contact curves are not smooth there (the faces'
+            // own seams), and twice as many would not close it. Errors jumping about instead
+            // (sections finding other balls) are left to the full count.)
+            let ratio = previous_worst / worst;
+            let poor = (0.25..4.0).contains(&ratio);
+            let stalled = n >= 4 * SECTIONS && worst > 100.0 * target && poor && previous_poor;
+            if worst <= target || stalled || n >= 32 * SECTIONS {
+                return Ok((sections, contacts));
+            }
+            previous_worst = worst;
+            previous_poor = poor;
+            n *= 2;
+        }
+    };
+
+    // (Where the balls' centres lie beyond the edge's centre of curvature (a ball near as
+    // large as the curve's radius, inside its bend), the sections square to it fold back
+    // (the centres run back along the edge) or are not found. Then each section in its
+    // ball's own plane across (the arc's, square to the path of the centres) through the
+    // edge's point instead.)
+    let folds = |sections: &[Section]| {
+        sections.windows(2).any(|w| {
+            let inside = |t: f64| (t0.min(t1)..=t0.max(t1)).contains(&t);
+            inside(w[0].t) && inside(w[1].t) && (w[1].center - w[0].center).dot(curve.d1(w[0].t).1) * (w[1].t - w[0].t) < -1e-9 * size * (w[1].t - w[0].t).abs()
+        })
+    };
+    let (sections, contacts) = match sweep() {
+        Ok(swept) if chamfer.is_some() || !folds(&swept.0) => swept,
+        Err(e) if chamfer.is_some() => return Err(e),
+        first => {
+            characteristic.set(true);
+            match sweep() {
+                Ok(swept) if !folds(&swept.0) => swept,
+                _ => {
+                    characteristic.set(false);
+                    first?
+                }
             }
         }
-        // (Not further where doubling the sections has twice running hardly helped, and the
-        // gap is still far from closed: the contact curves are not smooth there (the faces'
-        // own seams), and twice as many would not close it. Errors jumping about instead
-        // (sections finding other balls) are left to the full count.)
-        let ratio = previous_worst / worst;
-        let poor = (0.25..4.0).contains(&ratio);
-        let stalled = n >= 4 * SECTIONS && worst > 100.0 * target && poor && previous_poor;
-        if worst <= target || stalled || n >= 32 * SECTIONS {
-            break (sections, contacts);
-        }
-        previous_worst = worst;
-        previous_poor = poor;
-        n *= 2;
     };
-    Ok(Rolling { id, va, vb, closed, sides, sections, contacts, convex, target, t0, t1 })
+    Ok(Rolling { id, va, vb, closed, sides, sections, contacts, convex, target, t0, t1, vanishing })
 }
 
 /// What a rolling-ball fillet is made from (see [`rolling`]).
@@ -427,6 +504,8 @@ struct Rolling {
     target: f64,
     t0: f64,
     t1: f64,
+    /// Whether the fillet narrows to nothing at each end, the faces tangent there.
+    vanishing: [bool; 2],
 }
 
 /// `shape` with `edge` rounded by a ball of radius `radius(s)`, `s` the fraction of the
@@ -611,13 +690,24 @@ fn onto_both(sides: &[Side; 2], guess: Point, tangent: Vector) -> Result<Point> 
 }
 
 /// The ball of radius `r` touching both faces, centred in the plane through `o` square to
-/// `tangent`, on the given side of the faces (-1 inside the solid): from the centre at
-/// offset `near` from `o` (a neighbouring section's), else from between the faces' tangent
-/// planes.
-fn section(sides: &[Side; 2], o: Point, tangent: Vector, r: f64, side: f64, near: Option<Vector>) -> Result<Section> {
+/// `tangent` (or, `characteristic`, in the plane through `o` of its own arc between the
+/// contacts, square to the path of the centres), on the given side of the faces (-1 inside
+/// the solid): from the centre at offset `near` from `o` (a neighbouring section's), else
+/// from between the faces' tangent planes.
+#[allow(clippy::too_many_arguments)]
+fn section(sides: &[Side; 2], o: Point, tangent: Vector, r: f64, side: f64, near: Option<Vector>, characteristic: bool) -> Result<Section> {
+    // (The plane's normal at a centre: the path of the centres runs square to both faces'
+    // normals at the contacts.)
+    let across = |q: Point| -> Result<Vector> {
+        if !characteristic {
+            return Ok(tangent);
+        }
+        let along = sides[0].distance(q)?.2.cross(sides[1].distance(q)?.2);
+        Ok(if along.length() > 1e-9 { along.normalized() * along.normalized().dot(tangent).signum() } else { tangent })
+    };
     if let Some(offset) = near {
         let start = o + (offset - tangent * offset.dot(tangent));
-        let solved = newton(start, |q| Ok([sides[0].distance(q)?.0 - side * r, sides[1].distance(q)?.0 - side * r, (q - o).dot(tangent)]));
+        let solved = newton_damped(start, |q| Ok([sides[0].distance(q)?.0 - side * r, sides[1].distance(q)?.0 - side * r, (q - o).dot(across(q)?)]), characteristic);
         if let Ok(center) = solved {
             let contacts = [sides[0].distance(center)?.1, sides[1].distance(center)?.1];
             let contact_uv = [sides[0].uv(center)?, sides[1].uv(center)?];
@@ -641,9 +731,9 @@ fn section(sides: &[Side; 2], o: Point, tangent: Vector, r: f64, side: f64, near
     let into: Vec<Vector> = into.into_iter().map(|v| v.normalized()).collect();
     let half = 0.5 * into[0].dot(into[1]).clamp(-1.0, 1.0).acos();
     let start = o + sum.normalized() * (r / half.sin());
-    let center = newton(start, |q| {
-        Ok([sides[0].distance(q)?.0 - side * r, sides[1].distance(q)?.0 - side * r, (q - o).dot(tangent)])
-    })?;
+    let center = newton_damped(start, |q| {
+        Ok([sides[0].distance(q)?.0 - side * r, sides[1].distance(q)?.0 - side * r, (q - o).dot(across(q)?)])
+    }, characteristic)?;
     let contacts = [sides[0].distance(center)?.1, sides[1].distance(center)?.1];
     let contact_uv = [sides[0].uv(center)?, sides[1].uv(center)?];
     Ok(Section { t: 0.0, center, contacts, contact_uv, radius: r, straight: false })
@@ -773,6 +863,12 @@ fn on_surface_at(side: &Side, start: Point, o: Point, tangent: Vector, d: f64) -
 
 /// Newton's method on a function of a point with three components, from `start`.
 fn newton(start: Point, f: impl Fn(Point) -> Result<[f64; 3]>) -> Result<Point> {
+    newton_damped(start, f, false)
+}
+
+/// [`newton`], with each step shortened (`damped`) where the whole of it leaves the system
+/// further from solved.
+fn newton_damped(start: Point, f: impl Fn(Point) -> Result<[f64; 3]>, damped: bool) -> Result<Point> {
     let scale = 1.0 + (start - Point::ORIGIN).length();
     let h = 1e-7 * scale;
     let mut x = start;
@@ -790,7 +886,20 @@ fn newton(start: Point, f: impl Fn(Point) -> Result<[f64; 3]>) -> Result<Point> 
             .collect::<Result<_>>()?;
         let step = super::solve3([columns[0], columns[1], columns[2]], fx)
             .ok_or_else(|| Error::InvalidInput("no fillet section here (singular system)".into()))?;
-        x = x - Vector::new(step[0], step[1], step[2]);
+        let step = Vector::new(step[0], step[1], step[2]);
+        // (Shorter where the whole step leaves the system further from solved, as where the
+        // plane of a section turns fast with its centre; the whole step where none helps.)
+        if !damped {
+            x = x - step;
+            continue;
+        }
+        let norm = |v: [f64; 3]| v.iter().map(|x| x * x).sum::<f64>();
+        let size = norm(fx);
+        let mut part = 1.0;
+        while part > 1e-3 && !f(x - step * part).is_ok_and(|g| norm(g) < size) {
+            part *= 0.5;
+        }
+        x = x - step * if part > 1e-3 { part } else { 1.0 };
     }
     if f(x)?.iter().all(|v| v.abs() <= 1e-8 * scale) {
         Ok(x)

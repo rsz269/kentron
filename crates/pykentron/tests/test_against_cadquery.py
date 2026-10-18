@@ -223,6 +223,28 @@ def rounded_pocket_rim(cq):
     return block.fillet(1, rim)
 
 
+def fillet_of_a_mitre(cq):
+    # (Where fillets of a box's two sides meet, their mitre goes on smoothly from the box's
+    # edge between those sides (filleted with it), and the fillet narrows to nothing where
+    # both reach the top.)
+    block = cq.Solid.makeBox(10, 10, 10)
+    top = [e for e in block.Edges() if abs(e.Center().z - 10) < 1e-9 and (abs(e.Center().x - 10) < 1e-9 or abs(e.Center().y - 10) < 1e-9)]
+    block = block.fillet(3, top)
+    return block.fillet(1, [e for e in block.Edges() if e.geomType() == "ELLIPSE"])
+
+
+def rounded_recess_cut(cq):
+    # (A tapered recess with rounded corners and bottom: the bottom's fillets go on from the
+    # straight sides round the corners' fillets; the recess cut from a block.)
+    def rect(w, d, z):
+        return cq.Wire.makePolygon([cq.Vector(x, y, z) for x, y in ((-w / 2, -d / 2), (w / 2, -d / 2), (w / 2, d / 2), (-w / 2, d / 2))], close=True)
+
+    recess = cq.Solid.makeLoft([rect(16, 56, 3), rect(30, 70, 12)], True)
+    recess = recess.fillet(6, [e for e in recess.Edges() if abs(e.Center().x) > 1 and abs(e.Center().y) > 1 and e.Center().z > 3.5])
+    recess = recess.fillet(4, [e for e in recess.Edges() if abs(e.Center().z - 3) < 1e-6])
+    return cq.Solid.makeBox(40, 80, 12, cq.Vector(-20, -40, 0)).cut(recess)
+
+
 CASES = [
     box, cylinder_along_y, cone, workplane_box, fused_boxes, cut_bores, intersected,
     polyline_prism_xz, polyline_prism_custom_plane, hexagon, face_with_hole, loft,
@@ -231,7 +253,7 @@ CASES = [
     loft_turned_aside, sweep_round_hexagon, frenet_sweep_round_helix, tapered_split_square,
     rotated_then_located, spline_surface_through_a_grid, plane_of_negative_size, subclassed_wire,
     array_of_vectors, sweep_through_three_circles, sweep_from_circle_to_square,
-    fuse_of_many, rounded_pocket_rim,
+    fuse_of_many, rounded_pocket_rim, fillet_of_a_mitre, rounded_recess_cut,
 ]
 
 

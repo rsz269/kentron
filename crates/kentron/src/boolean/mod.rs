@@ -867,6 +867,22 @@ mod tests {
         check(&model, fused, 4508.434770483955, 2661.863807650023, 1);
     }
 
+    #[test]
+    fn hole_crossing_an_edge_at_a_sample() {
+        // A hole through a block's side: the side's edges cross it twice, once exactly where
+        // they are sampled (the interval beside that point holds the other crossing).
+        let mut model = Model::new();
+        let block = cuboid(&mut model, (0.0, 0.0, 0.0), (32.0, 10.0, 5.0));
+        let drill = cylinder(&mut model, (10.35, 1.2, -1.0), Direction::Z, 1.25, 7.0);
+        let result = difference(&mut model, block, drill).unwrap();
+        let (r, d) = (1.25f64, 1.2f64);
+        let cut_off = r * r * (d / r).acos() - d * (r * r - d * d).sqrt();
+        let removed = 5.0 * (PI * r * r - cut_off);
+        let arc = 2.0 * r * (PI - (d / r).acos());
+        let area = 2.0 * (320.0 + 160.0 + 50.0) - 2.0 * (PI * r * r - cut_off) + 5.0 * arc - 5.0 * 2.0 * (r * r - d * d).sqrt();
+        check(&model, result, 1600.0 - removed, area, 1);
+    }
+
     fn cylinder(model: &mut Model, origin: (f64, f64, f64), axis: Direction, radius: f64, height: f64) -> Shape {
         let frame = Frame::from_z(Point::new(origin.0, origin.1, origin.2), axis);
         Cylinder::new(radius, height).with_frame(frame).build(model).unwrap()
@@ -1195,3 +1211,5 @@ mod tests {
         check(&model, result, 4.0 - 1.0, 2.0 * 3.0 + 8.0 + 4.0 * 1.0, 1);
     }
 }
+
+

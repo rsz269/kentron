@@ -246,10 +246,11 @@ class Shape:
         return Shape.cast(result)
 
     def intersect(self, *toIntersect: "Shape", tol: Optional[float] = None) -> "Shape":
-        result = self.wrapped
-        for other in toIntersect:
-            result = native.intersection(result, other.wrapped)
-        return Shape.cast(result)
+        # (With several, as OCCT's common: what lies within any of them, their union.)
+        if not toIntersect:
+            return self
+        tools = toIntersect[0] if len(toIntersect) == 1 else Shape.fuse(*toIntersect)
+        return Shape.cast(native.intersection(self.wrapped, tools.wrapped))
 
     def split(self, *splitters: "Shape") -> "Shape":
         """This shape cut into pieces by `splitters` (BRepAlgoAPI_Splitter): a compound of
