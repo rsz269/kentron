@@ -174,13 +174,35 @@ def spline_surface_through_a_grid(cq):
     return cq.Face.makeSplineApprox(grid, tol=1e-3, minDeg=3, maxDeg=8)
 
 
+def plane_of_negative_size(cq):
+    return cq.Face.makePlane(-2.0, 3.0)
+
+
+def subclassed_wire(cq):
+    # (Constructors make the class they are called on, as scripts subclass to add methods.)
+    class Outline(cq.Wire):
+        def face(self):
+            return cq.Face.makeFromWires(self)
+
+    return Outline.makePolygon([(0, 0, 0), (3, 0, 0), (3, 2, 0)], close=True).face()
+
+
+def array_of_vectors(cq):
+    # (numpy keeps vectors whole, as objects: one per point.)
+    import numpy
+
+    points = numpy.array([cq.Vector(0, 0, 0), cq.Vector(4, 0, 0), cq.Vector(4, 3, 0)])
+    return cq.Face.makeFromWires(cq.Wire.makePolygon(list(points[[0, 1, 2]]) * (points.size == 3), close=True))
+
+
 CASES = [
     box, cylinder_along_y, cone, workplane_box, fused_boxes, cut_bores, intersected,
     polyline_prism_xz, polyline_prism_custom_plane, hexagon, face_with_hole, loft,
     rotated_mirrored, revolved, located, euler_location, offset_outline, smoothed_helix_spline,
     chamfered_arc_plate, mirrored_outline, fillet_with_bore_edges,
     loft_turned_aside, sweep_round_hexagon, frenet_sweep_round_helix, tapered_split_square,
-    rotated_then_located, spline_surface_through_a_grid,
+    rotated_then_located, spline_surface_through_a_grid, plane_of_negative_size, subclassed_wire,
+    array_of_vectors,
 ]
 
 

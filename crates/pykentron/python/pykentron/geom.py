@@ -75,14 +75,13 @@ class Vector:
     def toTuple(self) -> Tuple3:
         return (self.x, self.y, self.z)
 
+    # (Iterable and indexable, but without a length, as CadQuery's has none: numpy keeps an
+    # array of vectors one of objects, as scripts index it.)
     def __iter__(self):
         return iter((self.x, self.y, self.z))
 
     def __getitem__(self, i: int) -> float:
         return (self.x, self.y, self.z)[i]
-
-    def __len__(self) -> int:
-        return 3
 
     def add(self, v) -> "Vector":
         v = Vector(v)

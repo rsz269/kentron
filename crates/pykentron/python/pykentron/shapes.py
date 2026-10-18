@@ -1438,6 +1438,8 @@ class Face(Shape):
             u, v = width / 2, length / 2
         else:
             u = v = 1e4
+        # (Of negative sizes, as of positive: CadQuery's takes them so.)
+        u, v = abs(u), abs(v)
         return Shape.cast(native.make_plane_face(_tuple(basePnt), _tuple(dir), -u, u, -v, v))
 
     @classmethod
@@ -1800,3 +1802,25 @@ _KINDS = {
     "CompSolid": CompSolid,
     "Compound": Compound,
 }
+
+
+def _made_as(name: str, made):
+    """The constructor classmethod `made`, returning the class it is called on where that
+    is a subclass of what it makes (as CadQuery's, which make `cls(...)`: scripts subclass
+    `Wire` and the like to add methods)."""
+
+    def wrapper(cls, *args, **kwargs):
+        shape = made.__get__(None, cls)(*args, **kwargs)
+        if isinstance(shape, Shape) and cls is not type(shape) and issubclass(cls, type(shape)):
+            shape.__class__ = cls
+        return shape
+
+    wrapper.__name__, wrapper.__qualname__, wrapper.__doc__ = name, made.__func__.__qualname__, made.__func__.__doc__
+    return classmethod(wrapper)
+
+
+for _cls in _KINDS.values():
+    for _name, _attr in list(vars(_cls).items()):
+        if isinstance(_attr, classmethod) and (_name.startswith("make") or _name in ("assembleEdges", "combine", "extrudeLinear", "revolve", "sweep", "loft")):
+            setattr(_cls, _name, _made_as(_name, _attr))
+del _cls, _name, _attr
