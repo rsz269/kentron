@@ -1555,8 +1555,10 @@ fn sliced(base: &Face, other: &Face, crossings: &[Point]) -> Vec<Section> {
         let range = super::march::Range { u: (u0, u1), v: (v0, v1), u_period: if periodic { base.u_period } else { None }, v_period: v_periodic, u_wrap: base.u_period, v_wrap: base.v_period };
         super::march::trace(s, q, range, (nu, nv), spacing * 64.0 / nu.max(nv) as f64, crossings, 10.0 * (base.drift.max(other.drift) + on_tol()), (other.u_range, other.v_range))
     };
-    // (Where either surface is free-form.)
-    if marching() && (geom::freeform(s) || geom::freeform(q)) {
+    // (Where either surface is free-form, or a surface of extrusion: on its grid of signed
+    // distances, as fine as a quadric's, sections are slow to find.)
+    let extrusion = |x: &Surface| matches!(x, Surface::Extrusion(_));
+    if marching() && (geom::freeform(s) || geom::freeform(q) || extrusion(s) || extrusion(q)) {
         if let Some(chains) = marched() {
             let mut out = Vec::new();
             for super::march::Chain { uv, st, closed } in chains {

@@ -949,7 +949,6 @@ tests/draft/angle/F6
 tests/draft/angle/F9
 tests/draft/angle/H6
 tests/draft/angle/H7
-tests/draft/angle/I3
 tests/draft/angle/I9
 tests/draft/angle/J9
 tests/draft/angle/K3

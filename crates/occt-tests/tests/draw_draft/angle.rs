@@ -1308,26 +1308,23 @@ fn i2() -> DrawResult<()> {
 /// `tests/draft/angle/I3`
 /// kentron: sub-shapes named by OCCT's enumeration are selected by position (draw_selectors.json)
 #[test]
-#[should_panic]
-fn i3() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.polyline(&["p", "0", "0", "5", "0", "0", "0", "20", "0", "0", "20", "0", "5"])?;
-        d.beziercurve(&["bc", "4", "20", "0", "5", "15", "0", "6", "5", "0", "4", "0", "0", "5"])?;
-        d.mkedge(&["bc", "bc"])?;
-        d.wire(&["p", "p", "bc"])?;
-        d.mkplane(&["p", "p"])?;
-        d.prism(&["p", "p", "0", "20", "0"])?;
-        d.plane(&["pc", "10", "10", "0", "0", "0", "1"])?;
-        d.pcone(&["pc", "pc", "5", "4", "10"])?;
-        d.bfuse(&["f", "p", "pc"])?;
-        d.nexplode(&["f", "f"])?;
-        d.nearest(&["f_7", "f", "F", "9.87305", "10.0", "7.44671", "134.211"])?;
-        d.depouille(&["result", "f", "0", "0", "1", "f_7", "1", "0", "0", "10", "0", "0", "1"])?;
-        d.checkprops(&["result", "-s", "1325.75"])?;
-        d.checkshape(&["result"])?;
-        Ok(())
-    })
+fn i3() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.polyline(&["p", "0", "0", "5", "0", "0", "0", "20", "0", "0", "20", "0", "5"])?;
+    d.beziercurve(&["bc", "4", "20", "0", "5", "15", "0", "6", "5", "0", "4", "0", "0", "5"])?;
+    d.mkedge(&["bc", "bc"])?;
+    d.wire(&["p", "p", "bc"])?;
+    d.mkplane(&["p", "p"])?;
+    d.prism(&["p", "p", "0", "20", "0"])?;
+    d.plane(&["pc", "10", "10", "0", "0", "0", "1"])?;
+    d.pcone(&["pc", "pc", "5", "4", "10"])?;
+    d.bfuse(&["f", "p", "pc"])?;
+    d.nexplode(&["f", "f"])?;
+    d.nearest(&["f_7", "f", "F", "9.87305", "10.0", "7.44671", "134.211"])?;
+    d.depouille(&["result", "f", "0", "0", "1", "f_7", "1", "0", "0", "10", "0", "0", "1"])?;
+    d.checkprops(&["result", "-s", "1325.75"])?;
+    d.checkshape(&["result"])?;
+    Ok(())
 }
 
 /// `tests/draft/angle/I4`
