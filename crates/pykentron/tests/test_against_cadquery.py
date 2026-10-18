@@ -155,12 +155,26 @@ def frenet_sweep_round_helix(cq):
     return cq.Solid.sweep(cq.Face.makeFromWires(square), helix, True, True)
 
 
+def tapered_split_square(cq):
+    # (Sides split in line: the taper's offset joins them.)
+    pts = [(0, 0, 0), (5, 0, 0), (10, 0, 0), (10, 5, 0), (10, 10, 0), (5, 10, 0), (0, 10, 0), (0, 5, 0)]
+    face = cq.Face.makeFromWires(cq.Wire.makePolygon(pts, close=True))
+    return cq.Solid.extrudeLinear(face, cq.Vector(0, 0, 1), taper=25)
+
+
+def rotated_then_located(cq):
+    # (A rotation moves the geometry; a location after it places that, not the original.)
+    turned = cq.Solid.makeBox(4, 2, 1).translate((1, 0, 0)).rotate((0, 0, 0), (0, 0, 1), 90)
+    return turned.located(cq.Location(cq.Vector(10, 0, 0)))
+
+
 CASES = [
     box, cylinder_along_y, cone, workplane_box, fused_boxes, cut_bores, intersected,
     polyline_prism_xz, polyline_prism_custom_plane, hexagon, face_with_hole, loft,
     rotated_mirrored, revolved, located, euler_location, offset_outline, smoothed_helix_spline,
     chamfered_arc_plate, mirrored_outline, fillet_with_bore_edges,
-    loft_turned_aside, sweep_round_hexagon, frenet_sweep_round_helix,
+    loft_turned_aside, sweep_round_hexagon, frenet_sweep_round_helix, tapered_split_square,
+    rotated_then_located,
 ]
 
 

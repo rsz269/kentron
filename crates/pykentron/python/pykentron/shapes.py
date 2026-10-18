@@ -19,7 +19,7 @@ import warnings
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from . import _kentron as native
-from .geom import BoundBox, Location, Matrix, Plane, Vector, _default_x, _rotation_rows, _rows_identity
+from .geom import BoundBox, Location, Matrix, Plane, Vector, _compose, _default_x, _invert, _rotation_rows, _rows_identity
 
 
 def _rows_translation(v) -> list:
@@ -146,11 +146,29 @@ class Shape:
 
     # --- placement ------------------------------------------------------------------------
 
+    # (OCCT's translate, rotate and transformShape move a copy's geometry, which its location
+    # (`location`, `located`, `locate`) then leaves alone; pykentron places the shape
+    # instead, and keeps that placement as `_baked`: the location is what is placed beyond
+    # it.)
+
+    def _transformed_copy(self, rows) -> "Shape":
+        s = self._new(self.wrapped.moved(rows))
+        s._baked = [list(r) for r in s.wrapped.placement()]
+        return s
+
+    def _baked_rows(self):
+        return self.__dict__.get("_baked") or _rows_identity()
+
+    def _with_baked(self, s: "Shape") -> "Shape":
+        if "_baked" in self.__dict__:
+            s._baked = self._baked
+        return s
+
     def translate(self, vector) -> "Shape":
-        return self._new(self.wrapped.moved(_rows_translation(vector)))
+        return self._transformed_copy(_rows_translation(vector))
 
     def rotate(self, startVector, endVector, angleDegrees: float) -> "Shape":
-        return self._new(self.wrapped.moved(_rows_rotation(startVector, endVector, angleDegrees)))
+        return self._transformed_copy(_rows_rotation(startVector, endVector, angleDegrees))
 
     def mirror(self, mirrorPlane="XY", basePointVector=(0, 0, 0)) -> "Shape":
         normal = _PLANE_NORMALS[mirrorPlane] if isinstance(mirrorPlane, str) else mirrorPlane
@@ -164,22 +182,25 @@ class Shape:
     def transformShape(self, m) -> "Shape":
         rows = _matrix_rows(m)
         if _is_rigid(rows):
-            return self._new(self.wrapped.moved(rows))
+            return self._transformed_copy(rows)
         return self._new(native.transformed(self.wrapped, rows))
 
     def transformGeometry(self, m) -> "Shape":
         return self._new(native.transformed(self.wrapped, _matrix_rows(m)))
 
     def location(self) -> Location:
-        return Location([list(r) for r in self.wrapped.placement()])
+        placement = [list(r) for r in self.wrapped.placement()]
+        if "_baked" not in self.__dict__:
+            return Location(placement)
+        return Location(_compose(placement, _invert(self._baked)))
 
     def locate(self, loc: Location) -> "Shape":
-        self.wrapped = self.wrapped.located(loc.rows)
+        self.wrapped = self.wrapped.located(_compose(loc.rows, self._baked_rows()))
         self.__dict__.pop("_boxes", None)
         return self
 
     def located(self, loc: Location) -> "Shape":
-        return self._copy_with(self.wrapped.located(loc.rows))
+        return self._with_baked(self._copy_with(self.wrapped.located(_compose(loc.rows, self._baked_rows()))))
 
     def move(self, *args, **kwargs) -> "Shape":
         loc = _location_of(*args, **kwargs)
@@ -192,17 +213,17 @@ class Shape:
         if len(args) == 1 and not kwargs and isinstance(args[0], Shape):
             return self.moved(args[0].toLocs())
         if kwargs:
-            return self._copy_with(self.wrapped.moved(_location_of(*args, **kwargs).rows))
+            return self._with_baked(self._copy_with(self.wrapped.moved(_location_of(*args, **kwargs).rows)))
         # Several locations: a compound of copies.
         if len(args) == 1 and isinstance(args[0], (list, tuple)) and args[0] and isinstance(args[0][0], (Location, list, tuple, Vector)) and not _is_vector_like(args[0]):
             args = tuple(args[0])
         if len(args) > 1 and all(isinstance(a, (Location, Vector)) or _is_vector_like(a) for a in args) and not _is_scalars(args):
             return Compound.makeCompound([self.moved(a) for a in args])
         loc = _location_of(*args)
-        return self._copy_with(self.wrapped.moved(loc.rows))
+        return self._with_baked(self._copy_with(self.wrapped.moved(loc.rows)))
 
     def copy(self, mesh: bool = False) -> "Shape":
-        return self._copy_with(self.wrapped)
+        return self._with_baked(self._copy_with(self.wrapped))
 
     def reverse(self) -> "Shape":
         """The shape with its orientation reversed."""
@@ -1180,6 +1201,24 @@ def _slits_closed(chain: List[Edge], tol: float) -> List[Edge]:
     return out if len(out) >= 1 else chain
 
 
+def _lines_joined(wire: "Wire") -> "Wire":
+    """A closed wire of straight edges with those in line joined (the wire as it is if any
+    edge is curved)."""
+    edges = wire.Edges()
+    if not wire.IsClosed() or any(e.geomType() != "LINE" for e in edges):
+        return wire
+    points = [e.startPoint() for e in edges]
+    n = len(points)
+    keep = []
+    for i in range(n):
+        a, b, c = points[i - 1], points[i], points[(i + 1) % n]
+        if (b - a).cross(c - b).Length > 1e-9 * (b - a).Length * (c - b).Length or (b - a).dot(c - b) < 0:
+            keep.append(b)
+    if len(keep) < 3 or len(keep) == n:
+        return wire
+    return Wire.makePolygon(keep, close=True)
+
+
 def _has_corners(wire: "Wire") -> bool:
     """Whether the wire's edges meet at an angle somewhere (at its start too, if closed)."""
     edges = wire.Edges()
@@ -1598,7 +1637,10 @@ class Solid(Shape, Mixin3D):
             outer = face.outerWire() if face is not None else outer
             v = Vector(vec)
             tops = outer.offset2D(-v.Length * math.tan(math.radians(taper)), "intersection")
-            if len(tops) != 1 or len(list(tops[0])) != len(list(outer)):
+            if len(tops) == 1 and len(tops[0].Edges()) != len(outer.Edges()):
+                # (The offset joins straight edges in line: the outline's joined too.)
+                outer = _lines_joined(outer)
+            if len(tops) != 1 or len(tops[0].Edges()) != len(outer.Edges()):
                 raise NotImplementedError("tapered extrusions whose profile changes shape")
             return cls.makeLoft([outer, tops[0].translate(v)], ruled=True)
         if face is None:

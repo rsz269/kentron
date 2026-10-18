@@ -72,10 +72,21 @@ Fixed since the cases were found (running them again):
 - A planar face's centre exactly in its plane: faces in one plane, sorted by height, keep
   their order (CadQuery's Ex026 selected the lid's face for the rim's).
 
+- Shapes translated or rotated, then `located`: the location placing the moved shape, as
+  OCCT's moves the copy's geometry first (cadqueryhelper's rotated and scheme grids,
+  cqterrain's books and bookcases).
+- Tapered extrusions of outlines whose straight sides are split in line (cadqueryhelper's
+  cell grids).
+
+Two scripts build differently on CadQuery for reasons of its own: cqterrain's magnet
+template queues its pending wire again (`toPending()`), and CadQuery's face counts it twice
+(double the volume); cqterrain's buildings stack storeys as touching solids, which CadQuery
+leaves 14 to 22 solids and kentron's union one.
+
 With these, five more of OCCT's cases pass (four booleans and a Tcl bug script).
 
 Still open among them: the thread solids' unions with their core (nearly coincident
 surfaces, 0.001 apart), cq_warehouse's bolts (their threads' unions too, by the look of
 them), the contrib remote enclosure (a countersink through a wall thinner than it is deep:
-the cut loses the countersink's cone), and the rest of `cases.tsv`. 20 of the 85 now build
+the cut loses the countersink's cone), and the rest of `cases.tsv`. 35 of the 85 now build
 as on CadQuery.
