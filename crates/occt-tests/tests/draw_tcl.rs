@@ -4,7 +4,8 @@
 //! it fails and is reported when it starts to pass. Scripts needing a data file that is
 //! missing, or declaring a known failure of OCCT's (a TODO for this platform), are ignored.
 //! Each has the YAML cases' limit on its processor time (`KENTRON_CASE_TIMEOUT`, 40 s).
-//! With `KENTRON_SKIP_EXPECTED_FAILURES` set, the listed scripts are ignored.
+//! With `KENTRON_SKIP_EXPECTED_FAILURES` set, the listed scripts are ignored; with
+//! `KENTRON_CASE_TIMES` set, each script's time is reported.
 
 use std::path::{Path, PathBuf};
 
@@ -34,8 +35,14 @@ fn main() {
         let name = format!("{group}::{grid}::{case}");
         let ignored = missing.is_some() || known.is_some() || (skip_expected && listed);
         let root = root.clone();
+        let timed = name.clone();
         let trial = Trial::test(name, move || {
+            // (With `KENTRON_CASE_TIMES` set, each script's time is reported, as the cases'.)
+            let started = std::time::Instant::now();
             let outcome = occt_tests::limit::run_limited(limit, move || run_script(&root, &group, &grid, &case));
+            if std::env::var_os("KENTRON_CASE_TIMES").is_some() {
+                eprintln!("case time {:.3}s {timed}", started.elapsed().as_secs_f64());
+            }
             match (outcome, listed) {
                 (Ok(Outcome::Passed | Outcome::Skipped(_) | Outcome::KnownFailure(_)), false) => Ok(()),
                 (Ok(Outcome::Failed(_)) | Err(_), true) => Ok(()),

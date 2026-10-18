@@ -564,6 +564,9 @@ impl Draw {
         let Ok(whole) = self.shape_var(shape) else { return };
         // (Each missed name with its nearest free sub-shape and how near, nearest first.)
         let mut pairs: Vec<(f64, &String, Shape)> = Vec::new();
+        // (Each kind's sub-shapes with their centres and sizes, measured once for all the
+        // names: edges' lengths and faces' areas are integrals.)
+        let mut measured: std::collections::HashMap<NodeKind, Vec<(Shape, kentron::math::Point, f64)>> = Default::default();
         for (var, kind, v) in missed {
             let kind = match kind.as_str() {
                 "E" => NodeKind::Edge,
@@ -572,12 +575,19 @@ impl Draw {
                 _ => continue,
             };
             let target = kentron::math::Point::new(v[0], v[1], v[2]);
-            for s in self.model.unique_subshapes(whole, kind) {
-                let (at, size) = match kind {
-                    NodeKind::Vertex => (self.model.point(s), 1e-3 * (1.0 + (target - kentron::math::Point::ORIGIN).length())),
-                    NodeKind::Edge => { let m = kentron::properties::length(&self.model, s); (m.center_of_mass, 0.25 * m.mass) }
-                    _ => { let m = kentron::properties::area(&self.model, s); (m.center_of_mass, 0.25 * m.mass.sqrt()) }
-                };
+            let subshapes = measured.entry(kind).or_insert_with(|| {
+                self.model
+                    .unique_subshapes(whole, kind)
+                    .into_iter()
+                    .map(|s| match kind {
+                        NodeKind::Vertex => (s, self.model.point(s), 0.0),
+                        NodeKind::Edge => { let m = kentron::properties::length(&self.model, s); (s, m.center_of_mass, 0.25 * m.mass) }
+                        _ => { let m = kentron::properties::area(&self.model, s); (s, m.center_of_mass, 0.25 * m.mass.sqrt()) }
+                    })
+                    .collect()
+            });
+            for &(s, at, size) in subshapes.iter() {
+                let size = if kind == NodeKind::Vertex { 1e-3 * (1.0 + (target - kentron::math::Point::ORIGIN).length()) } else { size };
                 let d = at.distance(target);
                 if d <= size {
                     pairs.push((d, var, s));

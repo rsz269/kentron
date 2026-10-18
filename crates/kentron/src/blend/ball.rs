@@ -1202,12 +1202,25 @@ fn end_cut_on(
         if best.is_some() {
             break;
         }
+        // (Each section's distance found once, in order along the edge: the projections onto
+        // the end face each start from the foot before, as the crossing's refinement then
+        // does from its bracket's end.)
+        let mut previous: Option<f64> = None;
         for w in order.windows(2) {
-            let (da, db) = (d(w[0])?, d(w[1])?);
+            let da = match previous {
+                Some(x) => x,
+                None => d(w[0])?,
+            };
+            let db = d(w[1])?;
+            previous = Some(db);
             if (da <= 0.0) != (db <= 0.0) && (da <= 0.0) == outwards {
                 let (mut lo, mut hi) = (w[0], w[1]);
+                // (Halved until the halves meet in the last bits: no further step moves.)
                 for _ in 0..80 {
                     let m = 0.5 * (lo + hi);
+                    if m == lo || m == hi {
+                        break;
+                    }
                     if (d(m)? <= 0.0) == (da <= 0.0) {
                         lo = m;
                     } else {
