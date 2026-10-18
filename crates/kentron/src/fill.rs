@@ -44,7 +44,6 @@ const BUDGET: usize = 480;
 #[doc(alias = "BRepOffsetAPI_MakeFilling")]
 #[doc(alias = "GeomPlate_BuildPlateSurface")]
 pub fn n_sided(model: &mut Model, edges: &[Shape], options: &FillingOptions) -> Result<Shape> {
-    let order = options.order.clamp(2, 4);
     let loop_edges = ordered(model, edges)?;
     let wire = crate::make::wire_within(model, &loop_edges, 1e-5)?;
     let wire_id = crate::topology::WireId::try_from(wire.node).expect("a wire");
@@ -59,11 +58,20 @@ pub fn n_sided(model: &mut Model, edges: &[Shape], options: &FillingOptions) -> 
         let (curve, first, last) = model.edge_curve(Shape::from(edge)).ok_or_else(|| Error::InvalidInput("a degenerate edge in a filling's loop".into()))?;
         runs.push((edge, o, curve, first, last));
     }
+    face_on_loop(model, &runs, options)
+}
+
+/// A filling face bounded by `runs` (edges, each with the way the loop runs along it, its
+/// curve and range), in order around a closed loop, through `options.points`: on the edges
+/// themselves (as a solid's cap shares its edges with the faces beside it), running the way
+/// given (the face reversed where its surface faces the other way).
+pub(crate) fn face_on_loop(model: &mut Model, runs: &[(crate::topology::EdgeId, Orientation, crate::geometry::curve::Curve, f64, f64)], options: &FillingOptions) -> Result<Shape> {
+    let order = options.order.clamp(2, 4);
     // The loop as a polygon, and its mean plane (Newell's normal through the centroid).
     // (Fewer along each of many edges: the plate's system grows with the cube of the points.)
     let per_edge = options.points_per_edge.min(BUDGET / runs.len().max(1)).max(3) - 1;
     let mut polygon = Vec::new();
-    for (_, o, curve, first, last) in &runs {
+    for (_, o, curve, first, last) in runs {
         let mut ts: Vec<f64> = (0..per_edge).map(|k| first + (last - first) * k as f64 / per_edge as f64).collect();
         if *o == Orientation::Reversed {
             ts = ts.iter().map(|t| first + last - t).collect();
@@ -149,7 +157,7 @@ pub fn n_sided(model: &mut Model, edges: &[Shape], options: &FillingOptions) -> 
     }).sum();
     let mut uses = Vec::with_capacity(runs.len());
     let mut worst: f64 = 0.0;
-    for (edge, o, curve, first, last) in &runs {
+    for (edge, o, curve, first, last) in runs {
         let k = 4 * per_edge.max(24);
         let ts: Vec<f64> = (0..=k).map(|i| first + (last - first) * i as f64 / k as f64).collect();
         let on_plane: Vec<Point2> = ts.iter().map(|&t| flat(curve.point(t))).collect();
@@ -159,7 +167,8 @@ pub fn n_sided(model: &mut Model, edges: &[Shape], options: &FillingOptions) -> 
         let pcurve = Curve2::BSpline(fit::interpolate_with_parameters(&on_plane, &ts)?);
         uses.push((*edge, *o, pcurve, *first, *last));
     }
-    if area < 0.0 {
+    let flipped = area < 0.0;
+    if flipped {
         uses.reverse();
         for u in &mut uses {
             u.1 = u.1.reversed();
@@ -185,7 +194,7 @@ pub fn n_sided(model: &mut Model, edges: &[Shape], options: &FillingOptions) -> 
             model.set_vertex_tolerance(id, tolerance)?;
         }
     }
-    Ok(face)
+    Ok(if flipped { face.reversed() } else { face })
 }
 
 /// Copies of `edges` (each placed where it is: the face's own, joined at their ends without

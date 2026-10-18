@@ -1012,8 +1012,11 @@ impl Section {
                         *last = b;
                         *kept_params.last_mut().expect("a point") = t1;
                     }
+                    // (Straight from end to end where nothing else can be: a section all but a
+                    // point, its ends maybe one.)
+                    let straight = || crate::geometry::curve::BSplineCurve::new(vec![a, b], vec![0.0, 1.0], vec![2, 2], 1);
                     if kept.len() < 2 {
-                        break fit::interpolate(&[a, b], false, 0.0).expect("interpolating a section");
+                        break fit::interpolate(&[a, b], false, 0.0).unwrap_or_else(|_| straight());
                     }
                     // Interpolated by chord length (a chain's own parameter slows to a stop at
                     // the ends of its branches); its accuracy measured from the section's points
@@ -1022,7 +1025,7 @@ impl Section {
                     // section's own parameter, else straight.)
                     let curve = match fit::interpolate(&kept, false, 0.0).or_else(|_| fit::interpolate_with_parameters(&kept, &kept_params)) {
                         Ok(curve) => curve,
-                        Err(_) => break fit::interpolate(&[a, b], false, 0.0).expect("interpolating a section"),
+                        Err(_) => break fit::interpolate(&[a, b], false, 0.0).unwrap_or_else(|_| straight()),
                     };
                     if matches!(self, Section::Sampled(..)) {
                         break curve;

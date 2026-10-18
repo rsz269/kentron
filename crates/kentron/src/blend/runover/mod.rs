@@ -795,7 +795,11 @@ fn lens(model: &mut Model, s: &Section) -> Result<Shape> {
     let (a, b) = (s.contacts[0] - s.center, s.contacts[1] - s.center);
     let angle = a.cross(b).length().atan2(a.dot(b));
     let normal = a.cross(b);
-    let circle = Circle::new(Frame::new(s.center, Direction::from_vector(normal), Direction::from_vector(a)), s.radius);
+    // (A section whose contacts meet, the faces tangent there: no arc across.)
+    let (Some(z), Some(x)) = (Direction::try_from_vector(normal), Direction::try_from_vector(a)) else {
+        return Err(Error::InvalidInput("a fillet's section has no arc across (its faces are tangent there)".into()));
+    };
+    let circle = Circle::new(Frame::new(s.center, z, x), s.radius);
     let arc = make::edge_from_curve_range(model, Curve::Circle(circle), 0.0, angle)?;
     let (start, end) = model.edge_vertices(arc);
     let chord = make::edge(model, end, start)?;

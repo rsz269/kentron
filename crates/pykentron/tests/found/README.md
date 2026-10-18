@@ -133,6 +133,13 @@ Fixed since the cases were found (running them again):
   faces), edges and wires made from them: cq_gears' worm gear and gear rack build as on
   CadQuery.
 
+- Lofts whose end sections lie in no one plane (wires projected onto a curved face) capped
+  by fillings on their edges: cq_warehouse's teapot handle lofts (the teapot then stops at
+  the spout's union with the pot, faces on one surface); fillets whose sections lose their
+  arc, and sections of surfaces all but meeting at a point, fail with an error, not a crash
+  (cq_warehouse's bottle funnel: a fillet as large as its outline's corners and curves, still
+  open).
+
 Three scripts build differently on CadQuery for reasons of its own: cqterrain's magnet
 template queues its pending wire again (`toPending()`), and CadQuery's face counts it twice
 (double the volume); cqterrain's buildings stack storeys as touching solids, which CadQuery

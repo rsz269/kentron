@@ -39,7 +39,8 @@ use crate::topology::{EdgeId, Model, NodeId, NodeKind, Orientation, Shape, Verte
 #[doc(alias = "BRepOffsetAPI_ThruSections")]
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct LoftOptions {
-    /// Close the loft with planar faces on its end sections into a solid.
+    /// Close the loft with faces on its end sections into a solid (planar, or fillings of
+    /// sections in no one plane).
     pub solid: bool,
     /// Join consecutive sections by straight lines instead of a smooth surface through all.
     pub ruled: bool,
@@ -1019,12 +1020,28 @@ fn build(model: &mut Model, sections: &[Section], grid: &Grid, closed: bool, loo
     // Caps on the end sections, using their edges the other way round.
     for (k, outward) in [(0, Orientation::Reversed), (n - 1, Orientation::Forward)] {
         let Section::Wire(w) = &sections[k] else { continue };
-        // The cap's boundary runs counter-clockwise about its plane's normal.
-        let plane = plane_of(w, if outward == Orientation::Reversed { -1.0 } else { 1.0 })?;
+        // The cap's boundary runs counter-clockwise about its plane's normal. (A section not
+        // in one plane, as a wire projected onto a curved face: capped by the filling of
+        // least bending energy, on its edges.)
+        let order: Vec<usize> = if outward == Orientation::Reversed { (0..edges).rev().collect() } else { (0..edges).collect() };
+        let plane = match plane_of(w, if outward == Orientation::Reversed { -1.0 } else { 1.0 }) {
+            Ok(plane) => plane,
+            Err(Error::InvalidInput(m)) if m.contains("not planar") => {
+                let mut runs = Vec::with_capacity(edges);
+                for &i in &order {
+                    let edge = section_edge(model, i, k)?;
+                    let (curve, first, last) = model.edge_curve(Shape::from(edge)).expect("a section edge has a curve");
+                    runs.push((edge, outward, curve, first, last));
+                }
+                let cap = crate::fill::face_on_loop(model, &runs, &Default::default())?;
+                model.add(shell, cap)?;
+                continue;
+            }
+            Err(e) => return Err(e),
+        };
         let face = model.new_empty(NodeKind::Face);
         model.set_face_surface(face, Surface::Plane(plane), crate::tolerance::LINEAR)?;
         let mut coedges = Vec::with_capacity(edges);
-        let order: Vec<usize> = if outward == Orientation::Reversed { (0..edges).rev().collect() } else { (0..edges).collect() };
         for i in order {
             let edge = section_edge(model, i, k)?;
             let coedge = model.add_coedge(edge, outward)?;
@@ -1244,5 +1261,20 @@ mod tests {
             let length = properties::length(&model, across[0]).mass;
             assert!((length - (400.0 + (200f64.sqrt() - 10.0).powi(2)).sqrt()).abs() < 1e-6, "length {length}");
         }
+    }
+
+    /// A loft from a square to one with a corner lifted (a section in no one plane): the end
+    /// capped by a filling on its edges, the solid closed.
+    #[test]
+    fn a_section_in_no_plane_is_capped_by_a_filling() {
+        let mut model = Model::new();
+        let low = polygon(&mut model, &[[0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [10.0, 10.0, 0.0], [0.0, 10.0, 0.0]]);
+        let high = polygon(&mut model, &[[0.0, 0.0, 10.0], [10.0, 0.0, 10.0], [10.0, 10.0, 12.0], [0.0, 10.0, 10.0]]);
+        let built = loft(&mut model, &[low, high], &LoftOptions { solid: true, ruled: true, ..Default::default() }).unwrap();
+        let report = crate::validity::check(&model, built.shape);
+        assert!(report.is_valid(), "{report:?}");
+        // (Between 1000, the box, and 1000 plus the lifted corner's pyramid over the top.)
+        let volume = crate::properties::volume(&model, built.shape).mass;
+        assert!(volume > 1000.0 && volume < 1000.0 + 100.0 * 2.0 / 2.0, "{volume}");
     }
 }
