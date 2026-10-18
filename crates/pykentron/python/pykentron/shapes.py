@@ -1152,8 +1152,59 @@ def _edges_to_wires(edges: List[Edge], tol: float) -> List[Wire]:
                     continue
                 grown = True
                 break
-        wires.append(Shape.cast(native.make_wire([e.wrapped for e in chain], tol)))
+        wires.append(Shape.cast(native.make_wire([e.wrapped for e in _slits_closed(_loops_one_way(chain, tol), tol)], tol)))
     return wires
+
+
+def _slits_closed(chain: List[Edge], tol: float) -> List[Edge]:
+    """`chain` less each edge followed by the same edge back (a slit, as where two mirrored
+    halves joined both run along the mirror line): the two bound nothing, and would leave
+    faces back to back inside a solid made from them."""
+
+    def back(a: Edge, b: Edge) -> bool:
+        return (
+            (a.startPoint() - b.endPoint()).Length <= tol
+            and (a.endPoint() - b.startPoint()).Length <= tol
+            and (a.positionAt(0.5) - b.positionAt(0.5)).Length <= tol
+        )
+
+    out: List[Edge] = []
+    for e in chain:
+        if out and back(out[-1], e):
+            out.pop()
+        else:
+            out.append(e)
+    # (Round the end of a closed chain too.)
+    while len(out) > 2 and back(out[-1], out[0]):
+        out = out[1:-1]
+    return out if len(out) >= 1 else chain
+
+
+def _loops_one_way(chain: List[Edge], tol: float) -> List[Edge]:
+    """`chain` with the loops after its first (where it passes its start again, as two
+    mirrored halves joined do) turned to wind as the first does: they then add to the area
+    it bounds rather than taking it away."""
+    start = chain[0].startPoint()
+    cuts = [i + 1 for i, e in enumerate(chain) if (e.endPoint() - start).Length <= tol]
+    if len(cuts) < 2:
+        return chain
+    loops = [chain[a:b] for a, b in zip([0] + cuts[:-1], cuts)] + ([chain[cuts[-1]:]] if cuts[-1] < len(chain) else [])
+
+    def winding(loop):
+        # (Newell's: twice the vector area of a polygon through points along the edges.)
+        pts = [e.positionAt(t, mode="parameter") for e in loop for t in (0.0, 0.25, 0.5, 0.75)]
+        total = Vector(0, 0, 0)
+        for a, b in zip(pts, pts[1:] + pts[:1]):
+            total = total + a.cross(b)
+        return total
+
+    first = winding(loops[0])
+    out = list(loops[0])
+    for loop in loops[1:]:
+        if winding(loop).dot(first) < 0:
+            loop = [e.reverse() for e in reversed(loop)]
+        out.extend(loop)
+    return out
 
 
 def _line_corner(a: Edge, b: Edge):
@@ -1295,7 +1346,9 @@ class Face(Shape):
         """The face bounded by `outerWire` with `innerWires` as holes. As CadQuery's (whose face
         fixing splits it so), "inner" wires clear of the outer one bound faces of their own
         (with the wires inside them as holes), the result then a compound of faces."""
-        innerWires = list(innerWires)
+        # (A wire given again, the same shape, bounds nothing more: as where a script queues
+        # its pending wire twice.)
+        innerWires = [w for i, w in enumerate(innerWires) if not w.isSame(outerWire) and not any(w.isSame(v) for v in innerWires[:i])]
         if innerWires and not outerWire.IsClosed():
             raise ValueError("Cannot build face(s): outer wire is not closed")
         for w in innerWires:

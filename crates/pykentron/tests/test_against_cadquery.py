@@ -118,11 +118,26 @@ def chamfered_arc_plate(cq):
     return plate.chamfer(3, None, arc)
 
 
+def mirrored_outline(cq):
+    # (Two halves of an outline joined along the mirror line: both wind one way, and the
+    # line out and back between them is dropped.)
+    half = cq.Wire.makePolygon([(0, 0, 0), (0, 6, 0), (10, 6, 0), (22, 0, 0)], close=True)
+    wire = cq.Wire.combine([half, half.mirror("XZ")])[0]
+    return cq.Solid.extrudeLinear(cq.Face.makeFromWires(wire), cq.Vector(0, 0, 4))
+
+
+def fillet_with_bore_edges(cq):
+    # (The bore's vertical edges, where its cylinder meets itself, are left out.)
+    block = cq.Solid.makeBox(20, 20, 10).cut(cq.Solid.makeCylinder(4, 30, cq.Vector(10, 10, -10)))
+    vertical = [e for e in block.Edges() if abs(e.startPoint().z - e.endPoint().z) > 1]
+    return block.fillet(2, vertical)
+
+
 CASES = [
     box, cylinder_along_y, cone, workplane_box, fused_boxes, cut_bores, intersected,
     polyline_prism_xz, polyline_prism_custom_plane, hexagon, face_with_hole, loft,
     rotated_mirrored, revolved, located, euler_location, offset_outline, smoothed_helix_spline,
-    chamfered_arc_plate,
+    chamfered_arc_plate, mirrored_outline, fillet_with_bore_edges,
 ]
 
 

@@ -105,7 +105,6 @@ tests/boolean/bcut_complex/Q9
 tests/boolean/bcut_simple/G8
 tests/boolean/bcut_simple/L9
 tests/boolean/bcut_simple/M1
-tests/boolean/bfuse_complex/K3
 tests/boolean/bfuse_complex/M2
 tests/boolean/bopcommon_2d/N2
 tests/boolean/bopcommon_complex/H8
@@ -123,10 +122,8 @@ tests/boolean/bopfuse_complex/D5
 tests/boolean/bopfuse_complex/F1
 tests/boolean/bopfuse_complex/H1
 tests/boolean/bopfuse_complex/J6
-tests/boolean/bopfuse_complex/J8
 tests/boolean/bopfuse_complex/K9
 tests/boolean/bopfuse_complex/L9
-tests/boolean/bopsection/A2
 tests/boolean/bopsection/C2
 tests/boolean/bopsection/D3
 tests/boolean/boptuc_complex/B5
@@ -138,7 +135,6 @@ tests/boolean/bsection/M3
 tests/boolean/bsection/M4
 tests/boolean/bsection/M5
 tests/boolean/bsection/N8
-tests/boolean/bsection/R9
 tests/boolean/cells_test/C7
 tests/boolean/cells_test/D5
 tests/boolean/cells_test/J2
@@ -672,7 +668,6 @@ tests/bugs/modalg_7/bug26558_2
 tests/bugs/modalg_7/bug26563
 tests/bugs/modalg_7/bug26795
 tests/bugs/modalg_7/bug27087
-tests/bugs/modalg_7/bug27711_3
 tests/bugs/modalg_7/bug27928
 tests/bugs/modalg_7/bug27948
 tests/bugs/modalg_7/bug28248

@@ -770,14 +770,27 @@ impl RevolutionSurface {
             let in_meridian = normal.dot(z).abs() <= 1e-12 && normal.dot(center).abs() <= 1e-12 * (1.0 + center.length());
             let radial_c = center - z * center.dot(z);
             if in_meridian && radial_c.length() > 1e-12 {
-                // p turned back into the circle's half-plane.
+                // p turned back into the plane of the circle, on the side of the axis its
+                // centre is on or on the other (where an arc crossing over from its centre,
+                // as a concave fillet's about a thin shaft, lies): there, the one nearer the
+                // circle, preferring a point within the basis's range.
                 let e = radial_c.normalized();
-                let q = o + e * rp + z * hp;
-                let d = q - circle.center();
-                let v = d.dot(y).atan2(d.dot(x));
                 let (first, last) = (self.basis.first_parameter(), self.basis.last_parameter());
-                let v = if v < first - 1e-12 && last - first >= std::f64::consts::TAU - 1e-12 { v + std::f64::consts::TAU } else { v };
-                let v = if v < first - 1e-12 { v + std::f64::consts::TAU } else { v };
+                let angle_of = |q: Point| {
+                    let d = q - circle.center();
+                    let v = d.dot(y).atan2(d.dot(x));
+                    let v = if v < first - 1e-12 && last - first >= std::f64::consts::TAU - 1e-12 { v + std::f64::consts::TAU } else { v };
+                    if v < first - 1e-12 { v + std::f64::consts::TAU } else { v }
+                };
+                let candidates = [o + e * rp + z * hp, o - e * rp + z * hp].map(|q| {
+                    let v = angle_of(q);
+                    let within = v <= last + 1e-9;
+                    ((q.distance(circle.center()) - circle.radius()).abs(), !within, v)
+                });
+                let [a, b] = candidates;
+                // (Nearer the circle, by more than rounding; else within the range.)
+                let near = 1e-9 * (1.0 + circle.radius());
+                let (_, _, v) = if (a.0 - b.0).abs() > near { if a.0 <= b.0 { a } else { b } } else if a.1 && !b.1 { b } else { a };
                 let c = self.basis.point(v) - o;
                 let (rc, rq) = (c - z * c.dot(z), (p - o) - z * (p - o).dot(z));
                 let u = z.dot(rc.cross(rq)).atan2(rc.dot(rq));
@@ -1329,6 +1342,23 @@ impl Transformable for OffsetSurface {
 mod tests {
     use super::*;
     use crate::geometry::ParametricSurface;
+
+    #[test]
+    fn revolution_parameters_round_trip_where_the_arc_lies_across_the_axis_from_its_centre() {
+        // A concave fillet's section about a thin shaft: an arc of radius 18 about a centre
+        // 8 from the axis (x), the arc itself on the other side of the axis.
+        use crate::geometry::curve::{Circle, Curve};
+        let x = Direction::new(-0.5734623443633282, 0.8192319205190406, 0.0);
+        let frame = Frame::new(Point::new(-19.326, -8.0, 0.0), -Direction::Z, x);
+        let basis = Curve::Circle(Circle::new(frame, 18.0));
+        let revolution = RevolutionSurface::new(basis, crate::math::Axis::new(Point::ORIGIN, Direction::X));
+        let surface = Surface::Revolution(revolution.clone());
+        for (u, v) in [(0.0, 0.1), (1.0, 0.4), (3.1, 0.6), (5.0, 0.3)] {
+            let p = surface.point(u, v);
+            let (pu, pv) = revolution.parameters(p);
+            assert!(surface.point(pu, pv).distance(p) < 1e-9, "({u}, {v}) came back as ({pu}, {pv})");
+        }
+    }
 
     #[test]
     fn cone_parameters_round_trip_on_both_sides_of_the_apex() {

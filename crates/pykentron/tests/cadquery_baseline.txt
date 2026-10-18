@@ -89,7 +89,6 @@ tests.test_cadquery.TestCadQuery::testCompSolid
 tests.test_cadquery.TestCadQuery::testExtrude
 tests.test_cadquery.TestCadQuery::testExtrudeUntilFace
 tests.test_cadquery.TestCadQuery::testFaceIntersectedByLine
-tests.test_cadquery.TestCadQuery::testFillet
 tests.test_cadquery.TestCadQuery::testFuzzyBoolOp
 tests.test_cadquery.TestCadQuery::testLocationAt
 tests.test_cadquery.TestCadQuery::testLoft

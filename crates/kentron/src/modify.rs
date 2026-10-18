@@ -426,7 +426,19 @@ impl Copier {
             NodeKind::Vertex => Ok(self.vertex(model, shape).into()),
             NodeKind::Edge => Ok(self.edge(model, shape)?.0.into()),
             NodeKind::Face => self.face(model, shape),
-            NodeKind::Wire => Err(Error::InvalidInput("transforming a wire outside a face is not supported".into())),
+            NodeKind::Wire => {
+                // A wire outside a face: its edges copied, in order (no pcurves to carry).
+                let coedges: Vec<Shape> = model.children_local(shape).collect();
+                let mut ids = Vec::new();
+                for c in coedges {
+                    let id = CoEdgeId::try_from(c.node).expect("a wire holds coedges");
+                    let (edge, orientation) = (model[id].edge, model[id].orientation);
+                    let placed = Shape { placement: shape.placement * c.placement, ..Shape::from(edge) };
+                    let (new_edge, _) = self.edge(model, placed)?;
+                    ids.push(model.add_coedge(new_edge, orientation)?);
+                }
+                Ok(model.add_wire(&ids)?.into())
+            }
             NodeKind::Shell | NodeKind::Solid | NodeKind::CompSolid | NodeKind::Compound => {
                 let copy = model.new_empty(shape.kind());
                 let children: Vec<Shape> = model.children_local(shape).collect();

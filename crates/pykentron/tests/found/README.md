@@ -49,7 +49,22 @@ Fixed since the cases were found (running them again):
   own volume of them is 3% off: 13.35 where the surfaces enclose 12.99).
 - Fillets and chamfers along an arc whose circle comes back into the solid: the tool ran
   round into it.
+- Fillets and chamfers given edges where the faces meet smoothly (a hole's seam, picked
+  by `edges("|Z")`): those left out, as OCCT leaves them (CadQuery's Ex003, the Raspberry
+  Pi board).
+- Fillets and chamfers on several solids, one shape placed twice among them: each solid on
+  its own (cqterrain's rooms).
+- A surface of revolution whose arc lies across its axis from the arc's centre (a concave
+  fillet round a thin shaft): points on it were found off it, and booleans cut it wrongly
+  (the contrib resin mould, the svg-export mould).
+- Wires joined from mirrored halves: the halves made to wind one way, the edge out and back
+  along the mirror line dropped (cqterrain's pointed arches); a wire given twice to a face
+  counted once (cq_warehouse's domed nuts); free wires transformed (mirrored).
+
+With these, five more of OCCT's cases pass (four booleans and a Tcl bug script).
 
 Still open among them: the thread solids' unions with their core (nearly coincident
-surfaces, 0.001 apart), cq_warehouse's nuts and bolts (their threads' unions too, by the look of them), and the rest of
-`cases.tsv`.
+surfaces, 0.001 apart), cq_warehouse's bolts (their threads' unions too, by the look of
+them), the contrib remote enclosure (a countersink through a wall thinner than it is deep:
+the cut loses the countersink's cone), and the rest of `cases.tsv`. 12 of the 85 now build
+as on CadQuery.

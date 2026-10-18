@@ -39,7 +39,81 @@ pub fn fillet(model: &mut Model, shape: Shape, edges: &[Shape], radius: f64) -> 
 /// [`fillet`] with a radius per edge.
 #[doc(alias = "BRepFilletAPI_MakeFillet::Add")]
 pub fn fillet_edges(model: &mut Model, shape: Shape, edges: &[(Shape, f64)]) -> Result<Shape> {
-    on_solids(model, shape, |model, shape| fillet_solid_edges(model, shape, edges))
+    let edges = &sharp(model, shape, edges, |e| e.0)?;
+    on_solids(model, shape, |model, shape| each_solid(model, shape, edges, |e| e.0, fillet_solid_edges))
+}
+
+/// [`fillet`] of all `edges`, those where the faces meet smoothly too (as an offset's
+/// parting edges, which may meet so but for rounding).
+pub(crate) fn fillet_all(model: &mut Model, shape: Shape, edges: &[Shape], radius: f64) -> Result<Shape> {
+    let edges: Vec<(Shape, f64)> = edges.iter().map(|&e| (e, radius)).collect();
+    on_solids(model, shape, |model, shape| each_solid(model, shape, &edges, |e| e.0, fillet_solid_edges))
+}
+
+/// `op` on each solid of `shape` with the edges of `edges` it has (by node and placement:
+/// one solid placed twice has the same edges twice, each pair apart), the solids without
+/// any left as they are; `op` on `shape` itself where it has one solid, or more than solids.
+fn each_solid<T: Copy>(model: &mut Model, shape: Shape, edges: &[T], edge: impl Fn(&T) -> Shape, op: impl Fn(&mut Model, Shape, &[T]) -> Result<Shape>) -> Result<Shape> {
+    let solids: Vec<Shape> = model.explore(shape, NodeKind::Solid).collect();
+    let shells_in = |model: &Model, s: Shape| model.explore(s, NodeKind::Shell).count();
+    let only_solids = shells_in(model, shape) == solids.iter().map(|&s| shells_in(model, s)).sum::<usize>();
+    if solids.len() < 2 || !only_solids {
+        return op(model, shape, edges);
+    }
+    let mut pieces = Vec::new();
+    for &solid in &solids {
+        let own: Vec<Shape> = model.explore(solid, NodeKind::Edge).collect();
+        let mine: Vec<T> = edges.iter().copied().filter(|e| own.iter().any(|o| o.is_same(&edge(e)))).collect();
+        if mine.is_empty() {
+            pieces.push(solid);
+        } else {
+            let done = op(model, solid, &mine)?;
+            pieces.extend(model.explore(done, NodeKind::Solid));
+        }
+    }
+    let out = model.new_empty(NodeKind::Compound);
+    for piece in pieces {
+        model.add(out, piece)?;
+    }
+    Ok(out)
+}
+
+/// Whether the faces at `edge` (of `shape`) meet smoothly there: a seam (a face meeting
+/// itself), or two faces tangent along it. As OCCT, such edges are left out of fillets and
+/// chamfers (there is no corner to round).
+fn smooth(model: &Model, shape: Shape, edge: Shape) -> bool {
+    use crate::geometry::ParametricCurve;
+    let mut uses: Vec<NodeId> = Vec::new();
+    for face in model.explore(shape, NodeKind::Face) {
+        for e in model.explore(face, NodeKind::Edge) {
+            if e.node == edge.node {
+                uses.push(face.node);
+            }
+        }
+    }
+    match uses[..] {
+        [a, b] if a == b => true,
+        [a, b] => {
+            let Some((curve, first, last)) = model.edge_curve(Shape { orientation: Orientation::Forward, ..edge }) else { return false };
+            [0.2, 0.5, 0.8].iter().all(|&s| {
+                let p = curve.point(first + (last - first) * s);
+                match (normal_at(model, shape, a, p), normal_at(model, shape, b, p)) {
+                    (Some(n), Some(m)) => n.dot(m).abs() >= 1.0 - tolerance::ANGULAR.sqrt(),
+                    _ => false,
+                }
+            })
+        }
+        _ => false,
+    }
+}
+
+/// `edges` less those where the faces meet smoothly; an error if that leaves none.
+fn sharp<T: Copy>(model: &Model, shape: Shape, edges: &[T], edge: impl Fn(&T) -> Shape) -> Result<Vec<T>> {
+    let kept: Vec<T> = edges.iter().copied().filter(|e| !smooth(model, shape, edge(e))).collect();
+    if kept.is_empty() && !edges.is_empty() {
+        return Err(Error::InvalidInput("the faces at a fillet edge are tangent".into()));
+    }
+    Ok(kept)
 }
 
 /// [`fillet_edges`] of a shape with solids.
@@ -400,7 +474,11 @@ pub fn chamfer(model: &mut Model, shape: Shape, edges: &[Shape], distance: f64) 
 /// [`chamfer`] with two distances per edge, the first along a given face.
 #[doc(alias = "BRepFilletAPI_MakeChamfer::Add")]
 pub fn chamfer_edges(model: &mut Model, shape: Shape, edges: &[ChamferedEdge]) -> Result<Shape> {
-    on_solids(model, shape, |model, shape| chamfer_solid_edges(model, shape, edges))
+    if edges.is_empty() {
+        return Err(Error::InvalidInput("no edges to chamfer".into()));
+    }
+    let edges = &sharp(model, shape, edges, |e| e.edge)?;
+    on_solids(model, shape, |model, shape| each_solid(model, shape, edges, |e| e.edge, chamfer_solid_edges))
 }
 
 /// [`chamfer_edges`] of a shape with solids.
@@ -1808,6 +1886,58 @@ mod tests {
             let volume = properties::volume(&model, result).mass;
             assert!((volume - expected).abs() < 1e-2, "{volume} not {expected}");
         }
+    }
+
+    /// A box with a hole: the hole's vertical edges (where its cylinder meets itself) left out
+    /// of the edges rounded, as OCCT leaves them; only those, an error.
+    #[test]
+    fn seams_are_left_out_of_fillets() {
+        use crate::primitives::Cylinder;
+        let mut model = Model::new();
+        let block = Cuboid::new(20.0, 20.0, 10.0).build(&mut model).unwrap();
+        let bore = Cylinder::new(4.0, 30.0).with_frame(Frame::from_z(Point::new(10.0, 10.0, -10.0), Direction::Z)).build(&mut model).unwrap();
+        let shape = boolean::difference(&mut model, block, bore).unwrap();
+        let vertical = |model: &Model, cylindrical: bool| -> Vec<Shape> {
+            model.unique_subshapes(shape, NodeKind::Edge).into_iter().filter(|&e| {
+                let (a, b) = model.edge_vertices(e);
+                let (p, q) = (model.point(a), model.point(b));
+                (p.x - q.x).abs() < 1e-9 && (p.y - q.y).abs() < 1e-9 && (p.z - q.z).abs() > 1.0 && ((p.x - 10.0).hypot(p.y - 10.0) < 5.0) == cylindrical
+            }).collect()
+        };
+        let (corners, seams) = (vertical(&model, false), vertical(&model, true));
+        // (The bore's vertical edges: its seam, and any edges between pieces of its cylinder.)
+        assert!(corners.len() == 4 && !seams.is_empty());
+        let alone = fillet(&mut model, shape, &corners, 2.0).unwrap();
+        let all: Vec<Shape> = corners.iter().chain(&seams).copied().collect();
+        let with_seams = fillet(&mut model, shape, &all, 2.0).unwrap();
+        let (a, b) = (properties::volume(&model, alone).mass, properties::volume(&model, with_seams).mass);
+        assert!((a - b).abs() < 1e-9, "{a} {b}");
+        assert!(fillet(&mut model, shape, &seams, 2.0).is_err());
+    }
+
+    /// Two copies of one box (one node placed twice): each copy's edges bevelled on that copy
+    /// alone, though the copies share their edges' nodes.
+    #[test]
+    fn copies_of_one_solid_are_bevelled_each_on_its_own() {
+        let mut model = Model::new();
+        let block = Cuboid::new(2.0, 2.0, 5.0).build(&mut model).unwrap();
+        let pair = model.new_empty(NodeKind::Compound);
+        for dy in [0.0, 4.0] {
+            model.add(pair, block.moved(&Transform::translation(Vector::new(0.0, dy, 0.0)))).unwrap();
+        }
+        let mut vertical: Vec<Shape> = Vec::new();
+        for e in model.explore(pair, NodeKind::Edge) {
+            let (a, b) = model.edge_vertices(e);
+            if (model.point(a).z - model.point(b).z).abs() > 1.0 && !vertical.iter().any(|v| v.is_same(&e)) {
+                vertical.push(e);
+            }
+        }
+        assert_eq!(vertical.len(), 8);
+        let bevelled = chamfer(&mut model, pair, &vertical, 0.5).unwrap();
+        assert_eq!(model.unique_subshapes(bevelled, NodeKind::Solid).len(), 2);
+        let volume = properties::volume(&model, bevelled).mass;
+        let expected = 2.0 * (20.0 - 4.0 * 0.125 * 5.0);
+        assert!((volume - expected).abs() < 1e-9, "{volume} not {expected}");
     }
 
     #[test]

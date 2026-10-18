@@ -245,7 +245,7 @@ fn round_parting(model: &mut Model, shape: Shape, moved: &Moved, radius: f64) ->
             model.add(solid, shell)?;
             model.add(compound, solid)?;
         }
-        let rounded = crate::blend::fillet(model, compound, &edges, radius)?;
+        let rounded = crate::blend::fillet_all(model, compound, &edges, radius)?;
         let shells = model.unique_subshapes(rounded, NodeKind::Shell);
         return match (shape.kind(), &shells[..]) {
             (NodeKind::Shell, [one]) => Ok(*one),
@@ -258,7 +258,7 @@ fn round_parting(model: &mut Model, shape: Shape, moved: &Moved, radius: f64) ->
             }
         };
     }
-    crate::blend::fillet(model, shape, &edges, radius)
+    crate::blend::fillet_all(model, shape, &edges, radius)
 }
 
 /// `shape` with its faces' surfaces replaced by `new_surface` (given each face as the shape
