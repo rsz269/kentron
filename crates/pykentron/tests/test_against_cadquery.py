@@ -133,11 +133,34 @@ def fillet_with_bore_edges(cq):
     return block.fillet(2, vertical)
 
 
+def loft_turned_aside(cq):
+    # (Outlines in planes square to each other: matched by their vertices, not by normals.)
+    a = cq.Wire.makePolygon([(0, 0, 0), (10, 0, 0), (12, 6, 0), (0, 8, 0)], close=True)
+    b = cq.Wire.makePolygon([(30, 0, 30), (30, 0, 20), (30, 6, 18), (30, 8, 30)], close=True)
+    return cq.Solid.makeLoft([a, b])
+
+
+def sweep_round_hexagon(cq):
+    # (A closed spine with corners, the profile mitred at each, as CadQuery's default.)
+    r = 3 / math.sin(math.pi / 3)
+    pts = [(r * math.cos(i * math.pi / 3 + math.pi / 6), r * math.sin(i * math.pi / 3 + math.pi / 6), 0) for i in range(7)]
+    spine = cq.Wire.makePolygon(pts)
+    profile = cq.Face.makeFromWires(cq.Wire.makeCircle(0.5, cq.Vector(3, 0, 0), cq.Vector(0, 1, 0)))
+    return cq.Solid.sweep(profile, spine, True, False, None, "right")
+
+
+def frenet_sweep_round_helix(cq):
+    helix = cq.Wire.makeHelix(pitch=0.4, height=2.4, radius=0.5)
+    square = cq.Wire.makePolygon([(0.35, 0, 0.1), (0.5, 0, 0.05), (0.5, 0, 0.35), (0.35, 0, 0.3)], close=True)
+    return cq.Solid.sweep(cq.Face.makeFromWires(square), helix, True, True)
+
+
 CASES = [
     box, cylinder_along_y, cone, workplane_box, fused_boxes, cut_bores, intersected,
     polyline_prism_xz, polyline_prism_custom_plane, hexagon, face_with_hole, loft,
     rotated_mirrored, revolved, located, euler_location, offset_outline, smoothed_helix_spline,
     chamfered_arc_plate, mirrored_outline, fillet_with_bore_edges,
+    loft_turned_aside, sweep_round_hexagon, frenet_sweep_round_helix,
 ]
 
 

@@ -91,7 +91,6 @@ tests.test_cadquery.TestCadQuery::testExtrudeUntilFace
 tests.test_cadquery.TestCadQuery::testFaceIntersectedByLine
 tests.test_cadquery.TestCadQuery::testFuzzyBoolOp
 tests.test_cadquery.TestCadQuery::testLocationAt
-tests.test_cadquery.TestCadQuery::testLoft
 tests.test_cadquery.TestCadQuery::testMultisectionSweep
 tests.test_cadquery.TestCadQuery::testNoClean
 tests.test_cadquery.TestCadQuery::testNullShape
@@ -141,7 +140,6 @@ tests.test_free_functions::test_history_offset
 tests.test_free_functions::test_history_sweep
 tests.test_free_functions::test_imprint
 tests.test_free_functions::test_imprint_error
-tests.test_free_functions::test_loft
 tests.test_free_functions::test_moved
 tests.test_free_functions::test_offset
 tests.test_free_functions::test_offset2D

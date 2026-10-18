@@ -375,7 +375,15 @@ fn make_compatible(sections: &mut Vec<Section>, closed: bool, looped: bool, matc
     for pair in wires.windows(2) {
         let (prev, this) = (wire(&sections[pair[0]]), wire(&sections[pair[1]]));
         let flip = if closed {
-            normal(prev).dot(normal(this)) < 0.0
+            let (a, b) = (normal(prev), normal(this));
+            // (Where the planes are near square to each other, the normals do not tell: the
+            // way round whose vertices, from the best start, lie nearest the previous one's.)
+            if a.dot(b).abs() < 0.5 * a.length() * b.length() && prev.pieces.len() == this.pieces.len() {
+                let reversed: Vec<Piece> = this.pieces.iter().rev().map(Piece::reversed).collect();
+                gap_from_best_start(prev, &reversed) < gap_from_best_start(prev, &this.pieces)
+            } else {
+                a.dot(b) < 0.0
+            }
         } else {
             let (a0, a1) = (prev.pieces[0].at(0.0), prev.pieces[prev.pieces.len() - 1].at(1.0));
             let (b0, b1) = (this.pieces[0].at(0.0), this.pieces[this.pieces.len() - 1].at(1.0));
@@ -393,17 +401,40 @@ fn make_compatible(sections: &mut Vec<Section>, closed: bool, looped: bool, matc
             split_at_fractions(wire_mut(&mut sections[k]), &all, marks);
         }
     }
-    // A closed wire starts at the vertex nearest to the previous wire's start.
+    // A closed wire starts at the vertex nearest to the previous wire's start; or, where the
+    // two lie in planes near square to each other, where its vertices in order lie nearest
+    // the previous wire's in all (of an outline turned aside, the vertex nearest the previous
+    // start may be its far end).
     if closed {
         for pair in wires.windows(2) {
-            let start = wire(&sections[pair[0]]).pieces[0].at(0.0);
+            let prev = wire(&sections[pair[0]]).clone();
+            let aside = {
+                let (a, b) = (normal(&prev), normal(wire(&sections[pair[1]])));
+                a.dot(b).abs() < 0.5 * a.length() * b.length()
+            };
             let w = wire_mut(&mut sections[pair[1]]);
-            let nearest = (0..w.pieces.len()).min_by(|&a, &b| w.pieces[a].at(0.0).distance(start).total_cmp(&w.pieces[b].at(0.0).distance(start)));
-            if let Some(i) = nearest {
+            let n = w.pieces.len();
+            let gap = |i: usize| -> f64 {
+                if aside && prev.pieces.len() == n {
+                    (0..n).map(|k| prev.pieces[k].at(0.0).distance(w.pieces[(k + i) % n].at(0.0))).sum()
+                } else {
+                    w.pieces[i].at(0.0).distance(prev.pieces[0].at(0.0))
+                }
+            };
+            if let Some(i) = (0..n).min_by(|&a, &b| gap(a).total_cmp(&gap(b))) {
                 w.pieces.rotate_left(i);
             }
         }
     }
+}
+
+/// The least sum of distances between `prev`'s vertices and `pieces`' taken in order from
+/// some start.
+fn gap_from_best_start(prev: &WireSection, pieces: &[Piece]) -> f64 {
+    let n = pieces.len();
+    (0..n)
+        .map(|i| (0..n).map(|k| prev.pieces[k].at(0.0).distance(pieces[(k + i) % n].at(0.0))).sum::<f64>())
+        .fold(f64::INFINITY, f64::min)
 }
 
 /// The fractions of their length where the wires have vertices, of all wires.

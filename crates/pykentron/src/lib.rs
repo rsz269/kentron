@@ -555,7 +555,7 @@ fn revolve(profile: Handle, origin: Xyz, axis: Xyz, angle: f64) -> PyResult<Hand
 #[pyo3(signature = (sections, solid=true, ruled=false))]
 fn make_loft(sections: Vec<Handle>, solid: bool, ruled: bool) -> PyResult<Handle> {
     let sections: Vec<Shape> = sections.iter().map(|h| h.shape).collect();
-    with_model(|m| loft::loft(m, &sections, &loft::LoftOptions { solid, ruled, ..Default::default() }).map(|l| l.shape)).map(handle)
+    with_model(|m| loft::loft(m, &sections, &loft::LoftOptions { solid, ruled, matching: loft::Matching::ByRays }).map(|l| l.shape)).map(handle)
 }
 
 /// A planar wire offset in its plane ("arc" or "intersection" joins).

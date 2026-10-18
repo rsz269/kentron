@@ -362,12 +362,21 @@ pub fn make_wedge(dx: f64, dy: f64, dz: f64, xmin: f64, zmin: f64, xmax: f64, zm
 
 /// `profile` swept along `spine` (an edge or wire), moved onto the spine first if
 /// `contact`, and squared to it if `correction`.
+/// At the spine's corners, the profile carried on unturned ("transformed"), or turned with
+/// the spine and the sweeps mitred ("right") or rounded ("round"), as CadQuery's transitions;
+/// with `frenet`, carried in the spine's Frenet frame.
 #[pyfunction]
-#[pyo3(signature = (profile, spine, contact=false, correction=false))]
-pub fn pipe(profile: Handle, spine: Handle, contact: bool, correction: bool) -> PyResult<Handle> {
+#[pyo3(signature = (profile, spine, contact=false, correction=false, corner="transformed", frenet=false))]
+pub fn pipe(profile: Handle, spine: Handle, contact: bool, correction: bool, corner: &str, frenet: bool) -> PyResult<Handle> {
+    let corner = match corner {
+        "transformed" => sweep::Corner::Unturned,
+        "right" => sweep::Corner::Mitred,
+        "round" => sweep::Corner::Rounded,
+        other => return Err(pyo3::exceptions::PyValueError::new_err(format!("unknown transition {other}"))),
+    };
     with_model(|m| {
-        let options = sweep::PipeOptions { contact, correction };
-        sweep::pipe_with(m, profile.shape, spine.shape, &options).map(|s| s.shape)
+        let options = sweep::PipeOptions { contact, correction, frenet };
+        sweep::pipe_cornered(m, profile.shape, spine.shape, &options, corner)
     })
     .map(handle)
 }
@@ -377,7 +386,7 @@ pub fn pipe(profile: Handle, spine: Handle, contact: bool, correction: bool) -> 
 #[pyfunction]
 #[pyo3(signature = (sections, spine, solid=true, contact=false, correction=false))]
 pub fn pipe_through(sections: Vec<Handle>, spine: Handle, solid: bool, contact: bool, correction: bool) -> PyResult<Handle> {
-    let options = sweep::PipeOptions { contact, correction };
+    let options = sweep::PipeOptions { contact, correction, ..Default::default() };
     let sections: Vec<(Shape, sweep::PipeOptions)> = sections.iter().map(|h| (h.shape, options)).collect();
     with_model(|m| sweep::pipe_through(m, &sections, spine.shape, solid)).map(handle)
 }

@@ -69,7 +69,7 @@ pub(super) fn pipe_shell(model: &mut Model, sections: &[(Shape, PipeOptions)], p
     if sections.is_empty() || pieces.is_empty() {
         return Err(Error::InvalidInput("a sweep needs a spine and sections".into()));
     }
-    let (reference, _) = motions(pieces, SAMPLES, (0, 0.0))?;
+    let (reference, _) = motions(pieces, SAMPLES, (0, 0.0), false)?;
     // Each section: where it stands (as a global spine position) and its motion into the
     // frame at the spine's start.
     let mut placed: Vec<(f64, Shape, Transform)> = Vec::with_capacity(sections.len());
@@ -77,7 +77,7 @@ pub(super) fn pipe_shell(model: &mut Model, sections: &[(Shape, PipeOptions)], p
         let placing = super::placing(model, section, pieces, &options)?;
         let section = section.moved(&placing);
         let (k, s) = section_placement(model, section, pieces)?;
-        let (at_anchor, _) = motions(pieces, SAMPLES, (k, s))?;
+        let (at_anchor, _) = motions(pieces, SAMPLES, (k, s), false)?;
         placed.push((k as f64 + s, section, at_anchor[0].transforms[0]));
     }
     placed.sort_by(|a, b| a.0.total_cmp(&b.0));

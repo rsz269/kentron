@@ -1180,6 +1180,17 @@ def _slits_closed(chain: List[Edge], tol: float) -> List[Edge]:
     return out if len(out) >= 1 else chain
 
 
+def _has_corners(wire: "Wire") -> bool:
+    """Whether the wire's edges meet at an angle somewhere (at its start too, if closed)."""
+    edges = wire.Edges()
+    pairs = list(zip(edges, edges[1:])) + ([(edges[-1], edges[0])] if wire.IsClosed() and len(edges) > 1 else [])
+    for a, b in pairs:
+        ta, tb = a.tangentAt(1.0), b.tangentAt(0.0)
+        if ta.cross(tb).Length > 1e-6 or ta.dot(tb) < 0:
+            return True
+    return False
+
+
 def _loops_one_way(chain: List[Edge], tol: float) -> List[Edge]:
     """`chain` with the loops after its first (where it passes its start again, as two
     mirrored halves joined do) turned to wind as the first does: they then add to the area
@@ -1645,10 +1656,14 @@ class Solid(Shape, Mixin3D):
         if mode is not None:
             raise NotImplementedError("sweeps guided by an auxiliary spine or binormal")
         spine = cls._toWire(path)
+        transition = options[3] if len(rest) > 3 and options[3] else transitionMode
+        isFrenet = bool(options[1]) if len(rest) > 1 else isFrenet
+        # (Only where the spine has corners: elsewhere every transition is the same sweep.)
+        corner = transition if transition in ("right", "round") and _has_corners(spine) else "transformed"
         if makeSolid:
             profile = Face.makeFromWires(outer, inners)
-            return Shape.cast(native.pipe(profile.wrapped, spine.wrapped))
-        shapes = [Shape.cast(native.pipe(w.wrapped, spine.wrapped)) for w in [outer] + inners]
+            return Shape.cast(native.pipe(profile.wrapped, spine.wrapped, corner=corner, frenet=isFrenet))
+        shapes = [Shape.cast(native.pipe(w.wrapped, spine.wrapped, corner=corner, frenet=isFrenet)) for w in [outer] + inners]
         return shapes[0] if len(shapes) == 1 else Compound.makeCompound(shapes)
 
     @classmethod

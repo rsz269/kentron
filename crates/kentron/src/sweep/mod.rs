@@ -128,6 +128,13 @@ pub fn extrude(model: &mut Model, profile: Shape, v: Vector) -> Result<Sweep> {
 /// faces sweep B-spline surfaces.
 #[doc(alias = "BRepOffsetAPI_MakePipe")]
 pub fn pipe(model: &mut Model, profile: Shape, spine: Shape) -> Result<Sweep> {
+    pipe_framed(model, profile, spine, false)
+}
+
+/// [`pipe`], the profile carried in the spine's Frenet frame where `frenet` (turning with
+/// its principal normal, as about a helix's axis; where the spine runs straight, turning
+/// no more than its tangent).
+fn pipe_framed(model: &mut Model, profile: Shape, spine: Shape, frenet: bool) -> Result<Sweep> {
     use crate::geometry::ParametricCurve;
     let pieces = spine_pieces(model, spine)?;
     if let [piece] = &pieces[..] {
@@ -146,10 +153,10 @@ pub fn pipe(model: &mut Model, profile: Shape, spine: Shape) -> Result<Sweep> {
         // Sweep the shape where it is defined, then place the result like the profile.
         let inverse = profile.placement.inverse();
         let local: Vec<pipe::SpinePiece> = pieces.iter().map(|p| pipe::SpinePiece { curve: p.curve.transformed(&inverse), first: p.first, last: p.last }).collect();
-        let sweep = pipe::pipe_along(model, Shape { placement: Transform::IDENTITY, ..profile }, &local)?;
+        let sweep = pipe::pipe_along(model, Shape { placement: Transform::IDENTITY, ..profile }, &local, frenet)?;
         return Ok(sweep.moved(&profile.placement));
     }
-    pipe::pipe_along(model, profile, &pieces)
+    pipe::pipe_along(model, profile, &pieces, frenet)
 }
 
 /// The edges of a pipe's spine, in order, each run in the direction the spine takes it.
@@ -178,17 +185,20 @@ pub struct PipeOptions {
     /// Turns the profile about its centre to be square to the spine there.
     #[doc(alias = "WithCorrection")]
     pub correction: bool,
+    /// Carries the profile in the spine's Frenet frame (see [`pipe`]'s frame otherwise).
+    #[doc(alias = "BRepOffsetAPI_MakePipeShell::SetMode")]
+    pub frenet: bool,
 }
 
 /// [`pipe`], the profile first placed on the spine as `options` say.
 #[doc(alias = "BRepOffsetAPI_MakePipeShell")]
 pub fn pipe_with(model: &mut Model, profile: Shape, spine: Shape, options: &PipeOptions) -> Result<Sweep> {
     if !options.contact && !options.correction {
-        return pipe(model, profile, spine);
+        return pipe_framed(model, profile, spine, options.frenet);
     }
     let pieces = spine_pieces(model, spine)?;
     let placing = placing(model, profile, &pieces, options)?;
-    pipe(model, profile.moved(&placing), spine)
+    pipe_framed(model, profile.moved(&placing), spine, options.frenet)
 }
 
 /// How a pipe goes round a corner of its spine (where the tangent jumps).

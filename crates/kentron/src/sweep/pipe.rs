@@ -52,7 +52,9 @@ pub(super) struct PieceMotion {
 /// carried on from piece to piece and sampled finely: the motions taking the frame at
 /// `anchor` (piece, fraction) to those at `samples` points per piece, and to the points
 /// halfway between them (to check fits).
-pub(super) fn motions(pieces: &[SpinePiece], samples: usize, anchor: (usize, f64)) -> Result<(Vec<PieceMotion>, Vec<Vec<Transform>>)> {
+/// With `frenet`, the frames' second axis is the spine's principal normal instead, where
+/// the spine curves (its sign kept from sample to sample).
+pub(super) fn motions(pieces: &[SpinePiece], samples: usize, anchor: (usize, f64), frenet: bool) -> Result<(Vec<PieceMotion>, Vec<Vec<Transform>>)> {
     const FINE: usize = 16;
     let (p0, t0) = pieces[0].point_tangent(0.0)?;
     let r0 = {
@@ -60,6 +62,21 @@ pub(super) fn motions(pieces: &[SpinePiece], samples: usize, anchor: (usize, f64
         let r = a - t0 * a.dot(t0);
         r * (1.0 / r.length())
     };
+    // The principal normal at fraction `s` of a piece, signed as `r`; or `r` where the
+    // spine runs straight.
+    let normal_or = |piece: &SpinePiece, s: f64, t: Vector, r: Vector| -> Vector {
+        if !frenet {
+            return r;
+        }
+        let (_, _, d2) = piece.curve.d2(piece.at(s));
+        let n = d2 - t * d2.dot(t);
+        if !(n.length() > 1e-9 * d2.length().max(1e-300)) {
+            return r;
+        }
+        let n = n * (1.0 / n.length());
+        if n.dot(r) < 0.0 { -n } else { n }
+    };
+    let r0 = if frenet { normal_or(&pieces[0], 0.0, t0, r0) } else { r0 };
     let frame = |p: Point, t: Vector, r: Vector| -> Frame { Frame::new(p, Direction::from_vector(t), Direction::from_vector(r)) };
     // One double reflection from (x, t, r) to the point x1 with tangent t1: the new r.
     let reflect = |x: Point, t: Vector, r: Vector, x1: Point, t1: Vector| -> Vector {
@@ -112,10 +129,10 @@ pub(super) fn motions(pieces: &[SpinePiece], samples: usize, anchor: (usize, f64
             let (s0, s) = ((i - 1) as f64 / n as f64, i as f64 / n as f64);
             if anchor.0 == k && anchor_frame.is_none() && anchor.1 > s0 && anchor.1 <= s {
                 let (xa, ta) = piece.point_tangent(anchor.1)?;
-                anchor_frame = Some(framed(&correction, xa, ta, reflect(x, t, r, xa, ta)));
+                anchor_frame = Some(framed(&correction, xa, ta, normal_or(piece, anchor.1, ta, reflect(x, t, r, xa, ta))));
             }
             let (x1, t1) = piece.point_tangent(s)?;
-            r = reflect(x, t, r, x1, t1);
+            r = normal_or(piece, s, t1, reflect(x, t, r, x1, t1));
             (x, t) = (x1, t1);
             if i % (2 * FINE) == 0 {
                 params.push(s);
@@ -440,7 +457,7 @@ impl Piper<'_> {
 }
 
 /// Sweeps `profile` (unplaced) along the spine's `pieces`, in order.
-pub(super) fn pipe_along(model: &mut Model, profile: Shape, pieces: &[SpinePiece]) -> Result<Sweep> {
+pub(super) fn pipe_along(model: &mut Model, profile: Shape, pieces: &[SpinePiece], frenet: bool) -> Result<Sweep> {
     if pieces.is_empty() {
         return Err(Error::InvalidInput("a pipe needs a spine".into()));
     }
@@ -460,7 +477,7 @@ pub(super) fn pipe_along(model: &mut Model, profile: Shape, pieces: &[SpinePiece
     let anchor = section_placement(model, profile, pieces)?;
     let mut samples = 16;
     let motions = loop {
-        let (motions, halves) = motions(pieces, samples, anchor)?;
+        let (motions, halves) = motions(pieces, samples, anchor, frenet)?;
         let mut error = 0.0f64;
         for (motion, half) in motions.iter().zip(&halves) {
             for &p in &probes {

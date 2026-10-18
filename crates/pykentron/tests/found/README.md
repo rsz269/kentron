@@ -61,10 +61,21 @@ Fixed since the cases were found (running them again):
   along the mirror line dropped (cqterrain's pointed arches); a wire given twice to a face
   counted once (cq_warehouse's domed nuts); free wires transformed (mirrored).
 
+- Lofts matched as OCCT matches them (by rays from the sections' centres where their edge
+  counts differ); closed sections in planes near square to each other turned and started
+  by their vertices' distances, not by their normals or the nearest start (CadQuery's
+  Ex018, the chute loft).
+- Sweeps along spines with corners mitred or rounded as CadQuery's `transition` says (it
+  was ignored: a closed spine's sweep came out empty), and carried in the spine's Frenet
+  frame where `isFrenet` (CadQuery's Ex023 and Ex025, both Tetrakaidecahedron scripts, now
+  15–20 times faster than on CadQuery).
+- A planar face's centre exactly in its plane: faces in one plane, sorted by height, keep
+  their order (CadQuery's Ex026 selected the lid's face for the rim's).
+
 With these, five more of OCCT's cases pass (four booleans and a Tcl bug script).
 
 Still open among them: the thread solids' unions with their core (nearly coincident
 surfaces, 0.001 apart), cq_warehouse's bolts (their threads' unions too, by the look of
 them), the contrib remote enclosure (a countersink through a wall thinner than it is deep:
-the cut loses the countersink's cone), and the rest of `cases.tsv`. 12 of the 85 now build
+the cut loses the countersink's cone), and the rest of `cases.tsv`. 20 of the 85 now build
 as on CadQuery.

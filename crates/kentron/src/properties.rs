@@ -106,12 +106,37 @@ pub fn area_with(model: &Model, shape: Shape, options: Options) -> MassPropertie
         todo!("area from meshes");
     }
     let mut total = Moments::default();
+    let mut plane: Option<Option<crate::geometry::surface::Plane>> = None;
     for face in faces(model, shape, options) {
         let moments = face_terms(model, face).2;
         // The sign follows the boundary's direction of travel; an area is positive.
         total.merge_area(&moments, moments.measure.signum());
+        // (Whether all the faces lie in one plane.)
+        let own = match model.surface(face) {
+            Some(crate::geometry::surface::Surface::Plane(p)) => Some(p.transformed(&face.placement)),
+            _ => None,
+        };
+        plane = Some(match (plane, own) {
+            (None, own) => own,
+            (Some(Some(p)), Some(q)) if same_plane(&p, &q) => Some(p),
+            _ => None,
+        });
     }
-    total.properties()
+    let mut properties = total.properties();
+    // (The centre of faces in one plane lies in it: exactly, not as near as the sum comes,
+    // so that faces in one plane sort by their centres' height as they stand.)
+    if let Some(Some(p)) = plane {
+        let n = crate::math::Vector::from(p.normal());
+        let c = properties.center_of_mass;
+        properties.center_of_mass = c - n * (c - p.origin()).dot(n);
+    }
+    properties
+}
+
+/// Whether two planes are the same, either way round.
+fn same_plane(a: &crate::geometry::surface::Plane, b: &crate::geometry::surface::Plane) -> bool {
+    let (n, m) = (crate::math::Vector::from(a.normal()), crate::math::Vector::from(b.normal()));
+    n.cross(m).length() <= 1e-12 && (b.origin() - a.origin()).dot(n).abs() <= 1e-12 * (1.0 + (a.origin() - Point::ORIGIN).length())
 }
 
 pub fn volume_with(model: &Model, shape: Shape, options: Options) -> MassProperties {

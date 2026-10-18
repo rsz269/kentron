@@ -1745,7 +1745,7 @@ impl Draw {
                 return self.not_implemented("buildsweep", args);
             }
             let profile = if solid && profile.kind() == NodeKind::Wire { make::planar_face(&mut self.model, profile)? } else { profile };
-            let options = kentron::sweep::PipeOptions { contact, correction };
+            let options = kentron::sweep::PipeOptions { contact, correction, ..Default::default() };
             let r = kentron::sweep::pipe_cornered(&mut self.model, profile, spine, &options, corner)?;
             return self.set_shape_var(args[0], r);
         }
@@ -1758,11 +1758,11 @@ impl Draw {
         }
         let r = if let [(profile, contact, correction)] = self.sweep_profiles[..] {
             let profile = if solid && profile.kind() == NodeKind::Wire { make::planar_face(&mut self.model, profile)? } else { profile };
-            let options = kentron::sweep::PipeOptions { contact, correction };
+            let options = kentron::sweep::PipeOptions { contact, correction, ..Default::default() };
             kentron::sweep::pipe_with(&mut self.model, profile, spine, &options)?.shape
         } else {
             let sections: Vec<(Shape, kentron::sweep::PipeOptions)> =
-                self.sweep_profiles.iter().map(|&(s, contact, correction)| (s, kentron::sweep::PipeOptions { contact, correction })).collect();
+                self.sweep_profiles.iter().map(|&(s, contact, correction)| (s, kentron::sweep::PipeOptions { contact, correction, ..Default::default() })).collect();
             kentron::sweep::pipe_through(&mut self.model, &sections, spine, solid)?
         };
         self.set_shape_var(args[0], r)
