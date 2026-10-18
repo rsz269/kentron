@@ -306,8 +306,10 @@ fn fillet_solid_edges_as(model: &mut Model, shape: Shape, edges: &[(Shape, f64)]
         }
         Ok(result)
     };
-    for ((corner, radius), extend) in corners.iter().zip(extensions(model, shape, &corners)) {
-        let tool = corner.tool(model, *radius, extend)?;
+    let mitred = mitres(&corners);
+    for (((corner, radius), extend), mitre) in corners.iter().zip(extensions(model, shape, &corners)).zip(&mitred) {
+        let tool = corner.tool(model, *radius, mitre_runs(corner, *radius, extend, mitre))?;
+        let tool = mitred_tool(model, tool, mitre)?;
         result = if corner.convex { boolean::difference(model, result, tool)? } else { boolean::union(model, result, tool)? };
         result = keep(model, result)?;
     }
@@ -374,6 +376,100 @@ fn on_solids(model: &mut Model, shape: Shape, op: impl FnOnce(&mut Model, Shape)
             Ok(out)
         }
     }
+}
+
+/// Where two straight corners' tools meet at an end of their edges, at an angle, on a plane
+/// they share, at a corner concave on that plane (a pocket's rim), and no third there: per
+/// corner and end, the vertex and the normal of the mitre plane there (through the vertex,
+/// along the bisector of the two edges and the plane's normal), pointing to the corner's own
+/// edge. The tools then run past the vertex and are cut back to the mitre, as OCCT mitres
+/// them.
+fn mitres(corners: &[(Corner, f64)]) -> Vec<[Option<(Point, Vector)>; 2]> {
+    // The direction from an end of the edge into it.
+    let inward = |c: &Corner, at_end: bool| -> Vector {
+        let p = if at_end { c.end } else { c.origin };
+        c.direction_at(p) * if at_end { -1.0 } else { 1.0 }
+    };
+    corners
+        .iter()
+        .enumerate()
+        .map(|(i, (corner, _))| {
+            [false, true].map(|at_end| -> Option<(Point, Vector)> {
+                // (Straight edges only: where an arc's blend meets another's, their surfaces
+                // meet otherwise.)
+                if !matches!(corner.path, Path::Line { .. }) || !corner.convex {
+                    return None;
+                }
+                let p = if at_end { corner.end } else { corner.origin };
+                let others: Vec<(usize, bool)> = corners
+                    .iter()
+                    .enumerate()
+                    .filter(|(j, _)| *j != i)
+                    .flat_map(|(j, (o, _))| {
+                        let mut ends = Vec::new();
+                        if !o.ends().is_empty() {
+                            if o.origin.distance(p) <= tolerance::LINEAR {
+                                ends.push((j, false));
+                            }
+                            if o.end.distance(p) <= tolerance::LINEAR {
+                                ends.push((j, true));
+                            }
+                        }
+                        ends
+                    })
+                    .collect();
+                let [(j, other_end)] = others[..] else { return None };
+                let other = &corners[j].0;
+                if !other.convex || !matches!(other.path, Path::Line { .. }) {
+                    return None;
+                }
+                let (di, dj) = (inward(corner, at_end), inward(other, other_end));
+                if di.dot(dj).abs() >= 1.0 - tolerance::ANGULAR {
+                    return None;
+                }
+                // The plane both edges bound.
+                let k = corner.faces.iter().position(|f| other.faces.iter().any(|g| g.0 == f.0))?;
+                let Surface::Plane(plane) = untrimmed(&corner.faces[k].1) else { return None };
+                // (Only where the corner is concave on it: the other edge leaving the vertex
+                // away from the side of this one the plane's face lies on. At a convex corner
+                // the tools, square at their ends, meet as they should cutting each other.)
+                if dj.dot(corner.into[k]) >= 0.0 {
+                    return None;
+                }
+                let n = Vector::from(plane.normal());
+                let b = di + dj;
+                let m = b.cross(n);
+                if !(m.length() > 1e-9) {
+                    return None;
+                }
+                let m = m.normalized();
+                Some((p, if m.dot(di) > 0.0 { m } else { -m }))
+            })
+        })
+        .collect()
+}
+
+/// The tool's runs past its edge's ends, far enough past a mitred end for the mitre to cut
+/// it back across its whole section.
+fn mitre_runs(corner: &Corner, size: f64, run: [f64; 2], mitre: &[Option<(Point, Vector)>; 2]) -> [f64; 2] {
+    let cap = corner.run_cap(size);
+    [0, 1].map(|k| if mitre[k].is_some() { run[k].max((4.0 * size).min(cap)) } else { run[k] })
+}
+
+/// The tool cut back to its mitres: what lies on its own edge's side of each.
+fn mitred_tool(model: &mut Model, tool: Shape, mitre: &[Option<(Point, Vector)>; 2]) -> Result<Shape> {
+    let mut tool = tool;
+    for &(p, m) in mitre.iter().flatten() {
+        let b = crate::properties::bounding_box(model, tool);
+        let reach = 4.0 * (b.max - b.min).length().max(1.0);
+        let frame = Frame::from_z(p, Direction::from_vector(m));
+        let corner = p - Vector::from(frame.x()) * reach - Vector::from(frame.y()) * reach;
+        let half = crate::primitives::Cuboid::new(2.0 * reach, 2.0 * reach, reach)
+            .with_frame(Frame::new(corner, frame.z(), frame.x()))
+            .build(model)?;
+        tool = boolean::intersection(model, tool, half)?;
+    }
+    Ok(tool)
 }
 
 /// For each corner (with its tool's size), how far its tool runs past the edge's start and
@@ -539,9 +635,11 @@ fn chamfer_solid_edges(model: &mut Model, shape: Shape, edges: &[ChamferedEdge])
     }
     let sized: Vec<(Corner, f64)> = corners.iter().map(|(c, d)| (c.clone(), d[0].max(d[1]))).collect();
     let mut result = shape;
-    for ((corner, distances), extend) in corners.iter().zip(extensions(model, shape, &sized)) {
+    let mitred = mitres(&sized);
+    for (((corner, distances), extend), mitre) in corners.iter().zip(extensions(model, shape, &sized)).zip(&mitred) {
         let section = corner.bevel_section(model, *distances)?;
-        let tool = corner.sweep_section(model, section, extend)?;
+        let tool = corner.sweep_section(model, section, mitre_runs(corner, distances[0].max(distances[1]), extend, mitre))?;
+        let tool = mitred_tool(model, tool, mitre)?;
         result = if corner.convex { boolean::difference(model, result, tool)? } else { boolean::union(model, result, tool)? };
     }
     for tool in chamfer_corner_tools(model, &corners)? {
@@ -1938,6 +2036,30 @@ mod tests {
         let volume = properties::volume(&model, bevelled).mass;
         let expected = 2.0 * (20.0 - 4.0 * 0.125 * 5.0);
         assert!((volume - expected).abs() < 1e-9, "{volume} not {expected}");
+    }
+
+    /// A block (20 x 20 x 6) with a pocket (10 x 8, 3 deep) in its top: the pocket's rim
+    /// bevelled (1) or rounded (R 1), the blends mitred at its corners, which are concave
+    /// on the top face (OCCT gives these values).
+    #[test]
+    fn blends_round_a_pocket_rim_meet_in_mitres() {
+        for (round, expected) in [(false, 2140.6667), (true, 2151.8909)] {
+            let mut model = Model::new();
+            let block = Cuboid::new(20.0, 20.0, 6.0).build(&mut model).unwrap();
+            let pocket = Cuboid::new(10.0, 8.0, 4.0).with_frame(Frame::from_z(Point::new(5.0, 6.0, 3.0), Direction::Z)).build(&mut model).unwrap();
+            let shape = boolean::difference(&mut model, block, pocket).unwrap();
+            let rim: Vec<Shape> = model.unique_subshapes(shape, NodeKind::Edge).into_iter().filter(|&e| {
+                let (a, b) = model.edge_vertices(e);
+                let (p, q) = (model.point(a), model.point(b));
+                (p.z - 6.0).abs() < 1e-9 && (q.z - 6.0).abs() < 1e-9 && p.x > 1.0 && p.x < 19.0 && p.y > 1.0 && p.y < 19.0
+            }).collect();
+            assert_eq!(rim.len(), 4);
+            let result = if round { fillet(&mut model, shape, &rim, 1.0) } else { chamfer(&mut model, shape, &rim, 1.0) }.unwrap();
+            assert!(validity::check(&model, result).is_valid());
+            assert_eq!(model.unique_subshapes(result, NodeKind::Face).len(), 15);
+            let volume = properties::volume(&model, result).mass;
+            assert!((volume - expected).abs() < 1e-3, "{volume} not {expected}");
+        }
     }
 
     #[test]

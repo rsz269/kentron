@@ -216,6 +216,13 @@ def fuse_of_many(cq):
     return cubes[0].fuse(*cubes[1:])
 
 
+def rounded_pocket_rim(cq):
+    # (The rim's corners are concave on the top: the fillets meet there in mitres.)
+    block = cq.Solid.makeBox(20, 20, 6).cut(cq.Solid.makeBox(10, 8, 4, cq.Vector(5, 6, 3)))
+    rim = [e for e in block.Edges() if abs(e.Center().z - 6) < 1e-9 and 1 < e.Center().x < 19 and 1 < e.Center().y < 19]
+    return block.fillet(1, rim)
+
+
 CASES = [
     box, cylinder_along_y, cone, workplane_box, fused_boxes, cut_bores, intersected,
     polyline_prism_xz, polyline_prism_custom_plane, hexagon, face_with_hole, loft,
@@ -224,7 +231,7 @@ CASES = [
     loft_turned_aside, sweep_round_hexagon, frenet_sweep_round_helix, tapered_split_square,
     rotated_then_located, spline_surface_through_a_grid, plane_of_negative_size, subclassed_wire,
     array_of_vectors, sweep_through_three_circles, sweep_from_circle_to_square,
-    fuse_of_many,
+    fuse_of_many, rounded_pocket_rim,
 ]
 
 

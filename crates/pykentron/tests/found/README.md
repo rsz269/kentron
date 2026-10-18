@@ -94,15 +94,20 @@ Fixed since the cases were found (running them again):
 - Fusing many shapes at once: pairwise, then pairs of pairs, not each added in turn to a
   growing whole (cqindustry's bridge, 263 pieces: 76 s, now 3 s, as on CadQuery).
 
-Two scripts build differently on CadQuery for reasons of its own: cqterrain's magnet
+- Fillets and chamfers of straight edges meeting at a corner concave on the face they share
+  (a pocket's or opening's rim): mitred there, as OCCT's, not left square with small faces
+  filling the corner (the contrib shelled cube).
+
+Three scripts build differently on CadQuery for reasons of its own: cqterrain's magnet
 template queues its pending wire again (`toPending()`), and CadQuery's face counts it twice
 (double the volume); cqterrain's buildings stack storeys as touching solids, which CadQuery
-leaves 14 to 22 solids and kentron's union one.
+leaves 14 to 22 solids and kentron's union one; the contrib drawer frame fuses dovetails
+into its walls with `glue=True`, which assumes shapes only touch, and they overlap.
 
 With these, five more of OCCT's cases pass (four booleans and a Tcl bug script).
 
 Still open among them: the thread solids' unions with their core (nearly coincident
 surfaces, 0.001 apart) and two meshing helical gears' union (teeth touching), cq_warehouse's bolts (their threads' unions too, by the look of
 them), the contrib remote enclosure (a countersink through a wall thinner than it is deep:
-the cut loses the countersink's cone), and the rest of `cases.tsv`. 37 of the 85 now build
+the cut loses the countersink's cone), and the rest of `cases.tsv`. 38 of the 85 now build
 as on CadQuery.
