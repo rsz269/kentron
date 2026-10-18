@@ -859,6 +859,49 @@ pub fn approximate_surface(points: &[Vec<crate::math::Point>], options: Approxim
     Ok(best)
 }
 
+/// Curves of `degree` sharing one knot vector, each within `tolerance` of the cubic through
+/// its points (at `params`, shared), at them and midway between: as few poles as do, those
+/// cubics themselves at most.
+pub(crate) fn approximate_alike(points: &[Vec<crate::math::Point>], params: &[f64], degree: usize, tolerance: f64) -> Result<Vec<BSplineCurve>> {
+    use crate::math::Point;
+    let n = params.len();
+    if points.iter().any(|p| p.len() != n) || n < 2 {
+        return Err(Error::InvalidInput("curves fitted alike need as many points each".into()));
+    }
+    let p = degree.min(n - 1);
+    let fit = |m: usize| -> Option<Vec<BSplineCurve>> {
+        let knots = knots_for(params, p, m);
+        points
+            .iter()
+            .map(|row| {
+                let q3: Vec<[f64; 3]> = row.iter().map(|q| q.coords()).collect();
+                least_squares_with_knots::<Point>(&q3, params, p, knots.clone())
+            })
+            .collect()
+    };
+    // (Near the curves through the points, at them and between: a curve near them only at
+    // the points may swing between, where they turn sharply.)
+    let through: Vec<BSplineCurve> = points.iter().map(|row| interpolate_with_parameters(row, params)).collect::<Result<_>>()?;
+    let near = |curves: &[BSplineCurve]| {
+        curves.iter().zip(&through).all(|(c, t)| {
+            (0..2 * n - 1).all(|k| {
+                let u = if k % 2 == 0 { params[k / 2] } else { 0.5 * (params[k / 2] + params[k / 2 + 1]) };
+                c.point(u).distance(t.point(u)) <= tolerance
+            })
+        })
+    };
+    let mut m = p + 1;
+    loop {
+        if let Some(curves) = fit(m).filter(|c| near(c)) {
+            return Ok(curves);
+        }
+        if m >= n {
+            return Ok(through);
+        }
+        m = (m + m / 2).max(m + 1).min(n);
+    }
+}
+
 /// Clamped flat knots for `m` poles of `degree`, spread so that every span holds parameters
 /// (The NURBS Book, eq. 9.69).
 fn knots_for(params: &[f64], degree: usize, m: usize) -> Vec<f64> {
@@ -1006,6 +1049,26 @@ mod tests {
                 let (_, _, d) = crate::geometry::extrema::nearest_on_surface(*p, &surface, None);
                 assert!(d < 1e-9, "{d} from {p:?}");
             }
+        }
+    }
+
+    /// Points along cubics (sampled 65 times): fitted alike by one span each, four poles;
+    /// points along a curve no polynomial of few spans follows (a circle's quarter, sharply
+    /// turned through its samples): more poles, within the tolerance of the cubics through
+    /// the points, between them too.
+    #[test]
+    fn curves_fitted_alike_are_compact() {
+        let params: Vec<f64> = (0..=64).map(|i| i as f64 / 64.0).collect();
+        let cubic = |a: f64| params.iter().map(|&t| Point::new(t, a * t * t * t - t, 2.0 * t * t)).collect::<Vec<_>>();
+        let curves = approximate_alike(&[cubic(1.0), cubic(-3.0)], &params, 3, 1e-8).unwrap();
+        assert!(curves.iter().all(|c| c.poles().len() == 4));
+        let arc: Vec<Point> = params.iter().map(|&t| Point::new((t * PI / 2.0).cos(), (t * PI / 2.0).sin(), 0.0)).collect();
+        let through = interpolate_with_parameters(&arc, &params).unwrap();
+        let fitted = approximate_alike(&[arc], &params, 3, 1e-8).unwrap();
+        assert!(fitted[0].poles().len() < 65);
+        for k in 0..=640 {
+            let t = k as f64 / 640.0;
+            assert!(fitted[0].point(t).distance(through.point(t)) < 1e-7);
         }
     }
 

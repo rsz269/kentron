@@ -140,6 +140,13 @@ Fixed since the cases were found (running them again):
   (cq_warehouse's bottle funnel: a fillet as large as its outline's corners and curves, still
   open).
 
+- Speed: a fillet whose ball only grazes the faces beyond its own rolled on its own faces
+  first (rolling it on over them, the slower way, only where that fails): cadquery-models'
+  foot block 3.4 s, now 0.5 s; an ellipse of equal radii made a circle, so that what is
+  extruded or offset from it stays a cylinder or circle (cqindustry's round platform 5.6 s,
+  now 0.25 s; its can tower stairs 5 s, now 2 s); sweeps through several sections as compact
+  along the spine as the sections' blend allows (spindle's chimney 1.2 s, now 0.9 s).
+
 Three scripts build differently on CadQuery for reasons of its own: cqterrain's magnet
 template queues its pending wire again (`toPending()`), and CadQuery's face counts it twice
 (double the volume); cqterrain's buildings stack storeys as touching solids, which CadQuery
@@ -151,5 +158,5 @@ With these, five more of OCCT's cases pass (four booleans and a Tcl bug script).
 Still open among them: the thread solids' unions with their core (nearly coincident
 surfaces, 0.001 apart) and two meshing helical gears' union (teeth touching), cq_warehouse's bolts (their threads' unions too, by the look of
 them), the contrib remote enclosure (a countersink through a wall thinner than it is deep:
-the cut loses the countersink's cone), and the rest of `cases.tsv`. 42 of the 85 now build
+the cut loses the countersink's cone), and the rest of `cases.tsv`. 45 of the 85 now build
 as on CadQuery.

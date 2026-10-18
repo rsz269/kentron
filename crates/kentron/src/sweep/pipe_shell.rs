@@ -161,7 +161,10 @@ pub(super) fn pipe_shell(model: &mut Model, sections: &[(Shape, PipeOptions)], p
         for e in 0..edge_count {
             let (v0, v1) = (e, if closed { (e + 1) % vertex_count } else { e + 1 });
             // The surface: each pole's law carried by the frames along the piece.
-            let paths: Vec<BSplineCurve> = (0..pole_count).map(|i| carried(motion, k, &law(e, i))).collect::<Result<_>>()?;
+            // (Fitted alike, as few poles along as hold the samples: few where the frames and
+            // the sections' blend vary smoothly, as along a straight spine.)
+            let samples: Vec<Vec<Point>> = (0..pole_count).map(|i| carried_points(motion, k, &law(e, i))).collect();
+            let paths = crate::geometry::fit::approximate_alike(&samples, &motion.params, 3, 1e-8)?;
             let v = KnotVector::new(paths[0].knots().to_vec(), paths[0].multiplicities().to_vec(), paths[0].degree());
             let u = KnotVector::new(u_knots.knots().to_vec(), u_knots.multiplicities().to_vec(), u_knots.degree());
             let surface = Surface::BSpline(BSplineSurface::try_new(paths.iter().map(|p| p.poles().to_vec()).collect(), u, v)?);
@@ -233,11 +236,16 @@ fn fit_curve(poles: &[Point], n: usize) -> Result<BSplineCurve> {
     Ok(BSplineCurve::new(poles.to_vec(), knots.knots().to_vec(), knots.multiplicities().to_vec(), knots.degree()))
 }
 
-/// The cubic through a point following `law` (in the reference frame) carried by the
-/// frames along piece `k`, parametrized by the fraction along it.
+/// A point following `law` (in the reference frame) carried by the frames along piece `k`,
+/// at the samples' fractions along it.
+fn carried_points(motion: &PieceMotion, k: usize, law: &[(f64, Point)]) -> Vec<Point> {
+    motion.params.iter().zip(&motion.transforms).map(|(&s, t)| blend(law, k as f64 + s).transformed(t)).collect()
+}
+
+/// The cubic through a point following `law` carried by the frames along piece `k`,
+/// parametrized by the fraction along it.
 fn carried(motion: &PieceMotion, k: usize, law: &[(f64, Point)]) -> Result<BSplineCurve> {
-    let points: Vec<Point> = motion.params.iter().zip(&motion.transforms).map(|(&s, t)| blend(law, k as f64 + s).transformed(t)).collect();
-    crate::geometry::fit::interpolate_with_parameters(&points, &motion.params)
+    crate::geometry::fit::interpolate_with_parameters(&carried_points(motion, k, law), &motion.params)
 }
 
 /// The sweep's vertices and edges, made once and shared by the faces meeting along them.

@@ -73,7 +73,6 @@ tests/blend/tolblend_simple/A7
 tests/blend/tolblend_simple/A8
 tests/blend/tolblend_simple/A9
 tests/blend/tolblend_simple/B2
-tests/blend/tolblend_simple/B5
 tests/blend/tolblend_simple/B6
 tests/blend/tolblend_simple/C3
 tests/blend/tolblend_simple/C5

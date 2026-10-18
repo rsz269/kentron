@@ -397,7 +397,13 @@ pub fn make_bezier(points: Vec<Xyz>) -> PyResult<Handle> {
 pub fn make_ellipse(major: f64, minor: f64, centre: Xyz, normal: Xyz, x: Option<Xyz>, angle1: f64, angle2: f64) -> PyResult<Handle> {
     let f = frame(centre, normal, x)?;
     with_model(|m| {
-        let curve = Curve::Ellipse(Ellipse::new(f, major, minor));
+        // (Of equal radii: the circle, parametrized alike, so that what is made from it stays
+        // analytic (a cylinder extruded, a circle offset).)
+        let curve = if (major - minor).abs() <= 1e-12 * major.abs().max(minor.abs()) {
+            Curve::Circle(kentron::geometry::curve::Circle::new(f, major))
+        } else {
+            Curve::Ellipse(Ellipse::new(f, major, minor))
+        };
         if (angle2 - angle1).abs() >= 360.0 - 1e-9 {
             make::edge_from_curve(m, curve)
         } else {
