@@ -210,6 +210,12 @@ def sweep_from_circle_to_square(cq):
     return cq.Solid.sweep_multi([circle, square], spine)
 
 
+def fuse_of_many(cq):
+    # (Fused pairwise, then pairs of pairs: as one union of them all.)
+    cubes = [cq.Solid.makeBox(2, 2, 2, cq.Vector(1.5 * i, (i % 3) * 0.5, 0)) for i in range(25)]
+    return cubes[0].fuse(*cubes[1:])
+
+
 CASES = [
     box, cylinder_along_y, cone, workplane_box, fused_boxes, cut_bores, intersected,
     polyline_prism_xz, polyline_prism_custom_plane, hexagon, face_with_hole, loft,
@@ -218,6 +224,7 @@ CASES = [
     loft_turned_aside, sweep_round_hexagon, frenet_sweep_round_helix, tapered_split_square,
     rotated_then_located, spline_surface_through_a_grid, plane_of_negative_size, subclassed_wire,
     array_of_vectors, sweep_through_three_circles, sweep_from_circle_to_square,
+    fuse_of_many,
 ]
 
 

@@ -232,10 +232,12 @@ class Shape:
     # --- booleans -------------------------------------------------------------------------
 
     def fuse(self, *toFuse: "Shape", glue: bool = False, tol: Optional[float] = None) -> "Shape":
-        result = self.wrapped
-        for other in toFuse:
-            result = native.union(result, other.wrapped)
-        return Shape.cast(result)
+        # (Pairwise, then pairs of pairs: each step a union of shapes of like size, not each
+        # shape added in turn to a whole that grows with every one.)
+        shapes = [self.wrapped] + [other.wrapped for other in toFuse]
+        while len(shapes) > 1:
+            shapes = [native.union(shapes[i], shapes[i + 1]) if i + 1 < len(shapes) else shapes[i] for i in range(0, len(shapes), 2)]
+        return Shape.cast(shapes[0])
 
     def cut(self, *toCut: "Shape", tol: Optional[float] = None) -> "Shape":
         result = self.wrapped
