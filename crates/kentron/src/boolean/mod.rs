@@ -1011,6 +1011,24 @@ mod tests {
         assert!((v - volume).abs() <= 1e-4 * volume, "volume {v} != {volume}");
     }
 
+    /// A box and a slab under a wave (a B-spline) rising just through the box's top, by 2e-5
+    /// over 0.013, and again by 5e-4: the top meets the wave in pairs of lines close
+    /// together, and is kept between them.
+    #[test]
+    fn box_and_a_wave_just_through_its_top() {
+        let mut model = Model::new();
+        let mut read = |text: &str| crate::io::brep::read(&mut model, &mut text.as_bytes()).unwrap();
+        let block = read(include_str!("tests/box_under_a_wave_a.brep"));
+        let slab = read(include_str!("tests/box_under_a_wave_b.brep"));
+        let result = intersection(&mut model, block, slab).unwrap();
+        assert!(validity::check(&model, result).is_valid(), "{:?}", validity::check(&model, result));
+        // (OCCT's.)
+        let v = properties::volume(&model, result).mass;
+        assert!((v - 187.5).abs() <= 1e-4 * 187.5, "volume {v}");
+        let top = model.explore(result, NodeKind::Face).filter(|&f| (properties::area(&model, f).center_of_mass.y - 1.0).abs() < 1e-9).count();
+        assert_eq!(top, 2);
+    }
+
     #[test]
     fn box_with_a_cylindrical_hole() {
         let mut model = Model::new();

@@ -330,6 +330,97 @@ fn plane_across_extrusion(plane: &Surface, extrusion: &Surface) -> Option<Sectio
     Some(Section::Open(curve, first, last))
 }
 
+/// Where a plane along the direction of a surface of extrusion meets it: lines along the
+/// direction through the points of the extruded curve on the plane, the roots of its
+/// height above the plane, found between samples and either side of the turns of the
+/// height (two roots close together, the curve dipping just through the plane, or one
+/// where it touches the plane). `None` unless the plane is along the direction.
+fn plane_along_extrusion(fa: &Face, fb: &Face) -> Option<Vec<Section>> {
+    let (plane, extrusion, extruded) = match (&fa.surface, &fb.surface) {
+        (Surface::Plane(p), Surface::Extrusion(e)) => (p, e, fb),
+        (Surface::Extrusion(e), Surface::Plane(p)) => (p, e, fa),
+        _ => return None,
+    };
+    let (n, d) = (Vector::from(plane.normal()), Vector::from(extrusion.direction()));
+    if n.dot(d).abs() > crate::tolerance::ANGULAR {
+        return None;
+    }
+    let curve = extrusion.basis();
+    let (b0, b1) = (curve.first_parameter(), curve.last_parameter());
+    // (Over the extruded face's range, a little beyond it, within the curve's.)
+    let (u0, u1) = extruded.u_range;
+    let span = u1 - u0;
+    let (t0, t1) = ((u0 - 0.05 * span).max(b0), (u1 + 0.05 * span).min(b1));
+    if !(t1 > t0) {
+        return Some(Vec::new());
+    }
+    let origin = plane.origin();
+    let height = |t: f64| n.dot(curve.point(t) - origin);
+    let slope = |t: f64| n.dot(curve.d1(t).1);
+    const N: usize = 512;
+    let ts: Vec<f64> = (0..=N).map(|i| t0 + (t1 - t0) * i as f64 / N as f64).collect();
+    let hs: Vec<f64> = ts.iter().map(|&t| height(t)).collect();
+    let ds: Vec<f64> = ts.iter().map(|&t| slope(t)).collect();
+    let root = |f: &dyn Fn(f64) -> f64, mut lo: f64, mut hi: f64| {
+        let flo = f(lo);
+        for _ in 0..100 {
+            let mid = 0.5 * (lo + hi);
+            if (f(mid) < 0.0) == (flo < 0.0) {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+            if hi - lo <= 1e-15 * (t1 - t0) {
+                break;
+            }
+        }
+        0.5 * (lo + hi)
+    };
+    let mut roots = Vec::new();
+    for i in 0..N {
+        let (a, b) = (ts[i], ts[i + 1]);
+        if hs[i] == 0.0 {
+            roots.push(a);
+            continue;
+        }
+        if hs[i] * hs[i + 1] < 0.0 {
+            roots.push(root(&height, a, b));
+        } else if ds[i] * ds[i + 1] < 0.0 && hs[i + 1] != 0.0 {
+            // A turn of the height: through the plane and back, or touching it.
+            let turn = root(&slope, a, b);
+            let h = height(turn);
+            if h * hs[i] < 0.0 {
+                roots.push(root(&height, a, turn));
+                roots.push(root(&height, turn, b));
+            } else if h.abs() <= TOL {
+                roots.push(turn);
+            }
+        }
+    }
+    if hs[N] == 0.0 {
+        roots.push(ts[N]);
+    }
+    let boxes = [&fa.bbox, &fb.bbox];
+    Some(
+        roots
+            .into_iter()
+            .map(|t| {
+                let line = Line::new(curve.point(t) - n * height(t), extrusion.direction());
+                let along = |bx: &(Point, Point)| {
+                    let (lo, hi) = *bx;
+                    let ts = (0..8).map(|i| {
+                        let corner = Point::new(if i & 1 == 0 { lo.x } else { hi.x }, if i & 2 == 0 { lo.y } else { hi.y }, if i & 4 == 0 { lo.z } else { hi.z });
+                        (corner - line.origin).dot(d)
+                    });
+                    ts.fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), t| (a.min(t), b.max(t)))
+                };
+                let ((lo_a, hi_a), (lo_b, hi_b)) = (along(boxes[0]), along(boxes[1]));
+                Section::Open(Curve::Line(line), lo_a.max(lo_b) - 1.0, hi_a.min(hi_b) + 1.0)
+            })
+            .collect(),
+    )
+}
+
 /// A curve where two faces' surfaces meet.
 enum Section {
     /// A line, restricted to a range covering both faces.
@@ -1012,6 +1103,22 @@ impl Section {
                         *last = b;
                         *kept_params.last_mut().expect("a point") = t1;
                     }
+                    // Each point advancing along the section's way there (from the points
+                    // some way before it to some way after it), else dropped: where the
+                    // surfaces nearly touch, points pulled onto the section may slide along
+                    // it, back over its stretch before.
+                    if matches!(self, Section::Sampled(..)) && kept.len() > 2 {
+                        let last = kept.len() - 1;
+                        let (mut points, mut ts) = (vec![kept[0]], vec![kept_params[0]]);
+                        for i in 1..=last {
+                            let way = kept[(i + 4).min(last)] - kept[i.saturating_sub(4)];
+                            if i == last || (kept[i] - *points.last().expect("a point")).dot(way) > 0.0 {
+                                points.push(kept[i]);
+                                ts.push(kept_params[i]);
+                            }
+                        }
+                        (kept, kept_params) = (points, ts);
+                    }
                     // (Straight from end to end where nothing else can be: a section all but a
                     // point, its ends maybe one.)
                     let straight = || crate::geometry::curve::BSplineCurve::new(vec![a, b], vec![0.0, 1.0], vec![2, 2], 1);
@@ -1063,6 +1170,9 @@ fn sections(fa: &Face, fb: &Face, crossings: &[Point]) -> Vec<Section> {
     let boxes = [&fa.bbox, &fb.bbox];
     if let Some(section) = plane_across_extrusion(a, b).or_else(|| plane_across_extrusion(b, a)) {
         return vec![section];
+    }
+    if let Some(sections) = plane_along_extrusion(fa, fb) {
+        return sections;
     }
     match (a, b) {
         (Surface::Revolution(r), _) if coaxial(r, b) => return parallels(fa, fb),

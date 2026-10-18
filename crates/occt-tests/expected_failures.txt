@@ -35,7 +35,6 @@ tests/blend/complex/F2
 tests/blend/complex/F3
 tests/blend/complex/G8
 tests/blend/complex/G9
-tests/blend/complex/H4
 tests/blend/encoderegularity/A1
 tests/blend/encoderegularity/A2
 tests/blend/encoderegularity/A4
