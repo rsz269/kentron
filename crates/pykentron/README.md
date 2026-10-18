@@ -35,10 +35,18 @@ Code written against OCP, as libraries like cq_warehouse are, finds some of OCCT
   `IsPartner`, `IsNull`;
 - `Vector.wrapped` answers `gp_Vec`'s methods, `Location.wrapped` `IsEqual` and
   `Transformation`, and `Matrix.wrapped` `Trsf()`;
-- the classes `BRepBuilderAPI_Copy`, `BRepBuilderAPI_Transform`,
+- the classes `BRepBuilderAPI_Copy`, `BRepBuilderAPI_Transform`, `BRepBuilderAPI_Sewing`,
+  `BRepBuilderAPI_MakeFace` (a face from a planar wire, or a face with holes added),
   `ShapeUpgrade_UnifySameDomain`, `Bnd_Box` with `BRepBndLib.AddOptimal_s`,
   `BRepTools.UVBounds_s` and `Clean_s`, the empty `TopoDS_Shape()`, the `TopAbs` numbers and
   the `gp` classes;
+- projections and fillings: `BRepProj_Projection` (wires onto shapes, along a direction or
+  from a point), `BRepOffsetAPI_MakeFilling` (faces spanning a loop of edges through points:
+  the plate of least bending energy, as `Face.makeNSidedSurface` and `interpPlate` make),
+  `BRepOffset_MakeOffset` (thickening a face into a solid), `BRepIntCurveSurface_Inter` with
+  `gce_MakeLin` (where a line crosses a shape's faces), `ShapeAnalysis_FreeBounds`'
+  `ConnectEdgesToWires_s` with `TopTools_HSequenceOfShape`, and `StdFail_NotDone` (as
+  `ValueError`, what kentron's failures raise);
 - `occ_impl.shapes`' `downcast`, `fix` and `shapetype`.
 
 Other names, of pykentron or OCP, import but raise `NotImplementedError` when used.

@@ -288,6 +288,128 @@ pub fn face_on(model: &mut Model, surface: Surface, wire: Shape) -> Result<Shape
     face_with_boundary(model, surface, wire)
 }
 
+/// `face` with `holes` (closed wires lying on its surface, within it) cut out: a new face on
+/// the same surface, bounded by the face's wires and the holes, each hole run clockwise in
+/// the surface's parameters (as OCCT's `BRepBuilderAPI_MakeFace::Add`).
+#[doc(alias = "BRepBuilderAPI_MakeFace::Add")]
+pub fn face_with_holes(model: &mut Model, face: Shape, holes: &[Shape]) -> Result<Shape> {
+    use crate::geometry::curve2::{BSplineCurve2, Curve2};
+    use crate::geometry::ParametricSurface;
+    use crate::math::Point2;
+    use crate::topology::CoEdgeId;
+    // (A placed face or hole: a copy with its placement applied.)
+    let face = if face.placement == crate::math::Transform::IDENTITY { face } else { crate::modify::copy(model, face, false)? };
+    let surface = model.surface(face).ok_or_else(|| Error::InvalidInput("a face without a surface".into()))?.clone();
+    let new = model.new_empty(NodeKind::Face);
+    let tolerance = model.tolerance(face).max(tolerance::LINEAR);
+    model.set_face_surface(new, surface.clone(), tolerance)?;
+    // The face's own wires, their coedges again with the same curves on the surface.
+    for w in model.children(face).collect::<Vec<_>>() {
+        let mut coedges = Vec::new();
+        // (Its coedges as the wire holds them; the wire's own orientation kept on the new one.)
+        for c in model.explore(Shape { orientation: Orientation::Forward, ..w }, NodeKind::CoEdge).collect::<Vec<_>>() {
+            let id = CoEdgeId::try_from(c.node).expect("a coedge");
+            let (edge, orientation) = (model[id].edge, model[id].orientation.compose(c.orientation));
+            let (pcurve, first, last) = model.effective_pcurve(id).ok_or_else(|| Error::InvalidInput("a face's edge without a curve on it".into()))?;
+            let new_c = model.add_coedge(edge, orientation)?;
+            model.set_pcurve_with_range(new_c, pcurve, first, last)?;
+            coedges.push(new_c);
+        }
+        let wire = model.add_wire(&coedges)?;
+        model.add(new, Shape { orientation: w.orientation, ..Shape::from(wire) })?;
+    }
+    // The holes: each edge's curve on the surface, carried on across the surface's periods
+    // from the one before; turned to run clockwise where they run the other way.
+    let flip = face.orientation == Orientation::Reversed;
+    let (u_period, v_period) = (surface.u_period(), surface.v_period());
+    for &hole in holes {
+        let hole = if hole.placement == crate::math::Transform::IDENTITY { hole } else { crate::modify::copy(model, hole, false)? };
+        let id = WireId::try_from(hole.node).map_err(|n| Error::InvalidInput(format!("{n:?} is not a wire")))?;
+        if !model.is_closed_wire(id) {
+            return Err(Error::InvalidInput("a hole needs a closed wire".into()));
+        }
+        let mut uses: Vec<(EdgeId, Orientation, BSplineCurve2, f64, f64)> = Vec::new();
+        let mut previous: Option<Point2> = None;
+        let mut uv: Vec<Point2> = Vec::new();
+        // (In the order the wire holds its edges: which way round it runs is decided below.)
+        for c in model.explore(Shape { orientation: Orientation::Forward, ..hole }, NodeKind::CoEdge).collect::<Vec<_>>() {
+            let cid = CoEdgeId::try_from(c.node).expect("a coedge");
+            let (edge, orientation) = (model[cid].edge, model[cid].orientation.compose(c.orientation));
+            let (curve, first, last) = model.edge_curve(Shape::from(edge)).ok_or_else(|| Error::InvalidInput("a degenerate edge in a hole".into()))?;
+            // (Within the edge's tolerance; else, a wire only near the surface (made on another
+            // it approximates), the nearest points of the surface, each found from the last,
+            // interpolated: adjacent edges' ends at the same points. The edge's tolerance then
+            // raised to how far it strays.)
+            let tol = model[edge].tolerance.max(tolerance::LINEAR);
+            let mut pcurve = crate::geometry::project::pcurve_on_range(&curve, &surface, first, last, tol)
+                .or_else(|| {
+                    let n = 64;
+                    let ts: Vec<f64> = (0..=n).map(|k| first + (last - first) * k as f64 / n as f64).collect();
+                    let mut from: Option<(f64, f64)> = None;
+                    let uv: Vec<Point2> = ts
+                        .iter()
+                        .map(|&t| {
+                            let (u, v, _) = crate::geometry::extrema::nearest_on_surface(curve.point(t), &surface, from);
+                            from = Some((u, v));
+                            Point2::new(u, v)
+                        })
+                        .collect();
+                    crate::geometry::fit::interpolate_with_parameters(&uv, &ts).ok()
+                })
+                .ok_or_else(|| Error::InvalidInput("a hole's edge does not lie on the face's surface".into()))?;
+            let strays = (0..=32)
+                .map(|k| {
+                    let t = first + (last - first) * k as f64 / 32.0;
+                    let q = pcurve.point(t);
+                    surface.point(q.x, q.y).distance(curve.point(t))
+                })
+                .fold(0.0, f64::max);
+            if strays > model[edge].tolerance {
+                model.set_edge_tolerance(edge, 1.5 * strays)?;
+            }
+            let (a, b) = model.edge_vertices(Shape::from(edge));
+            for v in [a, b] {
+                let v = VertexId::try_from(v.node).expect("a vertex");
+                if 1.5 * strays > model[v].tolerance {
+                    model.set_vertex_tolerance(v, 1.5 * strays)?;
+                }
+            }
+            let (start, end) = if orientation == Orientation::Reversed { (last, first) } else { (first, last) };
+            if let Some(target) = previous {
+                let at = pcurve.point(start);
+                let shift = Point2::new(
+                    u_period.map_or(0.0, |p| ((target.x - at.x) / p).round() * p),
+                    v_period.map_or(0.0, |p| ((target.y - at.y) / p).round() * p),
+                );
+                if shift.x != 0.0 || shift.y != 0.0 {
+                    let poles = pcurve.poles().iter().map(|q| Point2::new(q.x + shift.x, q.y + shift.y)).collect();
+                    pcurve = BSplineCurve2::new(poles, pcurve.knots().to_vec(), pcurve.multiplicities().to_vec(), pcurve.degree());
+                }
+            }
+            previous = Some(pcurve.point(end));
+            uv.extend((0..16).map(|k| pcurve.point(start + (end - start) * k as f64 / 16.0)));
+            uses.push((edge, orientation, pcurve, first, last));
+        }
+        let n = uv.len();
+        let area: f64 = (0..n).map(|k| uv[k].x * uv[(k + 1) % n].y - uv[(k + 1) % n].x * uv[k].y).sum();
+        if (area > 0.0) != flip {
+            uses.reverse();
+            for u in &mut uses {
+                u.1 = u.1.reversed();
+            }
+        }
+        let mut coedges = Vec::with_capacity(uses.len());
+        for (edge, orientation, pcurve, first, last) in uses {
+            let c = model.add_coedge(edge, orientation)?;
+            model.set_pcurve_with_range(c, Curve2::BSpline(pcurve), first, last)?;
+            coedges.push(c);
+        }
+        let wire = model.add_wire(&coedges)?;
+        model.add(new, Shape::from(wire))?;
+    }
+    Ok(Shape { orientation: face.orientation, ..new })
+}
+
 /// A face covering the whole natural domain of a bounded surface (a sphere, torus, trimmed
 /// surface, ...), with its boundary built from the domain's edges (seams and degenerate
 /// edges at poles included). Fails for unbounded surfaces such as planes and cylinders.
@@ -379,5 +501,31 @@ mod tests {
         let a = edge_between(&mut model, Point::new(0.0, 0.0, 0.0), Point::new(1.0, 0.0, 0.0)).unwrap();
         let b = edge_between(&mut model, Point::new(2.0, 0.0, 0.0), Point::new(3.0, 0.0, 0.0)).unwrap();
         assert!(wire(&mut model, &[a, b]).is_err());
+    }
+
+    /// A hole (a patch between two rulings and two circles, run either way) cut in a
+    /// cylinder's side: the face loses the patch's area.
+    #[test]
+    fn holes_are_cut_in_curved_faces() {
+        use crate::geometry::curve::Circle;
+        use crate::math::Frame;
+        let mut model = Model::new();
+        let solid = crate::primitives::Cylinder::new(5.0, 10.0).build(&mut model).unwrap();
+        let side = model.unique_subshapes(solid, NodeKind::Face).into_iter().find(|&f| matches!(model.surface(f), Some(Surface::Cylinder(_)))).unwrap();
+        let (a, b) = (0.5f64, 1.5f64);
+        let at = |t: f64, z: f64| Point::new(5.0 * t.cos(), 5.0 * t.sin(), z);
+        let arc = |model: &mut Model, z: f64| edge_from_curve_range(model, Curve::Circle(Circle::new(Frame::from_z(Point::new(0.0, 0.0, z), Direction::Z), 5.0)), a, b).unwrap();
+        let low = arc(&mut model, 3.0);
+        let right = edge_between(&mut model, at(b, 3.0), at(b, 6.0)).unwrap();
+        let high = arc(&mut model, 6.0);
+        let left = edge_between(&mut model, at(a, 6.0), at(a, 3.0)).unwrap();
+        let hole = wire(&mut model, &[low, right, high, left]).unwrap();
+        for hole in [hole, hole.reversed()] {
+            let face = face_with_holes(&mut model, side, &[hole]).unwrap();
+            assert!(crate::validity::check(&model, face).is_valid());
+            let area = crate::properties::area(&model, face).mass;
+            let expected = 2.0 * std::f64::consts::PI * 5.0 * 10.0 - 5.0 * (b - a) * 3.0;
+            assert!((area - expected).abs() < 1e-6, "{area} != {expected}");
+        }
     }
 }

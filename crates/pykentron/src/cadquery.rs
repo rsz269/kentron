@@ -334,6 +334,51 @@ pub fn make_spline_surface_approx(points: Vec<Vec<Xyz>>, tolerance: f64, min_deg
     .map(handle)
 }
 
+/// The face spanning the closed loop of `edges` (edges or wires, in any order), through
+/// `points`, of least bending energy of `order` (OCCT's filling `Degree`).
+#[pyfunction]
+#[pyo3(signature = (edges, points=Vec::new(), order=3, points_per_edge=24))]
+pub fn make_filling(edges: Vec<Handle>, points: Vec<Xyz>, order: usize, points_per_edge: usize) -> PyResult<Handle> {
+    let edges: Vec<Shape> = edges.iter().map(|h| h.shape).collect();
+    let options = kentron::fill::FillingOptions { order, points: points.into_iter().map(point).collect(), points_per_edge };
+    with_model(|m| kentron::fill::n_sided(m, &edges, &options)).map(handle)
+}
+
+/// `face` with the closed wires `holes` (on its surface, within it) cut out.
+#[pyfunction]
+pub fn face_with_holes(face: Handle, holes: Vec<Handle>) -> PyResult<Handle> {
+    let holes: Vec<Shape> = holes.iter().map(|h| h.shape).collect();
+    with_model(|m| make::face_with_holes(m, face.shape, &holes)).map(handle)
+}
+
+/// Where the infinite line through `origin` along `direction` crosses the faces of `shape`
+/// (within `tolerance`): each point, the face, and the line's parameter there (its signed
+/// distance from `origin`), in the line's order.
+#[pyfunction]
+#[pyo3(signature = (shape, origin, direction, tolerance=1e-4))]
+pub fn line_intersections(shape: Handle, origin: Xyz, direction: Xyz, tolerance: f64) -> PyResult<Vec<(Xyz, Handle, f64)>> {
+    use kentron::geometry::curve::Line;
+    let d = kentron::math::Direction::try_from_vector(Vector::new(direction.0, direction.1, direction.2))
+        .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("a line along a zero direction"))?;
+    let line = Curve::Line(Line::new(point(origin), d));
+    let found = with_model(|m| {
+        let mut out = Vec::new();
+        for face in m.unique_subshapes(shape.shape, NodeKind::Face) {
+            let Some(surface) = m.surface(face).map(|s| kentron::math::Transformable::transformed(s, &face.placement)) else { continue };
+            for hit in kentron::geometry::intersect::curve_surface(&line, &surface, tolerance).points {
+                // (Within the face: no further from it than the tolerance.)
+                let v = make::vertex(m, hit.point);
+                if kentron::distance::distance(m, v, face)?.value <= tolerance {
+                    out.push((hit.point, face, hit.t));
+                }
+            }
+        }
+        out.sort_by(|a, b| a.2.total_cmp(&b.2));
+        Ok::<_, kentron::Error>(out)
+    })?;
+    Ok(found.into_iter().map(|(p, f, t)| ((p.x, p.y, p.z), handle(f), t)).collect())
+}
+
 /// The Bézier edge with poles `points`.
 #[pyfunction]
 pub fn make_bezier(points: Vec<Xyz>) -> PyResult<Handle> {
@@ -580,6 +625,9 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(make_spline, m)?)?;
     m.add_function(wrap_pyfunction!(make_spline_approx, m)?)?;
     m.add_function(wrap_pyfunction!(make_spline_surface_approx, m)?)?;
+    m.add_function(wrap_pyfunction!(make_filling, m)?)?;
+    m.add_function(wrap_pyfunction!(face_with_holes, m)?)?;
+    m.add_function(wrap_pyfunction!(line_intersections, m)?)?;
     m.add_function(wrap_pyfunction!(make_bezier, m)?)?;
     m.add_function(wrap_pyfunction!(make_ellipse, m)?)?;
     m.add_function(wrap_pyfunction!(make_wedge, m)?)?;

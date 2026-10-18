@@ -65,6 +65,44 @@ class BRepBuilderAPI_Sewing:
             self.Perform()
         return self._result
 
+
+class BRepBuilderAPI_MakeFace:
+    """A face: from a closed planar wire, or a face again (`Add` cutting holes in it)."""
+
+    def __init__(self, shape=None, *args):
+        from pykentron import _kentron
+
+        self._face = None
+        if shape is None:
+            return
+        # (TopAbs numbers: 4 a face, 5 a wire.)
+        kind = int(shape.ShapeType()) if hasattr(shape, "ShapeType") else None
+        if kind == 4:
+            self._face = shape
+        elif kind == 5:
+            self._face = _kentron.make_face(shape, [])
+        else:
+            raise NotImplementedError("OCP.BRepBuilderAPI.BRepBuilderAPI_MakeFace from surfaces is not provided by pykentron")
+
+    def Add(self, wire) -> None:
+        from pykentron import _kentron
+        from pykentron.shapes import Shape
+
+        # (A wire that does not close bounds no hole: OCCT adds it, the face then invalid;
+        # here it is left out.)
+        if not Shape.cast(wire).IsClosed():
+            return
+        self._face = _kentron.face_with_holes(self._face, [wire])
+
+    def IsDone(self) -> bool:
+        return self._face is not None
+
+    def Face(self):
+        return self._face
+
+    Shape = Face
+
+
 from ._placeholder import fallback as _fallback  # noqa: E402
 
 __getattr__ = _fallback("BRepBuilderAPI")

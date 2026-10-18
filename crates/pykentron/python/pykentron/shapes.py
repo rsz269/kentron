@@ -1453,8 +1453,16 @@ class Face(Shape):
         return faces[0] if len(faces) == 1 and edgeOrWire1.ShapeType() == "Edge" else shell
 
     @classmethod
-    def makeNSidedSurface(cls, edges, constraints, *args, **kwargs) -> "Face":
-        raise NotImplementedError("N-sided filling surfaces")
+    def makeNSidedSurface(cls, edges, constraints=(), continuity=None, degree: int = 3, *args, **kwargs) -> "Face":
+        """The face spanning the closed loop of `edges` (edges or wires) through the points of
+        `constraints`, of least bending energy (OCCT's filling: `degree` the energy's order;
+        the other settings, its approximation's, are not needed)."""
+        points = []
+        for c in constraints:
+            if isinstance(c, Shape):
+                raise NotImplementedError("filling surfaces constrained by curves within them")
+            points.append(_tuple(c))
+        return Shape.cast(native.make_filling([e.wrapped for e in edges], points, int(degree)))
 
     @classmethod
     def makeSplineApprox(cls, points, tol: float = 1e-2, smoothing=None, minDeg: int = 1, maxDeg: int = 3) -> "Face":
@@ -1480,11 +1488,8 @@ class Face(Shape):
         return Face.makeFromWires(wires[0], wires[1:])
 
     def thicken(self, thickness: float) -> "Solid":
-        """The solid between the face and the face offset by `thickness` along its normal
-        (planar faces)."""
-        if self.geomType() != "PLANE":
-            raise NotImplementedError("thickening curved faces")
-        return Shape.cast(native.extrude(self.wrapped, (self.normalAt() * thickness).toTuple()))
+        """The solid between the face and the face offset by `thickness` along its normal."""
+        return _thickened(self, thickness)
 
     def trim(self, *args) -> "Face":
         """The face's surface over `(u0, u1) × (v0, v1)`."""
@@ -1498,6 +1503,8 @@ class Face(Shape):
 
     def addHole(self, *inner) -> "Face":
         wires = [w if w.ShapeType() == "Wire" else Wire.assembleEdges([w]) for w in inner]
+        if self.geomType() != "PLANE":
+            return Shape.cast(native.face_with_holes(self.wrapped, [w.wrapped for w in wires]))
         return Face.makeFromWires(self.outerWire(), self.innerWires() + wires)
 
     def toPln(self):
@@ -1827,3 +1834,33 @@ for _cls in _KINDS.values():
         if isinstance(_attr, classmethod) and (_name.startswith("make") or _name in ("assembleEdges", "combine", "extrudeLinear", "revolve", "sweep", "loft")):
             setattr(_cls, _name, _made_as(_name, _attr))
 del _cls, _name, _attr
+
+
+def _thickened(face: "Face", thickness: float) -> "Solid":
+    """The solid between `face` and its offset by `thickness` along its normal (what
+    `Face.thicken` makes, kept apart from it: extensions replace that method)."""
+    if face.geomType() == "PLANE":
+        return Shape.cast(native.extrude(face.wrapped, (face.normalAt() * thickness).toTuple()))
+    # The face, its offset, and a ruled wall between each edge of its boundary and that
+    # edge's offset (none at a seam, where the face meets itself), sewn.
+    moved = Shape.cast(native.offset_shape(face.wrapped, thickness, "intersection"))
+
+    def boundary(f):
+        uses = [e for w in f.Wires() for e in w.Edges()]
+        return [e for i, e in enumerate(uses) if not any(e.isSame(x) for j, x in enumerate(uses) if j != i)]
+
+    theirs = boundary(moved)
+    middles = [x.positionAt(0.5) for x in theirs]
+    walls = []
+    for e in boundary(face):
+        start, end = e.startPoint(), e.endPoint()
+        shifted = lambda p: p + face.normalAt(p) * thickness
+        a, b = shifted(start), shifted(end)
+        target = shifted(e.positionAt(0.5))
+        g = theirs[min(range(len(theirs)), key=lambda k: (middles[k] - target).Length)]
+        # (Run the same way as `e`.)
+        if (g.startPoint() - a).Length + (g.endPoint() - b).Length > (g.endPoint() - a).Length + (g.startPoint() - b).Length:
+            g = Shape.cast(g.wrapped.Reversed())
+        walls.append(native.make_loft([native.make_wire([e.wrapped]), native.make_wire([g.wrapped])], False, True))
+    shell = Shape.cast(native.sew([face.wrapped, moved.wrapped] + walls, 1e-6))
+    return Shape.cast(native.make_solid([s.wrapped for s in shell.Shells()]))

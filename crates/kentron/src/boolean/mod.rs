@@ -927,6 +927,26 @@ mod tests {
         (vc, ac)
     }
 
+    /// A strip swept from a short curve (its first pole doubled: no tangent there, as font
+    /// outlines' curves have), crossing a sphere beside its seam: the section is where
+    /// the strip crosses the sphere (two curves), nothing along the seam (points beyond the
+    /// spline's end are not on the strip's surface, though along its normal at that end,
+    /// which vanishes, they are no distance from it).
+    #[test]
+    fn section_of_a_swept_strip_and_a_sphere() {
+        let mut model = Model::new();
+        let ball = sphere(&mut model, (0.0, 0.0, 0.0), 50.0);
+        // (A glyph's piece of outline, met projecting text onto a sphere.)
+        let (a, b) = (Point::new(86.07779878153892, -437.6899883531731, -59.34253200971563), Point::new(86.08473793833254, -437.66262713896106, -59.53699334792927));
+        let curve = crate::geometry::curve::Curve::Bezier(crate::geometry::curve::BezierCurve::new(vec![a, a, b]));
+        let edge = crate::make::edge_from_curve(&mut model, curve).unwrap();
+        let along = Vector::new(-0.18758591913397418, 0.9735687357550348, 0.13028982962229022) * 800.0;
+        let strip = crate::sweep::extrude(&mut model, edge, along).unwrap().shape;
+        let cut = section(&mut model, strip, ball).unwrap();
+        let edges = model.unique_subshapes(cut, NodeKind::Edge);
+        assert_eq!(edges.len(), 2, "{} section edges", edges.len());
+    }
+
     #[test]
     fn box_with_a_cylindrical_hole() {
         let mut model = Model::new();
@@ -1211,5 +1231,7 @@ mod tests {
         check(&model, result, 4.0 - 1.0, 2.0 * 3.0 + 8.0 + 4.0 * 1.0, 1);
     }
 }
+
+
 
 

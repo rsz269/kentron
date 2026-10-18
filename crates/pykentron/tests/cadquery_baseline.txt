@@ -92,7 +92,6 @@ tests.test_cadquery.TestCadQuery::testFaceIntersectedByLine
 tests.test_cadquery.TestCadQuery::testFuzzyBoolOp
 tests.test_cadquery.TestCadQuery::testLocationAt
 tests.test_cadquery.TestCadQuery::testMultisectionSweep
-tests.test_cadquery.TestCadQuery::testNoClean
 tests.test_cadquery.TestCadQuery::testNullShape
 tests.test_cadquery.TestCadQuery::testOffset2D
 tests.test_cadquery.TestCadQuery::testParametricSurface

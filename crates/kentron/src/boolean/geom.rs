@@ -103,9 +103,14 @@ pub(super) fn signed_distance(surface: &Surface, p: Point) -> f64 {
             if beyond.abs() < near.abs() { beyond } else { near }
         }
         Surface::Revolution(_) | Surface::Extrusion(_) => {
-            // Along the normal at the foot point.
+            // Along the normal at the foot point; or, on an extrusion where there is no normal
+            // (the foot at an end of its curve where that has no tangent, as font outlines'
+            // curves start), the whole way to it: along nothing, the point would seem on the
+            // surface. (Not at a surface of revolution's pole, where the distance changes sign
+            // through the axis.)
             let uv = uv_of(surface, p);
-            (p - surface_point(surface, uv)).dot(normal_at(surface, uv))
+            let (r, n) = (p - surface_point(surface, uv), normal_at(surface, uv));
+            if n.length() > 0.5 || matches!(surface, Surface::Revolution(_)) { r.dot(n) } else { r.length() }
         }
         other if freeform(other) => {
             let foot = foot_on(surface, p);

@@ -43,6 +43,7 @@ pub mod defeature;
 pub mod divide;
 pub mod draft;
 pub mod feature;
+pub mod fill;
 mod error;
 pub mod geometry;
 pub mod hashing;

@@ -112,6 +112,20 @@ Fixed since the cases were found (running them again):
 - Intersections with several shapes, with all of them (OCCT's common), not with each in
   turn (cqindustry's round platform and can tower stairs).
 
+- Projections, fillings and thickening, as cq_warehouse calls them through OCP: wires
+  projected onto shapes (along a direction or from a point), faces spanning loops of edges
+  (the plate of least bending energy through them and given points), holes cut in curved
+  faces, curved faces thickened, lines crossing shapes' faces (cq_warehouse's cylinder with
+  holes now builds as on CadQuery; its heatset nuts too). Swept faces of curves with no
+  tangent at an end (font outlines') no longer meet other surfaces all along a sphere's seam.
+  CadQuery's own fillings stray from their points (by up to 1.4 in its interpolated plates),
+  which kentron's pass through: Ex101's plates differ by 0.2–0.6%; fillings approximating a
+  surface from its outline (cq_warehouse's projected flag faces) by about 1%; a filling's
+  normal, and so the way it thickens, follows OCCT's average plane where kentron's follows
+  the loop (cq_warehouse's squares mapped on a sphere). Its projection example's conical
+  case projects text from a point in the text's own plane (every projected outline folded
+  onto one circle): it stops there.
+
 Three scripts build differently on CadQuery for reasons of its own: cqterrain's magnet
 template queues its pending wire again (`toPending()`), and CadQuery's face counts it twice
 (double the volume); cqterrain's buildings stack storeys as touching solids, which CadQuery
@@ -123,5 +137,5 @@ With these, five more of OCCT's cases pass (four booleans and a Tcl bug script).
 Still open among them: the thread solids' unions with their core (nearly coincident
 surfaces, 0.001 apart) and two meshing helical gears' union (teeth touching), cq_warehouse's bolts (their threads' unions too, by the look of
 them), the contrib remote enclosure (a countersink through a wall thinner than it is deep:
-the cut loses the countersink's cone), and the rest of `cases.tsv`. 39 of the 85 now build
+the cut loses the countersink's cone), and the rest of `cases.tsv`. 40 of the 85 now build
 as on CadQuery.

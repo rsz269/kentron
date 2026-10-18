@@ -245,6 +245,13 @@ def rounded_recess_cut(cq):
     return cq.Solid.makeBox(40, 80, 12, cq.Vector(-20, -40, 0)).cut(recess)
 
 
+def filled_square_through_a_point(cq):
+    # (A plate spanning a square, bent through a point off its plane: the least bending.)
+    corners = [cq.Vector(0, 0, 0), cq.Vector(0, 10, 0), cq.Vector(0, 10, 10), cq.Vector(0, 0, 10)]
+    edges = cq.Wire.makePolygon(corners, close=True).Edges()
+    return cq.Face.makeNSidedSurface(edges, [cq.Vector(5, 5, 5)])
+
+
 CASES = [
     box, cylinder_along_y, cone, workplane_box, fused_boxes, cut_bores, intersected,
     polyline_prism_xz, polyline_prism_custom_plane, hexagon, face_with_hole, loft,
@@ -253,7 +260,7 @@ CASES = [
     loft_turned_aside, sweep_round_hexagon, frenet_sweep_round_helix, tapered_split_square,
     rotated_then_located, spline_surface_through_a_grid, plane_of_negative_size, subclassed_wire,
     array_of_vectors, sweep_through_three_circles, sweep_from_circle_to_square,
-    fuse_of_many, rounded_pocket_rim, fillet_of_a_mitre, rounded_recess_cut,
+    fuse_of_many, rounded_pocket_rim, fillet_of_a_mitre, rounded_recess_cut, filled_square_through_a_point,
 ]
 
 
