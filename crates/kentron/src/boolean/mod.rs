@@ -1029,6 +1029,57 @@ mod tests {
         assert_eq!(top, 2);
     }
 
+    /// A cylinder and a strip winding twenty times round it (a B-spline ruled between two
+    /// helices in 63 spans, as a thread's flank, from inside it to outside): they meet along
+    /// a curve winding with it, found all along (the strip's points found on the turn they
+    /// are on) and split where it crosses the cylinder's seam, each turn.
+    #[test]
+    fn a_cylinder_and_a_strip_winding_round_it() {
+        use crate::geometry::surface::{BSplineSurface, KnotVector, Surface};
+        let (turns, n, r) = (20.0, 64, 2.5);
+        let params: Vec<f64> = (0..n).map(|i| i as f64 / (n - 1) as f64).collect();
+        let helix = |radius: f64| {
+            let points: Vec<Point> = params.iter().map(|&t| Point::new(radius * (2.0 * PI * turns * t).cos(), radius * (2.0 * PI * turns * t).sin(), turns * t)).collect();
+            crate::geometry::fit::interpolate_with_parameters(&points, &params).unwrap()
+        };
+        let (inner, outer) = (helix(2.2), helix(3.0));
+        let poles: Vec<Vec<Point>> = inner.poles().iter().zip(outer.poles()).map(|(&a, &b)| vec![a, b]).collect();
+        let u = KnotVector::new(inner.knots().to_vec(), inner.multiplicities().to_vec(), inner.degree());
+        let v = KnotVector::new(vec![0.0, 1.0], vec![2, 2], 1);
+        let surface = BSplineSurface::new(poles, u, v);
+        // The curve where the strip is at radius r, found finely: at each of many u where the
+        // strip reaches across it (not all: its interpolated edges wobble), by bisection along
+        // v (outwards along the strip's rulings).
+        let fine: f64 = {
+            use crate::geometry::ParametricSurface;
+            let at = |u: f64| {
+                let radius = |v: f64| {
+                    let p = surface.point(u, v);
+                    p.x.hypot(p.y) - r
+                };
+                if radius(0.0) >= 0.0 || radius(1.0) <= 0.0 {
+                    return None;
+                }
+                let (mut lo, mut hi) = (0.0, 1.0);
+                for _ in 0..60 {
+                    let mid = 0.5 * (lo + hi);
+                    if radius(mid) < 0.0 { lo = mid } else { hi = mid }
+                }
+                Some(surface.point(u, 0.5 * (lo + hi)))
+            };
+            let points: Vec<Option<Point>> = (0..=20000).map(|i| at(i as f64 / 20000.0)).collect();
+            points.windows(2).filter_map(|w| Some(w[0]?.distance(w[1]?))).sum()
+        };
+        let mut model = Model::new();
+        let strip = crate::make::face_on_surface(&mut model, Surface::BSpline(surface)).unwrap();
+        let bar = cylinder(&mut model, (0.0, 0.0, -1.0), Direction::Z, r, turns + 2.0);
+        let cut = section(&mut model, bar, strip).unwrap();
+        let edges = model.unique_subshapes(cut, NodeKind::Edge);
+        let length = properties::length(&model, cut).mass;
+        assert!((length - fine).abs() <= 5e-4 * fine, "length {length} != {fine}");
+        assert!(edges.len() <= 2 * turns as usize + 2, "{} edges", edges.len());
+    }
+
     #[test]
     fn box_with_a_cylindrical_hole() {
         let mut model = Model::new();

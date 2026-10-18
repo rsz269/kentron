@@ -200,6 +200,59 @@ pub(super) fn trace(base: &Surface, other: &Surface, range: Range, (nu, nv): (us
         if tracer.stopped.get() {
             return None;
         }
+        // Where it runs on over a branch traced already (followed from a seed just past that
+        // one's end), only its stretches off that one (an open one's; a closed one
+        // over part of one traced already stays whole): near it in space and on the base (a
+        // branch passing as near in space elsewhere on the base, as the next turn of a
+        // helical surface, is another).
+        let chain = {
+            let apart = |x: f64, y: f64, period: Option<f64>| {
+                let d = x - y;
+                period.map_or(d, |w| d - (d / w).round() * w).abs()
+            };
+            let cell = (4.0 * (range.u.1 - range.u.0).abs() / nu as f64, 4.0 * (range.v.1 - range.v.0).abs() / nv as f64);
+            let over = |b: &Both| {
+                chains.iter().any(|(points, closed)| {
+                    let n = points.len();
+                    let segments = if *closed { n } else { n.saturating_sub(1) };
+                    (0..segments).any(|i| {
+                        let (a, c) = (&points[i], &points[(i + 1) % n]);
+                        let d = c.p - a.p;
+                        let len2 = d.dot(d);
+                        let w = if len2 > 0.0 { ((b.p - a.p).dot(d) / len2).clamp(0.0, 1.0) } else { 0.0 };
+                        (a.p + d * w).distance(b.p) <= 0.1 * leaf && apart(a.u, b.u, base.u_period()) <= cell.0 && apart(a.v, b.v, base.v_period()) <= cell.1
+                    })
+                })
+            };
+            let mut keep: Vec<bool> = chain.0.iter().map(|b| !over(b)).collect();
+            // (Only where it runs over that one for a while, not where it merely meets it.)
+            let mut i = 0;
+            while i < keep.len() {
+                if keep[i] {
+                    i += 1;
+                    continue;
+                }
+                let mut j = i;
+                while j + 1 < keep.len() && !keep[j + 1] {
+                    j += 1;
+                }
+                let length: f64 = chain.0[i..=j].windows(2).map(|w| w[0].p.distance(w[1].p)).sum();
+                if length < 2.0 * leaf {
+                    keep[i..=j].iter_mut().for_each(|k| *k = true);
+                }
+                i = j + 1;
+            }
+            if chain.1 || keep.iter().all(|&k| k) {
+                chain
+            } else {
+                for run in stretches(&chain.0, chain.1, &keep).0 {
+                    if run.0.len() >= 2 {
+                        chains.push(run);
+                    }
+                }
+                continue;
+            }
+        };
         // (A single point, where the surfaces touch: no branch.)
         if chain.0.len() < 2 {
             continue;

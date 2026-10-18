@@ -1240,6 +1240,70 @@ pub(crate) fn newton_foot(p: Point, surface: &Surface, start: (f64, f64)) -> Sur
     SurfaceFoot { u, v, point, du, dv }
 }
 
+/// What stands for a surface in caches of what is found on it: a B-spline or Bézier
+/// surface's identity, else three of its points.
+#[derive(PartialEq)]
+pub(crate) enum SurfaceKey {
+    Shared(crate::geometry::SurfaceId),
+    Points([u64; 9]),
+}
+
+impl SurfaceKey {
+    pub(crate) fn of(surface: &Surface) -> SurfaceKey {
+        match surface.shared_id() {
+            Some(id) => SurfaceKey::Shared(id),
+            None => SurfaceKey::Points(fingerprint(surface)),
+        }
+    }
+}
+
+/// Three points of a surface, standing for it in the cache.
+fn fingerprint(surface: &Surface) -> [u64; 9] {
+    use super::parametric::ParametricSurface;
+    let (u0, u1, v0, v1) = surface.bounds();
+    let mut out = [0; 9];
+    for (k, (u, v)) in [(0.31, 0.27), (0.5, 0.5), (0.77, 0.69)].into_iter().enumerate() {
+        let q = surface.point(u0 + (u1 - u0) * u, v0 + (v1 - v0) * v);
+        out[3 * k..3 * k + 3].copy_from_slice(&[q.x.to_bits(), q.y.to_bits(), q.z.to_bits()]);
+    }
+    out
+}
+
+/// For a B-spline surface winding round six times or more along u or v (a helical sweep, its
+/// turns close together, more than its usual samples tell apart), sixteen samples a turn
+/// that way, so that a point's nearest sample is on the turn it is on; else 0. The turning is measured along the middle iso-lines.
+/// Kept for the surface.
+pub(crate) fn windings(surface: &Surface) -> (usize, usize) {
+    static FOUND: std::sync::Mutex<Vec<(SurfaceKey, (usize, usize))>> = std::sync::Mutex::new(Vec::new());
+    use super::parametric::ParametricSurface;
+    use crate::math::Vector;
+    let Surface::BSpline(_) = surface else { return (0, 0) };
+    let key = SurfaceKey::of(surface);
+    let lock = || FOUND.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(&(_, found)) = lock().iter().find(|(k, _)| *k == key) {
+        return found;
+    }
+    let (u0, u1, v0, v1) = surface.bounds();
+    let angle = |x: Vector, y: Vector| {
+        let (lx, ly) = (x.length(), y.length());
+        if lx > 0.0 && ly > 0.0 { (x.dot(y) / (lx * ly)).clamp(-1.0, 1.0).acos() } else { 0.0 }
+    };
+    let turned = |points: Vec<Point>| points.windows(3).map(|w| angle(w[1] - w[0], w[2] - w[1])).sum::<f64>();
+    // (Over chords long enough that a fitted surface's ripples between its knots do not
+    // add up: up to some forty turns told.)
+    let (nu, nv) = (128, 128);
+    let u_turn = turned((0..=nu).map(|i| surface.point(u0 + (u1 - u0) * i as f64 / nu as f64, 0.5 * (v0 + v1))).collect());
+    let v_turn = turned((0..=nv).map(|j| surface.point(0.5 * (u0 + u1), v0 + (v1 - v0) * j as f64 / nv as f64)).collect());
+    let winding = |turn: f64| if turn >= 6.0 * std::f64::consts::TAU { ((16.0 * turn / std::f64::consts::TAU).ceil() as usize).min(1024) } else { 0 };
+    let found = (winding(u_turn), winding(v_turn));
+    let mut cache = lock();
+    if cache.len() >= 256 {
+        cache.remove(0);
+    }
+    cache.push((key, found));
+    found
+}
+
 /// The parameters `(u, v)` of the point of `surface` closest to `p` within its bounds, and the
 /// distance: in closed form on elementary surfaces, otherwise by Newton steps from `start`
 /// (a nearby solution, as when following a curve) or from the best of a grid of samples.
@@ -1263,8 +1327,12 @@ pub fn nearest_on_surface(p: Point, surface: &Surface, start: Option<(f64, f64)>
     }
     // A grid (finer on B-splines of many spans), then Newton steps from its few nearest
     // points (the nearest alone may be a pole, where the steps stall, or a local minimum).
+    // (And on one winding round many times, enough to tell its turns apart.)
     let (nu, nv) = match surface {
-        Surface::BSpline(b) => ((2 * b.u_knots().len()).clamp(16, 64), (2 * b.v_knots().len()).clamp(16, 64)),
+        Surface::BSpline(b) => {
+            let (wu, wv) = windings(surface);
+            ((2 * b.u_knots().len()).clamp(16, 64).max(wu), (2 * b.v_knots().len()).clamp(16, 64).max(wv))
+        }
         _ => (16, 16),
     };
     let points = grid_points(surface, (u0, u1, v0, v1), nu, nv);

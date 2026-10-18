@@ -235,42 +235,16 @@ pub(super) fn freeform(surface: &Surface) -> bool {
 
 /// Grids of points of the free-form surfaces met lately, to start point inversions from
 /// (shared by the threads of an operation).
-static SAMPLES: std::sync::Mutex<Vec<(SampleKey, std::sync::Arc<Vec<(f64, f64, Point)>>)>> = std::sync::Mutex::new(Vec::new());
-
-/// What stands for a surface in the cache of sample grids: a B-spline or Bézier surface's
-/// identity, else three of its points.
-#[derive(PartialEq)]
-enum SampleKey {
-    Shared(crate::geometry::SurfaceId),
-    Points([u64; 9]),
-}
-
-fn sample_key(surface: &Surface) -> SampleKey {
-    match surface.shared_id() {
-        Some(id) => SampleKey::Shared(id),
-        None => SampleKey::Points(fingerprint(surface)),
-    }
-}
-
-/// Three points of a surface, standing for it in the cache.
-fn fingerprint(surface: &Surface) -> [u64; 9] {
-    let (u0, u1, v0, v1) = surface.bounds();
-    let mut out = [0; 9];
-    for (k, (u, v)) in [(0.31, 0.27), (0.5, 0.5), (0.77, 0.69)].into_iter().enumerate() {
-        let q = surface.point(u0 + (u1 - u0) * u, v0 + (v1 - v0) * v);
-        out[3 * k..3 * k + 3].copy_from_slice(&[q.x.to_bits(), q.y.to_bits(), q.z.to_bits()]);
-    }
-    out
-}
+static SAMPLES: std::sync::Mutex<Vec<(crate::geometry::extrema::SurfaceKey, std::sync::Arc<Vec<(f64, f64, Point)>>)>> = std::sync::Mutex::new(Vec::new());
 
 /// The steps of a surface's sample grid along u and v.
 fn grid_steps(surface: &Surface) -> (usize, usize) {
     // A few samples per knot span and degree (a bilinear patch needs few); more on one
-    // winding round many times ([`windings`]).
+    // winding round many times ([`crate::geometry::extrema::windings`]).
     let by = |spans: usize, degree: usize| (4 * spans * degree.max(1)).clamp(4, 32);
     match surface {
         Surface::BSpline(b) => {
-            let (wu, wv) = windings(surface);
+            let (wu, wv) = crate::geometry::extrema::windings(surface);
             (by(b.u_knots().len() - 1, b.u_degree()).max(wu), by(b.v_knots().len() - 1, b.v_degree()).max(wv))
         }
         Surface::Bezier(b) => (by(1, b.u_degree()), by(1, b.v_degree())),
@@ -278,50 +252,18 @@ fn grid_steps(surface: &Surface) -> (usize, usize) {
     }
 }
 
-/// For a B-spline surface winding round six times or more along u or v (a helical sweep, its
-/// turns close together, more than its usual samples tell apart), sixteen samples a turn that way, so that a point's nearest sample
-/// is on the turn it is on; else 0. The turning is measured along the middle iso-lines.
-/// Kept for the surface.
-fn windings(surface: &Surface) -> (usize, usize) {
-    static FOUND: std::sync::Mutex<Vec<(SampleKey, (usize, usize))>> = std::sync::Mutex::new(Vec::new());
-    let Surface::BSpline(b) = surface else { return (0, 0) };
-    let key = sample_key(surface);
-    let lock = || FOUND.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    if let Some(&(_, found)) = lock().iter().find(|(k, _)| *k == key) {
-        return found;
-    }
-    let (u0, u1, v0, v1) = surface.bounds();
-    let angle = |x: Vector, y: Vector| {
-        let (lx, ly) = (x.length(), y.length());
-        if lx > 0.0 && ly > 0.0 { (x.dot(y) / (lx * ly)).clamp(-1.0, 1.0).acos() } else { 0.0 }
-    };
-    let turned = |points: Vec<Point>| points.windows(3).map(|w| angle(w[1] - w[0], w[2] - w[1])).sum::<f64>();
-    // (Over chords long enough that a fitted surface's ripples between its knots do not
-    // add up: up to some forty turns told.)
-    let (nu, nv) = (128, 128);
-    let u_turn = turned((0..=nu).map(|i| surface.point(u0 + (u1 - u0) * i as f64 / nu as f64, 0.5 * (v0 + v1))).collect());
-    let v_turn = turned((0..=nv).map(|j| surface.point(0.5 * (u0 + u1), v0 + (v1 - v0) * j as f64 / nv as f64)).collect());
-    let winding = |turn: f64| if turn >= 6.0 * std::f64::consts::TAU { ((16.0 * turn / std::f64::consts::TAU).ceil() as usize).min(1024) } else { 0 };
-    let found = (winding(u_turn), winding(v_turn));
-    let mut cache = lock();
-    if cache.len() >= 256 {
-        cache.remove(0);
-    }
-    cache.push((key, found));
-    found
-}
 
-/// The samples of a surface winding round many times ([`windings`])
+/// The samples of a surface winding round many times ([`crate::geometry::extrema::windings`])
 /// along its more winding direction; 0 for others.
 pub(super) fn winding_samples(surface: &Surface) -> usize {
-    let (u, v) = windings(surface);
+    let (u, v) = crate::geometry::extrema::windings(surface);
     u.max(v)
 }
 
 /// Runs `f` on the surface's sample grid (points `(u, v, p)`, row by row along u), cached.
 fn with_samples<R>(surface: &Surface, f: impl FnOnce(&[(f64, f64, Point)]) -> R) -> R {
     let lock = || SAMPLES.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    let key = sample_key(surface);
+    let key = crate::geometry::extrema::SurfaceKey::of(surface);
     let found = lock().iter().find(|(k, _)| *k == key).map(|(_, grid)| grid.clone());
     let grid = match found {
         Some(grid) => grid,
