@@ -1001,7 +1001,7 @@ impl Graph {
 /// and boxes.
 pub(super) fn sample_face(surface: &Surface, boundary: &[(&Curve2, f64, f64)]) -> FaceSample {
     {
-        let polylines: Vec<Vec<Uv>> = boundary.iter().map(|&(pcurve, first, last)| geom::sample_pcurve(pcurve, first, last)).collect();
+        let polylines: Vec<Vec<Uv>> = boundary.iter().map(|&(pcurve, first, last)| geom::sample_pcurve_closely(pcurve, first, last)).collect();
         let us = polylines.iter().flatten().map(|p| p[0]);
         let u_range = us.clone().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), u| (lo.min(u), hi.max(u)));
         let vs = polylines.iter().flatten().map(|p| p[1]);

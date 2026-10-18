@@ -165,8 +165,6 @@ tests/boolean/volumemaker/A4
 tests/boolean/volumemaker/C5
 tests/boolean/volumemaker/C6
 tests/boolean/volumemaker/C8
-tests/boolean/volumemaker/C9
-tests/boolean/volumemaker/D6
 tests/boolean/volumemaker/D8
 tests/boolean/volumemaker/D9
 tests/boolean/volumemaker/E4

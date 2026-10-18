@@ -651,6 +651,44 @@ pub(super) fn sample_pcurve(pcurve: &Curve2, first: f64, last: f64) -> Vec<Uv> {
     pcurve.points_along(&params).into_iter().map(|p| [p.x, p.y]).collect()
 }
 
+/// [`sample_pcurve`], with free-form spans halved while their midpoints stray from their
+/// chords: for telling points close to the boundary on which side of it they lie.
+pub(super) fn sample_pcurve_closely(pcurve: &Curve2, first: f64, last: f64) -> Vec<Uv> {
+    if matches!(pcurve, Curve2::Line(_) | Curve2::Circle(_) | Curve2::Ellipse(_)) {
+        return sample_pcurve(pcurve, first, last);
+    }
+    let n = 64;
+    let mut params: Vec<f64> = (0..=n).map(|i| first + (last - first) * i as f64 / n as f64).collect();
+    let mut points: Vec<Uv> = pcurve.points_along(&params).into_iter().map(|p| [p.x, p.y]).collect();
+    let (lo, hi) = polyline_box(&points);
+    let tol = 1e-7 * (hi[0] - lo[0]).hypot(hi[1] - lo[1]);
+    for _ in 0..6 {
+        let mids: Vec<f64> = params.windows(2).map(|w| 0.5 * (w[0] + w[1])).collect();
+        let at: Vec<Uv> = pcurve.points_along(&mids).into_iter().map(|p| [p.x, p.y]).collect();
+        let stray = |i: usize| {
+            let (a, b, m) = (points[i], points[i + 1], at[i]);
+            let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+            let len = dx.hypot(dy);
+            let off = if len > 0.0 { ((m[0] - a[0]) * dy - (m[1] - a[1]) * dx).abs() / len } else { (m[0] - a[0]).hypot(m[1] - a[1]) };
+            off > tol
+        };
+        if !(0..mids.len()).any(stray) {
+            break;
+        }
+        let (mut p2, mut q2) = (vec![params[0]], vec![points[0]]);
+        for i in 0..mids.len() {
+            if stray(i) {
+                p2.push(mids[i]);
+                q2.push(at[i]);
+            }
+            p2.push(params[i + 1]);
+            q2.push(points[i + 1]);
+        }
+        (params, points) = (p2, q2);
+    }
+    points
+}
+
 /// Twice the signed area enclosed by a closed polyline (positive counter-clockwise).
 pub(super) fn signed_area(points: &[Uv]) -> f64 {
     let n = points.len();
@@ -962,4 +1000,27 @@ pub(super) fn boxes_overlap(a: &(Point, Point), b: &(Point, Point)) -> bool {
 
 pub(super) fn box_contains(b: &(Point, Point), p: Point) -> bool {
     p.x >= b.0.x && p.x <= b.1.x && p.y >= b.0.y && p.y <= b.1.y && p.z >= b.0.z && p.z <= b.1.z
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::geometry::curve2::BezierCurve2;
+    use crate::math::Point2;
+
+    /// A point between an arch and the chord of its 64-part polyline is inside the arch's
+    /// closely sampled outline.
+    #[test]
+    fn points_just_inside_curved_boundaries_are_inside() {
+        let arch = Curve2::Bezier(BezierCurve2::new(vec![Point2::new(0.0, 0.0), Point2::new(5.0, 10.0), Point2::new(10.0, 0.0)]));
+        let at = |t: f64| {
+            let p = arch.point(t);
+            [p.x, p.y]
+        };
+        let (a, b, c) = (at(0.5), at(33.0 / 64.0), at(65.0 / 128.0));
+        let q = [c[0] + 0.5 * (0.5 * (a[0] + b[0]) - c[0]), c[1] + 0.5 * (0.5 * (a[1] + b[1]) - c[1])];
+        let outline = |arc: Vec<Uv>| vec![arc, vec![[10.0, 0.0], [0.0, 0.0]]];
+        assert!(!inside_polylines(&outline(sample_pcurve(&arch, 0.0, 1.0)), q));
+        assert!(inside_polylines(&outline(sample_pcurve_closely(&arch, 0.0, 1.0)), q));
+    }
 }

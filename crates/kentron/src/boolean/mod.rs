@@ -458,10 +458,46 @@ fn classified(model: &Model, graph: &mut Graph) -> (Vec<split::Piece>, Vec<Vec<s
     let classify = |ri: usize| {
         let (fi, region, _) = &regions[ri];
         let face = &graph.faces[*fi];
-        let uv = region.interior;
-        let p = geom::surface_point(&face.surface, uv);
-        let outward = geom::normal_at(&face.surface, uv) * face.outward;
-        graph.classify(p, outward, 1 - face.operand)
+        let at = |uv: geom::Uv| {
+            let p = geom::surface_point(&face.surface, uv);
+            let outward = geom::normal_at(&face.surface, uv) * face.outward;
+            graph.classify(p, outward, 1 - face.operand)
+        };
+        let state = at(region.interior);
+        if !matches!(state, State::OnSame | State::OnOpposite) {
+            return state;
+        }
+        // (On the other operand at the point taken: lying on it, or only touching it there,
+        // as a face tangent to the other's along a line through that point. Other points of
+        // the region then tell: lying on it, all are on it.)
+        let (mut lo, mut hi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
+        for p in region.polygons.iter().flatten() {
+            lo = [lo[0].min(p[0]), lo[1].min(p[1])];
+            hi = [hi[0].max(p[0]), hi[1].max(p[1])];
+        }
+        const SPREAD: [f64; 5] = [0.2763, 0.4127, 0.5891, 0.7177, 0.1531];
+        let mut off = Vec::new();
+        'samples: for &a in &SPREAD {
+            for &b in SPREAD.iter().rev() {
+                let uv = [lo[0] + (hi[0] - lo[0]) * a, lo[1] + (hi[1] - lo[1]) * b];
+                if !geom::inside_polylines(&region.polygons, uv) {
+                    continue;
+                }
+                let s = at(uv);
+                if matches!(s, State::OnSame | State::OnOpposite) {
+                    return state;
+                }
+                off.push(s);
+                if off.len() >= 3 {
+                    break 'samples;
+                }
+            }
+        }
+        // (Off it at all others: only touching it. They agree, or the point taken stands.)
+        match off.first() {
+            Some(&s) if off.iter().all(|&t| t == s) => s,
+            _ => state,
+        }
     };
     const SAMPLES: usize = 7;
     let sample = |g: &[usize]| -> Vec<usize> {
@@ -947,6 +983,34 @@ mod tests {
         assert_eq!(edges.len(), 2, "{} section edges", edges.len());
     }
 
+    /// A box and a slab under a wave touching the box's top along a line: the regions of
+    /// the top and of the wave either side of the line, on the other operand only along it,
+    /// are outside and inside it.
+    #[test]
+    fn box_and_a_wave_touching_its_top() {
+        let mut model = Model::new();
+        let block = cuboid(&mut model, (-5.0, -1.0, -2.5), (10.0, 2.0, 5.0));
+        let wave = |x: f64| 0.25 + 0.75 * (PI * x / 6.0).cos();
+        let points: Vec<Point> = (0..=48).map(|i| -12.0 + 0.5 * i as f64).map(|x| Point::new(x, wave(x), -2.5)).collect();
+        let curve = crate::geometry::curve::Curve::BSpline(crate::geometry::fit::interpolate(&points, false, 1e-9).unwrap());
+        let (first, last) = (points[0], points[48]);
+        let edges = [
+            crate::make::edge_from_curve(&mut model, curve).unwrap(),
+            crate::make::edge_between(&mut model, last, Point::new(12.0, -2.0, -2.5)).unwrap(),
+            crate::make::edge_between(&mut model, Point::new(12.0, -2.0, -2.5), Point::new(-12.0, -2.0, -2.5)).unwrap(),
+            crate::make::edge_between(&mut model, Point::new(-12.0, -2.0, -2.5), first).unwrap(),
+        ];
+        let profile = crate::make::wire_within(&mut model, &edges, 1e-7).unwrap();
+        let face = crate::make::planar_face(&mut model, profile).unwrap();
+        let slab = crate::sweep::extrude(&mut model, face, Vector::new(0.0, 0.0, 5.0)).unwrap().shape;
+        let result = intersection(&mut model, block, slab).unwrap();
+        assert!(validity::check(&model, result).is_valid());
+        // Over -5 <= x <= 5, from y = -1 up to the wave, 5 deep.
+        let volume = 5.0 * (12.5 + 0.75 * 12.0 / PI * (5.0 * PI / 6.0).sin());
+        let v = properties::volume(&model, result).mass;
+        assert!((v - volume).abs() <= 1e-4 * volume, "volume {v} != {volume}");
+    }
+
     #[test]
     fn box_with_a_cylindrical_hole() {
         let mut model = Model::new();
@@ -1231,7 +1295,3 @@ mod tests {
         check(&model, result, 4.0 - 1.0, 2.0 * 3.0 + 8.0 + 4.0 * 1.0, 1);
     }
 }
-
-
-
-
