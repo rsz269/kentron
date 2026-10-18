@@ -44,6 +44,27 @@ class BRepBuilderAPI_Transform:
     def ModifiedShape(self, shape):
         return self._shape
 
+class BRepBuilderAPI_Sewing:
+    """Faces sewn into shells where their boundaries meet within the tolerance."""
+
+    def __init__(self, tolerance: float = 1e-6, option1: bool = True, option2: bool = True, option3: bool = True, option4: bool = False):
+        self._tolerance = tolerance
+        self._shapes = []
+        self._result = None
+
+    def Add(self, shape) -> None:
+        self._shapes.append(shape)
+
+    def Perform(self, *args) -> None:
+        from pykentron import _kentron
+
+        self._result = _kentron.sew(self._shapes, self._tolerance)
+
+    def SewedShape(self):
+        if self._result is None:
+            self.Perform()
+        return self._result
+
 from ._placeholder import fallback as _fallback  # noqa: E402
 
 __getattr__ = _fallback("BRepBuilderAPI")

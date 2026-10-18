@@ -1453,7 +1453,10 @@ class Face(Shape):
 
     @classmethod
     def makeSplineApprox(cls, points, tol: float = 1e-2, smoothing=None, minDeg: int = 1, maxDeg: int = 3) -> "Face":
-        raise NotImplementedError("spline surfaces approximating points")
+        """The spline face near the grid of points (rows along u), within `tol`. (Smoothing
+        weights are not used: the surface passes within the tolerance as without them.)"""
+        grid = [[_tuple(p) for p in row] for row in points]
+        return Shape.cast(native.make_spline_surface_approx(grid, tol, minDeg, maxDeg))
 
     def fillet2D(self, radius: float, vertices: Iterable[Vertex]) -> "Face":
         """The face with its corners at `vertices` rounded (between straight edges)."""

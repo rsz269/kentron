@@ -168,13 +168,19 @@ def rotated_then_located(cq):
     return turned.located(cq.Location(cq.Vector(10, 0, 0)))
 
 
+def spline_surface_through_a_grid(cq):
+    at = lambda x, y: cq.Vector(x, y, 0.3 * x * y - 0.1 * x * x + math.sin(0.7 * y))
+    grid = [[at(i * 0.2, j * 0.25) for j in range(20)] for i in range(30)]
+    return cq.Face.makeSplineApprox(grid, tol=1e-3, minDeg=3, maxDeg=8)
+
+
 CASES = [
     box, cylinder_along_y, cone, workplane_box, fused_boxes, cut_bores, intersected,
     polyline_prism_xz, polyline_prism_custom_plane, hexagon, face_with_hole, loft,
     rotated_mirrored, revolved, located, euler_location, offset_outline, smoothed_helix_spline,
     chamfered_arc_plate, mirrored_outline, fillet_with_bore_edges,
     loft_turned_aside, sweep_round_hexagon, frenet_sweep_round_helix, tapered_split_square,
-    rotated_then_located,
+    rotated_then_located, spline_surface_through_a_grid,
 ]
 
 

@@ -745,6 +745,116 @@ fn smoothed<P: ControlPoint>(points: &[P], q: &[[f64; 3]], params: &[f64], weigh
     Ok(best)
 }
 
+/// A B-spline surface passing near a grid of points (`points[i][j]`, `i` along u and `j`
+/// along v), within `options.tolerance`: of degree 3 in each direction where the options
+/// allow it (else the nearest they allow, and less where there are too few points), with
+/// as few poles as a search finds. Each column of points fitted along u on common knots,
+/// then each row of those curves' poles along v.
+#[doc(alias = "GeomAPI_PointsToBSplineSurface")]
+pub fn approximate_surface(points: &[Vec<crate::math::Point>], options: ApproximationOptions) -> Result<super::bspline::BSplineSurface> {
+    use crate::math::Point;
+    let (nu, nv) = (points.len(), points.first().map_or(0, Vec::len));
+    if nu < 2 || nv < 2 || points.iter().any(|r| r.len() != nv) {
+        return Err(Error::InvalidInput("surface approximation needs a grid of two or more points each way".into()));
+    }
+    // Chord-length parameters, averaged across the grid, over [0, 1].
+    let average = |count: usize, other: usize, at: &dyn Fn(usize, usize) -> Point| -> Result<Vec<f64>> {
+        let mut params = vec![0.0; count];
+        for k in 0..other {
+            let mut t = vec![0.0];
+            for i in 1..count {
+                t.push(t[i - 1] + at(i - 1, k).distance(at(i, k)));
+            }
+            let total = t[count - 1];
+            if total > 0.0 {
+                for i in 0..count {
+                    params[i] += t[i] / total / other as f64;
+                }
+            } else {
+                for i in 0..count {
+                    params[i] += i as f64 / (count - 1) as f64 / other as f64;
+                }
+            }
+        }
+        params[0] = 0.0;
+        params[count - 1] = 1.0;
+        if params.windows(2).any(|w| !(w[1] > w[0])) {
+            return Err(Error::InvalidInput("surface approximation points coincide".into()));
+        }
+        Ok(params)
+    };
+    let us = average(nu, nv, &|i, j| points[i][j])?;
+    let vs = average(nv, nu, &|j, i| points[i][j])?;
+    let degree = |n: usize| 3usize.clamp(options.min_degree.max(1), options.max_degree.max(1)).min(n - 1);
+    let (p, q) = (degree(nu), degree(nv));
+    // The poles of every column fitted along u with `mu` poles, then every row of those along
+    // v with `mv`: the surface, or `None` where a fit fails.
+    let fit = |mu: usize, mv: usize| -> Option<super::bspline::BSplineSurface> {
+        let (ku, kv) = (knots_for(&us, p, mu), knots_for(&vs, q, mv));
+        let mut columns: Vec<Vec<Point>> = Vec::with_capacity(nv);
+        for j in 0..nv {
+            let q3: Vec<[f64; 3]> = (0..nu).map(|i| points[i][j].coords()).collect();
+            let curve: BSplineCurve<Point> = least_squares_with_knots(&q3, &us, p, ku.clone())?;
+            columns.push(curve.poles().to_vec());
+        }
+        let mut rows: Vec<Vec<Point>> = Vec::with_capacity(mu);
+        for i in 0..mu {
+            let q3: Vec<[f64; 3]> = (0..nv).map(|j| columns[j][i].coords()).collect();
+            let curve: BSplineCurve<Point> = least_squares_with_knots(&q3, &vs, q, kv.clone())?;
+            rows.push(curve.poles().to_vec());
+        }
+        let (ku_knots, ku_mults) = super::knots::group(&ku);
+        let (kv_knots, kv_mults) = super::knots::group(&kv);
+        super::bspline::BSplineSurface::try_new(
+            rows,
+            super::bspline::KnotVector::new(ku_knots, ku_mults, p),
+            super::bspline::KnotVector::new(kv_knots, kv_mults, q),
+        )
+        .ok()
+    };
+    let near = |surface: &super::bspline::BSplineSurface| {
+        use super::ParametricSurface;
+        (0..nu).all(|i| (0..nv).all(|j| surface.point(us[i], vs[j]).distance(points[i][j]) <= options.tolerance))
+    };
+    // Poles each way growing by half until near enough (or as many as points), then the
+    // fewest each way between.
+    let grow = |m: usize, n: usize| (m + m / 2).max(m + 1).min(n);
+    let (mut mu, mut mv) = (p + 1, q + 1);
+    let mut found = None;
+    loop {
+        if let Some(surface) = fit(mu, mv).filter(|s| near(s)) {
+            found = Some((mu, mv, surface));
+            break;
+        }
+        if mu == nu && mv == nv {
+            break;
+        }
+        (mu, mv) = (grow(mu, nu), grow(mv, nv));
+    }
+    let Some((mut mu, mut mv, mut best)) = found else {
+        return fit(nu, nv).ok_or_else(|| Error::Failed("no surface through the points".into()));
+    };
+    for side in 0..2 {
+        let mut lo = if side == 0 { p } else { q };
+        loop {
+            let hi = if side == 0 { mu } else { mv };
+            if hi - lo <= 1 {
+                break;
+            }
+            let mid = (lo + hi) / 2;
+            let (a, b) = if side == 0 { (mid, mv) } else { (mu, mid) };
+            match fit(a, b).filter(|s| near(s)) {
+                Some(surface) => {
+                    best = surface;
+                    if side == 0 { mu = mid } else { mv = mid }
+                }
+                None => lo = mid,
+            }
+        }
+    }
+    Ok(best)
+}
+
 /// Clamped flat knots for `m` poles of `degree`, spread so that every span holds parameters
 /// (The NURBS Book, eq. 9.69).
 fn knots_for(params: &[f64], degree: usize, m: usize) -> Vec<f64> {
@@ -765,6 +875,7 @@ mod tests {
     use std::f64::consts::PI;
 
     use super::*;
+    use crate::geometry::surface::Surface;
     use crate::geometry::ParametricCurve;
     use crate::math::Point;
 
@@ -875,6 +986,27 @@ mod tests {
         }
         let length = crate::geometry::measure::length(&crate::geometry::curve::Curve::BSpline(curve));
         assert!((length - 94.332624).abs() < 1e-5, "{length}");
+    }
+
+    #[test]
+    fn surfaces_pass_near_their_grids() {
+        use crate::geometry::ParametricSurface;
+        // A saddle sampled on a 30 x 20 grid: within the tolerance at every point, between
+        // them too, with fewer poles than points.
+        let at = |x: f64, y: f64| Point::new(x, y, 0.3 * x * y - 0.1 * x * x + (y * 0.7).sin());
+        let points: Vec<Vec<Point>> = (0..30).map(|i| (0..20).map(|j| at(i as f64 * 0.2, j as f64 * 0.25)).collect()).collect();
+        let options = ApproximationOptions { min_degree: 3, max_degree: 8, tolerance: 1e-3, ..Default::default() };
+        let surface = approximate_surface(&points, options).unwrap();
+        assert!(surface.poles().len() < 30 && surface.poles()[0].len() < 20, "{} x {} poles", surface.poles().len(), surface.poles()[0].len());
+        for row in &points {
+            for &p in row {
+                let (u, v, _) = crate::geometry::extrema::nearest_on_surface(p, &Surface::BSpline(surface.clone()), None);
+                assert!(surface.point(u, v).distance(p) <= 1e-3, "{p:?}");
+            }
+        }
+        let mid = at(2.9, 2.1);
+        let (u, v, _) = crate::geometry::extrema::nearest_on_surface(mid, &Surface::BSpline(surface.clone()), None);
+        assert!(surface.point(u, v).distance(mid) <= 1e-2);
     }
 
     #[test]

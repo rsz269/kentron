@@ -320,6 +320,20 @@ pub fn make_spline_approx(points: Vec<Xyz>, tolerance: f64, min_degree: usize, m
     .map(handle)
 }
 
+/// A spline face near the grid of `points` (rows along u), within `tolerance`, of degree
+/// `min_degree` to `max_degree`.
+#[pyfunction]
+#[pyo3(signature = (points, tolerance=1e-2, min_degree=1, max_degree=3))]
+pub fn make_spline_surface_approx(points: Vec<Vec<Xyz>>, tolerance: f64, min_degree: usize, max_degree: usize) -> PyResult<Handle> {
+    let grid: Vec<Vec<Point>> = points.into_iter().map(|row| row.into_iter().map(point).collect()).collect();
+    with_model(|m| {
+        let options = fit::ApproximationOptions { min_degree, max_degree, tolerance, ..Default::default() };
+        let surface = fit::approximate_surface(&grid, options)?;
+        make::face_on_surface(m, Surface::BSpline(surface))
+    })
+    .map(handle)
+}
+
 /// The Bézier edge with poles `points`.
 #[pyfunction]
 pub fn make_bezier(points: Vec<Xyz>) -> PyResult<Handle> {
@@ -565,6 +579,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(curve_plane_normal, m)?)?;
     m.add_function(wrap_pyfunction!(make_spline, m)?)?;
     m.add_function(wrap_pyfunction!(make_spline_approx, m)?)?;
+    m.add_function(wrap_pyfunction!(make_spline_surface_approx, m)?)?;
     m.add_function(wrap_pyfunction!(make_bezier, m)?)?;
     m.add_function(wrap_pyfunction!(make_ellipse, m)?)?;
     m.add_function(wrap_pyfunction!(make_wedge, m)?)?;
