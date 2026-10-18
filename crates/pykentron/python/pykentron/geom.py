@@ -62,6 +62,16 @@ class Vector:
     def wrapped(self):
         return self
 
+    def __getattr__(self, name):
+        # (OCCT's gp_Vec methods, which code written for OCP calls on `Vector.wrapped`: on a
+        # gp_Vec of the same coordinates. Those changing the vector in place do not change
+        # this one.)
+        if name[:1].isupper():
+            from .gp import gp_Vec
+
+            return getattr(gp_Vec(self.x, self.y, self.z), name)
+        raise AttributeError(f"'Vector' object has no attribute '{name}'")
+
     def toTuple(self) -> Tuple3:
         return (self.x, self.y, self.z)
 
@@ -273,6 +283,13 @@ class Matrix:
     @property
     def wrapped(self):
         return self
+
+    def Trsf(self):
+        """The transformation as OCCT's `gp_Trsf` (CadQuery's `Matrix.wrapped` is a gp_GTrsf,
+        whose `Trsf()` this is)."""
+        from .gp import gp_Trsf
+
+        return gp_Trsf(self.rows)
 
     def rotateX(self, angle: float):
         """Rotates about X by `angle` (radians), before this transformation."""
@@ -697,12 +714,6 @@ class Color:
     ("#RGB", "#RGBA", "#RRGGBB", "#RRGGBBAA"), or components (sRGB, unless `srgb` is false:
     linear). Read as OCCT's from `wrapped`: `GetRGB()` gives the linear components."""
 
-    _NAMED = {
-        "red": (1, 0, 0), "green": (0, 1, 0), "blue": (0, 0, 1), "yellow": (1, 1, 0),
-        "white": (1, 1, 1), "black": (0, 0, 0), "gray": (0.5, 0.5, 0.5), "grey": (0.5, 0.5, 0.5),
-        "orange": (1, 0.65, 0), "cyan": (0, 1, 1), "magenta": (1, 0, 1),
-    }
-
     def __init__(self, *args, **kwargs):
         if not args:
             r, g, b, a = 1.0, 1.0, 0.0, 1.0
@@ -721,9 +732,11 @@ class Color:
 
     @classmethod
     def _parse(cls, text: str):
-        name = text.lower()
-        if name in cls._NAMED:
-            return (*cls._NAMED[name], 1.0)
+        from ._colors import NAMED
+
+        name = text.lower().replace(" ", "").replace("_", "")
+        if name in NAMED:
+            return (*NAMED[name], 1.0)
         if text.startswith("#") and len(text) in (4, 5, 7, 9):
             digits = text[1:]
             step = 1 if len(digits) in (3, 4) else 2

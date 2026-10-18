@@ -461,6 +461,18 @@ impl Input {
                     for s in sections {
                         let section = &self.sections[s];
                         if collapsed[section.rep] {
+                            // (Kept, as a degenerate edge of this face's own, where its pcurve
+                            // still runs across the face's parameters: a ruled surface's end
+                            // between curves that meet there, say. Without it the face's
+                            // boundary would not close.)
+                            let (a, b) = (u.pcurve.point(section.first), u.pcurve.point(section.last));
+                            if a.distance(b) > 1e-9 * (1.0 + (a - Point2::ORIGIN).length()) {
+                                let vertex = out_vertex[&self.parent_root(section.start)].0;
+                                let degenerate = model.add_edge(vertex, vertex, edge.tolerance)?;
+                                let coedge = model.add_coedge(degenerate, if u.forward { Orientation::Forward } else { Orientation::Reversed })?;
+                                model.set_pcurve_with_range(coedge, u.pcurve.clone(), section.first, section.last)?;
+                                coedges.push(coedge);
+                            }
                             continue;
                         }
                         let (id, tolerance) = out_edge.get_mut(&section.rep).expect("edge");
@@ -715,6 +727,36 @@ mod tests {
         let volume = crate::properties::volume(&model, shell).mass;
         assert!((volume.abs() - 1.0).abs() < 1e-2, "volume {volume}");
         assert!(crate::validity::check(&model, shell).errors().next().is_none());
+    }
+
+    #[test]
+    fn edges_sewn_to_a_point_stay_where_they_cross_the_face() {
+        // A ruled face between two half circles meeting at both ends (one in the XY plane,
+        // one in the XZ plane), sewn to the half discs they bound (a closed shell): the ruled
+        // face's two rulings at the ends become points in space, but cross its parameters. They stay (as degenerate
+        // edges), and the face keeps its area.
+        use crate::geometry::curve::Circle;
+        use crate::math::{Direction, Frame};
+        let mut model = Model::new();
+        let half = |model: &mut Model, frame: Frame| make::edge_from_curve_range(model, Curve::Circle(Circle::new(frame, 1.0)), 0.0, std::f64::consts::PI).unwrap();
+        let flat = half(&mut model, Frame::WORLD);
+        let upright = half(&mut model, Frame::new(Point::ORIGIN, -Direction::Y, Direction::X));
+        let sections = [make::wire(&mut model, &[flat]).unwrap(), make::wire(&mut model, &[upright]).unwrap()];
+        let options = crate::loft::LoftOptions { ruled: true, ..Default::default() };
+        let ruled = crate::loft::loft(&mut model, &sections, &options).unwrap().shape;
+        let disc = |model: &mut Model, frame: Frame| {
+            let rim = half(model, frame);
+            let across = make::edge_between(model, Point::new(-1.0, 0.0, 0.0), Point::new(1.0, 0.0, 0.0)).unwrap();
+            let wire = make::wire(model, &[rim, across]).unwrap();
+            make::planar_face(model, wire).unwrap()
+        };
+        let discs = [disc(&mut model, Frame::WORLD), disc(&mut model, Frame::new(Point::ORIGIN, -Direction::Y, Direction::X))];
+        let area = crate::properties::area(&model, ruled).mass + std::f64::consts::PI;
+        let sewn = sew(&mut model, &[ruled, discs[0], discs[1]], &SewOptions::default()).unwrap();
+        assert_eq!(sewn.kind(), NodeKind::Shell);
+        let after = crate::properties::area(&model, sewn).mass;
+        assert!((after - area).abs() < 1e-6 * area, "{after} not {area}");
+        assert!(crate::validity::check(&model, sewn).errors().next().is_none());
     }
 
     #[test]

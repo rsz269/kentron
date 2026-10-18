@@ -97,7 +97,6 @@ tests.test_cadquery.TestCadQuery::testMultisectionSweep
 tests.test_cadquery.TestCadQuery::testNoClean
 tests.test_cadquery.TestCadQuery::testNullShape
 tests.test_cadquery.TestCadQuery::testOffset2D
-tests.test_cadquery.TestCadQuery::testParametricCurve
 tests.test_cadquery.TestCadQuery::testParametricSurface
 tests.test_cadquery.TestCadQuery::testSketch
 tests.test_cadquery.TestCadQuery::testSplineApprox
@@ -127,7 +126,6 @@ tests.test_exporters::test_stl_binary[2-opt2-STL Exported by Open CASCADE]
 tests.test_exporters::test_stl_binary[3-opt3-STL Exported by Open CASCADE]
 tests.test_exporters::test_stl_binary[4-opt4-STL Exported by Open CASCADE]
 tests.test_exporters::test_toVTK
-tests.test_free_functions::test__shape_to_faces_shells
 tests.test_free_functions::test_adaptor_curve_to_edge
 tests.test_free_functions::test_cap
 tests.test_free_functions::test_check

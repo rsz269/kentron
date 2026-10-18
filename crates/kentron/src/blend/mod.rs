@@ -302,11 +302,13 @@ fn on_solids(model: &mut Model, shape: Shape, op: impl FnOnce(&mut Model, Shape)
     }
 }
 
-/// For each corner (with its tool's size), whether its tool may run past the edge's start
-/// and end: not where another of the edges continues it tangentially (the tools meet there),
-/// nor where there is material just past the end, within the strip the tool takes away (a
-/// cut would carve a groove into the material carrying on there).
-fn extensions(model: &Model, shape: Shape, corners: &[(Corner, f64)]) -> Vec<[bool; 2]> {
+/// For each corner (with its tool's size), how far its tool runs past the edge's start and
+/// end (0 for not at all): not where another of the edges continues it tangentially (the
+/// tools meet there), nor where there is material just past the end, within the strip the
+/// tool takes away (a cut would carve a groove into the material carrying on there). Else
+/// as far as it may, unless its path comes back into the solid (as an arc's circle may):
+/// then only until its cross-section is clear of the solid, and as far again.
+fn extensions(model: &Model, shape: Shape, corners: &[(Corner, f64)]) -> Vec<[f64; 2]> {
     let joints: Vec<[bool; 2]> = corners
         .iter()
         .enumerate()
@@ -321,21 +323,43 @@ fn extensions(model: &Model, shape: Shape, corners: &[(Corner, f64)]) -> Vec<[bo
             })
         })
         .collect();
-    let clear_past = |corner: &Corner, p: Point, size: f64, at_end: bool| -> bool {
-        let along = corner.direction_at(p) * if at_end { 1.0 } else { -1.0 };
-        let inward = (corner.into[0] + corner.into[1]).normalized();
-        let probe = p + along * size + inward * (0.3 * size);
-        !matches!(boolean::classify_point(model, shape, probe), Ok(boolean::PointLocation::Inside))
+    let inside = |p: Point| matches!(boolean::classify_point(model, shape, p), Ok(boolean::PointLocation::Inside));
+    let run = |corner: &Corner, size: f64, at_end: bool| -> f64 {
+        let cap = corner.run_cap(size);
+        if cap <= 0.0 {
+            return 0.0;
+        }
+        let probes = |s: f64| {
+            let (p, into) = corner.past(at_end, s);
+            let inward = (into[0] + into[1]).normalized();
+            (p + inward * (0.3 * size), [p + into[0] * (0.8 * size) + inward * (0.1 * size), p + into[1] * (0.8 * size) + inward * (0.1 * size)])
+        };
+        // (Material along the edge's line carrying on: no run at all.)
+        if inside(probes(size).0) {
+            return 0.0;
+        }
+        // All the way, unless the path comes back into material (as an arc's circle may):
+        // then until the tool's cross-section is clear of the solid, and as far again (short
+        // of where it comes back).
+        let step = (0.5 * size).max(cap / 64.0);
+        let mut s = size;
+        let mut clear = None;
+        while s <= cap {
+            let (along, section) = probes(s);
+            if inside(along) {
+                return clear.map_or(0.0, |c: f64| (2.0 * c).min(s - size).max(c));
+            }
+            if clear.is_none() && !section.iter().any(|&q| inside(q)) {
+                clear = Some(s);
+            }
+            s += step;
+        }
+        cap
     };
     corners
         .iter()
         .zip(&joints)
-        .map(|((corner, size), joint)| {
-            [
-                !joint[0] && clear_past(corner, corner.origin, *size, false),
-                !joint[1] && clear_past(corner, corner.end, *size, true),
-            ]
-        })
+        .map(|((corner, size), joint)| [if joint[0] { 0.0 } else { run(corner, *size, false) }, if joint[1] { 0.0 } else { run(corner, *size, true) }])
         .collect()
 }
 
@@ -439,7 +463,7 @@ fn chamfer_solid_edges(model: &mut Model, shape: Shape, edges: &[ChamferedEdge])
     let mut result = shape;
     for ((corner, distances), extend) in corners.iter().zip(extensions(model, shape, &sized)) {
         let section = corner.bevel_section(model, *distances)?;
-        let tool = corner.sweep_section(model, section, distances[0].max(distances[1]), extend)?;
+        let tool = corner.sweep_section(model, section, extend)?;
         result = if corner.convex { boolean::difference(model, result, tool)? } else { boolean::union(model, result, tool)? };
     }
     for tool in chamfer_corner_tools(model, &corners)? {
@@ -1458,32 +1482,53 @@ impl Corner {
         }
     }
 
-    /// The solid between the edge and the fillet, run past the edge's ends for a cut where
-    /// `extend` says so (at its start and its end).
-    fn tool(&self, model: &mut Model, radius: f64, extend: [bool; 2]) -> Result<Shape> {
+    /// The solid between the edge and the fillet, run past the edge's start and end by
+    /// `run` for a cut.
+    fn tool(&self, model: &mut Model, radius: f64, run: [f64; 2]) -> Result<Shape> {
         let section = self.section(model, radius)?;
-        self.sweep_section(model, section, radius, extend)
+        self.sweep_section(model, section, run)
     }
 
-    /// The solid swept by a cross-section at `origin` along the edge (of a tool `radius`
-    /// across), run past the edge's ends for a cut where `extend` says so.
-    fn sweep_section(&self, model: &mut Model, section: Shape, radius: f64, extend: [bool; 2]) -> Result<Shape> {
+    /// The furthest a tool of `size` across may run past either end of the edge: a cut may
+    /// run past (the faces there trim it), added material must stop at them; and an arc's
+    /// not round to meet itself.
+    fn run_cap(&self, size: f64) -> f64 {
+        if !self.convex {
+            return 0.0;
+        }
+        match self.path {
+            Path::Line { length } => size + length,
+            Path::Arc { radius, angle, .. } if angle < TAU - tolerance::ANGULAR => (size + radius * angle).min(0.5 * (TAU - angle) * radius),
+            Path::Arc { .. } => 0.0,
+        }
+    }
+
+    /// The point `s` along the edge's path past its start (or its end, `at_end`), and the
+    /// directions into the faces there.
+    fn past(&self, at_end: bool, s: f64) -> (Point, [Vector; 2]) {
+        match self.path {
+            Path::Line { .. } => {
+                let p = if at_end { self.end + self.tangent * s } else { self.origin - self.tangent * s };
+                (p, self.into)
+            }
+            Path::Arc { axis, radius, angle } => {
+                let turn = Transform::rotation(axis, if at_end { angle + s / radius } else { -s / radius });
+                (self.origin.transformed(&turn), self.into.map(|v| v.transformed(&turn)))
+            }
+        }
+    }
+
+    /// The solid swept by a cross-section at `origin` along the edge, run past the edge's
+    /// start and end by `run`.
+    fn sweep_section(&self, model: &mut Model, section: Shape, run: [f64; 2]) -> Result<Shape> {
         match self.path {
             Path::Line { length } => {
-                // A cut may run past the edge's ends (the faces there trim it); added
-                // material must stop at them.
-                let margin = if self.convex { radius + length } else { 0.0 };
-                let [before, after] = extend.map(|e| if e { margin } else { 0.0 });
+                let [before, after] = run;
                 let section = section.moved(&Transform::translation(self.tangent * -before));
                 Ok(sweep::extrude(model, section, self.tangent * (length + before + after))?.shape)
             }
             Path::Arc { axis, radius: arc_radius, angle } => {
-                let margin = if self.convex && angle < TAU - tolerance::ANGULAR {
-                    ((radius + arc_radius * angle) / arc_radius).min(0.5 * (TAU - angle))
-                } else {
-                    0.0
-                };
-                let [before, after] = extend.map(|e| if e { margin } else { 0.0 });
+                let [before, after] = run.map(|r| r / arc_radius);
                 let section = section.moved(&Transform::rotation(axis, -before));
                 Ok(sweep::revolve(model, section, axis, (angle + before + after).min(TAU))?.shape)
             }
@@ -1725,6 +1770,44 @@ mod tests {
         let volume = properties::volume(&model, rounded).mass;
         let without = 8000.0 - 20.0 * 16.0 * (1.0 - PI / 4.0) + PI * 9.0 * 5.0;
         assert!(volume > without + 1.0 && volume < without + PI * 9.0 * 4.0, "{volume} {without}");
+    }
+
+    /// A plate (100 x 76.2, 10 thick) whose back edge bulges into an arc (25.4 high, of a
+    /// circle 61.9 across that comes back into the plate near its front corners): the arc's
+    /// top edge bevelled (3) or rounded (R 3) is cut only along the arc, run past its ends
+    /// clear of the plate but not round the circle into it (OCCT gives these values).
+    #[test]
+    fn tools_along_an_arc_stop_short_of_its_circle_coming_back() {
+        use crate::geometry::curve::{Circle, Curve};
+        let plate = |model: &mut Model| {
+            let radius = (50.0f64.powi(2) + 25.4f64.powi(2)) / (2.0 * 25.4);
+            let centre = Point::new(50.0, 76.2 + 25.4 - radius, 0.0);
+            let start = (76.2 - centre.y).atan2(50.0);
+            let arc = make::edge_from_curve_range(model, Curve::Circle(Circle::new(Frame::from_z(centre, Direction::Z), radius)), start, PI - start).unwrap();
+            let corners = [Point::new(0.0, 76.2, 0.0), Point::new(0.0, 0.0, 0.0), Point::new(100.0, 0.0, 0.0), Point::new(100.0, 76.2, 0.0)];
+            let mut edges = vec![arc];
+            for w in corners.windows(2) {
+                edges.push(make::edge_between(model, w[0], w[1]).unwrap());
+            }
+            let wire = make::wire(model, &edges).unwrap();
+            let face = make::planar_face(model, wire).unwrap();
+            crate::sweep::extrude(model, face, Vector::new(0.0, 0.0, 10.0)).unwrap().shape
+        };
+        let top_arc = |model: &Model, shape: Shape| {
+            model.unique_subshapes(shape, NodeKind::Edge).into_iter().find(|&e| {
+                matches!(model.edge_curve(e), Some((Curve::Circle(_), _, _))) && (model.point(model.edge_vertices(e).0).z - 10.0).abs() < 1e-9
+            }).unwrap()
+        };
+        for (round, expected) in [(false, 93449.591), (true, 93751.569)] {
+            let mut model = Model::new();
+            let shape = plate(&mut model);
+            let edge = top_arc(&model, shape);
+            let result = if round { fillet(&mut model, shape, &[edge], 3.0) } else { chamfer(&mut model, shape, &[edge], 3.0) }.unwrap();
+            assert!(validity::check(&model, result).is_valid());
+            assert_eq!(model.unique_subshapes(result, NodeKind::Face).len(), 7);
+            let volume = properties::volume(&model, result).mass;
+            assert!((volume - expected).abs() < 1e-2, "{volume} not {expected}");
+        }
     }
 
     #[test]

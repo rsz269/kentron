@@ -44,22 +44,19 @@ fn solve_dense(mut rows: Vec<Vec<f64>>, mut rhs: Vec<[f64; 3]>) -> Option<Vec<[f
 /// The least-squares B-spline of `degree` with `m` poles through the first and last of
 /// `q` (at `params`, from 0 to 1) and near the others (The NURBS Book, A9.7).
 fn least_squares<P: ControlPoint>(q: &[[f64; 3]], params: &[f64], degree: usize, m: usize) -> Option<BSplineCurve<P>> {
-    let (n, p) = (q.len(), degree);
-    // Knots spread so that every span holds parameters (eq. 9.69).
-    let mut flat = vec![0.0; p + 1];
-    let d = n as f64 / (m - p) as f64;
-    for j in 1..m - p {
-        let i = (j as f64 * d).floor() as usize;
-        let alpha = j as f64 * d - i as f64;
-        flat.push((1.0 - alpha) * params[i.saturating_sub(1).min(n - 1)] + alpha * params[i.min(n - 1)]);
-    }
-    flat.extend(std::iter::repeat(1.0).take(p + 1));
-    least_squares_with_knots(q, params, degree, flat)
+    least_squares_with_knots(q, params, degree, knots_for(params, degree, m))
 }
 
 /// The least-squares B-spline of `degree` on flat knots `flat` (clamped, spanning
 /// `params`) through the first and last of `q` and near the others.
 pub(crate) fn least_squares_with_knots<P: ControlPoint>(q: &[[f64; 3]], params: &[f64], degree: usize, flat: Vec<f64>) -> Option<BSplineCurve<P>> {
+    faired_least_squares(q, params, degree, flat, &[])
+}
+
+/// The least-squares B-spline of [`least_squares_with_knots`], faired: plus, for each
+/// `(order, weight)` of `fairing`, `weight` times the integral of the square of the curve's
+/// derivative of that order (as a share of the fit's own size: 1 weighs them alike).
+fn faired_least_squares<P: ControlPoint>(q: &[[f64; 3]], params: &[f64], degree: usize, flat: Vec<f64>, fairing: &[(usize, f64)]) -> Option<BSplineCurve<P>> {
     let (n, p) = (q.len(), degree);
     let m = flat.len() - p - 1;
     if flat.windows(2).any(|w| w[1] < w[0]) || m < 2 {
@@ -97,11 +94,54 @@ pub(crate) fn least_squares_with_knots<P: ControlPoint>(q: &[[f64; 3]], params: 
                 }
             }
         }
+        let fit_size: f64 = (0..inner).map(|i| a[i][i]).sum();
+        for &(order, weight) in fairing {
+            if weight <= 0.0 || order > p {
+                continue;
+            }
+            let gram = derivative_gram(&flat, p, order);
+            let size: f64 = (1..m - 1).map(|i| gram[i][i]).sum();
+            if !(size > 0.0) {
+                continue;
+            }
+            let w = weight * fit_size / size;
+            for i in 0..inner {
+                for j in 0..inner {
+                    a[i][j] += w * gram[i + 1][j + 1];
+                }
+                for c in 0..3 {
+                    b[i][c] -= w * (gram[i + 1][0] * first[c] + gram[i + 1][m - 1] * last[c]);
+                }
+            }
+        }
         poles.extend(solve_dense(a, b)?);
     }
     poles.push(last);
     let (knots, multiplicities) = super::knots::group(&flat);
     BSplineCurve::try_new(poles.into_iter().map(P::from_coords).collect(), knots, multiplicities, p).ok()
+}
+
+/// The integrals over the knots' range of the products of the B-spline basis functions'
+/// derivatives of `order` (degree `p`, flat knots `flat`).
+fn derivative_gram(flat: &[f64], p: usize, order: usize) -> Vec<Vec<f64>> {
+    let m = flat.len() - p - 1;
+    let mut gram = vec![vec![0.0; m]; m];
+    for span in p..m {
+        let (a, b) = (flat[span], flat[span + 1]);
+        if b <= a {
+            continue;
+        }
+        let (mid, half) = (0.5 * (a + b), 0.5 * (b - a));
+        for &(x, w) in &super::measure::GAUSS {
+            let d = crate::geometry::bspline::basis_derivatives(flat, span, mid + half * x, p, order);
+            for i in 0..=p {
+                for j in 0..=p {
+                    gram[span - p + i][span - p + j] += w * half * d[order][i] * d[order][j];
+                }
+            }
+        }
+    }
+    gram
 }
 
 /// The B-spline curve passing exactly through `points`, in order (periodic: closing back
@@ -599,11 +639,15 @@ pub struct ApproximationOptions {
     pub continuity: Continuity,
     /// Largest allowed distance from the points.
     pub tolerance: f64,
+    /// Weights of the curve's length, bending and twisting to keep small besides (its first,
+    /// second and third derivatives' squares integrated), for a fair curve: then of the
+    /// greatest degree, and as fair as it may be while near enough the points.
+    pub smoothing: Option<[f64; 3]>,
 }
 
 impl Default for ApproximationOptions {
     fn default() -> Self {
-        Self { min_degree: 3, max_degree: 8, continuity: Continuity::C2, tolerance: 1.0e-3 }
+        Self { min_degree: 3, max_degree: 8, continuity: Continuity::C2, tolerance: 1.0e-3, smoothing: None }
     }
 }
 
@@ -629,8 +673,11 @@ pub fn approximate_with<P: ControlPoint>(points: &[P], options: ApproximationOpt
         return Err(Error::InvalidInput("approximation points coincide".into()));
     }
     params.iter_mut().for_each(|t| *t /= total);
-    let degree = options.min_degree.max(1).min(n - 1).min(options.max_degree.max(1));
     let q: Vec<[f64; 3]> = points.iter().map(|p| p.coords()).collect();
+    if let Some(weights) = options.smoothing {
+        return smoothed(points, &q, &params, weights, options);
+    }
+    let degree = options.min_degree.max(1).min(n - 1).min(options.max_degree.max(1));
     // More poles until the curve passes within the tolerance (with n poles it interpolates).
     for m in (degree + 1)..=n {
         let Some(curve) = least_squares::<P>(&q, &params, degree, m) else { continue };
@@ -645,8 +692,78 @@ pub fn approximate_with<P: ControlPoint>(points: &[P], options: ApproximationOpt
     interpolate_with_parameters(points, &params)
 }
 
+/// [`approximate_with`] with smoothing: of the greatest degree, with the fewest poles (as
+/// near as a search finds) that, faired as much as may be, pass near enough the points.
+fn smoothed<P: ControlPoint>(points: &[P], q: &[[f64; 3]], params: &[f64], weights: [f64; 3], options: ApproximationOptions) -> Result<BSplineCurve<P>> {
+    let n = q.len();
+    let least = match options.continuity {
+        Continuity::C0 => 1,
+        Continuity::C1 | Continuity::G1 => 2,
+        _ => 3,
+    };
+    let degree = options.max_degree.max(least).min(n - 1).max(1);
+    let near = |curve: &BSplineCurve<P>| {
+        params.iter().zip(q).all(|(&t, target)| {
+            let c = curve.point(t).coords();
+            (0..3).map(|k| (c[k] - target[k]).powi(2)).sum::<f64>().sqrt() <= options.tolerance
+        })
+    };
+    // (Fairing ever less, down to none: the fairest near enough.)
+    let with = |m: usize| -> Option<BSplineCurve<P>> {
+        for share in [1e-2, 1e-4, 1e-6, 1e-8, 0.0] {
+            let fairing: Vec<(usize, f64)> = weights.iter().enumerate().map(|(k, &w)| (k + 1, w * share)).collect();
+            let flat = knots_for(params, degree, m);
+            if let Some(curve) = faired_least_squares::<P>(q, params, degree, flat, &fairing) {
+                if near(&curve) {
+                    return Some(curve);
+                }
+            }
+        }
+        None
+    };
+    // Poles growing by half until near enough, then the fewest between.
+    let (mut lo, mut hi) = (degree, None);
+    let mut m = degree + 1;
+    while m < n {
+        if let Some(curve) = with(m) {
+            hi = Some((m, curve));
+            break;
+        }
+        lo = m;
+        m = (m + m / 2).max(m + 1).min(n);
+    }
+    let Some((mut m_hi, mut best)) = hi else {
+        return with(n).ok_or(()).or_else(|_| interpolate_with_parameters(points, params));
+    };
+    while m_hi - lo > 1 {
+        let mid = (lo + m_hi) / 2;
+        match with(mid) {
+            Some(curve) => (m_hi, best) = (mid, curve),
+            None => lo = mid,
+        }
+    }
+    Ok(best)
+}
+
+/// Clamped flat knots for `m` poles of `degree`, spread so that every span holds parameters
+/// (The NURBS Book, eq. 9.69).
+fn knots_for(params: &[f64], degree: usize, m: usize) -> Vec<f64> {
+    let (n, p) = (params.len(), degree);
+    let mut flat = vec![0.0; p + 1];
+    let d = n as f64 / (m - p) as f64;
+    for j in 1..m - p {
+        let i = (j as f64 * d).floor() as usize;
+        let alpha = j as f64 * d - i as f64;
+        flat.push((1.0 - alpha) * params[i.saturating_sub(1).min(n - 1)] + alpha * params[i.min(n - 1)]);
+    }
+    flat.extend(std::iter::repeat(1.0).take(p + 1));
+    flat
+}
+
 #[cfg(test)]
 mod tests {
+    use std::f64::consts::PI;
+
     use super::*;
     use crate::geometry::ParametricCurve;
     use crate::math::Point;
@@ -739,6 +856,25 @@ mod tests {
             let v = 6.5 * i as f64 / 20.0;
             assert!(reversed.point(0.3, swapped.v_reversed_parameter(v)).distance(swapped.point(0.3, v)) < 1e-12);
         }
+    }
+
+    #[test]
+    fn smoothed_approximation_passes_near_the_points() {
+        // Three turns of a helix (5 across, 4 high) sampled densely: within the tolerance of
+        // every point, of the greatest degree, with far fewer poles than points; its length
+        // the helix's (OCCT's, from the same points: 94.332624).
+        let at = |t: f64| Point::new(5.0 * (6.0 * PI * t).cos(), 5.0 * (6.0 * PI * t).sin(), 4.0 * t);
+        let points: Vec<Point> = (0..=400).map(|i| at(i as f64 / 400.0)).collect();
+        let options = ApproximationOptions { min_degree: 1, max_degree: 6, tolerance: 1e-6, smoothing: Some([1.0, 1.0, 1.0]), ..Default::default() };
+        let curve = approximate_with(&points, options).unwrap();
+        assert_eq!(curve.degree(), 6);
+        assert!(curve.poles().len() < 100, "{} poles", curve.poles().len());
+        for q in &points {
+            let found = crate::geometry::extrema::nearest_on_curve(*q, &crate::geometry::curve::Curve::BSpline(curve.clone()), 0.0, 1.0);
+            assert!(found.distance <= 1e-6, "{q:?} {}", found.distance);
+        }
+        let length = crate::geometry::measure::length(&crate::geometry::curve::Curve::BSpline(curve));
+        assert!((length - 94.332624).abs() < 1e-5, "{length}");
     }
 
     #[test]

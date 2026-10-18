@@ -142,7 +142,10 @@ fn kind_of(name: &str) -> PyResult<NodeKind> {
 
 /// A shape of the shared model: a node with its orientation and placement. The node, and
 /// what it is made of, stay in the model while a handle names it.
-#[pyclass(frozen, module = "pykentron._kentron")]
+///
+/// (Not frozen: OCCT's `TopoDS_Shape::Location(loc)`, which code written for OCP calls on
+/// `Shape.wrapped`, places the shape in place.)
+#[pyclass(module = "pykentron._kentron")]
 struct Handle {
     shape: Shape,
 }
@@ -234,6 +237,105 @@ impl Handle {
     fn node_hash(&self) -> u64 {
         let n = self.shape.node;
         (n.index as u64) << 4 | n.kind as u64
+    }
+
+    // --- OCCT's names (`TopoDS_Shape`), for code written for OCP that calls them on
+    // `Shape.wrapped`. Placements are anything with `rows` (pykentron's `Location`, which is
+    // its own `wrapped`, or `gp_Trsf`); kinds and orientations OCP's `TopAbs` numbers.
+
+    #[pyo3(name = "ShapeType")]
+    fn shape_type(&self) -> u8 {
+        match self.shape.kind() {
+            NodeKind::Compound => 0,
+            NodeKind::CompSolid => 1,
+            NodeKind::Solid => 2,
+            NodeKind::Shell => 3,
+            NodeKind::Face => 4,
+            NodeKind::Wire => 5,
+            NodeKind::Edge => 6,
+            NodeKind::Vertex => 7,
+            // (Assembly nodes, never a handle's.)
+            NodeKind::Instance | NodeKind::Product | NodeKind::CoEdge => 8,
+        }
+    }
+
+    #[pyo3(name = "Orientation")]
+    fn orientation_number(&self) -> u8 {
+        match self.shape.orientation {
+            Orientation::Forward => 0,
+            Orientation::Reversed => 1,
+            Orientation::Internal => 2,
+            Orientation::External => 3,
+        }
+    }
+
+    #[pyo3(name = "Oriented")]
+    fn oriented(&self, orientation: u8) -> PyResult<Handle> {
+        let orientation = match orientation {
+            0 => Orientation::Forward,
+            1 => Orientation::Reversed,
+            2 => Orientation::Internal,
+            3 => Orientation::External,
+            other => return Err(PyValueError::new_err(format!("unknown orientation {other}"))),
+        };
+        Ok(handle(Shape { orientation, ..self.shape }))
+    }
+
+    #[pyo3(name = "Reversed")]
+    fn reversed_occt(&self) -> Handle {
+        self.reversed()
+    }
+
+    #[pyo3(name = "IsNull")]
+    fn is_null(&self) -> bool {
+        false
+    }
+
+    #[pyo3(name = "IsSame")]
+    fn is_same_occt(&self, other: &Handle) -> bool {
+        self.is_same(other)
+    }
+
+    #[pyo3(name = "IsEqual")]
+    fn is_equal_occt(&self, other: &Handle) -> bool {
+        self.is_equal(other)
+    }
+
+    #[pyo3(name = "IsPartner")]
+    fn is_partner(&self, other: &Handle) -> bool {
+        self.shape.node == other.shape.node
+    }
+
+    #[pyo3(name = "Moved")]
+    fn moved_occt(&self, loc: &Bound<'_, PyAny>) -> PyResult<Handle> {
+        self.moved(loc.getattr("rows")?.extract()?)
+    }
+
+    #[pyo3(name = "Located")]
+    fn located_occt(&self, loc: &Bound<'_, PyAny>) -> PyResult<Handle> {
+        self.located(loc.getattr("rows")?.extract()?)
+    }
+
+    /// The placement (as pykentron's `Location`); or, given one, the shape placed there in
+    /// place.
+    #[pyo3(name = "Location", signature = (loc=None))]
+    fn location_occt(&mut self, py: Python<'_>, loc: Option<&Bound<'_, PyAny>>) -> PyResult<Py<PyAny>> {
+        match loc {
+            None => Ok(py.import("pykentron.geom")?.getattr("Location")?.call1((self.placement().to_vec(),))?.unbind()),
+            Some(loc) => {
+                let placed = self.located(loc.getattr("rows")?.extract()?)?;
+                self.shape = placed.shape;
+                Ok(py.None())
+            }
+        }
+    }
+
+    fn __copy__(&self) -> Handle {
+        self.clone()
+    }
+
+    fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> Handle {
+        self.clone()
     }
 }
 

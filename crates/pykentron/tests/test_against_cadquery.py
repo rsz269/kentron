@@ -105,10 +105,24 @@ def offset_outline(cq):
     return w.offset2D(1.5, "arc")[0]
 
 
+def smoothed_helix_spline(cq):
+    # (What Workplane.parametricCurve makes: a smoothed approximation.)
+    at = lambda t: cq.Vector(5 * math.cos(6 * math.pi * t), 5 * math.sin(6 * math.pi * t), 4 * t)
+    return cq.Edge.makeSplineApprox([at(i / 400) for i in range(401)], tol=1e-6, smoothing=(1, 1, 1), maxDeg=6)
+
+
+def chamfered_arc_plate(cq):
+    # (The arc's circle comes back into the plate near its front corners.)
+    plate = cq.Workplane("XY").lineTo(100, 0).lineTo(100, 76.2).threePointArc((50, 101.6), (0, 76.2)).close().extrude(10).val()
+    arc = [e for e in plate.Edges() if e.geomType() == "CIRCLE" and e.Center().z > 5]
+    return plate.chamfer(3, None, arc)
+
+
 CASES = [
     box, cylinder_along_y, cone, workplane_box, fused_boxes, cut_bores, intersected,
     polyline_prism_xz, polyline_prism_custom_plane, hexagon, face_with_hole, loft,
-    rotated_mirrored, revolved, located, euler_location, offset_outline,
+    rotated_mirrored, revolved, located, euler_location, offset_outline, smoothed_helix_spline,
+    chamfered_arc_plate,
 ]
 
 

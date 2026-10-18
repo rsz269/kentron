@@ -6,7 +6,7 @@ use super::parametric::{ParametricCurve, ParametricSurface};
 use super::surface::Surface;
 
 /// Gauss-Legendre nodes and weights on [-1, 1] (order 10).
-const GAUSS: [(f64, f64); 10] = [
+pub(crate) const GAUSS: [(f64, f64); 10] = [
     (-0.9739065285171717, 0.0666713443086881),
     (-0.8650633666889845, 0.1494513491505806),
     (-0.6794095682990244, 0.2190863625159820),
@@ -75,43 +75,68 @@ fn arc_length(speed: &dyn Fn(f64) -> f64, breaks: &[f64], period: Option<f64>, t
 }
 
 /// The parameter at arc length `distance` from `from`: Newton steps on the length,
-/// kept inside a bracket.
-fn parameter_at(speed: &dyn Fn(f64) -> f64, breaks: &[f64], period: Option<f64>, from: f64, distance: f64) -> f64 {
+/// kept inside a bracket, each length measured on from the last point it was known at; no
+/// further than `bounds` (a bounded curve's ends, where it stops).
+fn parameter_at(speed: &dyn Fn(f64) -> f64, breaks: &[f64], period: Option<f64>, bounds: Option<(f64, f64)>, from: f64, distance: f64) -> f64 {
     if distance == 0.0 {
         return from;
     }
     let sign = distance.signum();
-    // A bracket: step out until the length passes the distance.
-    let mut step = (distance.abs() / speed(from).max(1e-12)).max(1e-9);
-    let mut far = from + sign * step;
-    for _ in 0..200 {
-        if arc_length(speed, breaks, period, from, far).abs() >= distance.abs() {
+    let target = distance.abs();
+    let along = |a: f64, b: f64| arc_length(speed, breaks, period, a, b).abs();
+    let bound = bounds.map(|(lo, hi)| if sign > 0.0 { hi } else { lo });
+    // A bracket: step out until the length passes the distance (or the curve ends short of
+    // it, or as good as: its end).
+    let mut step = (target / speed(from).max(1e-12)).max(1e-9);
+    let (mut near, mut near_length) = (from, 0.0);
+    let (mut far, mut far_length);
+    loop {
+        far = from + sign * step;
+        if let Some(b) = bound.filter(|&b| (far - b) * sign >= 0.0) {
+            far = b;
+            far_length = near_length + along(near, far);
+            if far_length <= target * (1.0 + 1e-12) {
+                return far;
+            }
             break;
         }
+        far_length = near_length + along(near, far);
+        if far_length >= target || step > 1e300 {
+            break;
+        }
+        (near, near_length) = (far, far_length);
         step *= 2.0;
-        far = from + sign * step;
     }
-    let (mut lo, mut hi) = if sign > 0.0 { (from, far) } else { (far, from) };
-    let mut t = from + sign * (distance.abs() / speed(from).max(1e-12)).min(step);
+    let ((mut lo, mut hi), mut known) = (if sign > 0.0 { (near, far) } else { (far, near) }, (near, near_length));
+    let mut t = (from + sign * (target / speed(from).max(1e-12)).min(step)).clamp(lo, hi);
     for _ in 0..100 {
-        let f = arc_length(speed, breaks, period, from, t) - distance;
-        if f.abs() <= 1e-12 * distance.abs().max(1.0) {
+        // (Away from `from` past the point last known, the length grows; back towards it, it
+        // shrinks.)
+        let (kt, kl) = known;
+        let length = kl + if (t - kt) * sign >= 0.0 { along(kt, t) } else { -along(t, kt) };
+        known = (t, length);
+        let f = length - target;
+        if f.abs() <= 1e-12 * target.max(1.0) {
             return t;
         }
-        // f grows with t.
-        if f > 0.0 {
+        if (f > 0.0) == (sign > 0.0) {
             hi = t;
         } else {
             lo = t;
         }
-        let v = speed(t);
-        let next = if v > 0.0 { t - f / v } else { 0.5 * (lo + hi) };
+        let v = speed(t) * sign;
+        let next = if v != 0.0 { t - f / v } else { 0.5 * (lo + hi) };
         t = if next > lo && next < hi { next } else { 0.5 * (lo + hi) };
         if hi - lo <= 1e-15 * (1.0 + t.abs()) {
             break;
         }
     }
     t
+}
+
+/// The ends where `curve` stops, if bounded and not periodic.
+fn stops(first: f64, last: f64, periodic: bool) -> Option<(f64, f64)> {
+    (!periodic && first.is_finite() && last.is_finite()).then_some((first, last))
 }
 
 /// The length of a bounded curve over its whole domain.
@@ -130,7 +155,8 @@ pub fn length_between(curve: &Curve, t1: f64, t2: f64) -> f64 {
 #[doc(alias = "GCPnts_AbscissaPoint")]
 pub fn parameter_at_length(curve: &Curve, from: f64, distance: f64) -> f64 {
     let speed = |t: f64| curve.d1(t).1.length();
-    parameter_at(&speed, &curve.breaks(), curve.period().filter(|_| curve.is_periodic()), from, distance)
+    let bounds = stops(curve.first_parameter(), curve.last_parameter(), curve.is_periodic());
+    parameter_at(&speed, &curve.breaks(), curve.period().filter(|_| curve.is_periodic()), bounds, from, distance)
 }
 
 /// [`length`] for a 2D curve.
@@ -144,7 +170,8 @@ pub fn length_between2(curve: &Curve2, t1: f64, t2: f64) -> f64 {
 
 pub fn parameter_at_length2(curve: &Curve2, from: f64, distance: f64) -> f64 {
     let speed = |t: f64| curve.d1(t).1.length();
-    parameter_at(&speed, &curve.breaks(), curve.period().filter(|_| curve.is_periodic()), from, distance)
+    let bounds = stops(curve.first_parameter(), curve.last_parameter(), curve.is_periodic());
+    parameter_at(&speed, &curve.breaks(), curve.period().filter(|_| curve.is_periodic()), bounds, from, distance)
 }
 
 /// The largest distance between a 3D curve and a curve on a surface over a common
@@ -223,4 +250,40 @@ pub fn curve_on_surface_deviation(
         }
     }
     best
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+    use std::f64::consts::PI;
+
+    use super::*;
+    use crate::math::Point;
+
+    #[test]
+    fn parameters_at_lengths_are_found_from_where_the_length_was_last_known() {
+        // Twenty turns of a helix (radius 2, pitch 1) as a B-spline: the parameter a length
+        // along, forwards and backwards, out to the very end, found in about as many
+        // evaluations of the speed as the whole length takes, not anew over the whole way at
+        // every step (nor, at the end, searched for past it).
+        let points: Vec<Point> = (0..=800).map(|i| {
+            let a = 40.0 * PI * i as f64 / 800.0;
+            Point::new(2.0 * a.cos(), 2.0 * a.sin(), a / (2.0 * PI))
+        }).collect();
+        let curve = Curve::BSpline(crate::geometry::fit::interpolate(&points, false, 1e-9).unwrap());
+        let (first, last) = (curve.first_parameter(), curve.last_parameter());
+        let whole = length(&curve);
+        let calls = Cell::new(0usize);
+        let speed = |t: f64| {
+            calls.set(calls.get() + 1);
+            curve.d1(t).1.length()
+        };
+        for (from, distance) in [(first, whole), (first, 0.3 * whole), (last, -whole), (last, -0.5 * whole)] {
+            calls.set(0);
+            let t = parameter_at(&speed, &curve.breaks(), None, Some((first, last)), from, distance);
+            let along = length_between(&curve, from, t);
+            assert!((along - distance).abs() < 1e-9 * whole, "{along} not {distance}");
+            assert!(calls.get() < 400_000, "{} evaluations", calls.get());
+        }
+    }
 }

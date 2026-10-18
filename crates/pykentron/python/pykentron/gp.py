@@ -207,6 +207,12 @@ class gp_Vec(gp_XYZ):
     def Transformed(self, t: "gp_Trsf") -> "gp_Vec":
         return gp_Vec(*t._apply_vector(self._c))
 
+    def Rotated(self, axis: "gp_Ax1", angle: float) -> "gp_Vec":
+        """The vector turned by `angle` (radians) about the direction of `axis`."""
+        t = gp_Trsf()
+        t.SetRotation(axis, angle)
+        return type(self)(*t._apply_vector(self._c))
+
 
 class gp_Dir(gp_Vec):
     """A unit vector."""

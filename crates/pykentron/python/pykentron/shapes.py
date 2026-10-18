@@ -106,7 +106,7 @@ class Shape:
         return self.wrapped.kind().upper()
 
     def isNull(self) -> bool:
-        return self.wrapped is None
+        return self.wrapped is None or self.wrapped.IsNull()
 
     def isSame(self, other: "Shape") -> bool:
         return self.wrapped.is_same(other.wrapped)
@@ -965,9 +965,8 @@ class Edge(Shape, Mixin1D):
 
     @classmethod
     def makeSplineApprox(cls, listOfVector, tol: float = 1e-3, smoothing=None, minDeg: int = 1, maxDeg: int = 6) -> "Edge":
-        if smoothing:
-            raise NotImplementedError("smoothed spline approximation")
-        return Shape.cast(native.make_spline_approx([_tuple(v) for v in listOfVector], tol, minDeg, maxDeg))
+        smoothing = [float(w) for w in smoothing] if smoothing else None
+        return Shape.cast(native.make_spline_approx([_tuple(v) for v in listOfVector], tol, minDeg, maxDeg, smoothing))
 
     @classmethod
     def makeThreePointArc(cls, v1, v2, v3) -> "Edge":

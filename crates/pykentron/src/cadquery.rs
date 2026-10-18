@@ -111,7 +111,14 @@ impl Path {
         for (i, p) in self.pieces.iter().enumerate() {
             let length = measure::length_between(&p.curve, p.first, p.last);
             if left <= length || i + 1 == self.pieces.len() {
-                let t = if p.reversed { measure::parameter_at_length(&p.curve, p.last, -left) } else { measure::parameter_at_length(&p.curve, p.first, left) };
+                // (At the piece's end, or past it: its end, not searched for.)
+                let t = if left >= length * (1.0 - 1e-14) {
+                    if p.reversed { p.first } else { p.last }
+                } else if p.reversed {
+                    measure::parameter_at_length(&p.curve, p.last, -left)
+                } else {
+                    measure::parameter_at_length(&p.curve, p.first, left)
+                };
                 return p.global(t);
             }
             left -= length;
@@ -299,13 +306,14 @@ pub fn make_spline(points: Vec<Xyz>, tangents: Option<Vec<Option<Xyz>>>, params:
     .map(handle)
 }
 
-/// A spline edge near `points` (within `tolerance`, degree `min_degree` to `max_degree`).
+/// A spline edge near `points` (within `tolerance`, degree `min_degree` to `max_degree`;
+/// with `smoothing`, the weights of its length, bending and twisting kept small besides).
 #[pyfunction]
-#[pyo3(signature = (points, tolerance=1e-3, min_degree=1, max_degree=6))]
-pub fn make_spline_approx(points: Vec<Xyz>, tolerance: f64, min_degree: usize, max_degree: usize) -> PyResult<Handle> {
+#[pyo3(signature = (points, tolerance=1e-3, min_degree=1, max_degree=6, smoothing=None))]
+pub fn make_spline_approx(points: Vec<Xyz>, tolerance: f64, min_degree: usize, max_degree: usize, smoothing: Option<[f64; 3]>) -> PyResult<Handle> {
     let pts: Vec<Point> = points.into_iter().map(point).collect();
     with_model(|m| {
-        let options = fit::ApproximationOptions { min_degree, max_degree, tolerance, ..Default::default() };
+        let options = fit::ApproximationOptions { min_degree, max_degree, tolerance, smoothing, ..Default::default() };
         let curve = fit::approximate_with(&pts, options)?;
         make::edge_from_curve(m, Curve::BSpline(curve))
     })

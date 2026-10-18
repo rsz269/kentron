@@ -40,6 +40,28 @@ def edgesToWires(edges: Iterable[Edge], tol: float = 1e-6) -> List[Wire]:
     return _edges_to_wires(list(edges), tol)
 
 
+# --- OCP-level helpers ---------------------------------------------------------------------
+# (CadQuery's take and return OCCT shapes, `Shape.wrapped`: here pykentron's handles.)
+
+
+def downcast(obj):
+    """The shape as its own kind: pykentron's handles always are."""
+    return obj
+
+
+def fix(obj):
+    """The shape repaired: pykentron's are kept as built."""
+    return obj
+
+
+_KINDS = {"compound": 0, "compsolid": 1, "solid": 2, "shell": 3, "face": 4, "wire": 5, "edge": 6, "vertex": 7}
+
+
+def shapetype(obj) -> int:
+    """The kind of shape, as OCP's TopAbs number."""
+    return _KINDS[obj.kind().lower()]
+
+
 # --- utilities ---------------------------------------------------------------------------
 
 

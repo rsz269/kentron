@@ -28,9 +28,20 @@ is with `pykentron-run script.py`. Nothing named `cadquery` is installed, so a r
 beside pykentron is unaffected unless the shim is activated (the two cannot share one
 process).
 
-Names pykentron does not have yet, and the OCP names scripts use directly (beyond `Bnd_Box`,
-`BRepBndLib.AddOptimal_s`, `BRepTools.Clean_s`), import but raise `NotImplementedError` when
-used.
+Code written against OCP, as libraries like cq_warehouse are, finds some of OCCT's names:
+
+- `Shape.wrapped` answers `TopoDS_Shape`'s `Moved`, `Located`, `Location` (also placing the
+  shape in place), `Orientation`, `Oriented`, `Reversed`, `ShapeType`, `IsSame`, `IsEqual`,
+  `IsPartner`, `IsNull`;
+- `Vector.wrapped` answers `gp_Vec`'s methods, `Location.wrapped` `IsEqual` and
+  `Transformation`, and `Matrix.wrapped` `Trsf()`;
+- the classes `BRepBuilderAPI_Copy`, `BRepBuilderAPI_Transform`,
+  `ShapeUpgrade_UnifySameDomain`, `Bnd_Box` with `BRepBndLib.AddOptimal_s`,
+  `BRepTools.UVBounds_s` and `Clean_s`, the empty `TopoDS_Shape()`, the `TopAbs` numbers and
+  the `gp` classes;
+- `occ_impl.shapes`' `downcast`, `fix` and `shapetype`.
+
+Other names, of pykentron or OCP, import but raise `NotImplementedError` when used.
 
 ## Building from source
 
@@ -76,7 +87,10 @@ so `fast` is only had through the variable. Building without the `mimalloc` feat
   until it is tessellated, then bounded by its meshes, widened by their deviation.
 - Files: STEP import and export (shapes, or an `Assembly` with names, colours and
   placements), BRep import and export, STL export.
-- `Assembly`, `Location`, `Plane`, `Vector`, `Color`, `BoundBox`.
+- Splines: interpolated, approximated (`makeSplineApprox`, smoothed too, as
+  `parametricCurve` makes them), Bézier.
+- `Assembly`, `Location`, `Plane`, `Vector`, `Color` (by OCCT's colour names, which are
+  X11's), `BoundBox`.
 
 Not yet: DXF import, SVG and other exporters, `cadquery.vis.show` (warns).
 
@@ -99,3 +113,7 @@ Not yet: DXF import, SVG and other exporters, `cadquery.vis.show` (warns).
   The suite reaches CadQuery's internals (`cadquery.occ_impl.*`, `cadquery.func`, OCP): the
   shim resolves those names to pykentron's where it has them, and makes the rest placeholders
   that raise NotImplementedError when used.
+- `tests/found/` holds CadQuery scripts from public projects that pykentron failed on,
+  built differently from CadQuery, or built much more slowly, with where each came from and
+  what went wrong (`cases.tsv`), and the tools that found them (`harness/`: each script run
+  on both, in fresh isolated processes, and compared).

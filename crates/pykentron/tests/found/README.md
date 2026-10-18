@@ -32,3 +32,24 @@ A case is flagged if any of these holds:
 Scripts using unseeded randomness are left out, since no two runs of them agree.
 
 Many scripts import their project's own library: cq_warehouse, cqterrain, cadqueryhelper, cqindustry, cq_gears, cqMore and cq-electronics. To run those, install the library without its dependencies (`--no-deps`), so that it can't replace CadQuery.
+
+## Since
+
+Fixed since the cases were found (running them again):
+
+- OCP names cq_warehouse calls on shapes and vectors (`BRepBuilderAPI_Copy`,
+  `ShapeUpgrade_UnifySameDomain`, `TopoDS_Shape`'s and `gp_Vec`'s methods, ...): its
+  sprocket and chain examples now build as on CadQuery.
+- Smoothed spline approximation (what `parametricCurve` makes): cq_warehouse's threads and
+  the contrib cylindrical gear now build as on CadQuery.
+- A wire's point at a fraction of its length, at its end: was searched for past it (2 s a
+  point on a helix); cq_warehouse's fastener examples took 34–102 s, now about 1 s.
+- Sewing faces whose edges collapse to a point there (a ruled face between curves that
+  meet): the faces lost their area. The contrib thread's solids are now right (CadQuery's
+  own volume of them is 3% off: 13.35 where the surfaces enclose 12.99).
+- Fillets and chamfers along an arc whose circle comes back into the solid: the tool ran
+  round into it.
+
+Still open among them: the thread solids' unions with their core (nearly coincident
+surfaces, 0.001 apart), cq_warehouse's nuts and bolts (their threads' unions too, by the look of them), and the rest of
+`cases.tsv`.
