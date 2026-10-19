@@ -303,6 +303,14 @@ fn integrate_face(model: &Model, face: Shape, mut sample: impl FnMut(Point, Vect
         }
     }
     let (u_density, v_density) = densities(surface, angular, &along);
+    // (Along a pcurve, v counts too where the surface is straight across it (a ruled face's
+    // single span), a few pieces across its range: the integrand along u changes with v all
+    // the same, and a pcurve turning sharply across it (where a face narrows to nothing) is
+    // integrated piece by piece.)
+    let v_weight = {
+        let (_, _, v0, v1) = surface.bounds();
+        if matches!(surface, Surface::Plane(_)) || !(v1 - v0).is_finite() || v1 - v0 >= 1e100 || !(v1 > v0) { v_density } else { v_density.max(4.0 / (v1 - v0)) }
+    };
     // An extrusion of a curve without a density of its own (a parabola, a hyperbola, ...):
     // pieces along u where its tangent turns, graded (by the parameter, a parabola's turn
     // is all near its vertex, however long it is).
@@ -430,20 +438,35 @@ fn integrate_face(model: &Model, face: Shape, mut sample: impl FnMut(Point, Vect
             let mut stretches: Vec<(f64, f64)> = Vec::new();
             for w in breaks.windows(2) {
                 let (s0, s1) = (w[0], w[1]);
-                let span = {
-                    let (a, b) = (pcurve.point(s0), pcurve.point(s1));
-                    match pcurve {
-                        Curve2::Circle(_) => (s1 - s0).abs(),
-                        Curve2::Line(_) => u_span(a.x, b.x) + (b.y - a.y).abs() * v_density * MAX_ANGLE_STEP,
-                        _ => {
-                            // The angle travelled, from a few samples.
-                            (0..8)
+                let (a, b) = (pcurve.point(s0), pcurve.point(s1));
+                let span = match pcurve {
+                    Curve2::Circle(_) => (s1 - s0).abs(),
+                    Curve2::Line(_) => u_span(a.x, b.x) + (b.y - a.y).abs() * v_density * MAX_ANGLE_STEP,
+                    _ => {
+                        // The angle travelled, from a few samples; where it is travelled
+                        // unevenly (most of it in one part, as round a sharp turn), halved
+                        // until it is even or short, so that the pieces gather there.
+                        let mut todo = vec![(s0, s1, 0u32)];
+                        while let Some((a, b, depth)) = todo.pop() {
+                            let parts: Vec<f64> = (0..8)
                                 .map(|i| {
-                                    let (p, q) = (pcurve.point(s0 + (s1 - s0) * i as f64 / 8.0), pcurve.point(s0 + (s1 - s0) * (i + 1) as f64 / 8.0));
-                                    u_span(p.x, q.x) + (q.y - p.y).abs() * v_density * MAX_ANGLE_STEP
+                                    let (p, q) = (pcurve.point(a + (b - a) * i as f64 / 8.0), pcurve.point(a + (b - a) * (i + 1) as f64 / 8.0));
+                                    u_span(p.x, q.x) + (q.y - p.y).abs() * v_weight * MAX_ANGLE_STEP
                                 })
-                                .sum()
+                                .collect();
+                            let span: f64 = parts.iter().sum();
+                            let most = parts.iter().copied().fold(0.0, f64::max);
+                            if span > MAX_ANGLE_STEP && most > 0.5 * span && depth < 16 {
+                                let m = 0.5 * (a + b);
+                                todo.push((m, b, depth + 1));
+                                todo.push((a, m, depth + 1));
+                                continue;
+                            }
+                            let n = pieces(span);
+                            let step = (b - a) / n as f64;
+                            stretches.extend((0..n).map(|k| (a + step * k as f64, step)));
                         }
+                        continue;
                     }
                 };
                 let n = pieces(span);
