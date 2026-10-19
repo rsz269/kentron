@@ -1,8 +1,10 @@
 # CadQuery scripts found failing, diverging or slow on pykentron
 
-Scripts from public CadQuery projects on GitHub (2026-10-18) that pykentron fails on,
-builds differently from CadQuery 2.8, or builds substantially slower. Each project's scripts
-keep its licence, copied beside them (`<project>/LICENSE`).
+Scripts from public CadQuery projects on GitHub (2026-10-18 and 2026-10-19) that pykentron
+fails on, builds differently from CadQuery 2.8, or builds substantially slower. Each
+project's scripts keep its licence, copied beside them (`<project>/LICENSE`). Scripts under
+other licences than MIT, Apache, BSD and the Unlicense, or none, are not copied: their
+cases are only listed.
 
 The source of every case and what went wrong is in `cases.tsv`:
 
@@ -31,7 +33,9 @@ A case is flagged if any of these holds:
 
 Scripts using unseeded randomness are left out, since no two runs of them agree.
 
-Many scripts import their project's own library: cq_warehouse, cqterrain, cadqueryhelper, cqindustry, cq_gears, cqMore and cq-electronics. To run those, install the library without its dependencies (`--no-deps`), so that it can't replace CadQuery.
+Many scripts import their project's own library: cq_warehouse, cqterrain, cadqueryhelper, cqindustry, cq_gears, cqMore and cq-electronics, and from the second round LatticeQuery, cadquery-massembly and gridfinity-cadquery's package. To run those, install the library without its dependencies (`--no-deps`), so that it can't replace CadQuery.
+
+A second round (2026-10-19) took 57 more projects from GitHub's repository search (`cadquery`, `topic:cadquery`, and `cadquery` with gridfinity, keyboard, enclosure, printable, parametric and the like), leaving out lists, AI pipelines and datasets: 382 scripts, of which CadQuery built 187. pykentron built 129 of those as CadQuery does. Of the other 58, the 53 cases at the end of `cases.tsv`; left out are two scripts writing to a directory that does not exist, one reading a file on its author's disk, one using unseeded randomness and one showing nothing to compare.
 
 ## Since
 
