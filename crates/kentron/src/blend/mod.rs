@@ -483,7 +483,9 @@ fn extensions(model: &Model, shape: Shape, corners: &[(Corner, f64)]) -> Vec<[f6
             })
         })
         .collect();
-    let inside = |p: Point| matches!(boolean::classify_point(model, shape, p), Ok(boolean::PointLocation::Inside));
+    // (The shape prepared once for all the points.)
+    let classifier = std::cell::OnceCell::new();
+    let inside = |p: Point| matches!(classifier.get_or_init(|| boolean::PointClassifier::new(model, shape)), Ok(c) if c.locate(p) == boolean::PointLocation::Inside);
     let run = |corner: &Corner, size: f64, at_end: bool| -> f64 {
         let cap = corner.run_cap(size);
         if cap <= 0.0 {
@@ -624,16 +626,34 @@ fn chamfer_solid_edges(model: &mut Model, shape: Shape, edges: &[ChamferedEdge])
         corners.push((corner, if first_on_second { [d2, d1] } else { [d1, d2] }));
     }
     let sized: Vec<(Corner, f64)> = corners.iter().map(|(c, d)| (c.clone(), d[0].max(d[1]))).collect();
-    let mut result = shape;
     let mitred = mitres(&sized);
+    let mut tools = Vec::with_capacity(corners.len());
     for (((corner, distances), extend), mitre) in corners.iter().zip(extensions(model, shape, &sized)).zip(&mitred) {
         let section = corner.bevel_section(model, *distances)?;
         let tool = corner.sweep_section(model, section, mitre_runs(corner, distances[0].max(distances[1]), extend, mitre))?;
-        let tool = mitred_tool(model, tool, mitre)?;
-        result = if corner.convex { boolean::difference(model, result, tool)? } else { boolean::union(model, result, tool)? };
+        tools.push((mitred_tool(model, tool, mitre)?, corner.convex));
     }
-    for tool in chamfer_corner_tools(model, &corners)? {
-        result = boolean::difference(model, result, tool)?;
+    tools.extend(chamfer_corner_tools(model, &corners)?.into_iter().map(|tool| (tool, true)));
+    with_tools(model, shape, &tools)
+}
+
+/// `shape` with `tools` cut away (each convex) or added (concave) in turn; a run of one kind
+/// in one boolean operation with all of them (each on its own, an edge's tool after
+/// another's, the solid grew more to split each time).
+fn with_tools(model: &mut Model, shape: Shape, tools: &[(Shape, bool)]) -> Result<Shape> {
+    let mut result = shape;
+    for run in tools.chunk_by(|a, b| a.1 == b.1) {
+        let tool = match run {
+            [(one, _)] => *one,
+            many => {
+                let compound = model.new_empty(NodeKind::Compound);
+                for (t, _) in many {
+                    model.add(compound, *t)?;
+                }
+                compound
+            }
+        };
+        result = if run[0].1 { boolean::difference(model, result, tool)? } else { boolean::union(model, result, tool)? };
     }
     Ok(result)
 }
@@ -915,23 +935,33 @@ fn tangent_chains(model: &Model, shape: Shape, edges: &[(Shape, f64)]) -> Vec<(S
         let (a, b) = model.edge_vertices(Shape { orientation: Orientation::Forward, ..edge });
         [(a.node, first), (b.node, last)].into_iter().map(|(v, t)| (v, curve.d1(t).1.normalized())).collect()
     };
-    let faces_of = |edge: Shape| -> Vec<NodeId> {
-        model
-            .explore(shape, NodeKind::Face)
-            .filter(|&f| model.explore(f, NodeKind::Edge).any(|e| e.node == edge.node))
-            .map(|f| f.node)
-            .collect()
-    };
+    // (Each edge's faces, and each of the shape's edges' ends, found once.)
+    let mut faces_by_edge: crate::hashing::FastMap<NodeId, Vec<NodeId>> = Default::default();
+    for f in model.explore(shape, NodeKind::Face) {
+        let mut seen: Vec<NodeId> = Vec::new();
+        for e in model.explore(f, NodeKind::Edge) {
+            if !seen.contains(&e.node) {
+                seen.push(e.node);
+                faces_by_edge.entry(e.node).or_default().push(f.node);
+            }
+        }
+    }
+    let faces_of = |edge: Shape| -> Vec<NodeId> { faces_by_edge.get(&edge.node).cloned().unwrap_or_default() };
+    let all_ends: Vec<Vec<(NodeId, Vector)>> = all.iter().map(|&e| ends(e)).collect();
     let mut out: Vec<(Shape, f64)> = edges.to_vec();
     let mut i = 0;
     while i < out.len() {
         let (edge, radius) = out[i];
         let (mine, my_faces) = (ends(edge), faces_of(edge));
-        for &other in &all {
+        for (j, &other) in all.iter().enumerate() {
+            let theirs = &all_ends[j];
+            // (Only an edge from one of this one's vertices.)
+            if !mine.iter().any(|(v, _)| theirs.iter().any(|(w, _)| w == v)) {
+                continue;
+            }
             if out.iter().any(|(e, _)| e.node == other.node) {
                 continue;
             }
-            let theirs = ends(other);
             let their_faces = faces_of(other);
             // (Between the same two faces, as nearly tangent as the faces' normals below: an
             // edge carried on by a fitted curve leaves its vertex very nearly, not exactly, as
