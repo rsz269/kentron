@@ -1238,8 +1238,8 @@ fn end_cut_on(
             };
             let last = d(order[to])?;
             previous = Some(last);
-            let reach = 2.0 * fillet.point(u, order[at]).distance(fillet.point(u, order[to]));
-            if to > at + 1 && (first <= 0.0) == (last <= 0.0) && first.abs() + last.abs() > reach {
+            let reach = || 2.0 * fillet.point(u, order[at]).distance(fillet.point(u, order[to]));
+            if to > at + 1 && (first <= 0.0) == (last <= 0.0) && first.abs() + last.abs() > reach() {
                 at = to;
                 continue;
             }
