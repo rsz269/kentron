@@ -163,7 +163,7 @@ pub(super) fn foot_on(surface: &Surface, p: Point) -> crate::geometry::extrema::
         }
         (best, (grid[best.1].0, grid[best.1].1))
     });
-    let foot = crate::geometry::extrema::newton_foot(p, surface, start);
+    let foot = crate::geometry::extrema::newton_foot_to_the_last(p, surface, start);
     let (u0, u1, v0, v1) = surface.bounds();
     let on_bound = |x: f64, a: f64, b: f64, periodic: bool| !periodic && ((x - a).abs() <= 1e-12 * (b - a).abs().max(1.0) || (x - b).abs() <= 1e-12 * (b - a).abs().max(1.0));
     let distance = foot.point.distance(p);
@@ -189,7 +189,7 @@ pub(super) fn foot_on(surface: &Surface, p: Point) -> crate::geometry::extrema::
         (other.0 < 4.0 * best.0).then(|| (grid[other.1].0, grid[other.1].1))
     });
     let Some(other) = other else { return foot };
-    let second = crate::geometry::extrema::newton_foot(p, surface, other);
+    let second = crate::geometry::extrema::newton_foot_to_the_last(p, surface, other);
     if second.point.distance(p) < distance { second } else { foot }
 }
 
@@ -213,7 +213,7 @@ pub(super) fn signed_distance_from(surface: &Surface, p: Point, last: Option<Foo
     let fresh = || foot_on(surface, p);
     let foot = match last {
         Some(f) => {
-            let foot = crate::geometry::extrema::newton_foot(p, surface, (f.uv[0], f.uv[1]));
+            let foot = crate::geometry::extrema::newton_foot_to_the_last(p, surface, (f.uv[0], f.uv[1]));
             if foot.point.distance(p) <= f.distance + p.distance(f.point) + 1e-9 { foot } else { fresh() }
         }
         None => fresh(),

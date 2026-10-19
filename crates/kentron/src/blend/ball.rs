@@ -65,64 +65,82 @@ impl Side {
     /// The parameters of `p`'s foot on the surface: in closed form where there is one,
     /// otherwise the nearest point (from the last one found).
     fn parameters(&self, p: Point) -> (f64, f64) {
-        if let Some(uv) = self.surface.parameters(p) {
-            let (v0, v1) = self.v_range;
-            let margin = 0.25 * (v1 - v0);
-            let near = 1e-9 * (v1 - v0);
-            if !(matches!(self.surface, Surface::Revolution(_)) && (v1 - v0).is_finite()) || (uv.1 >= v0 - near && uv.1 <= v1 + near) {
-                return uv;
-            }
-            // (Found again within the face's range: off it, the point may be on the
-            // meridian's half across the axis, with the normal the other way.)
-            if let Surface::Revolution(r) = &self.surface {
-                // (Within the face's range carried on as long as the meridian stays on its
-                // side of the axis.)
-                let range = match self.own_range.get() {
-                    Some(range) => range,
-                    None => {
-                        use crate::geometry::ParametricCurve;
-                        let (o, z) = (r.axis().origin, Vector::from(r.axis().direction));
-                        let radial = |v: f64| {
-                            let d = r.basis().point(v) - o;
-                            d - z * d.dot(z)
-                        };
-                        let e = radial(0.5 * (v0 + v1));
-                        let mut range = (v0, v1);
-                        for k in 1..=16 {
-                            let v = v0 - margin * k as f64 / 16.0;
-                            if radial(v).dot(e) <= 0.0 {
-                                break;
-                            }
-                            range.0 = v;
-                        }
-                        for k in 1..=16 {
-                            let v = v1 + margin * k as f64 / 16.0;
-                            if radial(v).dot(e) <= 0.0 {
-                                break;
-                            }
-                            range.1 = v;
-                        }
-                        self.own_range.set(Some(range));
-                        range
-                    }
-                };
-                return r.parameters_between(p, range.0, range.1);
-            }
+        self.foot(p).0
+    }
+
+    /// [`Self::parameters`], with the foot point and its derivatives where the search found
+    /// them (to spare evaluating them again).
+    fn foot(&self, p: Point) -> ((f64, f64), Option<(Point, Vector, Vector)>) {
+        let Some(uv) = self.surface.parameters(p) else {
+            // (Locally from the last foot, the points following one another; the whole
+            // surface searched the first time.)
+            return match self.last.get() {
+                Some(start) => {
+                    let foot = crate::geometry::extrema::newton_foot(p, &self.surface, start);
+                    self.last.set(Some((foot.u, foot.v)));
+                    ((foot.u, foot.v), Some((foot.point, foot.du, foot.dv)))
+                }
+                None => {
+                    let (u, v, _) = crate::geometry::extrema::nearest_on_surface(p, &self.surface, None);
+                    self.last.set(Some((u, v)));
+                    ((u, v), None)
+                }
+            };
+        };
+        (self.closed_form(p, uv), None)
+    }
+
+    /// The parameters of `p`'s foot from the surface's closed-form inverse (`uv`), kept
+    /// within the face's range of `v` on a surface of revolution.
+    fn closed_form(&self, p: Point, uv: (f64, f64)) -> (f64, f64) {
+        let (v0, v1) = self.v_range;
+        let margin = 0.25 * (v1 - v0);
+        let near = 1e-9 * (v1 - v0);
+        if !(matches!(self.surface, Surface::Revolution(_)) && (v1 - v0).is_finite()) || (uv.1 >= v0 - near && uv.1 <= v1 + near) {
             return uv;
         }
-        // (Locally from the last foot, the points following one another; the whole
-        // surface searched the first time.)
-        let (u, v, _) = match self.last.get() {
-            Some(start) => crate::geometry::extrema::newton_on_surface(p, &self.surface, start),
-            None => crate::geometry::extrema::nearest_on_surface(p, &self.surface, None),
-        };
-        self.last.set(Some((u, v)));
-        (u, v)
+        // (Found again within the face's range: off it, the point may be on the
+        // meridian's half across the axis, with the normal the other way.)
+        if let Surface::Revolution(r) = &self.surface {
+            // (Within the face's range carried on as long as the meridian stays on its
+            // side of the axis.)
+            let range = match self.own_range.get() {
+                Some(range) => range,
+                None => {
+                    use crate::geometry::ParametricCurve;
+                    let (o, z) = (r.axis().origin, Vector::from(r.axis().direction));
+                    let radial = |v: f64| {
+                        let d = r.basis().point(v) - o;
+                        d - z * d.dot(z)
+                    };
+                    let e = radial(0.5 * (v0 + v1));
+                    let mut range = (v0, v1);
+                    for k in 1..=16 {
+                        let v = v0 - margin * k as f64 / 16.0;
+                        if radial(v).dot(e) <= 0.0 {
+                            break;
+                        }
+                        range.0 = v;
+                    }
+                    for k in 1..=16 {
+                        let v = v1 + margin * k as f64 / 16.0;
+                        if radial(v).dot(e) <= 0.0 {
+                            break;
+                        }
+                        range.1 = v;
+                    }
+                    self.own_range.set(Some(range));
+                    range
+                }
+            };
+            return r.parameters_between(p, range.0, range.1);
+        }
+        uv
     }
 
     fn distance(&self, p: Point) -> Result<(f64, Point, Vector)> {
-        let (u, v) = self.parameters(p);
-        let (foot, du, dv) = self.surface.d1(u, v);
+        let ((u, v), found) = self.foot(p);
+        let (foot, du, dv) = found.unwrap_or_else(|| self.surface.d1(u, v));
         let n = du.cross(dv);
         if n.length() <= 1e-300 {
             return Err(Error::InvalidInput("a fillet section meets a singular point of a face".into()));

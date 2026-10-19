@@ -1194,8 +1194,24 @@ pub(crate) struct SurfaceFoot {
     pub dv: crate::math::Vector,
 }
 
+/// A Newton step `e` at most a millionth of the range (`small` a trillionth) and a hundredth
+/// of the step `last` before it.
+fn close_to(e: f64, small: f64, last: f64) -> bool {
+    e <= 1e6 * small && e <= 1e-2 * last
+}
+
 /// [`newton_on_surface`] with the point's derivatives (to spare evaluating them again).
 pub(crate) fn newton_foot(p: Point, surface: &Surface, start: (f64, f64)) -> SurfaceFoot {
+    newton_foot_to(p, surface, start, true)
+}
+
+/// [`newton_foot`] with every step taken to the rounding noise (none spared as converged):
+/// for distances whose signs decide where surfaces cross, as booleans' do.
+pub(crate) fn newton_foot_to_the_last(p: Point, surface: &Surface, start: (f64, f64)) -> SurfaceFoot {
+    newton_foot_to(p, surface, start, false)
+}
+
+fn newton_foot_to(p: Point, surface: &Surface, start: (f64, f64), spare_last: bool) -> SurfaceFoot {
     use super::parametric::ParametricSurface;
     let (u0, u1, v0, v1) = surface.bounds();
     let (u_periodic, v_periodic) = (surface.is_u_periodic(), surface.is_v_periodic());
@@ -1205,13 +1221,15 @@ pub(crate) fn newton_foot(p: Point, surface: &Surface, start: (f64, f64)) -> Sur
     // rounding noise, where steps no longer shrink).
     let span = |a: f64, b: f64, t: f64| if (b - a).is_finite() { b - a } else { 1.0 + t.abs() };
     let (u_small, v_small) = (1e-12 * span(u0, u1, u), 1e-12 * span(v0, v1, v));
+    let mut before = (f64::INFINITY, f64::INFINITY);
     for step in 0..50 {
         let d = surface.d2(u, v);
         let r = d.point - p;
         let (gu, gv) = (r.dot(d.du), r.dot(d.dv));
         let (huu, huv, hvv) = (d.du.dot(d.du) + r.dot(d.duu), d.du.dot(d.dv) + r.dot(d.duv), d.dv.dot(d.dv) + r.dot(d.dvv));
         let det = huu * hvv - huv * huv;
-        let (du, dv) = if det.abs() > 1e-300 && huu > 0.0 && det > 0.0 {
+        let convex = det.abs() > 1e-300 && huu > 0.0 && det > 0.0;
+        let (du, dv) = if convex {
             ((-gu * hvv + gv * huv) / det, (-gv * huu + gu * huv) / det)
         } else {
             // Not convex here: a gradient step instead.
@@ -1232,9 +1250,16 @@ pub(crate) fn newton_foot(p: Point, surface: &Surface, start: (f64, f64)) -> Sur
         let (nu, nv) = clamp(u + du, v + dv);
         let done = (nu - u).abs() <= u_small && (nv - v).abs() <= v_small;
         (u, v) = (nu, nv);
-        if done {
+        // Close (where sparing it), the steps shrinking as Newton's do near a foot (each within about the square
+        // of the one before: this one a millionth of the range, a hundredth of the last at
+        // most): the next would be at the rounding noise, and is not taken. (The point and
+        // its derivatives are evaluated where it ends, not carried on from those before: a
+        // point far off the surface magnifies their errors in its distance along the normal.)
+        let (eu, ev) = (du.abs(), dv.abs());
+        if done || spare_last && convex && close_to(eu, u_small, before.0) && close_to(ev, v_small, before.1) {
             break;
         }
+        before = (eu.max(u_small), ev.max(v_small));
     }
     let (point, du, dv) = surface.d1(u, v);
     SurfaceFoot { u, v, point, du, dv }
