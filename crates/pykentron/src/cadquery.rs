@@ -470,6 +470,14 @@ pub fn inertia(shape: Handle, dimension: u32) -> PyResult<[[f64; 3]; 3]> {
     })
 }
 
+/// `wire` (in one plane) with its corners at `vertices` rounded by `radius`, its edges lines
+/// or curves.
+#[pyfunction]
+pub fn fillet_wire_2d(wire: Handle, radius: f64, vertices: Vec<Handle>) -> PyResult<Handle> {
+    let vertices: Vec<Shape> = vertices.iter().map(|h| h.shape).collect();
+    with_model(|m| kentron::blend::fillet_wire_2d(m, wire.shape, radius, Some(&vertices))).map(handle)
+}
+
 /// `shape` with `edges` chamfered: each `(edge, d1, d2, face)` cut back by `d1` along `face`
 /// (either face if `None`) and `d2` along the other.
 #[pyfunction]
@@ -611,6 +619,7 @@ pub fn cells(shapes: Vec<Handle>) -> PyResult<Vec<(Vec<bool>, Handle)>> {
 
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(cells, m)?)?;
+    m.add_function(wrap_pyfunction!(fillet_wire_2d, m)?)?;
     m.add_function(wrap_pyfunction!(ordered_edges, m)?)?;
     m.add_function(wrap_pyfunction!(edge_trimmed, m)?)?;
     m.add_function(wrap_pyfunction!(face_trimmed, m)?)?;

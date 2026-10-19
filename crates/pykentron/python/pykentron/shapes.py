@@ -1474,18 +1474,27 @@ class Face(Shape):
 
     def fillet2D(self, radius: float, vertices: Iterable[Vertex]) -> "Face":
         """The face with its corners at `vertices` rounded (between straight edges)."""
-        return self._corners(vertices, lambda a, b, p: _fillet_corner(a, b, p, radius))
+        return self._corners(vertices, lambda a, b, p: _fillet_corner(a, b, p, radius), radius)
 
     def chamfer2D(self, d: float, vertices: Iterable[Vertex]) -> "Face":
         """The face with its corners at `vertices` cut back by `d` along both edges."""
         return self._corners(vertices, lambda a, b, p: _chamfer_corner(a, b, p, d))
 
-    def _corners(self, vertices, corner_edge) -> "Face":
+    def _corners(self, vertices, corner_edge, radius=None) -> "Face":
         vertices = list(vertices)
         wires = []
         for w in self.Wires():
             mine = [v for v in vertices if any(v.isSame(x) for x in w.Vertices())]
-            wires.append(_round_corners(w, 0.0, mine, corner_edge) if mine else w)
+            if not mine:
+                wires.append(w)
+                continue
+            try:
+                wires.append(_round_corners(w, 0.0, mine, corner_edge))
+            except NotImplementedError:
+                # (Between curved edges: rounded by the kernel, along the curves.)
+                if radius is None:
+                    raise
+                wires.append(Shape.cast(native.fillet_wire_2d(w.wrapped, radius, [v.wrapped for v in mine])))
         return Face.makeFromWires(wires[0], wires[1:])
 
     def thicken(self, thickness: float) -> "Solid":

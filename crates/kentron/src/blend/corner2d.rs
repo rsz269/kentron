@@ -159,8 +159,8 @@ pub fn chamfer_2d(model: &mut Model, first: Shape, second: Shape, d1: f64, d2: f
 }
 
 /// `wire` (in one plane) with its corners rounded by `radius`: at `vertices` (each where
-/// two of its edges meet), or at every vertex where two edges meet at an angle if none are
-/// given.
+/// two of its edges meet), or at every vertex where two edges meet if none are given; where
+/// they meet tangentially, there is no corner and the vertex is passed over.
 #[doc(alias = "BRepFilletAPI_MakeFillet2d")]
 pub fn fillet_wire_2d(model: &mut Model, wire: Shape, radius: f64, vertices: Option<&[Shape]>) -> Result<Shape> {
     let mut edges = model.ordered_edges(wire);
@@ -185,14 +185,19 @@ pub fn fillet_wire_2d(model: &mut Model, wire: Shape, radius: f64, vertices: Opt
         if !wanted(model, model.point(end)) {
             continue;
         }
+        // (Where the edges meet tangentially there is no corner, asked for or not.)
+        let (a, _) = Arm::of(model, edges[i], edges[j])?;
+        let (b, _) = Arm::of(model, edges[j], edges[i])?;
+        if a.direction(a.at_corner).dot(b.direction(b.at_corner)) <= -1.0 + tolerance::ANGULAR {
+            continue;
+        }
         match fillet_2d(model, edges[i], edges[j], radius) {
             Ok(c) => {
                 edges[i] = c.first;
                 edges[j] = c.second;
                 corners[i] = Some(c.corner);
             }
-            // (Where the edges meet tangentially there is no corner; elsewhere it is an
-            // error only if asked for.)
+            // (Elsewhere an error only if asked for.)
             Err(e) if vertices.is_some() => return Err(e),
             Err(_) => {}
         }
@@ -243,6 +248,27 @@ mod tests {
         let rounded = fillet_wire_2d(&mut model, wire, 10.0, None).unwrap();
         let length = properties::length(&model, rounded).mass;
         assert!((length - 253.58).abs() < 0.01, "{length}");
+    }
+
+    /// A stadium (two lines and two half circles, all meeting tangentially) with all its
+    /// vertices asked for: no corner to round, the wire as it was.
+    #[test]
+    fn tangent_vertices_are_passed_over() {
+        let mut model = Model::new();
+        let (r, l) = (5.0, 20.0);
+        let bottom = segment(&mut model, Point::new(0.0, -r, 0.0), Point::new(l, -r, 0.0));
+        let right = Circle::new(Frame::from_z(Point::new(l, 0.0, 0.0), Direction::Z), r);
+        let right = make::edge_from_curve_range(&mut model, Curve::Circle(right), -PI / 2.0, PI / 2.0).unwrap();
+        let top = segment(&mut model, Point::new(l, r, 0.0), Point::new(0.0, r, 0.0));
+        let left = Circle::new(Frame::from_z(Point::ORIGIN, Direction::Z), r);
+        let left = make::edge_from_curve_range(&mut model, Curve::Circle(left), PI / 2.0, 1.5 * PI).unwrap();
+        let wire = make::wire(&mut model, &[bottom, right, top, left]).unwrap();
+        let vertices = model.unique_subshapes(wire, NodeKind::Vertex);
+        assert_eq!(vertices.len(), 4);
+        let rounded = fillet_wire_2d(&mut model, wire, 1.0, Some(&vertices)).unwrap();
+        let length = properties::length(&model, rounded).mass;
+        assert!((length - (2.0 * l + 2.0 * PI * r)).abs() < 1e-9, "{length}");
+        assert_eq!(model.unique_subshapes(rounded, NodeKind::Edge).len(), 4);
     }
 
     #[test]

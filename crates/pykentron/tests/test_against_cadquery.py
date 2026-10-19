@@ -126,6 +126,16 @@ def asymmetric_chamfer_of_an_extrusion(cq):
     return rod.chamfer(1.0, 0.5, rims)
 
 
+def rounded_corners_between_arcs_and_lines(cq):
+    # (A D-shaped outline: its corners between the arc and the lines rounded along the arc,
+    # the one between the two lines as the others.)
+    V = cq.Vector
+    edges = [cq.Edge.makeLine(V(0, 0, 0), V(20, 0, 0)), cq.Edge.makeLine(V(20, 0, 0), V(20, 10, 0)),
+             cq.Edge.makeThreePointArc(V(20, 10, 0), V(10, 18, 0), V(0, 10, 0)), cq.Edge.makeLine(V(0, 10, 0), V(0, 0, 0))]
+    face = cq.Face.makeFromWires(cq.Wire.assembleEdges(edges))
+    return face.fillet2D(2.0, face.Vertices())
+
+
 def mirrored_outline(cq):
     # (Two halves of an outline joined along the mirror line: both wind one way, and the
     # line out and back between them is dropped.)
@@ -269,7 +279,7 @@ CASES = [
     rotated_then_located, spline_surface_through_a_grid, plane_of_negative_size, subclassed_wire,
     array_of_vectors, sweep_through_three_circles, sweep_from_circle_to_square,
     fuse_of_many, rounded_pocket_rim, fillet_of_a_mitre, rounded_recess_cut, filled_square_through_a_point,
-    asymmetric_chamfer_of_an_extrusion,
+    asymmetric_chamfer_of_an_extrusion, rounded_corners_between_arcs_and_lines,
 ]
 
 
