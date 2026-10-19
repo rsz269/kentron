@@ -121,8 +121,11 @@ Fixed since the cases were found (running them again):
   CadQuery's own fillings stray from their points (by up to 1.4 in its interpolated plates),
   which kentron's pass through: Ex101's plates differ by 0.2–0.6%; fillings approximating a
   surface from its outline (cq_warehouse's projected flag faces) by about 1%; a filling's
-  normal, and so the way it thickens, follows OCCT's average plane where kentron's follows
-  the loop (cq_warehouse's squares mapped on a sphere). Its projection example's conical
+  normal, and so the way it thickens, follows the loop in kentron (cq_warehouse's squares
+  mapped on a sphere thicken the other way). OCCT's follows no rule to match: it ignores
+  which way the loop runs, and as a square loop tilts about an axis in its plane its normal
+  flips back and forth (every 15° in places), at some tilts with the side of the loop's
+  plane its interior point is on. Its projection example's conical
   case projects text from a point in the text's own plane (every projected outline folded
   onto one circle): it stops there.
 
