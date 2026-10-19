@@ -1,6 +1,6 @@
 """Finding font files, for text: by path, or by family name and style among the system's
 fonts (fontconfig's `fc-match` where there is one, else the usual font directories), as
-OCCT's font manager finds them for CadQuery."""
+OCCT's font manager finds them for CadQuery: a family not installed set in a generic one."""
 
 from __future__ import annotations
 
@@ -15,6 +15,9 @@ from typing import List, Optional
 _EXTENSIONS = (".ttf", ".otf", ".ttc", ".otc")
 
 _STYLES = {"regular": "Regular", "bold": "Bold", "italic": "Italic"}
+
+# The kinds as fontconfig patterns (italic one way or the other, a family's "Oblique" too).
+_PATTERNS = {"regular": "style=Regular", "bold": "bold", "italic": "italic"}
 
 
 def font_file(font: str = "Arial", fontPath: Optional[str] = None, kind: str = "regular") -> str:
@@ -31,22 +34,55 @@ def font_file(font: str = "Arial", fontPath: Optional[str] = None, kind: str = "
     return found
 
 
+# A family not installed is set, as OCCT sets it, in a generic one: serif for these names,
+# monospaced for these, sans serif for any other; each the first of these families
+# installed.
+_SERIF_NAMES = ("serif", "times")
+_MONO_NAMES = ("mono", "monospace", "courier")
+_GENERIC = {
+    "sans": ("FreeSans", "DejaVu Sans", "Liberation Sans", "Noto Sans"),
+    "serif": ("FreeSerif", "DejaVu Serif", "Liberation Serif", "Noto Serif"),
+    "mono": ("FreeMono", "DejaVu Sans Mono", "Liberation Mono", "Noto Sans Mono"),
+}
+
+
+def _fc_match(fc: str, font: str, kind: str) -> List[tuple]:
+    """fontconfig's matches for a family in a kind of style, best first: each one's family
+    names (lower case) and file."""
+    try:
+        out = subprocess.run(
+            [fc, "-s", "--format=%{family}|%{file}\\n", f"{font}:{_PATTERNS[kind]}"],
+            capture_output=True, text=True, timeout=10,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    found = []
+    for line in out.splitlines():
+        families, _, path = line.rpartition("|")
+        if path.lower().endswith(_EXTENSIONS) and os.path.isfile(path):
+            found.append(({f.strip().lower() for f in families.split(",")}, path))
+    return found
+
+
 @functools.lru_cache(maxsize=None)
 def _by_name(font: str, kind: str) -> Optional[str]:
-    style = _STYLES[kind]
-    # fontconfig's best match, the first of its fallbacks kentron can read.
     fc = shutil.which("fc-match")
     if fc:
-        try:
-            out = subprocess.run(
-                [fc, "-s", "--format=%{file}\\n", f"{font}:style={style}"],
-                capture_output=True, text=True, timeout=10,
-            ).stdout
-            for line in out.splitlines():
-                if line.lower().endswith(_EXTENSIONS) and os.path.isfile(line):
-                    return line
-        except (OSError, subprocess.SubprocessError):
-            pass
+        # The family itself where it is installed, else a generic one's font, else
+        # fontconfig's best match (the first of its fallbacks kentron can read).
+        def installed(family: str) -> Optional[str]:
+            matches = _fc_match(fc, family, kind)
+            return matches[0][1] if matches and family.lower() in matches[0][0] else None
+
+        name = font.strip().lower()
+        generic = "serif" if name in _SERIF_NAMES else "mono" if name in _MONO_NAMES else "sans"
+        for family in (font, *_GENERIC[generic]):
+            path = installed(family)
+            if path:
+                return path
+        matches = _fc_match(fc, font, kind)
+        if matches:
+            return matches[0][1]
     # Else the files in the usual directories, by name: the family's in the style, the
     # family's, a sans serif's, any.
     files = _font_files()

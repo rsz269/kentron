@@ -46,8 +46,17 @@ pub fn text(model: &mut Model, font: &[u8], text: &str, size: f64, horizontal: H
     }
     let face = ttf_parser::Face::parse(font, 0).map_err(|e| Error::InvalidInput(format!("not a font: {e}")))?;
     let scale = size / f64::from(face.units_per_em());
-    let ascender = f64::from(face.ascender()) * scale;
-    let line_spacing = f64::from(face.ascender() - face.descender() + face.line_gap()) * scale;
+    // (A font with CFF outlines stands as high and low as its glyphs' bounding box, with no
+    // gap between lines, as OCCT sets it; one with TrueType outlines by its own metrics.)
+    let tables = face.tables();
+    let (ascender, descender, gap) = if tables.cff.is_some() || tables.cff2.is_some() {
+        let b = face.global_bounding_box();
+        (f64::from(b.y_max), f64::from(b.y_min), 0.0)
+    } else {
+        (f64::from(face.ascender()), f64::from(face.descender()), f64::from(face.line_gap()))
+    };
+    let line_spacing = (ascender - descender + gap) * scale;
+    let ascender = ascender * scale;
     let space = |next: Option<char>| advance(&face, ' ', next) * scale;
     // The glyphs' pen positions, line by line.
     let chars: Vec<char> = text.chars().collect();
@@ -313,6 +322,12 @@ mod tests {
 
     /// A font the tests can rely on: one of the system's, if any (they are skipped otherwise).
     fn some_font() -> Option<Vec<u8>> {
+        system_font("ttf", |_| true)
+    }
+
+    /// One of the system's fonts with the extension `extension` (and an 'O'), for which
+    /// `wanted` holds.
+    fn system_font(extension: &str, wanted: impl Fn(&ttf_parser::Face) -> bool) -> Option<Vec<u8>> {
         let dirs = ["/usr/share/fonts", "/usr/local/share/fonts", "/System/Library/Fonts", "C:\\Windows\\Fonts"];
         let mut stack: Vec<std::path::PathBuf> = dirs.iter().map(std::path::PathBuf::from).collect();
         while let Some(dir) = stack.pop() {
@@ -321,9 +336,9 @@ mod tests {
                 let p = e.path();
                 if p.is_dir() {
                     stack.push(p);
-                } else if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("ttf")) {
+                } else if p.extension().is_some_and(|x| x.eq_ignore_ascii_case(extension)) {
                     if let Ok(bytes) = std::fs::read(&p) {
-                        if ttf_parser::Face::parse(&bytes, 0).is_ok_and(|f| f.glyph_index('O').is_some()) {
+                        if ttf_parser::Face::parse(&bytes, 0).is_ok_and(|f| f.glyph_index('O').is_some() && f.glyph_index('H').is_some() && wanted(&f)) {
                             return Some(bytes);
                         }
                     }
@@ -353,5 +368,25 @@ mod tests {
         // Facing +Z, on the baseline (bottom), starting past the pen (left).
         let b = crate::properties::bounding_box(&model, t);
         assert!(b.min.y > -0.5 && b.min.x >= 0.0 && b.max.y < 10.0);
+    }
+
+    /// A font with CFF outlines stands as high and low as its glyphs' bounding box: aligned
+    /// at the top, its baseline that far down; its lines that box's height apart.
+    #[test]
+    fn cff_fonts_stand_as_their_bounding_box() {
+        let Some(font) = system_font("otf", |f| f.tables().cff.is_some() && f.global_bounding_box().y_max > f.ascender()) else { return };
+        let face = ttf_parser::Face::parse(&font, 0).unwrap();
+        let scale = 10.0 / f64::from(face.units_per_em());
+        let b = face.global_bounding_box();
+        let mut model = Model::new();
+        let top = |model: &mut Model, s: &str, v: VerticalAlignment| {
+            let t = text(model, &font, s, 10.0, HorizontalAlignment::Left, v).unwrap();
+            crate::properties::bounding_box(model, t).max.y
+        };
+        let cap = top(&mut model, "H", VerticalAlignment::Bottom);
+        let at_top = top(&mut model, "H", VerticalAlignment::Top);
+        assert!((at_top - (cap - f64::from(b.y_max) * scale)).abs() < 1e-6, "{at_top} {cap}");
+        let two = top(&mut model, "H\nH", VerticalAlignment::Bottom);
+        assert!((two - cap - f64::from(b.y_max - b.y_min) * scale).abs() < 1e-6, "{two} {cap}");
     }
 }

@@ -155,6 +155,14 @@ def vertices_of_a_face_placed_twice(cq):
     return cq.Compound.makeCompound([cq.Solid.makeBox(0.1, 0.1, 0.1, v.Center()) for v in vertices])
 
 
+def text_in_fonts_not_installed_and_cff_ones(cq):
+    # (A family not installed set as OCCT sets it, in a generic one; a font with CFF
+    # outlines, Nimbus Sans, standing as high as OCCT sets it, aligned at the top.)
+    texts = [cq.Compound.makeText("Hag", 10, 1, font=f, halign="left", valign="top").translate(cq.Vector(0, 20 * i, 0))
+             for i, f in enumerate(("Arial", "Serif", "Courier", "Nimbus Sans"))]
+    return cq.Compound.makeCompound(texts)
+
+
 def mirrored_outline(cq):
     # (Two halves of an outline joined along the mirror line: both wind one way, and the
     # line out and back between them is dropped.)
@@ -300,6 +308,7 @@ CASES = [
     fuse_of_many, rounded_pocket_rim, fillet_of_a_mitre, rounded_recess_cut, filled_square_through_a_point,
     asymmetric_chamfer_of_an_extrusion, rounded_corners_between_arcs_and_lines,
     loft_through_three_unevenly_spaced_circles, vertices_of_a_face_placed_twice,
+    text_in_fonts_not_installed_and_cff_ones,
 ]
 
 
