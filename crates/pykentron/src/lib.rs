@@ -233,10 +233,22 @@ impl Handle {
         self.shape == other.shape
     }
 
-    /// A hash of the node (equal for the same node, whatever its placement).
+    /// A hash of the node and its placement (equal for the same, whatever the orientation:
+    /// as `is_same`).
     fn node_hash(&self) -> u64 {
         let n = self.shape.node;
-        (n.index as u64) << 4 | n.kind as u64
+        let node = (n.index as u64) << 4 | n.kind as u64;
+        if self.shape.placement.is_identity() {
+            return node;
+        }
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        node.hash(&mut hasher);
+        // (0.0 for -0.0, which compares equal.)
+        for x in self.shape.placement.rows().iter().flatten() {
+            (x + 0.0).to_bits().hash(&mut hasher);
+        }
+        hasher.finish() >> 1
     }
 
     // --- OCCT's names (`TopoDS_Shape`), for code written for OCP that calls them on

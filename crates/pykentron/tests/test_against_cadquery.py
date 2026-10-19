@@ -136,6 +136,15 @@ def rounded_corners_between_arcs_and_lines(cq):
     return face.fillet2D(2.0, face.Vertices())
 
 
+def vertices_of_a_face_placed_twice(cq):
+    # (One face placed at two points: told apart by their hashes, as a sketch tells apart
+    # what it selects, the vertices of both (a small cube at each).)
+    face = cq.Face.makePlane(1, 2)
+    faces = [face.moved(cq.Location(cq.Vector(x, 0, 0))) for x in (-3, 3)]
+    vertices = {hash(v): v for f in faces for v in f.Vertices()}.values()
+    return cq.Compound.makeCompound([cq.Solid.makeBox(0.1, 0.1, 0.1, v.Center()) for v in vertices])
+
+
 def mirrored_outline(cq):
     # (Two halves of an outline joined along the mirror line: both wind one way, and the
     # line out and back between them is dropped.)
@@ -280,6 +289,7 @@ CASES = [
     array_of_vectors, sweep_through_three_circles, sweep_from_circle_to_square,
     fuse_of_many, rounded_pocket_rim, fillet_of_a_mitre, rounded_recess_cut, filled_square_through_a_point,
     asymmetric_chamfer_of_an_extrusion, rounded_corners_between_arcs_and_lines,
+    vertices_of_a_face_placed_twice,
 ]
 
 
