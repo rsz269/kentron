@@ -1299,10 +1299,28 @@ fn fingerprint(surface: &Surface) -> [u64; 9] {
 /// that way, so that a point's nearest sample is on the turn it is on; else 0. The turning is measured along the middle iso-lines.
 /// Kept for the surface.
 pub(crate) fn windings(surface: &Surface) -> (usize, usize) {
-    static FOUND: std::sync::Mutex<Vec<(SurfaceKey, (usize, usize))>> = std::sync::Mutex::new(Vec::new());
+    windings_from(surface, 6.0)
+}
+
+/// [`windings`] for a surface winding round `turns` times or more; under six, only where its
+/// turns come close together (not one only bending to and fro, as a fillet along a wavy
+/// edge).
+pub(crate) fn windings_from(surface: &Surface, turns: f64) -> (usize, usize) {
+    let ((u_turn, u_close), (v_turn, v_close)) = turning(surface);
+    let winding = |turn: f64, close: bool| if turn >= turns * std::f64::consts::TAU && (close || turn >= 6.0 * std::f64::consts::TAU) { ((16.0 * turn / std::f64::consts::TAU).ceil() as usize).min(1024) } else { 0 };
+    (winding(u_turn, u_close), winding(v_turn, v_close))
+}
+
+/// How far a B-spline surface turns (in radians) along its middle iso-lines in u and in v,
+/// and whether each comes back near itself all along (most of its points within a few of
+/// its chords of a point a sixth of it along or more away: the next turn, not only its ends
+/// overlapping, as a fillet's carried past the ends of a closed edge); none for others.
+/// Kept for the surface.
+fn turning(surface: &Surface) -> ((f64, bool), (f64, bool)) {
+    static FOUND: std::sync::Mutex<Vec<(SurfaceKey, ((f64, bool), (f64, bool)))>> = std::sync::Mutex::new(Vec::new());
     use super::parametric::ParametricSurface;
     use crate::math::Vector;
-    let Surface::BSpline(_) = surface else { return (0, 0) };
+    let Surface::BSpline(_) = surface else { return ((0.0, false), (0.0, false)) };
     let key = SurfaceKey::of(surface);
     let lock = || FOUND.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     if let Some(&(_, found)) = lock().iter().find(|(k, _)| *k == key) {
@@ -1313,14 +1331,20 @@ pub(crate) fn windings(surface: &Surface) -> (usize, usize) {
         let (lx, ly) = (x.length(), y.length());
         if lx > 0.0 && ly > 0.0 { (x.dot(y) / (lx * ly)).clamp(-1.0, 1.0).acos() } else { 0.0 }
     };
-    let turned = |points: Vec<Point>| points.windows(3).map(|w| angle(w[1] - w[0], w[2] - w[1])).sum::<f64>();
+    let turned = |points: Vec<Point>| {
+        let turn = points.windows(3).map(|w| angle(w[1] - w[0], w[2] - w[1])).sum::<f64>();
+        let n = points.len();
+        let chord = points.windows(2).map(|w| w[0].distance(w[1])).sum::<f64>() / (n - 1) as f64;
+        let returns = (0..n).filter(|&i| (0..n).any(|j| i.abs_diff(j) >= n / 6 && points[i].distance(points[j]) <= 4.0 * chord)).count();
+        let close = 2 * returns >= n;
+        (turn, close)
+    };
     // (Over chords long enough that a fitted surface's ripples between its knots do not
     // add up: up to some forty turns told.)
     let (nu, nv) = (128, 128);
     let u_turn = turned((0..=nu).map(|i| surface.point(u0 + (u1 - u0) * i as f64 / nu as f64, 0.5 * (v0 + v1))).collect());
     let v_turn = turned((0..=nv).map(|j| surface.point(0.5 * (u0 + u1), v0 + (v1 - v0) * j as f64 / nv as f64)).collect());
-    let winding = |turn: f64| if turn >= 6.0 * std::f64::consts::TAU { ((16.0 * turn / std::f64::consts::TAU).ceil() as usize).min(1024) } else { 0 };
-    let found = (winding(u_turn), winding(v_turn));
+    let found = (u_turn, v_turn);
     let mut cache = lock();
     if cache.len() >= 256 {
         cache.remove(0);

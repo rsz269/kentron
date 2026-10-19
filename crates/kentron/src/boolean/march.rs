@@ -109,11 +109,16 @@ pub(super) fn trace(base: &Surface, other: &Surface, range: Range, (nu, nv): (us
     // (And the points where edges of either face meet the other, which the sections pass:
     // a section shorter than the lattice's cells, across a narrow face, is found there.)
     let lattice = seeds.len();
+    // (Those on both surfaces, which open branches may end at.)
+    let mut meetings: Vec<Both> = Vec::new();
     for &p in crossings {
         let [u, v] = geom::uv_of(base, p);
         let [s, t] = geom::uv_of(other, p);
         if range.holds(u, v) {
             seeds.push(Both { u, v, s, t, p });
+        }
+        if base.point(u, v).distance(p) <= slack && other.point(s, t).distance(p) <= slack {
+            meetings.push(Both { u, v, s, t, p });
         }
     }
     // Followed a little past the base's bounds too, where the range reaches them (as far as
@@ -282,6 +287,26 @@ pub(super) fn trace(base: &Surface, other: &Surface, range: Range, (nu, nv): (us
             }
         }
         chains.push(chain);
+    }
+    // An open branch ending just short of a point where an edge of either face meets the
+    // other, going on towards it (a section across a face far narrower than a step, whose
+    // ends steps find only roughly): carried on to that point, unless it ends at one.
+    for (points, closed) in chains.iter_mut() {
+        if *closed || points.len() < 2 {
+            continue;
+        }
+        for at_end in [false, true] {
+            let n = points.len();
+            let (end, before) = if at_end { (points[n - 1], points[n - 2]) } else { (points[0], points[1]) };
+            if meetings.iter().any(|m| m.p.distance(end.p) <= slack) {
+                continue;
+            }
+            let on = end.p - before.p;
+            let next = meetings.iter().filter(|m| (m.p - end.p).dot(on) > 0.0 && m.p.distance(end.p) <= 0.1 * leaf).min_by(|a, b| a.p.distance(end.p).total_cmp(&b.p.distance(end.p)));
+            if let Some(&m) = next {
+                if at_end { points.push(m) } else { points.insert(0, m) }
+            }
+        }
     }
     Some(
         chains
@@ -684,9 +709,12 @@ impl Tracer<'_> {
                 h *= 0.5;
                 continue;
             }
-            // Out of the ranges: the point where it leaves them ends the branch.
+            // Out of the ranges: the point where it leaves them ends the branch. (Only one
+            // ahead: from a point on a bound of a range across which the section is far
+            // shorter than a step, as a narrow face's, the step lands far off and the bound
+            // found may be the one behind.)
             if !self.range.holds(next.u, next.v) || !self.bounds.holds(next.s, next.t) {
-                if let Some(end) = self.exit(&at, &next, dir, h) {
+                if let Some(end) = self.exit(&at, &next, dir, h).filter(|end| (end.p - at.p).dot(dir) >= 0.0) {
                     out.push(end);
                 }
                 return (out, false);

@@ -352,6 +352,37 @@ fn parameters_near(surface: &Surface, p: Point, near: Option<(f64, f64)>) -> Opt
     Some((best.0, best.1))
 }
 
+/// The parameters on `surface` of `curve`'s point at `first`, the start of a curve followed
+/// along it. Where the whole surface searched gives a foot well off it (a nearest point only
+/// locally, as on a surface winding round many times), from a later sample's foot that is
+/// nearer, followed back along the curve.
+fn first_foot(curve: &Curve, surface: &Surface, first: f64, last: f64) -> Option<(f64, f64)> {
+    let p = curve.point(first);
+    let start = parameters_near(surface, p, None)?;
+    let gap = |(u, v): (f64, f64), q: Point| surface.point(u, v).distance(q);
+    let off = gap(start, p);
+    let size = p.distance(curve.point(0.5 * (first + last))) + curve.point(0.5 * (first + last)).distance(curve.point(last));
+    if !(off > 1e-3 * size) {
+        return Some(start);
+    }
+    const SAMPLES: usize = 16;
+    const BACK: usize = 8;
+    for k in 1..=SAMPLES {
+        let t = first + (last - first) * k as f64 / SAMPLES as f64;
+        let q = curve.point(t);
+        let Some(found) = parameters_near(surface, q, None) else { continue };
+        if !(gap(found, q) < 0.1 * off) {
+            continue;
+        }
+        let mut uv = found;
+        for j in (0..BACK * k).rev() {
+            uv = parameters_near(surface, curve.point(first + (t - first) * j as f64 / (BACK * k) as f64), Some(uv))?;
+        }
+        return Some(if gap(uv, p) < off { uv } else { start });
+    }
+    Some(start)
+}
+
 /// Samples of a curve in a surface's parameters where they lie on the edge of a closed (not
 /// periodic) surface: put on the side of it their neighbours are on.
 fn sides_of_seams(surface: &Surface, points: &mut [Point2]) {
@@ -462,7 +493,11 @@ pub fn pcurve_on_range_within(curve: &Curve, surface: &Surface, first: f64, last
                 false if i % 2 == 0 => raw[i / 2],
                 _ => {
                     let p = if raw.is_empty() { curve.point(t) } else { middles[i / 2] };
-                    let Some((u, v)) = parameters_near(surface, p, next.last().map(|q| (q.x, q.y))) else {
+                    let found = match next.last() {
+                        Some(q) => parameters_near(surface, p, Some((q.x, q.y))),
+                        None => first_foot(curve, surface, first, last),
+                    };
+                    let Some((u, v)) = found else {
                         return first_reached(reached);
                     };
                     let off = surface.point(u, v).distance(p);
@@ -542,7 +577,7 @@ pub fn polyline_pcurve_on_range(curve: &Curve, surface: &Surface, first: f64, la
         _ => false,
     };
     let u_period = surface.u_period();
-    let previous = std::cell::Cell::new(None);
+    let previous = std::cell::Cell::new(Some(first_foot(curve, surface, first, last)?));
     // (None where the curve itself lies off the surface by more than the tolerance: no
     // chords through its feet come within it.)
     let uv = |t: f64| -> Option<Point2> {

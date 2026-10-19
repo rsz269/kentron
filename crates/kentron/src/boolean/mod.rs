@@ -1035,14 +1035,27 @@ mod tests {
     /// are on) and split where it crosses the cylinder's seam, each turn.
     #[test]
     fn a_cylinder_and_a_strip_winding_round_it() {
+        cylinder_and_winding_strip(20.0, 2.2);
+    }
+
+    /// As [`a_cylinder_and_a_strip_winding_round_it`], winding five times (a short thread's
+    /// flank: its turns as close, though fewer) from just inside the cylinder.
+    #[test]
+    fn a_cylinder_and_a_strip_winding_round_it_a_few_times() {
+        cylinder_and_winding_strip(5.0, 2.499);
+    }
+
+    /// A cylinder of radius 2.5 and a strip winding `turns` times round it from radius `inner`
+    /// to 3.
+    fn cylinder_and_winding_strip(turns: f64, inner: f64) {
         use crate::geometry::surface::{BSplineSurface, KnotVector, Surface};
-        let (turns, n, r) = (20.0, 64, 2.5);
+        let (n, r) = (64, 2.5);
         let params: Vec<f64> = (0..n).map(|i| i as f64 / (n - 1) as f64).collect();
         let helix = |radius: f64| {
             let points: Vec<Point> = params.iter().map(|&t| Point::new(radius * (2.0 * PI * turns * t).cos(), radius * (2.0 * PI * turns * t).sin(), turns * t)).collect();
             crate::geometry::fit::interpolate_with_parameters(&points, &params).unwrap()
         };
-        let (inner, outer) = (helix(2.2), helix(3.0));
+        let (inner, outer) = (helix(inner), helix(3.0));
         let poles: Vec<Vec<Point>> = inner.poles().iter().zip(outer.poles()).map(|(&a, &b)| vec![a, b]).collect();
         let u = KnotVector::new(inner.knots().to_vec(), inner.multiplicities().to_vec(), inner.degree());
         let v = KnotVector::new(vec![0.0, 1.0], vec![2, 2], 1);
@@ -1077,7 +1090,67 @@ mod tests {
         let edges = model.unique_subshapes(cut, NodeKind::Edge);
         let length = properties::length(&model, cut).mass;
         assert!((length - fine).abs() <= 5e-4 * fine, "length {length} != {fine}");
-        assert!(edges.len() <= 2 * turns as usize + 2, "{} edges", edges.len());
+        // (Split at each of its crossings of the cylinder's seam, once a turn.)
+        assert!(edges.len() > turns as usize && edges.len() <= 2 * turns as usize + 2, "{} edges", edges.len());
+    }
+
+    /// A tube (radii 3 and 4, 4.875 high) and a thread on it (as CadQuery's contrib example
+    /// makes one: four faces ruled between helices, two turns, fading out to its root at both
+    /// ends), sunk 0.001 into the tube's outer wall. Where the thread fades out its flanks
+    /// meet the wall along curves ending on its crest, which there crosses the wall in a
+    /// section 0.0002 long, between points where the crest's edges meet it: the union is
+    /// whole, nearly the sum of the two.
+    #[test]
+    fn a_tube_and_a_thread_fading_out_into_its_wall() {
+        use crate::geometry::curve::Curve;
+        let (radius, pitch, height, d, depth, aspect, frac) = (4.0 - 1e-3, 2.0, 4.0, 0.5, 0.5, 10.0, 0.1);
+        let helix = |r_eps: f64, d: f64| {
+            move |t: f64| {
+                let (z, r) = if t > frac && t < 1.0 - frac {
+                    (height * t + d, radius + r_eps)
+                } else if t <= frac {
+                    (height * t + d * (PI / 2.0 * t / frac).sin(), radius + r_eps * (PI / 2.0 * t / frac).sin())
+                } else {
+                    (height * t - d * (2.0 * PI - PI / 2.0 * (1.0 - t) / frac).sin(), radius - r_eps * (2.0 * PI - PI / 2.0 * (1.0 - t) / frac).sin())
+                };
+                let a = 2.0 * PI * height / pitch * t;
+                Point::new(-r * a.sin(), r * a.cos(), z)
+            }
+        };
+        let mut model = Model::new();
+        let n = 200;
+        let params: Vec<f64> = (0..=n).map(|i| i as f64 / n as f64).collect();
+        let mut wire = |model: &mut Model, f: &dyn Fn(f64) -> Point| {
+            let points: Vec<Point> = params.iter().map(|&t| f(t)).collect();
+            let curve = crate::geometry::fit::interpolate_with_parameters(&points, &params).unwrap();
+            let edge = crate::make::edge_from_curve(model, Curve::BSpline(curve)).unwrap();
+            crate::make::wire(model, &[edge]).unwrap()
+        };
+        let (e1_bottom, e1_top) = (wire(&mut model, &helix(0.0, -d)), wire(&mut model, &helix(0.0, d)));
+        let (e2_bottom, e2_top) = (wire(&mut model, &helix(depth, -d / aspect)), wire(&mut model, &helix(depth, d / aspect)));
+        let ruled = crate::loft::LoftOptions { ruled: true, ..Default::default() };
+        let mut faces = Vec::new();
+        for pair in [[e1_bottom, e1_top], [e2_bottom, e2_top], [e1_bottom, e2_bottom], [e1_top, e2_top]] {
+            let shell = crate::loft::loft(&mut model, &pair, &ruled).unwrap().shape;
+            faces.extend(model.unique_subshapes(shell, NodeKind::Face));
+        }
+        let shell = crate::sew::sew(&mut model, &faces, &Default::default()).unwrap();
+        let shell = model.unique_subshapes(shell, NodeKind::Shell)[0];
+        let mut thread = model.new_empty(NodeKind::Solid);
+        model.add(thread, shell).unwrap();
+        if properties::volume(&model, thread).mass < 0.0 {
+            thread = model.new_empty(NodeKind::Solid);
+            model.add(thread, shell.reversed()).unwrap();
+        }
+        let outer = cylinder(&mut model, (0.0, 0.0, -d), Direction::Z, 4.0, height + 1.75 * d);
+        let inner = cylinder(&mut model, (0.0, 0.0, -d), Direction::Z, 3.0, height + 1.75 * d);
+        let tube = difference(&mut model, outer, inner).unwrap();
+        let result = union(&mut model, tube, thread).unwrap();
+        let report = validity::check(&model, result);
+        assert!(report.is_valid(), "{report:?}");
+        let sum = properties::volume(&model, tube).mass + properties::volume(&model, thread).mass;
+        let volume = properties::volume(&model, result).mass;
+        assert!(volume < sum && volume > sum - 0.1, "{volume} against {sum}");
     }
 
     #[test]

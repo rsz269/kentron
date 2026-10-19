@@ -424,8 +424,11 @@ fn aligned_pcurve(curve: &Curve, surface: &crate::geometry::surface::Surface, fi
                 a.distance(curve.point(0.5 * (first + last))) + curve.point(0.5 * (first + last)).distance(b)
             };
             let loose = vec![1e-3 * size.max(1e-3), 1e-2 * size.max(1e-3)];
+            // (Then a polyline a little looser, where the curve turns too sharply in (u, v) for
+            // a smooth fit, as where a face narrows to nothing, and strays a little.)
             project::pcurve_on_range_within(curve, surface, first, last, &[1e-8, 1e-6, 1e-4])
                 .or_else(|| project::polyline_pcurve_on_range(curve, surface, first, last, 1e-7))
+                .or_else(|| project::polyline_pcurve_on_range(curve, surface, first, last, 1e-5))
                 .or_else(|| project::pcurve_on_range_within(curve, surface, first, last, &loose))
                 .map(Curve2::BSpline)
                 .ok_or_else(|| Error::InvalidInput("no pcurve for a section edge".into()))?

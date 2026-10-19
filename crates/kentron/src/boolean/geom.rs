@@ -240,11 +240,12 @@ static SAMPLES: std::sync::Mutex<Vec<(crate::geometry::extrema::SurfaceKey, std:
 /// The steps of a surface's sample grid along u and v.
 fn grid_steps(surface: &Surface) -> (usize, usize) {
     // A few samples per knot span and degree (a bilinear patch needs few); more on one
-    // winding round many times ([`crate::geometry::extrema::windings`]).
+    // winding round twice or more, its turns close together
+    // ([`crate::geometry::extrema::windings_from`]).
     let by = |spans: usize, degree: usize| (4 * spans * degree.max(1)).clamp(4, 32);
     match surface {
         Surface::BSpline(b) => {
-            let (wu, wv) = crate::geometry::extrema::windings(surface);
+            let (wu, wv) = crate::geometry::extrema::windings_from(surface, 2.0);
             (by(b.u_knots().len() - 1, b.u_degree()).max(wu), by(b.v_knots().len() - 1, b.v_degree()).max(wv))
         }
         Surface::Bezier(b) => (by(1, b.u_degree()), by(1, b.v_degree())),
@@ -253,10 +254,11 @@ fn grid_steps(surface: &Surface) -> (usize, usize) {
 }
 
 
-/// The samples of a surface winding round many times ([`crate::geometry::extrema::windings`])
-/// along its more winding direction; 0 for others.
+/// The samples of a surface winding round twice or more, its turns close together
+/// ([`crate::geometry::extrema::windings_from`]), along its more winding direction; 0 for
+/// others.
 pub(super) fn winding_samples(surface: &Surface) -> usize {
-    let (u, v) = crate::geometry::extrema::windings(surface);
+    let (u, v) = crate::geometry::extrema::windings_from(surface, 2.0);
     u.max(v)
 }
 
