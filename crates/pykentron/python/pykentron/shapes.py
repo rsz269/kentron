@@ -591,6 +591,10 @@ class Shape:
         if hasattr(f, "write"):
             f.write(self.__getstate__()[0])
             return True
+        from .exporters import _in_a_directory
+
+        if not _in_a_directory(str(f)):
+            return False
         native.write_brep(self.wrapped, str(f))
         return True
 
@@ -611,6 +615,8 @@ class Shape:
     def exportStl(self, fileName: str, tolerance: float = 1e-3, angularTolerance: float = 0.1, ascii: bool = False, **kwargs):
         from . import exporters
 
+        if not exporters._in_a_directory(str(fileName)):
+            return False
         exporters.export(self, fileName, "STL", tolerance=tolerance, angularTolerance=angularTolerance, opt={"ascii": ascii})
         return True
 

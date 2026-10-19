@@ -61,6 +61,11 @@ def _mm_per(unit: str) -> float:
         raise ValueError(f"unknown length unit {unit}") from None
 
 
+def _in_a_directory(fname: str) -> bool:
+    """Whether the directory a file is to be written to exists."""
+    return Path(fname).parent.is_dir()
+
+
 def export(w, fname, exportType: Optional[str] = None, tolerance: float = 0.1, angularTolerance: float = 0.1, unit: str = "MM", outputUnit=None, opt=None, **kwargs) -> None:
     """Writes a shape, or a workplane's shapes, to a file of a type (or the file's
     extension's)."""
@@ -68,6 +73,10 @@ def export(w, fname, exportType: Optional[str] = None, tolerance: float = 0.1, a
     shape = _shape_of(w)
     kind = _type_of(fname, exportType)
     fname = str(fname)
+    # (As CadQuery's writers do, BRep, STEP and STL files in a directory that does not exist
+    # are quietly not written.)
+    if kind in ("BREP", "STEP", "STL") and not _in_a_directory(fname):
+        return
     if kind == "BREP":
         shape.exportBrep(fname)
     elif kind == "STEP":
