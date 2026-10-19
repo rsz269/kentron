@@ -507,32 +507,53 @@ impl Draw {
             k => return Err(DrawError::Failed(format!("nearest: unknown type {k}"))),
         };
         let v = self.numbers(&args[3..])?;
-        let props = |model: &Model, s: Shape| match kind {
-            NodeKind::Edge | NodeKind::Wire => kentron::properties::length(model, s),
-            NodeKind::Face | NodeKind::Shell => kentron::properties::area(model, s),
-            _ => kentron::properties::volume(model, s),
-        };
-        let measure = |model: &Model, s: Shape| if kind == NodeKind::Vertex { 0.0 } else { props(model, s).mass };
+        let subshapes = self.measured(shape, kind);
+        let s = self.nearest_among(&subshapes, kind, &v).map_err(|d| match d {
+            Some(d) => DrawError::Failed(format!("nearest: no single {k} of {} at ({}, {}, {}); the closest is {d} away", args[1], v[0], v[1], v[2], k = args[2])),
+            None => DrawError::Failed(format!("nearest: {} has no {}", args[1], args[2])),
+        })?;
+        self.set(args[0], DrawObject::Shape(s));
+        Ok(args[0].to_string())
+    }
+
+    /// The sub-shapes of `shape` of `kind`, each with its centroid (of its length, area or
+    /// volume, or its point) and its length, area or volume (0 for a vertex).
+    fn measured(&self, shape: Shape, kind: kentron::topology::NodeKind) -> Vec<(Shape, kentron::math::Point, f64)> {
+        use kentron::topology::NodeKind;
+        self.model
+            .unique_subshapes(shape, kind)
+            .into_iter()
+            .map(|s| {
+                let m = match kind {
+                    NodeKind::Vertex => return (s, self.model.point(s), 0.0),
+                    NodeKind::Edge | NodeKind::Wire => kentron::properties::length(&self.model, s),
+                    NodeKind::Face | NodeKind::Shell => kentron::properties::area(&self.model, s),
+                    _ => kentron::properties::volume(&self.model, s),
+                };
+                (s, m.center_of_mass, m.mass)
+            })
+            .collect()
+    }
+
+    /// [`Draw::nearest`]'s choice among `subshapes` (as [`Draw::measured`] gives them) for
+    /// `v` (x, y, z and maybe the measure): else how far the closest is, if any.
+    fn nearest_among(&self, subshapes: &[(Shape, kentron::math::Point, f64)], kind: kentron::topology::NodeKind, v: &[f64]) -> Result<Shape, Option<f64>> {
         let target = kentron::math::Point::new(v[0], v[1], v[2]);
-        let centroid = |model: &Model, s: Shape| if kind == NodeKind::Vertex { model.point(s) } else { props(model, s).center_of_mass };
         let tolerance = 1e-5 * (1.0 + (target - kentron::math::Point::ORIGIN).length());
-        let mut found: Vec<(f64, Shape)> = self.model.unique_subshapes(shape, kind).into_iter().map(|s| (centroid(&self.model, s).distance(target), s)).collect();
+        let mut found: Vec<(f64, Shape)> = subshapes.iter().map(|&(s, at, _)| (at.distance(target), s)).collect();
         found.sort_by(|a, b| a.0.total_cmp(&b.0));
         if let Some(&m) = v.get(3) {
             // Among those at the centroid, by length or area.
-            let close: Vec<Shape> = found.iter().filter(|f| f.0 <= tolerance).map(|f| f.1).collect();
+            let close: Vec<&(Shape, kentron::math::Point, f64)> = subshapes.iter().filter(|(_, at, _)| at.distance(target) <= tolerance).collect();
             if close.len() > 1 {
-                let fits: Vec<Shape> = close.into_iter().filter(|&s| (measure(&self.model, s) - m).abs() <= 1e-5 * (1.0 + m.abs())).collect();
-                found = fits.into_iter().map(|s| (0.0, s)).collect();
+                let measure = |x: &(Shape, kentron::math::Point, f64)| if kind == kentron::topology::NodeKind::Vertex { 0.0 } else { x.2 };
+                found = close.into_iter().filter(|x| (measure(x) - m).abs() <= 1e-5 * (1.0 + m.abs())).map(|x| (0.0, x.0)).collect();
             }
         }
         match found[..] {
-            [(d, s), ..] if d <= tolerance && found.get(1).is_none_or(|n| n.0 > tolerance) => {
-                self.set(args[0], DrawObject::Shape(s));
-                Ok(args[0].to_string())
-            }
-            [(d, _), ..] => Err(DrawError::Failed(format!("nearest: no single {k} of {} at ({}, {}, {}); the closest is {d} away", args[1], v[0], v[1], v[2], k = args[2]))),
-            [] => Err(DrawError::Failed(format!("nearest: {} has no {}", args[1], args[2]))),
+            [(d, s), ..] if d <= tolerance && found.get(1).is_none_or(|n| n.0 > tolerance) => Ok(s),
+            [(d, _), ..] => Err(Some(d)),
+            [] => Err(None),
         }
     }
 
@@ -545,28 +566,35 @@ impl Draw {
         use kentron::topology::NodeKind;
         let mut taken: std::collections::HashSet<kentron::topology::NodeId> = Default::default();
         let mut missed = Vec::new();
+        let Ok(whole) = self.shape_var(shape) else { return };
+        // (Each kind's sub-shapes with their centres and sizes, measured once for all the
+        // names: edges' lengths and faces' areas are integrals.)
+        let mut measured: std::collections::HashMap<NodeKind, Vec<(Shape, kentron::math::Point, f64)>> = Default::default();
         for (var, kind, v) in wanted {
-            let values = v.map(|x| x.to_string());
-            let mut argv = vec![var.as_str(), shape, kind.as_str()];
-            argv.extend(values.iter().map(|x| x.as_str()));
-            if kind == "V" {
-                argv.pop();
-            }
-            match self.nearest(&argv) {
-                Ok(_) => {
-                    if let Ok(s) = self.shape_var(var) {
-                        taken.insert(s.node);
-                    }
+            let kind_of = match kind.as_str() {
+                "E" => NodeKind::Edge,
+                "F" => NodeKind::Face,
+                "V" => NodeKind::Vertex,
+                "W" => NodeKind::Wire,
+                "SH" => NodeKind::Shell,
+                "SO" => NodeKind::Solid,
+                _ => {
+                    missed.push((var, kind, v));
+                    continue;
+                }
+            };
+            let subshapes = measured.entry(kind_of).or_insert_with(|| self.measured(whole, kind_of));
+            let values = if kind == "V" { &v[..3] } else { &v[..] };
+            match self.nearest_among(subshapes, kind_of, values) {
+                Ok(s) => {
+                    self.set(var, DrawObject::Shape(s));
+                    taken.insert(s.node);
                 }
                 Err(_) => missed.push((var, kind, v)),
             }
         }
-        let Ok(whole) = self.shape_var(shape) else { return };
         // (Each missed name with its nearest free sub-shape and how near, nearest first.)
         let mut pairs: Vec<(f64, &String, Shape)> = Vec::new();
-        // (Each kind's sub-shapes with their centres and sizes, measured once for all the
-        // names: edges' lengths and faces' areas are integrals.)
-        let mut measured: std::collections::HashMap<NodeKind, Vec<(Shape, kentron::math::Point, f64)>> = Default::default();
         for (var, kind, v) in missed {
             let kind = match kind.as_str() {
                 "E" => NodeKind::Edge,
@@ -575,19 +603,13 @@ impl Draw {
                 _ => continue,
             };
             let target = kentron::math::Point::new(v[0], v[1], v[2]);
-            let subshapes = measured.entry(kind).or_insert_with(|| {
-                self.model
-                    .unique_subshapes(whole, kind)
-                    .into_iter()
-                    .map(|s| match kind {
-                        NodeKind::Vertex => (s, self.model.point(s), 0.0),
-                        NodeKind::Edge => { let m = kentron::properties::length(&self.model, s); (s, m.center_of_mass, 0.25 * m.mass) }
-                        _ => { let m = kentron::properties::area(&self.model, s); (s, m.center_of_mass, 0.25 * m.mass.sqrt()) }
-                    })
-                    .collect()
-            });
-            for &(s, at, size) in subshapes.iter() {
-                let size = if kind == NodeKind::Vertex { 1e-3 * (1.0 + (target - kentron::math::Point::ORIGIN).length()) } else { size };
+            let subshapes = measured.entry(kind).or_insert_with(|| self.measured(whole, kind));
+            for &(s, at, m) in subshapes.iter() {
+                let size = match kind {
+                    NodeKind::Vertex => 1e-3 * (1.0 + (target - kentron::math::Point::ORIGIN).length()),
+                    NodeKind::Edge => 0.25 * m,
+                    _ => 0.25 * m.sqrt(),
+                };
                 let d = at.distance(target);
                 if d <= size {
                     pairs.push((d, var, s));
