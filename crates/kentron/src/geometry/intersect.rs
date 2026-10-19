@@ -906,6 +906,14 @@ fn quadric_value(q: &[f64; 10], p: Point) -> f64 {
         + q[9]
 }
 
+/// The size of the terms [`quadric_value`] sums at `p`, which its rounding goes with.
+fn quadric_size(q: &[f64; 10], p: Point) -> f64 {
+    let (x, y, z) = (p.x, p.y, p.z);
+    (q[0] * x * x).abs() + (q[1] * y * y).abs() + (q[2] * z * z).abs() + 2.0 * ((q[3] * x * y).abs() + (q[4] * x * z).abs() + (q[5] * y * z).abs())
+        + 2.0 * ((q[6] * x).abs() + (q[7] * y).abs() + (q[8] * z).abs())
+        + q[9].abs()
+}
+
 /// The implicit equation of an elementary quadric surface in world coordinates.
 fn quadric_of(surface: &Surface) -> Option<[f64; 10]> {
     // From a symmetric matrix M, a vector g and a constant: pᵀMp + 2g·p + c.
@@ -962,7 +970,12 @@ impl QuadricCurve {
         // A plane is met along a generator linearly: the rounding left in `a` is noise (where
         // the generator runs nearly along the plane it can outweigh `b`).
         let planar = self.quadric[..6].iter().all(|&c| c == 0.0);
-        (if planar { 0.0 } else { 0.5 * (plus + minus) - zero }, 0.5 * (plus - minus), zero)
+        // (So is an `a` within the rounding of the quadric's terms: a generator parallel to
+        // one of the other quadric's, as of two cones with opposite half-angles, whose terms
+        // far from the origin cancel to small values.)
+        let a = 0.5 * (plus + minus) - zero;
+        let rounding = 8.0 * f64::EPSILON * [-1.0, 0.0, 1.0].map(|v| quadric_size(&self.quadric, self.base.point(angle, v))).into_iter().fold(0.0, f64::max);
+        (if planar || a.abs() <= rounding { 0.0 } else { a }, 0.5 * (plus - minus), zero)
     }
 
     /// The branch's generator parameter at `angle`; `None` where it does not exist.
