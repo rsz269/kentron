@@ -21,7 +21,7 @@ use crate::error::{Error, Result};
 use crate::geometry::curve2::BSplineCurve2;
 use crate::geometry::curve::Curve;
 use crate::geometry::curve2::Curve2;
-use crate::geometry::extrema::nearest_on_curve;
+use crate::geometry::extrema::{nearest_on_curve, NearestOnCurve};
 use crate::geometry::fit;
 use crate::geometry::surface::Surface;
 use crate::geometry::{ParametricCurve, ParametricSurface};
@@ -551,7 +551,8 @@ fn transfer_with(curve: &Curve, range: (f64, f64), other: &Curve, section: &Sect
     let N = n;
     let ts: Vec<f64> = (0..=N).map(|i| lerp(range.0, range.1, i as f64 / N as f64)).collect();
     let (lo, hi) = (section.first.min(section.last), section.first.max(section.last));
-    let mut ss: Vec<f64> = ts.iter().map(|&t| nearest_on_curve(curve.point(t), other, lo, hi).parameter).collect();
+    let onto = NearestOnCurve::new(other, lo, hi);
+    let mut ss: Vec<f64> = ts.iter().map(|&t| onto.nearest(curve.point(t)).parameter).collect();
     (ss[0], ss[N]) = if section.same { (section.first, section.last) } else { (section.last, section.first) };
     // Keep the parameters monotonic (projections may wobble where curves are close to
     // tangent to each other's normals).

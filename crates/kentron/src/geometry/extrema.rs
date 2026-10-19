@@ -1461,46 +1461,75 @@ fn grid_points(surface: &Surface, (u0, u1, v0, v1): (f64, f64, f64, f64), nu: us
 /// The point of `curve` over `[first, last]` closest to `p` (its ends included).
 #[doc(alias = "GeomAPI_ProjectPointOnCurve::LowerDistance")]
 pub fn nearest_on_curve(p: Point, curve: &Curve, first: f64, last: f64) -> Projection {
-    use crate::geometry::ParametricCurve;
-    let (lo, hi) = (first.min(last), first.max(last));
-    // Over a whole period of a periodic curve the parameter wraps round (so that a point
-    // just before the curve's origin is not stuck at the range's start).
-    let period = curve.period().filter(|p| hi - lo >= p - 1e-12);
-    let clamp = |t: f64| match period {
-        Some(p) => lo + (t - lo).rem_euclid(p),
-        None => t.clamp(lo, hi),
-    };
-    // Coarse samples, then Newton steps on (C(t) - p)·C'(t) = 0 from the best.
-    let n = if matches!(curve, Curve::Line(_)) { 1 } else { 64 };
-    let mut best = (lo, f64::INFINITY);
-    for i in 0..=n {
-        let t = lo + (hi - lo) * i as f64 / n as f64;
+    NearestOnCurve::new(curve, first, last).nearest(p)
+}
+
+/// [`nearest_on_curve`] for many points onto one curve over one range: its coarse samples
+/// taken once.
+pub struct NearestOnCurve<'a> {
+    curve: &'a Curve,
+    lo: f64,
+    hi: f64,
+    period: Option<f64>,
+    samples: Vec<(f64, Point)>,
+}
+
+impl<'a> NearestOnCurve<'a> {
+    pub fn new(curve: &'a Curve, first: f64, last: f64) -> NearestOnCurve<'a> {
+        use crate::geometry::ParametricCurve;
+        let (lo, hi) = (first.min(last), first.max(last));
+        // Over a whole period of a periodic curve the parameter wraps round (so that a point
+        // just before the curve's origin is not stuck at the range's start).
+        let period = curve.period().filter(|p| hi - lo >= p - 1e-12);
+        // Coarse samples, then (for each point) Newton steps on (C(t) - p)·C'(t) = 0 from the
+        // best.
+        let n = if matches!(curve, Curve::Line(_)) { 1 } else { 64 };
+        let samples = (0..=n)
+            .map(|i| {
+                let t = lo + (hi - lo) * i as f64 / n as f64;
+                (t, curve.point(t))
+            })
+            .collect();
+        NearestOnCurve { curve, lo, hi, period, samples }
+    }
+
+    /// The point of the curve closest to `p`.
+    pub fn nearest(&self, p: Point) -> Projection {
+        use crate::geometry::ParametricCurve;
+        let (curve, lo, hi, period) = (self.curve, self.lo, self.hi, self.period);
+        let clamp = |t: f64| match period {
+            Some(p) => lo + (t - lo).rem_euclid(p),
+            None => t.clamp(lo, hi),
+        };
+        let mut best = (lo, f64::INFINITY);
+        for &(t, q) in &self.samples {
+            let d = q.distance(p);
+            if d < best.1 {
+                best = (t, d);
+            }
+        }
+        let mut t = best.0;
+        for _ in 0..30 {
+            let (c, d1, d2) = curve.d2(t);
+            let f = (c - p).dot(d1);
+            let df = d1.dot(d1) + (c - p).dot(d2);
+            if df.abs() <= 1e-300 {
+                break;
+            }
+            let step = t - f / df;
+            let next = if period.is_some() { step } else { clamp(step) };
+            let done = (next - t).abs() <= 1e-15 * (1.0 + t.abs());
+            t = next;
+            if done {
+                break;
+            }
+        }
+        let t = clamp(t);
         let d = curve.point(t).distance(p);
-        if d < best.1 {
-            best = (t, d);
-        }
+        let t = if d < best.1 { t } else { best.0 };
+        let point = curve.point(t);
+        Projection { parameter: t, point, distance: point.distance(p) }
     }
-    let mut t = best.0;
-    for _ in 0..30 {
-        let (c, d1, d2) = curve.d2(t);
-        let f = (c - p).dot(d1);
-        let df = d1.dot(d1) + (c - p).dot(d2);
-        if df.abs() <= 1e-300 {
-            break;
-        }
-        let step = t - f / df;
-        let next = if period.is_some() { step } else { clamp(step) };
-        let done = (next - t).abs() <= 1e-15 * (1.0 + t.abs());
-        t = next;
-        if done {
-            break;
-        }
-    }
-    let t = clamp(t);
-    let d = curve.point(t).distance(p);
-    let t = if d < best.1 { t } else { best.0 };
-    let point = curve.point(t);
-    Projection { parameter: t, point, distance: point.distance(p) }
 }
 
 #[cfg(test)]
