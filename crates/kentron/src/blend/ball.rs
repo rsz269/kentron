@@ -24,6 +24,8 @@ pub(super) use network::{blend_network, fillet_network};
 /// Sections along the edge, and past each of its ends.
 const SECTIONS: usize = 48;
 const PAST_END: usize = 8;
+/// Runs of sections over which the fillet's crossing with an end face is looked for at once.
+const RUNS: usize = 32;
 /// Samples across the fillet where it meets an end face.
 const ACROSS: usize = 16;
 /// How near (a fraction of the fillet's width) a contact meeting an edge at the fillet's
@@ -1222,41 +1224,58 @@ fn end_cut_on(
         }
         // (Each section's distance found once, in order along the edge: the projections onto
         // the end face each start from the foot before, as the crossing's refinement then
-        // does from its bracket's end.)
+        // does from its bracket's end. Over runs of sections at once where the distances at a
+        // run's ends are too far from the surface for the fillet to cross it in between: a
+        // distance changes no faster than the point moves.)
+        let step = ((order.len() - 1) / RUNS).max(1);
+        let mut at = 0;
         let mut previous: Option<f64> = None;
-        for w in order.windows(2) {
-            let da = match previous {
+        'scan: while at + 1 < order.len() {
+            let to = (at + step).min(order.len() - 1);
+            let first = match previous {
                 Some(x) => x,
-                None => d(w[0])?,
+                None => d(order[at])?,
             };
-            let db = d(w[1])?;
-            previous = Some(db);
-            if (da <= 0.0) != (db <= 0.0) && (da <= 0.0) == outwards {
-                let (mut lo, mut hi) = (w[0], w[1]);
-                // (Halved until the halves meet in the last bits: no further step moves.)
-                for _ in 0..80 {
-                    let m = 0.5 * (lo + hi);
-                    if m == lo || m == hi {
-                        break;
-                    }
-                    if (d(m)? <= 0.0) == (da <= 0.0) {
-                        lo = m;
-                    } else {
-                        hi = m;
-                    }
-                }
-                let v = 0.5 * (lo + hi);
-                // (Outwards the first from the middle; the other way, the one nearest the
-                // vertex.)
-                if outwards {
-                    best = Some((0.0, v));
-                    break;
-                }
-                let gap = fillet.point(u, v).distance(vertex_point);
-                if best.is_none_or(|(g, _)| gap < g) {
-                    best = Some((gap, v));
-                }
+            let last = d(order[to])?;
+            previous = Some(last);
+            let reach = 2.0 * fillet.point(u, order[at]).distance(fillet.point(u, order[to]));
+            if to > at + 1 && (first <= 0.0) == (last <= 0.0) && first.abs() + last.abs() > reach {
+                at = to;
+                continue;
             }
+            let mut da = first;
+            for k in at..to {
+                let w = [order[k], order[k + 1]];
+                let db = if k + 1 == to { last } else { d(w[1])? };
+                if (da <= 0.0) != (db <= 0.0) && (da <= 0.0) == outwards {
+                    let (mut lo, mut hi) = (w[0], w[1]);
+                    // (Halved until the halves meet in the last bits: no further step moves.)
+                    for _ in 0..80 {
+                        let m = 0.5 * (lo + hi);
+                        if m == lo || m == hi {
+                            break;
+                        }
+                        if (d(m)? <= 0.0) == (da <= 0.0) {
+                            lo = m;
+                        } else {
+                            hi = m;
+                        }
+                    }
+                    let v = 0.5 * (lo + hi);
+                    // (Outwards the first from the middle; the other way, the one nearest the
+                    // vertex.)
+                    if outwards {
+                        best = Some((0.0, v));
+                        break 'scan;
+                    }
+                    let gap = fillet.point(u, v).distance(vertex_point);
+                    if best.is_none_or(|(g, _)| gap < g) {
+                        best = Some((gap, v));
+                    }
+                }
+                da = db;
+            }
+            at = to;
         }
         }
         best.map(|(_, v)| (u, v)).ok_or_else(|| Error::InvalidInput(NOT_REACHED.into()))
@@ -1390,8 +1409,15 @@ fn end_cut_on(
     let piece = |side: &Side, lo: f64, hi: f64| -> Result<Piece> {
         let mut across = ACROSS;
         let mut previous_worst = f64::INFINITY;
+        let mut before: Vec<(f64, f64)> = Vec::new();
         let (uv, curve, on_fillet) = loop {
-            let uv: Vec<(f64, f64)> = (0..=across).map(|j| crossing_on(side, lo + (hi - lo) * j as f64 / across as f64)).collect::<Result<_>>()?;
+            // (Those of the samples before, every other one now, kept.)
+            let uv: Vec<(f64, f64)> = (0..=across)
+                .map(|j| match before.get(j / 2) {
+                    Some(&x) if j % 2 == 0 => Ok(x),
+                    _ => crossing_on(side, lo + (hi - lo) * j as f64 / across as f64),
+                })
+                .collect::<Result<_>>()?;
             let params: Vec<f64> = (0..=across).map(|j| j as f64 / across as f64).collect();
             let points: Vec<Point> = uv.iter().map(|&(u, v)| fillet.point(u, v)).collect();
             let curve = fit::interpolate_with_parameters(&points, &params)?;
@@ -1408,6 +1434,7 @@ fn end_cut_on(
                 break (uv, curve, on_fillet);
             }
             previous_worst = worst;
+            before = uv;
             across *= 2;
         };
         let params: Vec<f64> = (0..uv.len()).map(|j| j as f64 / (uv.len() - 1) as f64).collect();

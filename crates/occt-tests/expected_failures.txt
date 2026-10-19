@@ -928,8 +928,6 @@ tests/bugs/moddata_3/bug5145
 tests/chamfer/dist_angle/A2
 tests/chamfer/dist_angle/E9
 tests/chamfer/dist_angle/F1
-tests/chamfer/dist_angle_sequence/B3
-tests/chamfer/dist_angle_sequence/B4
 tests/chamfer/dist_angle_sequence/C1
 tests/chamfer/dist_dist/A2
 tests/chamfer/dist_dist/C1
