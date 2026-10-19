@@ -56,8 +56,8 @@ it honest. Every change is checked against the test sources below before it is c
 and no change may make a passing test fail.
 
 <!-- effort -->
-So far (2026-09-25 to 2026-10-18): about 104 hours of the agent's active work, 8.5 million
-tokens written by it, and 4.1 billion tokens processed in all (nearly all of them its
+So far (2026-09-25 to 2026-10-19): about 118 hours of the agent's active work, 9.3 million
+tokens written by it, and 4.5 billion tokens processed in all (nearly all of them its
 conversation's context, read back from the cache).
 <!-- /effort -->
 
@@ -71,14 +71,15 @@ conversation's context, read back from the cache).
 - **OCCT's GTests:** the computational-geometry and topology toolkits, translated by hand.
 - **BRL-CAD:** NIST's MBE PMI test parts and other STEP files from its source tree, with
   OCCT's reading of them as the reference, plus its `libbg` geometry tests.
-- **CadQuery's own test suite** (v2.8.0), run unchanged against pykentron: 558 of 727 tests
+- **CadQuery's own test suite** (v2.8.0), run unchanged against pykentron: 559 of 727 tests
   pass. Most of the rest exercise OCCT's document formats (OCAF/XDE), exporters kentron
   lacks (glTF, VRML, VTK), or OCCT-specific behaviour.
 - **44 CadQuery models from a private project** build on pykentron; for the 42 that return
   their parts, every part is valid and within 0.1% of CadQuery's volume.
-- **CadQuery scripts from 20 public projects** (up to 30 each), run on both: the 85 that
+- **CadQuery scripts from 77 public projects** (up to 30 each), run on both: the 138 that
   pykentron failed on, built differently or built much more slowly are kept, with where each
-  came from and what went wrong, in `crates/pykentron/tests/found/`, the cases still to fix.
+  came from and what went wrong, in `crates/pykentron/tests/found/`. 55 of them now build as
+  on CadQuery; the rest are the cases still to fix.
 
 About 12,700 tests run (with OCCT's dataset). About 1,500 of them are known gaps, marked as
 expected failures (`crates/occt-tests/expected_failures.txt` for OCCT's scripts): they pass
