@@ -452,6 +452,11 @@ fn joint(model: &Model, shape: Shape, vertex: VertexId, stripes: &[Stripe], a: (
             _ => None,
         };
         if let Some(jb) = paired {
+            // (Both faces in common, with another edge of one of them through the vertex, a
+            // sphere's seam: the fillets joined where their contacts on that face cross it,
+            // for the contacts' ends to lie on it, not across their sections through the
+            // vertex, whose contacts there miss it a little.)
+            let (va1, vb1) = if common.len() == 2 { seam_joint(model, vertex, sa, sb, jb, va1, vb1).unwrap_or((va1, vb1)) } else { (va1, vb1) };
             let ends: Vec<Point> = (0..2).map(|i| {
                 let (pa, pb) = (sa.rolling.contacts[i].point(va1), sb.rolling.contacts[if i == 0 { jb } else { 1 - jb }].point(vb1));
                 pa + (pb - pa) * 0.5
@@ -588,7 +593,7 @@ fn joint(model: &Model, shape: Shape, vertex: VertexId, stripes: &[Stripe], a: (
         let balls = !(sa.rolling.sections.iter().any(|x| x.straight) || sb.rolling.sections.iter().any(|x| x.straight));
         let smooth = balls && matches!(
             (sa.rolling.sides[1 - ia].distance(q).map(|d| d.2), sb.rolling.sides[1 - ib].distance(q).map(|d| d.2)),
-            (Ok(x), Ok(y)) if x.dot(y) >= 1.0 - crate::tolerance::ANGULAR.sqrt()
+            (Ok(x), Ok(y)) if x.dot(y) >= 1.0 - crate::tolerance::ANGULAR.sqrt().max(crate::blend::KINK)
         );
         let (va1, vb1) = if smooth { (wa, wb) } else { (va1, vb1) };
         // The common face's point: both contacts at the vertex.
@@ -634,6 +639,57 @@ fn joint(model: &Model, shape: Shape, vertex: VertexId, stripes: &[Stripe], a: (
         let m = Mitre { points: vec![p1, q], curve, cut: None, edges: vec![(third, vertex, on_edge.parameter, 1)], deviation };
         Ok((m, pa, pb))
     })())
+}
+
+/// Where fillets `sa` and `sb` (side 0 of `sa` on side `jb` of `sb`), joined at `vertex`
+/// between the same two faces, cross another edge of one of those faces through the vertex
+/// (from their ends there, `va1` and `vb1`): each one's spine parameter where its contact
+/// on that face meets the edge, if both do within a tenth of their lengths.
+fn seam_joint(model: &Model, vertex: VertexId, sa: &Stripe, sb: &Stripe, jb: usize, va1: f64, vb1: f64) -> Option<(f64, f64)> {
+    let v_node: crate::topology::NodeId = vertex.into();
+    for i in 0..2 {
+        let Some(edge) = model
+            .explore(sa.rolling.sides[i].face, NodeKind::Edge)
+            .filter(|&e| { let (p, q) = model.edge_vertices(e); p.node == v_node || q.node == v_node })
+            .filter_map(|e| EdgeId::try_from(e.node).ok())
+            .find(|&e| e != sa.rolling.id && e != sb.rolling.id)
+        else {
+            continue;
+        };
+        let (curve, first, last) = model.edge_curve(Shape::from(edge))?;
+        // Along the contact, from `t` a tenth of the fillet's length either way: where it
+        // comes nearest the edge (sampled, then by thirds).
+        let crossing = |s: &Stripe, c: usize, t: f64| -> (f64, f64) {
+            let contact = &s.rolling.contacts[c];
+            let (lo, hi) = (s.ts[0].min(s.ts[s.ts.len() - 1]), s.ts[0].max(s.ts[s.ts.len() - 1]));
+            let reach = 0.1 * (s.rolling.t1 - s.rolling.t0).abs();
+            let (x0, x1) = ((t - reach).max(lo), (t + reach).min(hi));
+            let gap = |w: f64| crate::geometry::extrema::nearest_on_curve(contact.point(w), &curve, first, last).distance;
+            let n = 64;
+            let (mut best, mut at) = (f64::INFINITY, t);
+            for j in 0..=n {
+                let w = x0 + (x1 - x0) * j as f64 / n as f64;
+                let d = gap(w);
+                if d < best {
+                    (best, at) = (d, w);
+                }
+            }
+            let step = (x1 - x0) / n as f64;
+            let (mut x, mut y) = ((at - step).max(x0), (at + step).min(x1));
+            for _ in 0..100 {
+                let (p, q) = (x + (y - x) / 3.0, y - (y - x) / 3.0);
+                if gap(p) < gap(q) { y = q } else { x = p }
+            }
+            let w = 0.5 * (x + y);
+            (w, gap(w))
+        };
+        let (wa, gap_a) = crossing(sa, i, va1);
+        let (wb, gap_b) = crossing(sb, if i == 0 { jb } else { 1 - jb }, vb1);
+        let size = 1.0 + (model.point(Shape::from(vertex)) - Point::ORIGIN).length();
+        let near = (1e-9 * size).max(10.0 * sa.rolling.target.max(sb.rolling.target));
+        return (gap_a.max(gap_b) <= near).then_some((wa, wb));
+    }
+    None
 }
 
 /// Fillet `s`'s end `k` (0 at its edge's start), where from its vertex each face goes on

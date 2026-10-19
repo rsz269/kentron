@@ -118,28 +118,43 @@ fn sharp<T: Copy>(model: &Model, shape: Shape, edges: &[T], edge: impl Fn(&T) ->
 
 /// [`fillet_edges`] of a shape with solids.
 fn fillet_solid_edges(model: &mut Model, shape: Shape, edges: &[(Shape, f64)]) -> Result<Shape> {
-    let rounded = fillet_solid_edges_as(model, shape, edges, true)?;
+    let before = fault_kinds(model, shape);
+    // (Where the edges go on at a slight kink between faces as nearly tangent, as between the
+    // faces of a loft through rounded outlines, the fillets carried on over it first: ending
+    // there, on a face so nearly its own face's continuation, a fillet can hardly be ended
+    // on it. Ended there where that fails.)
+    let kinked = tangent_chains(model, shape, edges, KINK).len() > tangent_chains(model, shape, edges, 0.0).len();
+    let carried = if kinked { fillet_solid_edges_as(model, shape, edges, true, true).and_then(|r| sound(model, &before, r)).ok() } else { None };
+    let over_kinks = carried.is_some();
+    let rounded = match carried {
+        Some(r) => r,
+        None => fillet_solid_edges_as(model, shape, edges, true, false)?,
+    };
     // (Where the cylinder and torus fillets' tools leave a face's boundary crossing itself,
     // as where a fillet runs over another feature of its faces: all rolled instead, which
     // goes round such features.)
     // (Either taken only where it leaves the solid as sound as it was.)
-    let before = fault_kinds(model, shape);
     let crossing = crate::validity::ProblemKind::SelfIntersection;
     if !before.contains(&crossing) && crosses_itself(model, rounded) {
-        if let Ok(rolled) = fillet_solid_edges_as(model, shape, edges, false).and_then(|r| sound(model, &before, r)) {
+        if let Ok(rolled) = fillet_solid_edges_as(model, shape, edges, false, over_kinks).and_then(|r| sound(model, &before, r)) {
             return Ok(rolled);
         }
     }
     Ok(rounded)
 }
 
+/// How far from tangent (one less the cosine of the angle) edges may meet, with their faces,
+/// for a fillet to be carried on from one to the other where it cannot end between them.
+pub(crate) const KINK: f64 = 2e-5;
+
 /// [`fillet_solid_edges`], the cylinder and torus fillets made as tools for boolean
-/// operations where `elementary`, else rolled as the others.
-fn fillet_solid_edges_as(model: &mut Model, shape: Shape, edges: &[(Shape, f64)], elementary: bool) -> Result<Shape> {
+/// operations where `elementary`, else rolled as the others; carried on over slight kinks
+/// (within [`KINK`]) where `over_kinks`.
+fn fillet_solid_edges_as(model: &mut Model, shape: Shape, edges: &[(Shape, f64)], elementary: bool, over_kinks: bool) -> Result<Shape> {
     if edges.is_empty() {
         return Err(Error::InvalidInput("no edges to fillet".into()));
     }
-    let edges = &tangent_chains(model, shape, edges);
+    let edges = &tangent_chains(model, shape, edges, if over_kinks { KINK } else { 0.0 });
     // The edges' geometry and adjacent faces, all taken from the original shape. Edges
     // whose fillet is a cylinder or a torus get a tool for a boolean operation; the others
     // a rolling-ball fillet, built first (it keeps the other edges).
@@ -585,7 +600,7 @@ fn chamfer_solid_edges(model: &mut Model, shape: Shape, edges: &[ChamferedEdge])
     }
     // The edges continuing them tangentially (indices into `edges` as their "radius").
     let indexed: Vec<(Shape, f64)> = edges.iter().enumerate().map(|(i, e)| (e.edge, i as f64)).collect();
-    let chains = tangent_chains(model, shape, &indexed);
+    let chains = tangent_chains(model, shape, &indexed, 0.0);
     // Where an edge's faces have other cross-sections than lines and circles: every edge
     // chamfered in turn, section by section along it.
     let mut elementary = true;
@@ -914,8 +929,6 @@ fn find_edge(model: &Model, shape: Shape, curve: &Curve, first: f64, last: f64) 
         .map(|(e, _)| Shape { orientation: Orientation::Forward, ..e })
 }
 
-/// `edges` with the edges continuing them tangentially (sharing a face, their directions
-/// parallel at the common vertex), with the same radius, repeatedly.
 /// The unit normal of face `face` (a node of `shape`) at its point nearest `p`.
 fn normal_at(model: &Model, shape: Shape, face: NodeId, p: Point) -> Option<Vector> {
     let face = model.explore(shape, NodeKind::Face).find(|f| f.node == face)?;
@@ -926,7 +939,11 @@ fn normal_at(model: &Model, shape: Shape, face: NodeId, p: Point) -> Option<Vect
     (n.length() > 1e-300).then(|| n.normalized())
 }
 
-fn tangent_chains(model: &Model, shape: Shape, edges: &[(Shape, f64)]) -> Vec<(Shape, f64)> {
+/// `edges` with the edges continuing them tangentially (sharing a face, their directions
+/// parallel at the common vertex), with the same radius, repeatedly; or, `kink` above
+/// zero, within that much (one less the cosine of the angle between them, and between their
+/// faces).
+fn tangent_chains(model: &Model, shape: Shape, edges: &[(Shape, f64)], kink: f64) -> Vec<(Shape, f64)> {
     use crate::geometry::ParametricCurve;
     let all: Vec<Shape> = model.explore(shape, NodeKind::Edge).collect();
     // Each edge's end vertices with its direction there, and its faces.
@@ -969,7 +986,7 @@ fn tangent_chains(model: &Model, shape: Shape, edges: &[(Shape, f64)]) -> Vec<(S
             let same_faces = their_faces.len() == 2 && their_faces.iter().all(|f| my_faces.contains(f));
             // (Elsewhere within about 1/2000 rad: edges of models made elsewhere meet that nearly
             // tangent, as continuous as the faces either side.)
-            let tangent = if same_faces { tolerance::ANGULAR.sqrt() } else { 1e5 * tolerance::ANGULAR };
+            let tangent = if same_faces { tolerance::ANGULAR.sqrt() } else { 1e5 * tolerance::ANGULAR }.max(kink);
             let Some(at) = mine.iter().find_map(|(v, d)| {
                 theirs.iter().any(|(w, e)| w == v && d.dot(*e).abs() >= 1.0 - tangent).then_some(*v)
             }) else {
@@ -980,7 +997,7 @@ fn tangent_chains(model: &Model, shape: Shape, edges: &[(Shape, f64)]) -> Vec<(S
             // sides meet): the fillet carries on smoothly.
             let point = model.point(Shape::from(crate::topology::VertexId::try_from(at).expect("a vertex")));
             let tangent_to = |f: NodeId, g: NodeId| match (normal_at(model, shape, f, point), normal_at(model, shape, g, point)) {
-                (Some(a), Some(b)) => a.dot(b).abs() >= 1.0 - tolerance::ANGULAR.sqrt(),
+                (Some(a), Some(b)) => a.dot(b).abs() >= 1.0 - tolerance::ANGULAR.sqrt().max(kink),
                 _ => false,
             };
             let (new, old): (Vec<NodeId>, Vec<NodeId>) = (
@@ -2178,6 +2195,63 @@ mod tests {
         let rolled = ball::fillet_network(&mut model, shape, &edges).unwrap();
         let report = validity::check(&model, rolled);
         assert!(report.is_valid(), "{report:?}");
+    }
+
+    /// A keycap: a loft from a square of 18.3 rounded by 1.5 to one of 13.5 rounded by 2.5,
+    /// 5.5 up and tilted by 6°, dished by a sphere through a point 1.5 below the top's
+    /// centre. Its lofted faces meet at a slight kink (a tenth of a degree) between the
+    /// sections: rounding the dish's front edge (R 0.5) carries on over the kinks round the
+    /// whole rim, across the sphere's seam, as OCCT's does (volume 1187.799).
+    #[test]
+    fn rounding_a_dish_over_slight_kinks() {
+        use crate::geometry::ParametricCurve;
+        use crate::math::{Axis, Transform};
+        use crate::primitives::Sphere;
+        let mut model = Model::new();
+        let square = |model: &mut Model, side: f64, radius: f64| {
+            let h = side / 2.0;
+            let corners: Vec<Shape> = [(-h, -h), (h, -h), (h, h), (-h, h)].iter().map(|&(x, y)| crate::make::vertex(model, Point::new(x, y, 0.0))).collect();
+            let edges: Vec<Shape> = (0..4).map(|i| crate::make::edge(model, corners[i], corners[(i + 1) % 4]).unwrap()).collect();
+            let wire = crate::make::wire(model, &edges).unwrap();
+            corner2d::fillet_wire_2d(model, wire, radius, None).unwrap()
+        };
+        let angle = -6f64.to_radians();
+        let tilt = Transform::rotation(Axis::new(Point::ORIGIN, Direction::X), angle);
+        let bottom = square(&mut model, 18.3, 1.5);
+        let top = square(&mut model, 13.5, 2.5).moved(&(tilt * Transform::translation(Vector::new(0.0, 0.0, 5.5))));
+        let options = crate::loft::LoftOptions { solid: true, ..Default::default() };
+        let cap = crate::loft::loft(&mut model, &[bottom, top], &options).unwrap().shape;
+        let r = 0.75 + 19.3f64.powi(2) / 12.0;
+        let up = Direction::new(0.0, -angle.sin(), angle.cos());
+        let centre = Point::ORIGIN + Vector::from(up) * (5.5 - 1.5 + r);
+        let dish = Sphere::new(r).with_frame(Frame::new(centre, up, Direction::X)).build(&mut model).unwrap();
+        let shape = boolean::difference(&mut model, cap, dish).unwrap();
+        assert!((properties::volume(&model, shape).mass - 1189.4064).abs() < 1e-3);
+        let sphere = model.unique_subshapes(shape, NodeKind::Face).into_iter().find(|&f| model.surface(f).is_some_and(|s| matches!(untrimmed(s), crate::geometry::surface::Surface::Sphere(_)))).unwrap();
+        // (The edge whose middle is furthest forward; not the sphere's pole, which has no curve.)
+        let front = model.unique_subshapes(sphere, NodeKind::Edge).into_iter().filter_map(|e| {
+            let (c, t0, t1) = model.edge_curve(e)?;
+            Some((e, c.point(0.5 * (t0 + t1)).y))
+        }).min_by(|a, b| a.1.total_cmp(&b.1)).unwrap().0;
+        let result = fillet(&mut model, shape, &[front], 0.5).unwrap();
+        let report = validity::check(&model, result);
+        assert!(report.is_valid(), "{report:?}");
+        assert_eq!(model.unique_subshapes(result, NodeKind::Face).len(), 19);
+        let volume = properties::volume(&model, result).mass;
+        assert!((volume - 1187.799).abs() < 0.2, "{volume}");
+        // The contacts on the dish, joined where they cross the sphere's seam: there, in its
+        // parameters, not a little past it.
+        let dish = model.unique_subshapes(result, NodeKind::Face).into_iter().find(|&f| model.surface(f).is_some_and(|s| matches!(untrimmed(s), crate::geometry::surface::Surface::Sphere(_)))).unwrap();
+        for w in model.children(dish) {
+            for c in model.children(w) {
+                let id = crate::topology::CoEdgeId::try_from(c.node).unwrap();
+                let (pcurve, t0, t1) = model.effective_pcurve(id).unwrap();
+                for t in [t0, t1] {
+                    let u = pcurve.point(t).x;
+                    assert!((-1e-9..=2.0 * PI + 1e-9).contains(&u), "a pcurve end at u = {u}");
+                }
+            }
+        }
     }
 
     #[test]
