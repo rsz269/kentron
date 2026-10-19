@@ -118,6 +118,14 @@ def chamfered_arc_plate(cq):
     return plate.chamfer(3, None, arc)
 
 
+def asymmetric_chamfer_of_an_extrusion(cq):
+    # (The first distance along the edge's first face: of an extrusion, its side, at both
+    # ends.)
+    rod = cq.Workplane("XY").circle(1.5).extrude(10).val()
+    rims = [e for e in rod.Edges() if e.geomType() == "CIRCLE"]
+    return rod.chamfer(1.0, 0.5, rims)
+
+
 def mirrored_outline(cq):
     # (Two halves of an outline joined along the mirror line: both wind one way, and the
     # line out and back between them is dropped.)
@@ -261,6 +269,7 @@ CASES = [
     rotated_then_located, spline_surface_through_a_grid, plane_of_negative_size, subclassed_wire,
     array_of_vectors, sweep_through_three_circles, sweep_from_circle_to_square,
     fuse_of_many, rounded_pocket_rim, fillet_of_a_mitre, rounded_recess_cut, filled_square_through_a_point,
+    asymmetric_chamfer_of_an_extrusion,
 ]
 
 

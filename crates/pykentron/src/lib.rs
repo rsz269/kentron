@@ -537,10 +537,52 @@ fn face_normal(m: &Model, face: Shape) -> Vector {
     }
 }
 
-/// `profile` (a face or wire) swept along `v`.
+/// `profile` (a face or wire) swept along `v`: a prism's faces in CadQuery's order (OCCT's),
+/// those swept from the profile's edges first and its ends last, which is what an
+/// asymmetric chamfer's first face, and indexing into its faces, go by.
 #[pyfunction]
 fn extrude(profile: Handle, v: Xyz) -> PyResult<Handle> {
-    with_model(|m| sweep::extrude(m, profile.shape, vector(v)).map(|s| s.shape)).map(handle)
+    with_model(|m| {
+        let swept = sweep::extrude(m, profile.shape, vector(v))?;
+        sides_first(m, &swept, profile.shape)
+    })
+    .map(handle)
+}
+
+/// The solid `swept` from `profile` with its shell's faces swept from the profile's edges
+/// (in their order) before the others; as it is if it is not one solid of one shell.
+fn sides_first(m: &mut Model, swept: &sweep::Sweep, profile: Shape) -> kentron::Result<Shape> {
+    if swept.shape.kind() != NodeKind::Solid {
+        return Ok(swept.shape);
+    }
+    // (In the solid's own placement, the result placed as it is.)
+    let placement = swept.shape.placement;
+    let solid = Shape { placement: Transform::IDENTITY, ..swept.shape };
+    let shells: Vec<Shape> = m.explore(solid, NodeKind::Shell).collect();
+    let [shell] = shells[..] else { return Ok(swept.shape) };
+    let faces: Vec<Shape> = m.explore(shell, NodeKind::Face).collect();
+    let mut sides: Vec<NodeId> = Vec::new();
+    for edge in m.explore(profile, NodeKind::Edge) {
+        for g in swept.generated(edge) {
+            let g = Shape { placement: Transform::IDENTITY, ..g };
+            if g.kind() == NodeKind::Face && !sides.contains(&g.node) {
+                sides.push(g.node);
+            }
+        }
+    }
+    let rank = |f: &Shape| sides.iter().position(|&n| n == f.node).unwrap_or(sides.len());
+    let mut ordered = faces.clone();
+    ordered.sort_by_key(rank);
+    if ordered == faces {
+        return Ok(swept.shape);
+    }
+    let new_shell = m.new_empty(NodeKind::Shell);
+    for f in ordered {
+        m.add(new_shell, f)?;
+    }
+    let new_solid = m.new_empty(NodeKind::Solid);
+    m.add(new_solid, new_shell)?;
+    Ok(new_solid.moved(&placement))
 }
 
 /// `profile` revolved by `angle` degrees about the axis through `origin` along `axis`.

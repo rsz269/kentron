@@ -164,4 +164,3 @@ tests.test_shapes::test_sample
 tests.test_shapes::test_trimming
 tests.test_sketch::test_bool_ops
 tests.test_sketch::test_constraint_solver
-tests.test_workplanes.TestWorkplanes::test_mirror_face
