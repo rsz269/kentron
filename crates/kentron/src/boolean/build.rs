@@ -69,8 +69,7 @@ pub(super) fn build(
         let (curve, first, last) = model.edge_curve(Shape::from(edge)).expect("uses are of edges with curves");
         let (p, tangent) = curve.d1(0.5 * (first + last));
         let tangent = if u.along { tangent } else { -tangent };
-        let normal = geom::normal_at_point(kept_output(graph, &kept[u.face]), p);
-        (normal.cross(tangent).normalized(), normal * u.sign)
+        into_face(kept_output(graph, &kept[u.face]), p, tangent, u.sign, tangent.length() * (last - first))
     };
     let shells = group_shells(&out.uses, faces.len(), vectors);
     let closed = out.uses.values().all(|u| u.len() % 2 == 0);
@@ -114,8 +113,7 @@ pub(super) fn build_partition(
             let (curve, first, last) = model.edge_curve(Shape::from(edge)).expect("uses are of edges with curves");
             let (p, tangent) = curve.d1(0.5 * (first + last));
             let tangent = if u.along { tangent } else { -tangent };
-            let normal = geom::normal_at_point(kept_output(graph, &kept[u.face]), p);
-            (normal.cross(tangent).normalized(), normal * u.sign)
+            into_face(kept_output(graph, &kept[u.face]), p, tangent, u.sign, tangent.length() * (last - first))
         };
         let shells = group_shells(&uses, cell_faces.len(), vectors);
         results.push(assemble(model, graph, &kept, &cell_faces, shells, invalid_operands)?);
@@ -442,6 +440,30 @@ fn aligned_pcurve(curve: &Curve, surface: &crate::geometry::surface::Surface, fi
         return Ok(pcurve);
     }
     Ok(pcurve.transformed(&Transform2::translation(Vector2::new(du, dv))))
+}
+
+/// Where a face leaves an edge it bounds: the direction into it, across the edge (bent the
+/// way the face curves, a little way in, so that faces leaving tangent to each other, as
+/// round solids touching along a line do, still come in their order around the edge), and
+/// its normal out of the result.
+fn into_face(surface: &crate::geometry::surface::Surface, p: Point, tangent: Vector, sign: f64, length: f64) -> (Vector, Vector) {
+    let normal = geom::normal_at_point(surface, p);
+    let into = normal.cross(tangent).normalized();
+    if matches!(surface, crate::geometry::surface::Surface::Plane(_)) {
+        return (into, normal * sign);
+    }
+    // The point `h` along `into` on the tangent plane, taken onto the surface by its (u, v).
+    let uv = geom::uv_of(surface, p);
+    let (at, su, sv) = surface.d1(uv[0], uv[1]);
+    let h = 1e-4 * length.max(TOL);
+    let (uu, uv_, vv) = (su.dot(su), su.dot(sv), sv.dot(sv));
+    let det = uu * vv - uv_ * uv_;
+    let (a, b) = (h * into.dot(su), h * into.dot(sv));
+    let along = tangent.normalized();
+    let chord = surface.point(uv[0] + (a * vv - b * uv_) / det, uv[1] + (b * uu - a * uv_) / det) - at;
+    let chord = chord - along * chord.dot(along);
+    let bent = if det > 0.0 && chord.length() > 0.0 { chord.normalized() } else { into };
+    (bent, normal * sign)
 }
 
 /// Groups faces into shells by shared edges. Where more than two faces meet at an edge

@@ -893,6 +893,20 @@ mod tests {
     }
 
     #[test]
+    fn cylinders_touching_along_a_line() {
+        // Side by side, touching where their sides are tangent: the faces leave the line
+        // they share in the same direction (told apart by the way they curve), and the
+        // cylinders stay two solids, as on OCCT.
+        let mut model = Model::new();
+        let (r, h) = (13.25, 65.0);
+        let a = cylinder(&mut model, (0.0, 0.0, 0.0), Direction::X, r, h);
+        let b = cylinder(&mut model, (0.0, 2.0 * r, 0.0), Direction::X, r, h);
+        let fused = union(&mut model, a, b).unwrap();
+        let pi = std::f64::consts::PI;
+        check(&model, fused, 2.0 * pi * r * r * h, 4.0 * pi * r * (h + r), 2);
+    }
+
+    #[test]
     fn cylinder_grazing_a_box_edge() {
         // A cylinder poking 0.01 past a box's side, its end flush with the box's front: the
         // box's edges along the side dip into it between samples (OCCT gives these values).
