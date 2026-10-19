@@ -502,6 +502,27 @@ fn joint(model: &Model, shape: Shape, vertex: VertexId, stripes: &[Stripe], a: (
                     deviation = deviation.max(on.distance);
                     edges.push((edge, vertex, on.parameter, i));
                 }
+            } else {
+                // (Both faces in common: any other edge of theirs through the vertex, as a
+                // sphere's seam reaching the edge, ends where the fillet's contact crosses it.)
+                let v_node: crate::topology::NodeId = vertex.into();
+                for (i, end) in ends.iter().enumerate() {
+                    let others: Vec<EdgeId> = model
+                        .explore(sa.rolling.sides[i].face, NodeKind::Edge)
+                        .filter(|&e| { let (p, q) = model.edge_vertices(e); p.node == v_node || q.node == v_node })
+                        .filter_map(|e| EdgeId::try_from(e.node).ok())
+                        .filter(|&e| e != sa.rolling.id && e != sb.rolling.id)
+                        .collect();
+                    for edge in others {
+                        if edges.iter().any(|x: &(EdgeId, VertexId, f64, usize)| x.0 == edge) {
+                            continue;
+                        }
+                        let (curve, first, last) = model.edge_curve(Shape::from(edge)).ok_or_else(|| Error::InvalidInput("a degenerate edge at a joint".into()))?;
+                        let on = crate::geometry::extrema::nearest_on_curve(*end, &curve, first, last);
+                        deviation = deviation.max(on.distance);
+                        edges.push((edge, vertex, on.parameter, i));
+                    }
+                }
             }
             let m = Mitre { points: ends, curve, cut: None, edges, deviation };
             return Ok((m, stop(0, va1, on_a), stop(jb, vb1, on_b)));

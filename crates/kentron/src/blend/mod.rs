@@ -2113,6 +2113,43 @@ mod tests {
         assert_eq!(model.explore(result, NodeKind::Face).count(), 18);
     }
 
+    /// A lofted frustum (radius 10 to 8 over 10, a B-spline side, rounded by a rolling ball)
+    /// with a spherical dish in its top, the sphere's seam a quarter turn from the side's: the
+    /// rim, in two edges meeting where each seam reaches it, rounded as one (R 0.5), each seam
+    /// shortened to the fillet (OCCT gives the volume).
+    #[test]
+    fn rounding_a_rim_across_seams() {
+        use crate::geometry::curve::Circle;
+        use crate::primitives::Sphere;
+        let mut model = Model::new();
+        let circle = |model: &mut Model, z: f64, radius: f64| {
+            let edge = crate::make::edge_from_curve(model, Curve::Circle(Circle::new(Frame::new(Point::new(0.0, 0.0, z), Direction::Z, Direction::X), radius))).unwrap();
+            crate::make::wire(model, &[edge]).unwrap()
+        };
+        let (bottom, top) = (circle(&mut model, 0.0, 10.0), circle(&mut model, 10.0, 8.0));
+        let options = crate::loft::LoftOptions { solid: true, ..Default::default() };
+        let frustum = crate::loft::loft(&mut model, &[bottom, top], &options).unwrap().shape;
+        let dish = Sphere::new(20.0).with_frame(Frame::new(Point::new(0.0, 0.0, 28.0), Direction::Z, Direction::Y)).build(&mut model).unwrap();
+        let shape = boolean::difference(&mut model, frustum, dish).unwrap();
+        let rim: Vec<Shape> = model.unique_subshapes(shape, NodeKind::Edge).into_iter().filter(|&e| {
+            let (a, b) = model.edge_vertices(e);
+            let (p, q) = (model.point(a), model.point(b));
+            p.z > 8.5 && p.z < 9.99 && q.z > 8.5 && q.z < 9.99 && !matches!(model.edge_curve(e), Some((Curve::Line(_), ..)))
+        }).collect();
+        assert_eq!(rim.len(), 2);
+        let result = fillet(&mut model, shape, &rim, 0.5).unwrap();
+        let report = validity::check(&model, result);
+        assert!(report.is_valid(), "{report:?}");
+        let volume = properties::volume(&model, result).mass;
+        assert!((volume - 2313.7561).abs() < 1e-3, "{volume}");
+        // (By the rolling balls themselves, not the tools tried where they fail.)
+        let radius = |_: f64| 0.5;
+        let edges: Vec<(Shape, &dyn Fn(f64) -> f64)> = rim.iter().map(|&e| (e, &radius as &dyn Fn(f64) -> f64)).collect();
+        let rolled = ball::fillet_network(&mut model, shape, &edges).unwrap();
+        let report = validity::check(&model, rolled);
+        assert!(report.is_valid(), "{report:?}");
+    }
+
     #[test]
     fn rounded_box_edge() {
         // The vertical edge of a 300 x 300 x 100 box at the origin, radius 100: the side
