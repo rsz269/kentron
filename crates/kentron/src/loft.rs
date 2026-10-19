@@ -46,6 +46,24 @@ pub struct LoftOptions {
     pub ruled: bool,
     /// How the sections' edges are matched up.
     pub matching: Matching,
+    /// Where a smooth loft passes through each section, along the way across them.
+    pub spacing: Spacing,
+}
+
+/// Where a smooth [`loft`] passes through its sections, along its parameter across them
+/// (which shapes the surface between them: through three or more sections, it bulges
+/// differently).
+#[doc(alias = "Approx_ParametrizationType")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Spacing {
+    /// Spaced as the sections are apart (by the mean distance between their points), as
+    /// OCCT's lofts are by default.
+    #[default]
+    ByDistance,
+    /// By the square roots of those distances.
+    ByRootDistance,
+    /// Evenly, whatever the distances (as CadQuery's lofts ask for).
+    Even,
 }
 
 /// How [`loft`] matches up the edges of its sections (splitting some, so that all have as
@@ -154,7 +172,7 @@ fn loft_traced(model: &mut Model, sections: &[Shape], options: &LoftOptions, bre
         return Err(Error::InvalidInput("a loft closing on itself has no end sections to make a solid".into()));
     }
     make_compatible(&mut parsed, closed, looped, options.matching, &mut marks);
-    let grid = Grid::sample(&parsed);
+    let grid = Grid::sample(&parsed, options.spacing);
     let built = build(model, &parsed, &grid, closed, looped, options, breaks)?;
     // What each section's edges and vertices generated: the faces of their pieces' columns
     // and the edges across at their boundaries.
@@ -760,7 +778,7 @@ struct Grid {
 }
 
 impl Grid {
-    fn sample(sections: &[Section]) -> Grid {
+    fn sample(sections: &[Section], spacing: Spacing) -> Grid {
         let edges = sections.iter().find_map(|s| if let Section::Wire(w) = s { Some(w.pieces.len()) } else { None }).expect("a wire");
         let mut curves: Vec<Vec<BSplineCurve>> = Vec::with_capacity(edges);
         for i in 0..edges {
@@ -807,7 +825,8 @@ impl Grid {
             };
             curves.push(sections.iter().zip(&counts).map(row).collect());
         }
-        // Across: by the mean distance between consecutive sections' points.
+        // Across: by the mean distance between consecutive sections' points (or as `spacing`
+        // says otherwise).
         let mut across = vec![0.0];
         for k in 1..sections.len() {
             let mut sum = 0.0;
@@ -818,7 +837,12 @@ impl Grid {
                     count += 1;
                 }
             }
-            let step = (sum / count as f64).max(1e-9);
+            let distance = (sum / count as f64).max(1e-9);
+            let step = match spacing {
+                Spacing::ByDistance => distance,
+                Spacing::ByRootDistance => distance.sqrt(),
+                Spacing::Even => 1.0,
+            };
             across.push(across[k - 1] + step);
         }
         let total = across[across.len() - 1];
@@ -1228,6 +1252,23 @@ mod tests {
         let p: Vec<Point> = points.iter().map(|c| Point::new(c[0], c[1], c[2])).collect();
         let edges: Vec<Shape> = (0..p.len()).map(|i| make::edge_between(model, p[i], p[(i + 1) % p.len()]).unwrap()).collect();
         make::wire(model, &edges).unwrap()
+    }
+
+    /// A smooth loft through circles of radius 5, 6 and 5 at heights 0, 1 and 10: through
+    /// them evenly (as CadQuery lofts), as OCCT's (volume 1011.593); by their distances
+    /// apart, it bulges further between the two near ones.
+    #[test]
+    fn three_sections_spaced_evenly_or_by_distance() {
+        let mut model = Model::new();
+        let sections: Vec<Shape> = [(0.0, 5.0), (1.0, 6.0), (10.0, 5.0)].iter().map(|&(z, r)| circle(&mut model, z, r, Direction::Z)).collect();
+        let volume = |model: &mut Model, spacing: Spacing| {
+            let options = LoftOptions { solid: true, spacing, ..Default::default() };
+            let solid = loft(model, &sections, &options).unwrap().shape;
+            properties::volume(model, solid).mass
+        };
+        let even = volume(&mut model, Spacing::Even);
+        assert!((even - 1011.593).abs() < 1e-3, "{even}");
+        assert!(volume(&mut model, Spacing::ByDistance) > even + 100.0);
     }
 
     /// A strip 0.1 high ruled between a helix winding forty times round a unit cylinder

@@ -136,6 +136,16 @@ def rounded_corners_between_arcs_and_lines(cq):
     return face.fillet2D(2.0, face.Vertices())
 
 
+def loft_through_three_unevenly_spaced_circles(cq):
+    # (CadQuery's loft, as a workplane's, passes through its sections evenly, however far
+    # apart they are.)
+    import importlib
+
+    V = cq.Vector
+    circles = [cq.Wire.makeCircle(r, V(0, 0, z), V(0, 0, 1)) for z, r in ((0, 5), (1, 6), (10, 5))]
+    return importlib.import_module(cq.__name__ + ".occ_impl.shapes").loft(circles, cap=True)
+
+
 def vertices_of_a_face_placed_twice(cq):
     # (One face placed at two points: told apart by their hashes, as a sketch tells apart
     # what it selects, the vertices of both (a small cube at each).)
@@ -289,7 +299,7 @@ CASES = [
     array_of_vectors, sweep_through_three_circles, sweep_from_circle_to_square,
     fuse_of_many, rounded_pocket_rim, fillet_of_a_mitre, rounded_recess_cut, filled_square_through_a_point,
     asymmetric_chamfer_of_an_extrusion, rounded_corners_between_arcs_and_lines,
-    vertices_of_a_face_placed_twice,
+    loft_through_three_unevenly_spaced_circles, vertices_of_a_face_placed_twice,
 ]
 
 

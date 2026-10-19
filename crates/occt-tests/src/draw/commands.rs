@@ -5174,7 +5174,7 @@ impl Draw {
             return self.not_implemented("thrusections", &args);
         }
         let flag = |a: &str| a.parse::<f64>().map(|x| x != 0.0).map_err(|_| DrawError::Failed(format!("thrusections: {a} is not 0 or 1")));
-        let options = kentron::loft::LoftOptions { solid: flag(args[1])?, ruled: flag(args[2])?, matching: if as_given { kentron::loft::Matching::AsGiven } else { kentron::loft::Matching::ByRays } };
+        let options = kentron::loft::LoftOptions { solid: flag(args[1])?, ruled: flag(args[2])?, matching: if as_given { kentron::loft::Matching::AsGiven } else { kentron::loft::Matching::ByRays }, ..Default::default() };
         let sections = args[3..].iter().map(|a| self.shape_var(a)).collect::<Result<Vec<_>, _>>()?;
         let result = kentron::loft::loft(&mut self.model, &sections, &options)?;
         let generated = sections.iter().flat_map(|&s| {

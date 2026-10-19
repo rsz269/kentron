@@ -604,12 +604,20 @@ fn revolve(profile: Handle, origin: Xyz, axis: Xyz, angle: f64) -> PyResult<Hand
     with_model(|m| sweep::revolve(m, profile.shape, axis, angle.to_radians()).map(|s| s.shape)).map(handle)
 }
 
-/// The loft through `sections` (wires, or vertices at the ends).
+/// The loft through `sections` (wires, or vertices at the ends), passing through them
+/// spaced as `spacing` says: "chordal" (by their distances apart), "centripetal" (by those
+/// distances' square roots) or "uniform" (evenly), CadQuery's names.
 #[pyfunction]
-#[pyo3(signature = (sections, solid=true, ruled=false))]
-fn make_loft(sections: Vec<Handle>, solid: bool, ruled: bool) -> PyResult<Handle> {
+#[pyo3(signature = (sections, solid=true, ruled=false, spacing="chordal"))]
+fn make_loft(sections: Vec<Handle>, solid: bool, ruled: bool, spacing: &str) -> PyResult<Handle> {
     let sections: Vec<Shape> = sections.iter().map(|h| h.shape).collect();
-    with_model(|m| loft::loft(m, &sections, &loft::LoftOptions { solid, ruled, matching: loft::Matching::ByRays }).map(|l| l.shape)).map(handle)
+    let spacing = match spacing.to_ascii_lowercase().as_str() {
+        "chordal" | "chordlength" => loft::Spacing::ByDistance,
+        "centripetal" => loft::Spacing::ByRootDistance,
+        "uniform" => loft::Spacing::Even,
+        other => return Err(PyValueError::new_err(format!("unknown loft parametrization {other}"))),
+    };
+    with_model(|m| loft::loft(m, &sections, &loft::LoftOptions { solid, ruled, matching: loft::Matching::ByRays, spacing }).map(|l| l.shape)).map(handle)
 }
 
 /// A planar wire offset in its plane ("arc" or "intersection" joins).

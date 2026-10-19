@@ -687,6 +687,7 @@ impl Env {
                         Some("as_given") => kentron::loft::Matching::AsGiven,
                         _ => kentron::loft::Matching::ByRays,
                     },
+                    ..Default::default()
                 };
                 shape(kentron::loft::loft(&mut self.model, &sections, &options).map_err(err)?.shape)
             }

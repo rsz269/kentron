@@ -562,7 +562,9 @@ def sweep(s, path: Shape, aux=None, cap: bool = False, transition: str = "transf
 
 def loft(*s, cap: bool = False, ruled: bool = False, continuity: str = "C2", parametrization: str = "uniform", degree: int = 3, compat: bool = True, smoothing: bool = False, weights=(1, 1, 1), history=None, name=None) -> Shape:
     """A loft through sections: faces (solids, their holes lofted too), or wires and edges
-    (vertices at the ends), capped into solids if `cap`."""
+    (vertices at the ends), capped into solids if `cap`; passing through them spaced as
+    `parametrization` says (by default evenly, as CadQuery's: `Solid.makeLoft` spaces them
+    by their distances apart, as OCCT does by default)."""
     if len(s) == 1 and isinstance(s[0], (list, tuple)):
         s = tuple(s[0])
     results = []
@@ -570,15 +572,15 @@ def loft(*s, cap: bool = False, ruled: bool = False, continuity: str = "C2", par
     if face_lists:
         for el in face_lists:
             outer = [f.outerWire() if isinstance(f, Face) else f for f in el]
-            result = Shape.cast(native.make_loft([w.wrapped for w in outer], True, ruled))
+            result = Shape.cast(native.make_loft([w.wrapped for w in outer], True, ruled, parametrization))
             if not any(isinstance(f, Vertex) for f in el):
                 for j in range(len(el[0].innerWires())):
-                    hole = Shape.cast(native.make_loft([f.innerWires()[j].wrapped for f in el], True, ruled))
+                    hole = Shape.cast(native.make_loft([f.innerWires()[j].wrapped for f in el], True, ruled, parametrization))
                     result = result.cut(hole)
             results.append(result)
     else:
         for el in _get_wire_lists(s):
-            results.append(Shape.cast(native.make_loft([w.wrapped for w in el], cap, ruled)))
+            results.append(Shape.cast(native.make_loft([w.wrapped for w in el], cap, ruled, parametrization)))
     return _compound_or_shape(results)
 
 
