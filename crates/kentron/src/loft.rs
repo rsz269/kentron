@@ -768,16 +768,44 @@ impl Grid {
                 Section::Wire(w) => w.pieces[i].straight(),
                 Section::Point(..) => true,
             });
-            let n = if straight { 1 } else { 64 };
-            let params: Vec<f64> = (0..=n).map(|j| j as f64 / n as f64).collect();
-            let row = |s: &Section| -> BSplineCurve {
+            // Each section's edge sampled 64 times a turn (at least 64 times), in powers of two
+            // (as one winding round many times, a helix, needs to be told apart turn by turn):
+            // the same edge the same way whatever it is lofted to (faces lofted from it apart
+            // meet along one curve); the coarser ones' knots then refined to the finest's (a
+            // fit's knots lie among those of one twice as fine).
+            let samples = |s: &Section| -> usize {
+                let Section::Wire(w) = s else { return 1 };
+                if straight {
+                    return 1;
+                }
+                const PROBE: usize = 1024;
+                let points: Vec<Point> = (0..=PROBE).map(|j| w.pieces[i].at(j as f64 / PROBE as f64)).collect();
+                let turn: f64 = points.windows(3).map(|q| (q[1] - q[0]).angle(q[2] - q[1])).filter(|a| a.is_finite()).sum();
+                let mut n = 64;
+                while (n as f64) < turn / std::f64::consts::TAU * 64.0 && n < 8192 {
+                    n *= 2;
+                }
+                n
+            };
+            let counts: Vec<usize> = sections.iter().map(samples).collect();
+            let finest = counts.iter().copied().max().expect("a section");
+            let row = |(s, &n): (&Section, &usize)| -> BSplineCurve {
+                let n = if matches!(s, Section::Point(..)) { finest } else { n };
+                let params: Vec<f64> = (0..=n).map(|j| j as f64 / n as f64).collect();
                 let points: Vec<Point> = match s {
                     Section::Wire(w) => params.iter().map(|&t| w.pieces[i].at(t)).collect(),
                     Section::Point(p, _) => vec![*p; params.len()],
                 };
-                fit::interpolate_with_parameters(&points, &params).expect("increasing parameters")
+                let mut curve = fit::interpolate_with_parameters(&points, &params).expect("increasing parameters");
+                if n < finest {
+                    let params: Vec<f64> = (0..=finest).map(|j| j as f64 / finest as f64).collect();
+                    let fine = fit::interpolate_with_parameters(&params.iter().map(|&t| Point::new(t, 0.0, 0.0)).collect::<Vec<_>>(), &params).expect("increasing parameters");
+                    let knots: Vec<(f64, usize)> = fine.knots().iter().map(|&k| (k, 1)).collect();
+                    curve.insert_knots(&knots);
+                }
+                curve
             };
-            curves.push(sections.iter().map(row).collect());
+            curves.push(sections.iter().zip(&counts).map(row).collect());
         }
         // Across: by the mean distance between consecutive sections' points.
         let mut across = vec![0.0];
@@ -1200,6 +1228,31 @@ mod tests {
         let p: Vec<Point> = points.iter().map(|c| Point::new(c[0], c[1], c[2])).collect();
         let edges: Vec<Shape> = (0..p.len()).map(|i| make::edge_between(model, p[i], p[(i + 1) % p.len()]).unwrap()).collect();
         make::wire(model, &edges).unwrap()
+    }
+
+    /// A strip 0.1 high ruled between a helix winding forty times round a unit cylinder
+    /// (pitch 0.4) and the same 0.1 higher: its area is 0.1 times the cylinder's
+    /// circumference forty times, its turns told apart.
+    #[test]
+    fn a_strip_ruled_between_helices_winding_forty_times() {
+        use crate::geometry::fit;
+        let mut model = Model::new();
+        let (turns, pitch) = (40.0, 0.4);
+        let helix = |model: &mut Model, dz: f64| {
+            let n = 32 * turns as usize;
+            let params: Vec<f64> = (0..=n).map(|i| i as f64 / n as f64).collect();
+            let points: Vec<Point> = params.iter().map(|&t| {
+                let a = std::f64::consts::TAU * turns * t;
+                Point::new(a.cos(), a.sin(), pitch * turns * t + dz)
+            }).collect();
+            let edge = make::edge_from_curve(model, Curve::BSpline(fit::interpolate_with_parameters(&points, &params).unwrap())).unwrap();
+            make::wire(model, &[edge]).unwrap()
+        };
+        let (low, high) = (helix(&mut model, 0.0), helix(&mut model, 0.1));
+        let strip = loft(&mut model, &[low, high], &LoftOptions { ruled: true, ..Default::default() }).unwrap().shape;
+        let area = properties::area(&model, strip).mass;
+        let expected = 0.1 * std::f64::consts::TAU * turns;
+        assert!((area - expected).abs() < 1e-4 * expected, "area {area} not {expected}");
     }
 
     #[test]
