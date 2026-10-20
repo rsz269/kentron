@@ -365,6 +365,14 @@ fn replace_surfaces(
                 let (frame, angle) = (c.frame(), c.semi_angle());
                 return Ok(frame.origin() + Vector::from(frame.z()) * (-c.radius() / angle.tan()));
             }
+            // A pole of a face of revolution alone (its meridian meeting the axis at an angle):
+            // where the offset's meridian meets the axis, short of the old pole where the
+            // offset passes it.
+            if let [f] = on[..] {
+                if let Some(p) = axis_crossing(&faces[f].offset, vertices[v].1, around[v][0].1, scale) {
+                    return Ok(p);
+                }
+            }
             meet(&faces, &around[v], scale)
         })
         .collect::<Result<_>>()?;
@@ -566,6 +574,41 @@ fn foot_on(surface: &Surface, p: Point, mut uv: Point2, nappe: f64) -> (Point2, 
     let n = du.cross(dv);
     let n = if n.length() > 0.0 { n.normalized() } else { n };
     (uv, q, n)
+}
+
+/// Where the meridian of `surface` (a surface of revolution, as offset) meets its axis
+/// short of `uv` (its parameters at `old`, a point on the axis), if it passes the axis
+/// there: the meridian on the far side of the axis at `uv`, back towards the middle of its
+/// range it comes back to its own side.
+fn axis_crossing(surface: &Surface, old: Point, uv: Point2, scale: f64) -> Option<Point> {
+    let Surface::Revolution(r) = surface else { return None };
+    let axis = r.axis();
+    let (o, z) = (axis.origin, Vector::from(axis.direction));
+    let radial = |q: Point| { let d = q - o; d - z * d.dot(z) };
+    if radial(old).length() > 1e-9 * scale.max(1.0) {
+        return None;
+    }
+    let (_, _, v0, v1) = surface.bounds();
+    if !(v0.is_finite() && v1.is_finite()) {
+        return None;
+    }
+    // (The middle of the meridian's range: its own side of the axis.)
+    let middle = 0.5 * (v0 + v1);
+    let side = radial(surface.point(uv.x, middle));
+    let signed = |v: f64| radial(surface.point(uv.x, v)).dot(side);
+    if side.length() <= 1e-9 * scale.max(1.0) || signed(uv.y) >= 0.0 {
+        return None;
+    }
+    // From the pole back towards the middle, the first point on its own side.
+    let n = 64;
+    let back = (1..=n).map(|k| uv.y + (middle - uv.y) * k as f64 / n as f64).find(|&v| signed(v) > 0.0)?;
+    let (mut lo, mut hi) = (back, uv.y);
+    for _ in 0..100 {
+        let mid = 0.5 * (lo + hi);
+        if signed(mid) > 0.0 { lo = mid } else { hi = mid }
+    }
+    let q = surface.point(uv.x, 0.5 * (lo + hi));
+    Some(o + z * (q - o).dot(z))
 }
 
 /// Where the offset surfaces of a vertex's faces meet, from its parameters on each: the point
@@ -1076,5 +1119,44 @@ mod tests {
         let inner = thick_solid(&mut model, c, &[top], -1.0, Join::Intersection).unwrap();
         let expected = std::f64::consts::PI * (25.0 * 15.0 - 16.0 * 14.0);
         assert!((volume(&model, inner).mass - expected).abs() < 1e-5 * expected, "{}", volume(&model, inner).mass);
+    }
+
+    /// A teapot's lid: a dome revolved from a spline meeting the axis at an angle, hollowed
+    /// 0.3 inwards from its flat underside. The inside's meridian, offset, passes the axis
+    /// before the spline's end: the inside closes at a pole where it meets the axis (OCCT's
+    /// volume).
+    #[test]
+    fn a_dome_meeting_its_axis_at_an_angle_hollowed() {
+        use crate::geometry::curve::Curve;
+        use crate::math::{Axis, Direction, Vector};
+        let mut model = Model::new();
+        let at = |x: f64, z: f64| Point::new(x, 0.0, z);
+        let spline = crate::geometry::fit::interpolate_with_tangents(
+            &[at(13.0, 20.3), at(2.0, 24.0), at(4.0, 25.0), at(0.0, 26.0)],
+            None,
+            &[Some(Vector::new(-1.0, 0.0, 0.3)), None, None, Some(Vector::new(-1.0, 0.0, 0.1))],
+            false,
+            true,
+            1e-6,
+        )
+        .unwrap();
+        let edges = vec![
+            crate::make::edge_between(&mut model, at(0.0, 20.0), at(13.0, 20.0)).unwrap(),
+            crate::make::edge_between(&mut model, at(13.0, 20.0), at(13.0, 20.3)).unwrap(),
+            crate::make::edge_from_curve(&mut model, Curve::BSpline(spline)).unwrap(),
+            crate::make::edge_between(&mut model, at(0.0, 26.0), at(0.0, 20.0)).unwrap(),
+        ];
+        let wire = crate::make::wire(&mut model, &edges).unwrap();
+        let profile = crate::make::planar_face(&mut model, wire).unwrap();
+        let lid = crate::sweep::revolve(&mut model, profile, Axis::new(Point::ORIGIN, Direction::Z), 2.0 * std::f64::consts::PI).unwrap().shape;
+        let underside = model
+            .unique_subshapes(lid, NodeKind::Face)
+            .into_iter()
+            .find(|&f| matches!(model.surface(f), Some(Surface::Plane(p)) if (p.origin().z - 20.0).abs() < 1e-9))
+            .unwrap();
+        let hollow = thick_solid(&mut model, lid, &[underside], -0.3, Join::Arc).unwrap();
+        valid(&model, hollow);
+        let v = volume(&model, hollow).mass;
+        assert!((v - 197.0377).abs() < 1e-2, "{v}");
     }
 }
