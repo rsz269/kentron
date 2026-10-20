@@ -4,8 +4,10 @@
 //! | profile | allocator | collection |
 //! |---|---|---|
 //! | `low-memory` | the system's | also forgets values derived from removed nodes |
-//! | `balanced` (default) | the system's | removes unreachable nodes, keeps derived values |
-//! | `fast` | mimalloc | as `balanced` |
+//! | `balanced` | the system's | removes unreachable nodes, keeps derived values |
+//! | `fast` (default) | mimalloc | as `balanced` |
+//!
+//! (Built without the `mimalloc` feature, `balanced` is the default.)
 //!
 //! The allocator is chosen once, at the first allocation (memory must be freed by the
 //! allocator that gave it), from `PYKENTRON_PROFILE` in the environment: the profile is set
@@ -73,13 +75,17 @@ fn from_environment() -> Option<Result<Profile, &'static [u8]>> {
 /// The profile in use, 0 until it is first asked for.
 static CURRENT: AtomicU8 = AtomicU8::new(0);
 
-/// The profile in use: the environment's at first (`balanced` if it names none).
+/// The profile used where the environment names none: `fast` where built with mimalloc.
+const DEFAULT: Profile = if cfg!(feature = "mimalloc") { Profile::Fast } else { Profile::Balanced };
+
+/// The profile in use: the environment's at first ([`DEFAULT`] if it names none).
 pub(crate) fn current() -> Profile {
     match CURRENT.load(Ordering::Relaxed) {
         0 => {
             let profile = match from_environment() {
                 Some(Ok(p)) if !p.uses_mimalloc() || cfg!(feature = "mimalloc") => p,
-                _ => Profile::Balanced,
+                Some(Ok(_)) => Profile::Balanced,
+                _ => DEFAULT,
             };
             CURRENT.store(profile as u8, Ordering::Relaxed);
             profile
@@ -143,7 +149,11 @@ mod allocator {
         match CHOSEN.load(Ordering::Relaxed) {
             0 => {
                 // (Threads allocating first at once all choose the same.)
-                let chosen = super::from_environment().is_some_and(|p| p.is_ok_and(|p| p.uses_mimalloc()));
+                let chosen = match super::from_environment() {
+                    Some(Ok(p)) => p.uses_mimalloc(),
+                    // (A name of no profile fails the import: the default's allocator meanwhile.)
+                    _ => super::DEFAULT.uses_mimalloc(),
+                };
                 CHOSEN.store(if chosen { 2 } else { 1 }, Ordering::Relaxed);
                 chosen
             }

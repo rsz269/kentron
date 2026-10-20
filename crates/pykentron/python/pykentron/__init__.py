@@ -3,7 +3,7 @@
 Scripts written for CadQuery run on kentron by importing `pykentron` in its place (or through
 the `cadquery` shim package next to this one, which re-exports it).
 
-Memory against speed: `PYKENTRON_PROFILE` (`low-memory`, `balanced`, the default, or `fast`)
+Memory against speed: `PYKENTRON_PROFILE` (`low-memory`, `balanced` or `fast`, the default)
 set before the import chooses a profile; `profile()` and `set_profile()` read and change it.
 """
 
