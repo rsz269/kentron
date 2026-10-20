@@ -76,9 +76,9 @@ conversation's context, read back from the cache).
   lacks (glTF, VRML, VTK), or OCCT-specific behaviour.
 - **44 CadQuery models from a private project** build on pykentron; for the 42 that return
   their parts, every part is valid and within 0.1% of CadQuery's volume.
-- **358 CadQuery scripts from 87 public projects**: pykentron builds 268 of them as
-  CadQuery does. On those 268 it takes 191 s in all, against CadQuery's 585 s, and is faster
-  on 239. The cases still to fix are in `crates/pykentron/tests/found/`.
+- **358 CadQuery scripts from 87 public projects**: pykentron builds 269 of them as
+  CadQuery does. On those 269 it takes 123 s in all, against CadQuery's 452 s, and is faster
+  on 241. The cases still to fix are in `crates/pykentron/tests/found/`.
 
 About 12,700 tests run (with OCCT's dataset). About 1,500 of them are known gaps, marked as
 expected failures (`crates/occt-tests/expected_failures.txt` for OCCT's scripts): they pass
@@ -92,12 +92,12 @@ CadQuery 2.8 (OCCT), median of 5 runs:
 
 | | wall time | CPU time | peak memory |
 |---|---|---|---|
-| pykentron, `fast` profile | 4.8 s | 5.9 s | 420 MB |
-| pykentron, `balanced` profile (default) | 5.4 s | 6.4 s | 339 MB |
-| pykentron, `low-memory` profile | 5.4 s | 6.4 s | 292 MB |
-| CadQuery 2.8 / OCCT | 40.9 s | 125.8 s | 1,094 MB |
+| pykentron, `fast` profile | 4.4 s | 5.3 s | 470 MB |
+| pykentron, `balanced` profile (default) | 5.0 s | 5.9 s | 376 MB |
+| pykentron, `low-memory` profile | 5.1 s | 6.1 s | 330 MB |
+| CadQuery 2.8 / OCCT | 41.9 s | 129.9 s | 1,094 MB |
 
-With the `fast` profile, that is 8.6× faster than CadQuery, with 21× less CPU time and 2.6×
+With the `fast` profile, that is 9.4× faster than CadQuery, with 24× less CPU time and 2.3×
 less memory.
 
 pykentron frees shapes that Python no longer refers to. How much it frees, and which
