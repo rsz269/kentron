@@ -79,9 +79,36 @@ pub fn union(model: &mut Model, a: Shape, b: Shape) -> Result<Shape> {
             }
             let result = model.new_empty(crate::topology::NodeKind::Compound);
             for r in 0..solids.len() {
-                let members: Vec<Shape> = (0..solids.len()).filter(|&i| root(&mut group, i) == r).map(|i| solids[i]).collect();
-                let Some((&first, rest)) = members.split_first() else { continue };
-                let fused = rest.iter().try_fold(first, |acc, &s| run(model, acc, s, Operation::Union))?;
+                let members: Vec<usize> = (0..solids.len()).filter(|&i| root(&mut group, i) == r).collect();
+                if members.is_empty() {
+                    continue;
+                }
+                // (In layers of solids whose boxes are apart, each layer fused at once with
+                // what the ones before make: many solids each meeting only one other, as
+                // tiles laid on a floor, in a few operations, not one each on the whole
+                // growing.)
+                let mut layers: Vec<Vec<usize>> = Vec::new();
+                for &i in &members {
+                    match layers.iter_mut().find(|layer| layer.iter().all(|&j| !boxes[i].overlaps(&boxes[j]))) {
+                        Some(layer) => layer.push(i),
+                        None => layers.push(vec![i]),
+                    }
+                }
+                let gathered = |model: &mut Model, layer: &[usize]| -> Result<Shape> {
+                    if let [one] = layer {
+                        return Ok(solids[*one]);
+                    }
+                    let c = model.new_empty(crate::topology::NodeKind::Compound);
+                    for &i in layer {
+                        model.add(c, solids[i])?;
+                    }
+                    Ok(c)
+                };
+                let mut fused = gathered(model, &layers[0])?;
+                for layer in &layers[1..] {
+                    let next = gathered(model, layer)?;
+                    fused = run(model, fused, next, Operation::Union)?;
+                }
                 for solid in model.explore(fused, crate::topology::NodeKind::Solid).collect::<Vec<_>>() {
                     model.add(result, solid)?;
                 }
@@ -890,6 +917,23 @@ mod tests {
         check(&model, both, 4.0, 16.0, 1);
         let touching = union(&mut model, corner_a, b).unwrap();
         check(&model, touching, 2.0, 12.0, 2);
+    }
+
+    #[test]
+    fn tiles_laid_on_a_floor() {
+        // A floor and a compound of 64 tiles sunk a little into it, apart from each other:
+        // fused in two operations (the floor, then the tiles at once), one solid.
+        let mut model = Model::new();
+        let floor = cuboid(&mut model, (0.0, 0.0, 0.0), (16.0, 16.0, 1.0));
+        let tiles = model.new_empty(NodeKind::Compound);
+        for i in 0..8 {
+            for j in 0..8 {
+                let tile = cuboid(&mut model, (i as f64 * 2.0 + 0.25, j as f64 * 2.0 + 0.25, 0.5), (1.5, 1.5, 1.0));
+                model.add(tiles, tile).unwrap();
+            }
+        }
+        let fused = union(&mut model, floor, tiles).unwrap();
+        check(&model, fused, 256.0 + 64.0 * 1.5 * 1.5 * 0.5, 2.0 * 256.0 + 4.0 * 16.0 + 64.0 * 4.0 * 1.5 * 0.5, 1);
     }
 
     #[test]
