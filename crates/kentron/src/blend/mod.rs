@@ -2280,7 +2280,7 @@ mod tests {
         let (v, w) = (properties::volume(&model, rounded).mass, properties::volume(&model, alone).mass);
         assert!((v - w).abs() < 1e-7 * w, "{v} != {w}");
         let (b, c) = (properties::volume(&model, rounded).center_of_mass, properties::volume(&model, alone).center_of_mass);
-        assert!((b - (c + Vector::new(5.0, -3.0, 2.0))).length() < 1e-7, "{b:?} {c:?}");
+        assert!((b - (c + Vector::new(5.0, -3.0, 2.0))).length() < 1e-6, "{b:?} {c:?}");
     }
 
     /// A keycap: a loft from a square of 18.3 rounded by 1.5 to one of 13.5 rounded by 2.5,

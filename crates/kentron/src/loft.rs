@@ -979,24 +979,40 @@ fn build(model: &mut Model, sections: &[Section], grid: &Grid, closed: bool, loo
             _ => None,
         })
         .collect();
-    let mut section_edges: std::collections::HashMap<(usize, usize), EdgeId> = std::collections::HashMap::new();
-    let mut section_edge = |model: &mut Model, i: usize, k: usize| -> Result<EdgeId> {
+    // (Each with the range of its curve that the face's parameter from 0 to 1 across runs
+    // over.)
+    let mut section_edges: std::collections::HashMap<(usize, usize), (EdgeId, (f64, f64))> = std::collections::HashMap::new();
+    let mut section_edge = |model: &mut Model, i: usize, k: usize| -> Result<(EdgeId, (f64, f64))> {
         let k = same(k);
         if let Some(&e) = section_edges.get(&(i, k)) {
             return Ok(e);
         }
         let id = model.add_edge(vertex(k, i), vertex(k, i + 1), crate::tolerance::LINEAR)?;
+        let mut range = (0.0, 1.0);
         if let Section::Wire(w) = &sections[k] {
+            let (curve, first, last) = w.pieces[i].forward();
             if analytic[i].is_some() {
-                let (curve, first, last) = w.pieces[i].forward();
                 model.set_edge_curve(id.into(), curve, crate::tolerance::LINEAR)?;
                 model.set_edge_range(id.into(), first, last)?;
+                range = (first, last);
+            } else if matches!(curve, Curve::Line(_) | Curve::Circle(_) | Curve::Ellipse(_)) {
+                // A line or conic stays one (as its section's edge, meeting the faces beyond
+                // it on the same curve), over the same fraction of its range as the face's
+                // boundary across: within the tolerance of that boundary from it.
+                let grid_curve = &grid.curves[i][k];
+                let off = (0..=64)
+                    .map(|j| j as f64 / 64.0)
+                    .map(|t| grid_curve.point(t).distance(curve.point(first + (last - first) * t)))
+                    .fold(0.0, f64::max);
+                model.set_edge_curve(id.into(), curve, crate::tolerance::LINEAR.max(2.0 * off))?;
+                model.set_edge_range(id.into(), first, last)?;
+                range = (first, last);
             } else {
                 model.set_edge_curve(id.into(), Curve::BSpline(grid.curves[i][k].clone()), crate::tolerance::LINEAR)?;
             }
         }
-        section_edges.insert((i, k), id);
-        Ok(id)
+        section_edges.insert((i, k), (id, range));
+        Ok((id, range))
     };
     let mut faces = Vec::new();
     let mut columns: Vec<Vec<Shape>> = vec![Vec::new(); edges];
@@ -1023,8 +1039,8 @@ fn build(model: &mut Model, sections: &[Section], grid: &Grid, closed: bool, loo
         }
         for (i, surface) in surfaces.into_iter().enumerate() {
             let face = model.new_empty(NodeKind::Face);
-            let bottom = section_edge(model, i, from)?;
-            let top = section_edge(model, i, to)?;
+            let (bottom, bottom_range) = section_edge(model, i, from)?;
+            let (top, top_range) = section_edge(model, i, to)?;
             let (left, right) = (across_edges[i % boundaries].expect("edge"), across_edges[(i + 1) % boundaries].expect("edge"));
             let uv = |u: f64, v: f64| Point2::new(u, v);
             let (surface, mut parts) = match &analytic[i] {
@@ -1032,9 +1048,9 @@ fn build(model: &mut Model, sections: &[Section], grid: &Grid, closed: bool, loo
                 None => (
                     surface,
                     vec![
-                        (bottom, Orientation::Forward, segment(uv(0.0, v0), uv(1.0, v0), 0.0, 1.0), (0.0, 1.0)),
+                        (bottom, Orientation::Forward, segment(uv(0.0, v0), uv(1.0, v0), bottom_range.0, bottom_range.1), bottom_range),
                         (right, Orientation::Forward, segment(uv(1.0, v0), uv(1.0, v1), v0, v1), (v0, v1)),
-                        (top, Orientation::Reversed, segment(uv(0.0, v1), uv(1.0, v1), 0.0, 1.0), (0.0, 1.0)),
+                        (top, Orientation::Reversed, segment(uv(0.0, v1), uv(1.0, v1), top_range.0, top_range.1), top_range),
                         (left, Orientation::Reversed, segment(uv(0.0, v0), uv(0.0, v1), v0, v1), (v0, v1)),
                     ],
                 ),
@@ -1081,7 +1097,7 @@ fn build(model: &mut Model, sections: &[Section], grid: &Grid, closed: bool, loo
             Err(Error::InvalidInput(m)) if m.contains("not planar") => {
                 let mut runs = Vec::with_capacity(edges);
                 for &i in &order {
-                    let edge = section_edge(model, i, k)?;
+                    let (edge, _) = section_edge(model, i, k)?;
                     let (curve, first, last) = model.edge_curve(Shape::from(edge)).expect("a section edge has a curve");
                     runs.push((edge, outward, curve, first, last));
                 }
@@ -1095,7 +1111,7 @@ fn build(model: &mut Model, sections: &[Section], grid: &Grid, closed: bool, loo
         model.set_face_surface(face, Surface::Plane(plane), crate::tolerance::LINEAR)?;
         let mut coedges = Vec::with_capacity(edges);
         for i in order {
-            let edge = section_edge(model, i, k)?;
+            let (edge, _) = section_edge(model, i, k)?;
             let coedge = model.add_coedge(edge, outward)?;
             let (curve, first, last) = model.edge_curve(Shape::from(edge)).expect("a section edge has a curve");
             let pcurve = crate::geometry::project::analytic_pcurve(&curve, &Surface::Plane(plane))
@@ -1269,6 +1285,40 @@ mod tests {
         let even = volume(&mut model, Spacing::Even);
         assert!((even - 1011.593).abs() < 1e-3, "{even}");
         assert!(volume(&mut model, Spacing::ByDistance) > even + 100.0);
+    }
+
+    /// A loft from a circle up to a rectangle through a smaller circle: the bottom circle's
+    /// pieces (split to match the rectangle's sides) stay arcs of it, the rectangle's sides
+    /// lines, as the faces beyond (a cylinder the loft stands on) meet them; the faces between
+    /// hold to them within the edges' tolerances (the middle section is no edge: the faces run
+    /// on through it).
+    #[test]
+    fn a_loft_keeps_its_sections_lines_and_arcs() {
+        let mut model = Model::new();
+        let sections = [
+            circle(&mut model, 0.0, 3.0, Direction::Z),
+            circle(&mut model, 2.0, 2.5, Direction::Z),
+            polygon(&mut model, &[[-2.0, -1.0, 4.0], [2.0, -1.0, 4.0], [2.0, 1.0, 4.0], [-2.0, 1.0, 4.0]]),
+        ];
+        let options = LoftOptions { solid: true, ..Default::default() };
+        let solid = loft(&mut model, &sections, &options).unwrap().shape;
+        let report = crate::validity::check(&model, solid);
+        assert!(report.is_valid(), "{report:?}");
+        let mut arcs = 0;
+        let mut lines = 0;
+        for e in model.unique_subshapes(solid, NodeKind::Edge) {
+            let Some((curve, first, last)) = model.edge_curve(e) else { continue };
+            let (a, b) = (curve.point(first), curve.point(last));
+            if (a.z - b.z).abs() > 1e-9 {
+                continue;
+            }
+            match curve {
+                Curve::Circle(_) => arcs += 1,
+                Curve::Line(_) => lines += 1,
+                _ => panic!("a section edge at z {} made {curve:?}", a.z),
+            }
+        }
+        assert_eq!((arcs, lines), (4, 4));
     }
 
     /// A strip 0.1 high ruled between a helix winding forty times round a unit cylinder
