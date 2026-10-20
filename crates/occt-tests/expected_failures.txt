@@ -57,11 +57,6 @@ tests/blend/simple/X1
 tests/blend/simple/X4
 tests/blend/simple/Y6
 tests/blend/simple/Y7
-tests/blend/tolblend_buildvol/A1
-tests/blend/tolblend_buildvol/A2
-tests/blend/tolblend_buildvol/A3
-tests/blend/tolblend_buildvol/A4
-tests/blend/tolblend_buildvol/A9
 tests/blend/tolblend_simple/A2
 tests/blend/tolblend_simple/A3
 tests/blend/tolblend_simple/A4

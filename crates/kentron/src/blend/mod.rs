@@ -1498,6 +1498,14 @@ impl RadiusLaw {
         }
         let s: Vec<f64> = pairs.iter().map(|p| (p.0 - first) / (last - first)).collect();
         let mut r: Vec<f64> = pairs.iter().map(|p| p.1).collect();
+        // (A radius of zero, as OCCT takes it: the fillet narrows to nothing there, here to a
+        // thousandth of the largest radius.)
+        let largest = r.iter().copied().fold(0.0, f64::max);
+        for r in r.iter_mut() {
+            if *r == 0.0 && largest > 0.0 {
+                *r = 1e-3 * largest;
+            }
+        }
         if s.windows(2).any(|w| !(w[0] < w[1])) || r.iter().any(|&r| !(r > 0.0)) {
             return Err(Error::InvalidInput("radius law parameters must increase and radii be positive".into()));
         }
