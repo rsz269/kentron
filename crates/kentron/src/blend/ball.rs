@@ -657,9 +657,6 @@ pub(super) fn rolling_tool(model: &mut Model, shape: Shape, edge: Shape, radius:
     // (On the faces' own surfaces: the tool goes on past the edge's ends, where a boolean
     // meets it with the faces as they are.)
     let Rolling { sections, convex, closed, t0, t1, .. } = rolling_on(model, shape, edge, &Profile::Ball(radius), 1, false)?;
-    if closed {
-        return Err(Error::InvalidInput("rolling-ball tools along closed edges are not supported yet".into()));
-    }
     let span = (t1 - t0).abs() * 1e-9;
     let kept: Vec<&Section> = sections.iter().filter(|s| convex || (s.t >= t0.min(t1) - span && s.t <= t0.max(t1) + span)).collect();
     let mut wires = Vec::with_capacity(kept.len());
@@ -689,7 +686,24 @@ pub(super) fn rolling_tool(model: &mut Model, shape: Shape, edge: Shape, radius:
         ];
         wires.push(crate::make::wire(model, &edges)?);
     }
-    let tool = crate::loft::loft(model, &wires, &crate::loft::LoftOptions { solid: true, ruled: false, ..Default::default() })?.shape;
+    let options = crate::loft::LoftOptions { solid: true, ruled: false, ..Default::default() };
+    let tool = if closed {
+        // Along a closed edge: two halves of the loop of sections, overlapping by a quarter
+        // of it, lofted each and fused (each one's ends inside the other).
+        // (The last section repeats the first.)
+        let n = wires.len().saturating_sub(1);
+        if n < 8 {
+            return Err(Error::InvalidInput("a rolling-ball tool along a closed edge with too few sections".into()));
+        }
+        let (half, overlap) = (n / 2, n / 8);
+        let first: Vec<Shape> = wires[..=half + overlap].to_vec();
+        let second: Vec<Shape> = wires[half - overlap..n].iter().chain(&wires[..=overlap]).copied().collect();
+        let a = crate::loft::loft(model, &first, &options)?.shape;
+        let b = crate::loft::loft(model, &second, &options)?.shape;
+        crate::boolean::union(model, a, b)?
+    } else {
+        crate::loft::loft(model, &wires, &options)?.shape
+    };
     let reach = 0.05 * kept_radius;
     cover_sides(model, tool, shape, edge, reach)?;
     Ok((tool, convex))

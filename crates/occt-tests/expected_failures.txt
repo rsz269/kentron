@@ -53,7 +53,6 @@ tests/blend/simple/U7
 tests/blend/simple/V6
 tests/blend/simple/W5
 tests/blend/simple/W7
-tests/blend/simple/W9
 tests/blend/simple/X1
 tests/blend/simple/X4
 tests/blend/simple/Y6
