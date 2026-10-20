@@ -1,8 +1,8 @@
 name: Release
 
-# Builds pykentron's wheels and source distribution and publishes them to PyPI (trusted
-# publishing: the PyPI project trusts this workflow, no token is stored). Runs for a version
-# tag, or by hand.
+# Builds pykentron's wheels and source distribution and publishes them to PyPI, and the
+# kentron crate to crates.io (trusted publishing: PyPI and crates.io trust this workflow, no
+# token is stored). Runs for a version tag, or by hand.
 on:
   push:
     tags: ["v*"]
@@ -58,6 +58,26 @@ jobs:
           python -c "import pykentron as cq; assert abs(cq.Workplane().box(1, 2, 3).val().Volume() - 6) < 1e-9"
           printf 'import cadquery as cq\nr = cq.Workplane("XY").box(2, 3, 4).faces(">Z").workplane().hole(1)\nprint(round(r.val().Volume(), 4))\n' > script.py
           test "$(pykentron-run script.py)" = "20.8584"
+
+  crate:
+    name: Publish kentron to crates.io
+    runs-on: ubuntu-latest
+    # (Trusted publishing, as for PyPI: crates.io trusts this workflow in this environment.)
+    environment: crates-io
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: The tag names the crate's version
+        if: github.ref_type == 'tag'
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 | python3 -c "import json, sys; print(next(p['version'] for p in json.load(sys.stdin)['packages'] if p['name'] == 'kentron'))")
+          test "${GITHUB_REF_NAME}" = "v${version}" || { echo "tag ${GITHUB_REF_NAME} is not v${version}"; exit 1; }
+      - uses: rust-lang/crates-io-auth-action@v1
+        id: auth
+      - run: cargo publish -p kentron
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
 
   publish:
     name: Publish to PyPI
