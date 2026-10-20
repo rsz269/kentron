@@ -1514,17 +1514,6 @@ fn grid_size(s: &Surface) -> (usize, usize) {
     }
 }
 
-/// Whether sections of free-form surfaces are traced by marching along them (else on a grid
-/// of signed distances): by default, unless the environment variable `KENTRON_MARCH` says
-/// otherwise (`0`, `off`, `false` or `no` for the grid), read once.
-fn marching() -> bool {
-    static MARCHING: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *MARCHING.get_or_init(|| match std::env::var("KENTRON_MARCH") {
-        Ok(value) => !matches!(value.trim().to_ascii_lowercase().as_str(), "0" | "off" | "false" | "no"),
-        Err(_) => true,
-    })
-}
-
 fn sliced(base: &Face, other: &Face, crossings: &[Point]) -> Vec<Section> {
     use crate::geometry::ParametricSurface;
     let (s, q) = (&base.surface, &other.surface);
@@ -1607,7 +1596,7 @@ fn sliced(base: &Face, other: &Face, crossings: &[Point]) -> Vec<Section> {
     // (Where either surface is free-form, or a surface of extrusion: on its grid of signed
     // distances, as fine as a quadric's, sections are slow to find.)
     let extrusion = |x: &Surface| matches!(x, Surface::Extrusion(_));
-    if marching() && (geom::freeform(s) || geom::freeform(q) || extrusion(s) || extrusion(q)) {
+    if geom::freeform(s) || geom::freeform(q) || extrusion(s) || extrusion(q) {
         if let Some(chains) = marched() {
             let mut out = Vec::new();
             for super::march::Chain { uv, st, closed } in chains {

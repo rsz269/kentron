@@ -112,17 +112,12 @@ passing `CollectOptions` to `Model::collect_garbage_with`.
 
 ## Tracing sections of free-form surfaces
 
-Where a boolean operation meets a B-spline, Bezier or offset surface, the curves where the
-faces meet are traced numerically. `KENTRON_MARCH` chooses how; it is read once per process:
-
-| value | how sections are traced |
-|---|---|
-| unset, `1`, `on` (default) | by marching along both surfaces at once from seeds found on a coarse grid, falling back to the grid where a branch cannot be followed |
-| `0`, `off` | on a grid over one surface, where the other's signed distance changes sign |
-
-Marching is several times faster on large free-form faces (a boolean from the OCCT suite,
-`bugs/modalg_7/bug29038`: 16.6 s on the grid, 4.0 s marching); the grid is kept for
-comparison.
+Where a boolean operation meets a B-spline, Bezier or offset surface, or a surface of
+extrusion, the curves where the faces meet are traced numerically: by marching along both
+surfaces at once from seeds found on a coarse grid, falling back to the grid (where the other
+surface's signed distance changes sign) where a branch cannot be followed. Marching is several
+times faster on large free-form faces than the grid alone (a boolean from the OCCT suite,
+`bugs/modalg_7/bug29038`: 4.0 s instead of 16.6 s).
 
 ## Installing
 
