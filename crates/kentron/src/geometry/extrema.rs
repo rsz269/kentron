@@ -1213,6 +1213,14 @@ pub(crate) fn newton_foot_to_the_last(p: Point, surface: &Surface, start: (f64, 
 
 fn newton_foot_to(p: Point, surface: &Surface, start: (f64, f64), spare_last: bool) -> SurfaceFoot {
     use super::parametric::ParametricSurface;
+    // An offset surface's normal lines are its basis's: a point's foot on it is where its
+    // foot on the basis is, found with the basis's second derivatives (the offset's need the
+    // basis's third).
+    if let Surface::Offset(o) = surface {
+        let foot = newton_foot_to(p, o.basis(), start, spare_last);
+        let (point, du, dv) = surface.d1(foot.u, foot.v);
+        return SurfaceFoot { u: foot.u, v: foot.v, point, du, dv };
+    }
     let (u0, u1, v0, v1) = surface.bounds();
     let (u_periodic, v_periodic) = (surface.is_u_periodic(), surface.is_v_periodic());
     let clamp = |u: f64, v: f64| (if u_periodic { u } else { u.clamp(u0, u1) }, if v_periodic { v } else { v.clamp(v0, v1) });

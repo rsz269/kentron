@@ -171,6 +171,95 @@ impl Patches {
         }
     }
 
+    /// The point and its derivatives `S(k, l)` of orders `k + l <= 3` at `(u, v)` as
+    /// coordinates (`[k][l]`, the others zero); `None` as for [`Self::evaluate`].
+    pub(super) fn evaluate3(&self, u: f64, v: f64) -> Option<[[[f64; 3]; 4]; 4]> {
+        let (u0, u1, v0, v1) = self.bounds();
+        if !(u0..=u1).contains(&u) || !(v0..=v1).contains(&v) {
+            return None;
+        }
+        match self.u_degree.max(self.v_degree) {
+            0..=3 => Some(self.sums3::<4>(u, v)),
+            4..=8 => Some(self.sums3::<9>(u, v)),
+            9..=25 => Some(self.sums3::<26>(u, v)),
+            _ => None,
+        }
+    }
+
+    /// [`Self::evaluate3`] with arrays of `N` (more than the degrees).
+    fn sums3<const N: usize>(&self, u: f64, v: f64) -> [[[f64; 3]; 4]; 4] {
+        const ORDER: usize = 3;
+        let (pu, pv) = (self.u_degree, self.v_degree);
+        let (a, s, ku) = locate(&self.u_breaks, u);
+        let (b, t, kv) = locate(&self.v_breaks, v);
+        let bu = bernstein3::<N>(pu, s, ku);
+        let bv = bernstein3::<N>(pv, t, kv);
+        let npv = self.v_breaks.len() - 1;
+        let patch = &self.points[(a * npv + b) * (pu + 1) * (pv + 1)..][..(pu + 1) * (pv + 1)];
+        // Homogeneous sums h[k][l] = Σ B_i^(k) B_j^(l) (w P, w) for k + l <= 3, along v first.
+        let mut h = [[[0.0f64; 4]; 4]; 4];
+        for i in 0..=pu {
+            let row = &patch[i * (pv + 1)..][..pv + 1];
+            let mut r = [[0.0f64; 4]; 4];
+            for j in 0..=pv {
+                let q = row[j];
+                for l in 0..=ORDER {
+                    let f = bv[l][j];
+                    for c in 0..4 {
+                        r[l][c] += f * q[c];
+                    }
+                }
+            }
+            for k in 0..=ORDER {
+                let f = bu[k][i];
+                for l in 0..=ORDER - k {
+                    for c in 0..4 {
+                        h[k][l][c] += f * r[l][c];
+                    }
+                }
+            }
+        }
+        let mut out = [[[0.0f64; 3]; 4]; 4];
+        if !self.rational {
+            for k in 0..=ORDER {
+                for l in 0..=ORDER - k {
+                    out[k][l] = [h[k][l][0], h[k][l][1], h[k][l][2]];
+                }
+            }
+            return out;
+        }
+        // The quotient rule (The NURBS Book, A4.4).
+        let binom = |n: usize, r: usize| (1..=r).fold(1.0, |acc, i| acc * (n - r + i) as f64 / i as f64);
+        for k in 0..=ORDER {
+            for l in 0..=ORDER - k {
+                let mut c = [h[k][l][0], h[k][l][1], h[k][l][2]];
+                for j in 1..=l {
+                    let f = binom(l, j) * h[0][j][3];
+                    for d in 0..3 {
+                        c[d] -= f * out[k][l - j][d];
+                    }
+                }
+                for i in 1..=k {
+                    let f = binom(k, i) * h[i][0][3];
+                    for d in 0..3 {
+                        c[d] -= f * out[k - i][l][d];
+                    }
+                    for j in 1..=l {
+                        let g = binom(k, i) * binom(l, j) * h[i][j][3];
+                        for d in 0..3 {
+                            c[d] -= g * out[k - i][l - j][d];
+                        }
+                    }
+                }
+                for d in 0..3 {
+                    c[d] /= h[0][0][3];
+                }
+                out[k][l] = c;
+            }
+        }
+        out
+    }
+
     /// [`Self::evaluate`] at `(u, v)` for each `u` of `us` (best ascending), into `out`, bit
     /// for bit the same: each patch row is summed along v once for all the `u`s in the
     /// patch, then each `u` sums the rows. `false` (and `out` untouched) where `v` is out of
@@ -544,6 +633,51 @@ fn bernstein<const N: usize, const ORDER: usize>(p: usize, s: f64, scale: f64) -
             let left = if i >= 1 { low[i - 1] } else { 0.0 };
             let right = if i < p { low[i] } else { 0.0 };
             out[1][i] = f * (left - right);
+        }
+    }
+    out[0] = b;
+    out
+}
+
+/// The Bernstein polynomials of degree `p` (below `N`) at `s` and their derivatives up to the
+/// third in the parameter whose patch place is `s` (`scale` = ds/dt).
+fn bernstein3<const N: usize>(p: usize, s: f64, scale: f64) -> [[f64; N]; 4] {
+    let r = 1.0 - s;
+    let mut out = [[0.0f64; N]; 4];
+    // Degree k from degree k - 1; the lower degrees p - m the derivatives need kept in
+    // out[m] on the way.
+    let mut b = [0.0f64; N];
+    b[0] = 1.0;
+    for k in 1..=p {
+        for m in 1..=3 {
+            if k + m == p + 1 {
+                out[m] = b;
+            }
+        }
+        b[k] = s * b[k - 1];
+        for i in (1..k).rev() {
+            b[i] = r * b[i] + s * b[i - 1];
+        }
+        b[0] *= r;
+    }
+    // d^m/ds^m B_i^p = p (p - 1) ... (p - m + 1) Σ_n (-1)^n C(m, n) B_{i-m+n}^{p-m}.
+    for m in 1..=3 {
+        if m > p {
+            out[m] = [0.0; N];
+            continue;
+        }
+        let low = out[m];
+        let f = (0..m).map(|t| (p - t) as f64 * scale).product::<f64>();
+        let binom = [[1.0, 0.0, 0.0, 0.0], [1.0, 1.0, 0.0, 0.0], [1.0, 2.0, 1.0, 0.0], [1.0, 3.0, 3.0, 1.0]];
+        for i in 0..=p {
+            let mut sum = 0.0;
+            for n in 0..=m {
+                if i + n >= m && i + n - m <= p - m {
+                    let sign = if n % 2 == 0 { 1.0 } else { -1.0 };
+                    sum += sign * binom[m][n] * low[i + n - m];
+                }
+            }
+            out[m][i] = f * sum;
         }
     }
     out[0] = b;

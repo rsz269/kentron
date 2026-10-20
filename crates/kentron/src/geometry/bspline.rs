@@ -2391,7 +2391,10 @@ impl crate::geometry::ParametricSurface for BSplineSurface {
             return s.d3(u, v);
         }
         let at = |d: &[[[f64; 3]; 4]; 4], k: usize, l: usize| d[k][l];
+        // (From the Bézier patches where there are, as the lower derivatives are.)
+        let patched = self.patches().and_then(|p| p.evaluate3(u, v));
         let d: [[[f64; 3]; 4]; 4] = match self.u.degree.max(self.v.degree) {
+            _ if patched.is_some() => patched.expect("patched"),
             0..=3 => self.fast_d3::<4, 8>(u, v),
             4..=8 => self.fast_d3::<9, 18>(u, v),
             9..=25 => self.fast_d3::<26, 52>(u, v),
@@ -2699,7 +2702,8 @@ mod fast_evaluation_tests {
     #[test]
     fn patches_match_the_general_derivatives() {
         // Unclamped ends, a knot of full multiplicity, degree 5 (the larger arrays), a
-        // single span; rational and not; inside and outside the bounds.
+        // single span; rational and not; inside and outside the bounds. (Up to the third
+        // derivatives.)
         let cases = [
             (KnotVector::new(vec![0.0, 0.1, 0.2, 0.5, 0.8, 0.9, 1.0], vec![1, 1, 2, 3, 1, 1, 2], 3), KnotVector::new(vec![0.0, 1.0], vec![6, 6], 5)),
             (KnotVector::new(vec![2.0, 3.0], vec![2, 2], 1), KnotVector::new(vec![0.0, 0.25, 0.5, 1.0], vec![3, 2, 1, 3], 2)),
@@ -2728,6 +2732,11 @@ mod fast_evaluation_tests {
                         assert!(close(d2.duu, general[2][0]) && close(d2.dvv, general[0][2]) && close(d2.duv, general[1][1]), "second derivatives at {s} {t}");
                         let (q, du, _) = surface.d1(s, t);
                         assert!(q.distance(p) <= 1e-14 * scale && (du - d2.du).length() <= 1e-12 * scale);
+                        let third = surface.derivatives_to(s, t, 3, 3, 3);
+                        let d3 = surface.d3(s, t);
+                        let close3 = |a: crate::math::Vector, b: [f64; 3]| (a.x - b[0]).abs().max((a.y - b[1]).abs()).max((a.z - b[2]).abs()) <= 1e-9 * scale;
+                        assert!(close(d3.duu, third[2][0]) && close(d3.duv, third[1][1]) && close(d3.dvv, third[0][2]), "second derivatives (d3) at {s} {t}");
+                        assert!(close3(d3.duuu, third[3][0]) && close3(d3.duuv, third[2][1]) && close3(d3.duvv, third[1][2]) && close3(d3.dvvv, third[0][3]), "third derivatives at {s} {t}");
                     }
                 }
             }
