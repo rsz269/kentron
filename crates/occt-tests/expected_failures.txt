@@ -6,7 +6,6 @@ tests/blend/bfuseblend/A6
 tests/blend/bfuseblend/A8
 tests/blend/bfuseblend/A9
 tests/blend/bfuseblend/B6
-tests/blend/buildevol/B3
 tests/blend/buildevol/J3
 tests/blend/buildevol/J9
 tests/blend/buildevol/K2

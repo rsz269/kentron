@@ -1474,23 +1474,27 @@ fn crosses_itself(model: &Model, shape: Shape) -> bool {
     crate::validity::check(model, shape).errors().any(|p| p.kind == crate::validity::ProblemKind::SelfIntersection)
 }
 
-/// A radius along an edge: the cubic spline through `(s, r)` pairs (`s` from 0 to 1) with
-/// zero slope at both ends (OCCT's `Law_Interpol` with null end derivatives), or, along a
-/// closed edge, the periodic one (OCCT's periodic `Law_Interpol`).
+/// A radius along an edge: the B-spline through `(s, r)` pairs (`s` from 0 to 1) as OCCT's
+/// `Law_Interpol` makes it (cubic, its inner knots at the pairs but the second and the last
+/// but one), or, along a closed edge, the periodic cubic spline (OCCT's periodic
+/// `Law_Interpol`).
 #[doc(alias = "Law_Interpol")]
 struct RadiusLaw {
     s: Vec<f64>,
     r: Vec<f64>,
-    /// Second derivatives at the pairs.
+    /// Second derivatives at the pairs (along a closed edge).
     m: Vec<f64>,
     periodic: bool,
+    /// Along an open edge: the B-spline through the pairs instead (flat knots, coefficients,
+    /// degree).
+    spline: Option<(Vec<f64>, Vec<f64>, usize)>,
 }
 
 impl RadiusLaw {
     fn new(pairs: &[(f64, f64)], closed: bool) -> Result<RadiusLaw> {
         let (first, last) = match pairs {
             [] => return Err(Error::InvalidInput("a radius law needs at least one value".into())),
-            [(_, r)] => return Ok(RadiusLaw { s: vec![0.0, 1.0], r: vec![*r, *r], m: vec![0.0, 0.0], periodic: false }),
+            [(_, r)] => return Ok(RadiusLaw { s: vec![0.0, 1.0], r: vec![*r, *r], m: vec![0.0, 0.0], periodic: false, spline: None }),
             [f, .., l] => (f.0, l.0),
         };
         if !(last > first) {
@@ -1544,44 +1548,56 @@ impl RadiusLaw {
                 m[i] = (a[i][n] - tail) / a[i][i];
             }
             m[n] = m[0];
-            return Ok(RadiusLaw { s, r, m, periodic: true });
+            return Ok(RadiusLaw { s, r, m, periodic: true, spline: None });
         }
-        // The clamped cubic spline (slopes 0 at both ends): a tridiagonal system for the
-        // second derivatives.
+        // As OCCT's (Law_Interpolate, as GeomAPI_Interpolate without tangents): the B-spline
+        // of degree 3 (2 through three pairs, 1 through two) through the pairs at their
+        // parameters, its inner knots at the pairs but the second and the last but one.
         let n = s.len();
-        let h: Vec<f64> = s.windows(2).map(|w| w[1] - w[0]).collect();
-        let mut diag = vec![0.0; n];
-        let mut upper = vec![0.0; n];
-        let mut lower = vec![0.0; n];
-        let mut rhs = vec![0.0; n];
-        diag[0] = h[0] / 3.0;
-        upper[0] = h[0] / 6.0;
-        rhs[0] = (r[1] - r[0]) / h[0];
-        for i in 1..n - 1 {
-            lower[i] = h[i - 1] / 6.0;
-            diag[i] = (h[i - 1] + h[i]) / 3.0;
-            upper[i] = h[i] / 6.0;
-            rhs[i] = (r[i + 1] - r[i]) / h[i] - (r[i] - r[i - 1]) / h[i - 1];
+        let degree = (n - 1).min(3);
+        let mut flat = vec![s[0]; degree + 1];
+        if degree == 3 {
+            flat.extend_from_slice(&s[2..n - 2]);
         }
-        lower[n - 1] = h[n - 2] / 6.0;
-        diag[n - 1] = h[n - 2] / 3.0;
-        rhs[n - 1] = -(r[n - 1] - r[n - 2]) / h[n - 2];
-        // Thomas algorithm.
-        for i in 1..n {
-            let f = lower[i] / diag[i - 1];
-            diag[i] -= f * upper[i - 1];
-            rhs[i] -= f * rhs[i - 1];
+        flat.extend(std::iter::repeat(s[n - 1]).take(degree + 1));
+        let span_of = |x: f64| (degree..n).rev().find(|&k| flat[k] <= x).unwrap_or(degree).min(n - 1);
+        // The collocation matrix, dense (a law has few pairs).
+        let mut a = vec![vec![0.0; n + 1]; n];
+        for (i, &x) in s.iter().enumerate() {
+            let span = span_of(x);
+            let (basis, _) = crate::geometry::basis_and_first::<4>(&flat, 0, span, x, degree, false);
+            for j in 0..=degree {
+                a[i][span - degree + j] = basis[j];
+            }
+            a[i][n] = r[i];
         }
-        let mut m = vec![0.0; n];
-        m[n - 1] = rhs[n - 1] / diag[n - 1];
-        for i in (0..n - 1).rev() {
-            m[i] = (rhs[i] - upper[i] * m[i + 1]) / diag[i];
+        for c in 0..n {
+            let p = (c..n).max_by(|&x, &y| a[x][c].abs().total_cmp(&a[y][c].abs())).expect("a row");
+            a.swap(c, p);
+            if a[c][c].abs() < 1e-300 {
+                return Err(Error::InvalidInput("a radius law that cannot be interpolated".into()));
+            }
+            for row in 0..n {
+                if row != c {
+                    let f = a[row][c] / a[c][c];
+                    for k in c..=n {
+                        a[row][k] -= f * a[c][k];
+                    }
+                }
+            }
         }
-        Ok(RadiusLaw { s, r, m, periodic: false })
+        let coefficients: Vec<f64> = (0..n).map(|i| a[i][n] / a[i][i]).collect();
+        Ok(RadiusLaw { s, r, m: Vec::new(), periodic: false, spline: Some((flat, coefficients, degree)) })
     }
 
     fn at(&self, x: f64) -> f64 {
         let x = if self.periodic { x.rem_euclid(1.0) } else { x.clamp(0.0, 1.0) };
+        if let Some((flat, coefficients, degree)) = &self.spline {
+            let n = coefficients.len();
+            let span = (*degree..n).rev().find(|&k| flat[k] <= x).unwrap_or(*degree).min(n - 1);
+            let (basis, _) = crate::geometry::basis_and_first::<4>(flat, 0, span, x, *degree, false);
+            return (0..=*degree).map(|j| basis[j] * coefficients[span - degree + j]).sum();
+        }
         let k = self.s.windows(2).position(|w| x <= w[1]).unwrap_or(self.s.len() - 2);
         let (a, b) = (self.s[k], self.s[k + 1]);
         let h = b - a;
@@ -2847,11 +2863,18 @@ mod radius_law_tests {
         assert_eq!(flat.at(0.3), 2.0);
     }
 
+    /// An open law passes through its pairs, as OCCT's: through three, the parabola
+    /// through them (r = 1 + 10 s - 8 s² for these); through more, a cubic B-spline.
     #[test]
-    fn open_law_is_flat_at_both_ends() {
+    fn open_law_interpolates_its_pairs() {
         let law = RadiusLaw::new(&[(0.0, 1.0), (1.0, 4.0), (2.0, 3.0)], false).unwrap();
-        assert!((law.at(1.0) - 3.0).abs() < 1e-12);
-        let h = 1e-6;
-        assert!(((law.at(h) - law.at(0.0)) / h).abs() < 1e-3 && ((law.at(1.0) - law.at(1.0 - h)) / h).abs() < 1e-3);
+        for (s, r) in [(0.0, 1.0), (0.5, 4.0), (1.0, 3.0), (0.25, 3.0), (0.75, 4.0)] {
+            assert!((law.at(s) - r).abs() < 1e-12, "{s}: {}", law.at(s));
+        }
+        let pairs = [(0.0, 2.0), (1.0, 3.0), (2.0, 5.0), (3.0, 4.0), (4.0, 6.0), (5.0, 2.5)];
+        let law = RadiusLaw::new(&pairs, false).unwrap();
+        for (u, r) in pairs {
+            assert!((law.at(u / 5.0) - r).abs() < 1e-12, "{u}: {}", law.at(u / 5.0));
+        }
     }
 }

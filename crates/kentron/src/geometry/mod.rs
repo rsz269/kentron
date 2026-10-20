@@ -34,6 +34,7 @@ pub mod surface;
 pub mod tangency;
 
 pub use bspline::KnotDistribution;
+pub(crate) use bspline::basis_and_first;
 pub use control::ControlPoint;
 pub use parametric::{Continuity, ParametricCurve, ParametricSurface, SurfaceD2, SurfaceD3};
 pub(crate) use patches::SurfaceId;
