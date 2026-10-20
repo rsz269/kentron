@@ -22,6 +22,45 @@ enum Contact {
     At(Vec<f64>),
 }
 
+/// Whether `curve` over `[first, last]` keeps clear of `face`'s surface (over the face's
+/// range, and as far past it as its edges stray): no stretch of the curve between samples
+/// (grown by its length and `tolerance`) meets a box of the face's grid (each grown by the
+/// grid's spacing).
+fn clear_of_face(face: &super::graph::Face, curve: &Curve, first: f64, last: f64, tolerance: f64) -> bool {
+    use crate::math::{BoundingBox, Bvh};
+    let cells = face.cells.get_or_init(|| {
+        const N: usize = 32;
+        let ((u0, u1), (v0, v1)) = (face.u_range, face.v_range);
+        let us: Vec<f64> = (0..=N).map(|i| u0 + (u1 - u0) * i as f64 / N as f64).collect();
+        let vs: Vec<f64> = (0..=N).map(|j| v0 + (v1 - v0) * j as f64 / N as f64).collect();
+        let rows = face.surface.points_on_grid(&us, &vs);
+        let mut boxes = Vec::with_capacity(N * N);
+        for j in 0..N {
+            for i in 0..N {
+                let mut b = BoundingBox::EMPTY;
+                for p in [rows[j][i], rows[j][i + 1], rows[j + 1][i], rows[j + 1][i + 1]] {
+                    b.add_point(p);
+                }
+                boxes.push(b);
+            }
+        }
+        // (Each grown by the largest cell's size: the surface between the corners stays
+        // within that of them.)
+        let spacing = boxes.iter().map(|b| b.min.distance(b.max)).fold(0.0, f64::max);
+        let margin = spacing + face.drift + on_tol();
+        let boxes: Vec<BoundingBox> = boxes.into_iter().map(|b| b.enlarged(margin)).collect();
+        Bvh::new(&boxes)
+    });
+    const M: usize = 32;
+    let points: Vec<Point> = (0..=M).map(|k| curve.point(first + (last - first) * k as f64 / M as f64)).collect();
+    points.windows(2).all(|w| {
+        let mut b = BoundingBox::EMPTY;
+        b.add_point(w[0]);
+        b.add_point(w[1]);
+        cells.overlapping(&b.enlarged(w[0].distance(w[1]) + tolerance + on_tol())).is_empty()
+    })
+}
+
 fn surface_contact(curve: &Curve, first: f64, last: f64, surface: &Surface, tolerance: f64) -> Contact {
     if let Some(contact) = plane_contact(curve, first, last, surface).or_else(|| coaxial_contact(curve, first, last, surface)) {
         return contact;
@@ -1868,6 +1907,10 @@ impl Graph {
                     }
                     continue;
                 };
+                // (Clear of a free-form face's grid of boxes: no contact, without the search.)
+                if geom::freeform(&face.surface) && clear_of_face(face, curve, edge.first, edge.last, edge.tolerance) {
+                    continue;
+                }
                 match surface_contact(curve, edge.first, edge.last, &face.surface, edge.tolerance) {
                     Contact::On => meetings.push((fi, Meeting::On)),
                     Contact::At(ts) => {

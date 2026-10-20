@@ -248,6 +248,10 @@ pub(super) struct Face {
     pub samples: std::sync::OnceLock<(Vec<Vec<Point>>, f64)>,
     /// Its boundary's polylines indexed for telling points inside (made on first use).
     pub inside_index: std::sync::OnceLock<geom::InsidePolylines>,
+    /// Boxes of the cells of a grid over its surface's range, each grown by the grid's
+    /// spacing, indexed: what passes none is clear of the surface there (made on first use,
+    /// for free-form faces).
+    pub cells: std::sync::OnceLock<crate::math::Bvh>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1030,6 +1034,7 @@ impl Graph {
             drift: 0.0,
             samples: Default::default(),
             inside_index: Default::default(),
+            cells: Default::default(),
         });
     }
 
