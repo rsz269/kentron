@@ -196,6 +196,9 @@ pub(super) struct BoundaryUse {
     pub pcurve: Curve2,
     /// False for an edge inside the face (internal or external), bounding no region of it.
     pub bounds: bool,
+    /// Whether the face runs along the edge (its region on the left of the pcurve as it
+    /// goes), else against it.
+    pub along: bool,
 }
 
 /// A face of an operand.
@@ -329,6 +332,45 @@ impl Face {
             }
         }
         Location::Outside
+    }
+
+    /// Whether `p` (on the face's surface) lies on the face's side of its nearest boundary
+    /// edge, where that is within `near` (and not a seam, nor nearest at an end of it): by the
+    /// edge's own curve, where the boundary's polylines, their chords cutting across its
+    /// bends, cannot tell a point that close.
+    pub fn inside_by_nearest_edge(&self, p: Point, near: f64, edges: &[Edge]) -> Option<bool> {
+        let mut nearest: Option<(f64, usize, f64)> = None;
+        for (k, b) in self.boundary.iter().enumerate().filter(|(_, b)| b.bounds) {
+            let e = &edges[b.edge];
+            let Some(curve) = &e.curve else { continue };
+            let (lo, hi) = e.bbox;
+            let outside = |x: f64, a: f64, b: f64| x < a - near || x > b + near;
+            if outside(p.x, lo.x, hi.x) || outside(p.y, lo.y, hi.y) || outside(p.z, lo.z, hi.z) {
+                continue;
+            }
+            let (t, d) = geom::project(curve, e.first, e.last, p);
+            if d <= near && nearest.is_none_or(|(best, _, _)| d < best) {
+                nearest = Some((d, k, t));
+            }
+        }
+        let (_, k, t) = nearest?;
+        let b = &self.boundary[k];
+        let e = &edges[b.edge];
+        let span = e.last - e.first;
+        if self.boundary.iter().filter(|c| c.edge == b.edge).count() > 1 || (t - e.first).abs() <= 1e-6 * span.abs() || (e.last - t).abs() <= 1e-6 * span.abs() {
+            return None;
+        }
+        let (q, d) = b.pcurve.d1(t);
+        let foot = [q.x, q.y];
+        let uv = geom::uv_of(&self.surface, p);
+        // (The copy of the point's parameters nearest the foot's, across periods.)
+        let near_copy = |x: f64, f: f64, period: Option<f64>| period.map_or(x, |t| x + ((f - x) / t).round() * t);
+        let uv = [near_copy(uv[0], foot[0], self.u_period), near_copy(uv[1], foot[1], self.v_period)];
+        let cross = d.x * (uv[1] - foot[1]) - d.y * (uv[0] - foot[0]);
+        if cross == 0.0 {
+            return None;
+        }
+        Some((cross > 0.0) == b.along)
     }
 
     /// Whether `p` lies within `near` of one of the face's edges.
@@ -808,7 +850,8 @@ impl Graph {
                         }
                     };
                     let bounds = !matches!(model[coedge_id].orientation, Orientation::Internal | Orientation::External);
-                    boundary.push(BoundaryUse { edge: index, pcurve, bounds });
+                    let along = model[coedge_id].orientation.compose(wire.orientation) == Orientation::Forward;
+                    boundary.push(BoundaryUse { edge: index, pcurve, bounds, along });
                     drift = drift.max(model.tolerance(Shape::from(edge_id)));
                 }
             }

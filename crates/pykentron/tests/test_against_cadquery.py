@@ -297,6 +297,40 @@ def filled_square_through_a_point(cq):
     return cq.Face.makeNSidedSurface(edges, [cq.Vector(5, 5, 5)])
 
 
+def reeded_prisms_under_their_lids(cq):
+    # (A prism ringed by round ribs, a rounded lid standing on it, its sides at the ribs'
+    # crests: each rib's arc meets a side a hair either way of tangent, crossing it twice
+    # close together, and the slivers between are faces of the union too, closed.)
+    def outline_point(w, d, r, s):
+        fx, fy = w / 2 - r, d / 2 - r
+        flats = [((0, d / 2), (1, 0), fx), ((w / 2, fy), (0, -1), 2 * fy), ((fx, -d / 2), (-1, 0), 2 * fx), ((-w / 2, -fy), (0, 1), 2 * fy), ((-fx, d / 2), (1, 0), fx)]
+        arcs = [((fx, fy), 90), ((fx, -fy), 0), ((-fx, -fy), -90), ((-fx, fy), 180)]
+        for i, ((x, y), (dx, dy), length) in enumerate(flats):
+            if s <= length or i == 4:
+                return (x + dx * s, y + dy * s), (-dy, dx)
+            s -= length
+            (cx, cy), a0 = arcs[i]
+            if s <= math.pi * r / 2:
+                a = math.radians(a0) - s / r
+                return (cx + r * math.cos(a), cy + r * math.sin(a)), (math.cos(a), math.sin(a))
+            s -= math.pi * r / 2
+
+    def module(w, d, z0, lip, z1, rib=0.8):
+        r = min(12.0, min(w, d) / 2 - 0.5)
+        n = 4 * round((2 * (w + d) - 8 * r + 2 * math.pi * r) / 12)
+        step = (2 * (w + d) - 8 * r + 2 * math.pi * r) / n
+        grooves = [cq.Vector(*outline_point(w, d, r, k * step)[0]) for k in range(n)]
+        edges = []
+        for k in range(n):
+            (x, y), (ax, ay) = outline_point(w, d, r, (k + 0.5) * step)
+            edges.append(cq.Edge.makeThreePointArc(grooves[k], cq.Vector(x + ax * rib, y + ay * rib), grooves[(k + 1) % n]))
+        reeds = cq.Solid.extrudeLinear(cq.Face.makeFromWires(cq.Wire.assembleEdges(edges)), cq.Vector(0, 0, lip - z0)).translate(cq.Vector(0, 0, z0))
+        lid = cq.Workplane("XY").workplane(offset=lip).rect(w + 2 * rib, d + 2 * rib).extrude(z1 - lip).edges("|Z").fillet(r + rib).val()
+        return reeds.fuse(lid)
+
+    return cq.Compound.makeCompound([module(48.7, 48.7, 14.9, 31.7, 38.7), module(99.5, 48.7, 14.9, 100.0, 107.0).translate(cq.Vector(0, 80, 0))])
+
+
 CASES = [
     box, cylinder_along_y, cone, workplane_box, fused_boxes, cut_bores, intersected,
     polyline_prism_xz, polyline_prism_custom_plane, hexagon, face_with_hole, loft,
@@ -308,7 +342,7 @@ CASES = [
     fuse_of_many, rounded_pocket_rim, fillet_of_a_mitre, rounded_recess_cut, filled_square_through_a_point,
     asymmetric_chamfer_of_an_extrusion, rounded_corners_between_arcs_and_lines,
     loft_through_three_unevenly_spaced_circles, vertices_of_a_face_placed_twice,
-    text_in_fonts_not_installed_and_cff_ones,
+    text_in_fonts_not_installed_and_cff_ones, reeded_prisms_under_their_lids,
 ]
 
 
@@ -317,7 +351,7 @@ def measures(shape):
         shape = shape.val()
     bb = shape.BoundingBox()
     kind = shape.ShapeType() if callable(shape.ShapeType) else shape.ShapeType
-    m = {"bbox": (bb.xmin, bb.ymin, bb.zmin, bb.xmax, bb.ymax, bb.zmax), "solids": len(shape.Solids())}
+    m = {"bbox": (bb.xmin, bb.ymin, bb.zmin, bb.xmax, bb.ymax, bb.zmax), "solids": len(shape.Solids()), "valid": shape.isValid()}
     if kind in ("Solid", "Compound", "CompSolid"):
         m["volume"] = shape.Volume()
     if kind in ("Wire", "Edge"):

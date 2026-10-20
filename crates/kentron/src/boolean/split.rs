@@ -32,6 +32,9 @@ pub(super) struct ArcOnFace {
     /// are told apart by how they curve away.
     pub leave_start: Uv,
     pub leave_end: Uv,
+    /// For an arc of the face's own boundary that bounds it, whether the face runs along the
+    /// arc (its region on the arc's left as it goes) or against it.
+    pub along: Option<bool>,
 }
 
 /// A boundary arc of a face over its whole edge, kept with the face (see
@@ -171,7 +174,7 @@ impl Graph {
             for &pi in &of_edge[b.edge] {
                 let p = &pieces[pi];
                 if let Some(w) = whole.and_then(|w| w.get(k)).filter(|w| w.range == (p.first, p.last)) {
-                    arcs.push(ArcOnFace { piece: pi, uv: w.uv.clone(), pcurve: Some(b.pcurve.clone()), leave_start: w.leave_start, leave_end: w.leave_end });
+                    arcs.push(ArcOnFace { piece: pi, uv: w.uv.clone(), pcurve: Some(b.pcurve.clone()), leave_start: w.leave_start, leave_end: w.leave_end, along: b.bounds.then_some(b.along) });
                     continue;
                 }
                 arcs.push(self.boundary_arc(fi, b, pi, p.first, p.last));
@@ -194,7 +197,15 @@ impl Graph {
                     continue;
                 }
                 let mid = self.edges[e].point(0.5 * (p.first + p.last), &self.vertices);
-                if face.locate(mid, &self.edges, &self.vertices) == Location::Inside {
+                // (Inside; or, a piece nearly along the boundary (as an arc nearly tangent to
+                // it, cutting a sliver off the face), on the face's side of the boundary edge
+                // nearest it, off the edge itself.)
+                let at = face.locate(mid, &self.edges, &self.vertices);
+                let sliver = || {
+                    let reach = 1e-3 * face.extent.0.distance(face.extent.1);
+                    !face.near_boundary(mid, geom::TOL, &self.edges, &self.vertices) && face.inside_by_nearest_edge(mid, reach, &self.edges) == Some(true)
+                };
+                if at == Location::Inside || sliver() {
                     reps.insert(p.rep);
                     arcs.push(self.arc_from_3d(fi, p, pi));
                 }
@@ -213,7 +224,7 @@ impl Graph {
         };
         let step = self.departure_step(fi);
         let (leave_start, leave_end) = (departure(at, first, last, step), departure(at, last, first, step));
-        ArcOnFace { piece, uv, pcurve: Some(b.pcurve.clone()), leave_start, leave_end }
+        ArcOnFace { piece, uv, pcurve: Some(b.pcurve.clone()), leave_start, leave_end, along: b.bounds.then_some(b.along) }
     }
 
     /// Each boundary use of face `fi` as an arc over its whole edge (which the face keeps
@@ -256,7 +267,7 @@ impl Graph {
         let (start, end) = (uv[0], *uv.last().expect("polyline"));
         let leave_start = departure(near(start), piece.first, piece.last, step);
         let leave_end = departure(near(end), piece.last, piece.first, step);
-        ArcOnFace { piece: index, uv, pcurve: None, leave_start, leave_end }
+        ArcOnFace { piece: index, uv, pcurve: None, leave_start, leave_end, along: None }
     }
 
     /// A degenerate edge (a pole) is a stretch of u in parameter space: arcs ending at its
@@ -303,6 +314,7 @@ impl Graph {
                     pcurve: pcurve.clone(),
                     leave_start: [to[0] - from[0], 0.0],
                     leave_end: [from[0] - to[0], 0.0],
+                    along: None,
                 });
             }
             arcs[i] = replacement.remove(0);
@@ -488,7 +500,15 @@ pub(super) fn split_face(arcs: &[ArcOnFace], pieces: &[Piece], face_polylines: &
     for r in &mut regions {
         r.interior = geom::interior_point_among(&r.polygons, &obstacles);
     }
-    regions.retain(|r| geom::inside_polylines(face_polylines, r.interior));
+    // Within the face: its point inside the face's boundary, or, a sliver along the boundary
+    // (thinner than its sampling), running along an arc of that boundary the way the face
+    // does, the face on its left.
+    let sliver = |r: &Region| {
+        let polygon = &r.polygons[0];
+        let perimeter: f64 = polygon.windows(2).map(|w| ((w[1][0] - w[0][0]).powi(2) + (w[1][1] - w[0][1]).powi(2)).sqrt()).sum();
+        2.0 * geom::signed_area(polygon).abs() <= 1e-5 * uv_scale.max(1.0) * perimeter
+    };
+    regions.retain(|r| geom::inside_polylines(face_polylines, r.interior) || sliver(r) && r.loops.iter().flatten().any(|&(a, forward)| arcs[a].along == Some(forward)));
     regions
 }
 
@@ -566,7 +586,7 @@ mod tests {
         for (i, (start, end, uv)) in paths.iter().enumerate() {
             let n = uv.len();
             out.1.push(Piece { edge: i, first: 0.0, last: 1.0, start: *start, end: *end, rep: i });
-            out.0.push(ArcOnFace { piece: i, uv: uv.clone(), pcurve: None, leave_start: towards(uv[0], uv[1]), leave_end: towards(uv[n - 1], uv[n - 2]) });
+            out.0.push(ArcOnFace { piece: i, uv: uv.clone(), pcurve: None, leave_start: towards(uv[0], uv[1]), leave_end: towards(uv[n - 1], uv[n - 2]), along: None });
         }
         out
     }
