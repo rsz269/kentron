@@ -276,8 +276,9 @@ pub fn interpolate_with_parameters<P: ControlPoint>(points: &[P], params: &[f64]
     // The collocation matrix: row i holds the basis functions at params[i], within p of
     // the diagonal (with knots averaged, params[i] lies in the support of the i-th one).
     let mut matrix = Band::new(n, p);
+    // (The parameters increase: each span found on from the last one's.)
+    let mut span = p;
     for (i, &t) in params.iter().enumerate() {
-        let mut span = p;
         while span + 1 < n && flat[span + 1] <= t {
             span += 1;
         }
