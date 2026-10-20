@@ -56,7 +56,7 @@ it honest. Every change is checked against the test sources below before it is c
 and no change may make a passing test fail.
 
 <!-- effort -->
-So far (2026-09-25 to 2026-10-20): about 127 hours of the agent's active work, 10.0 million
+So far (2026-09-25 to 2026-10-20): about 128 hours of the agent's active work, 10.0 million
 tokens written by it, and 4.8 billion tokens processed in all (nearly all of them its
 conversation's context, read back from the cache).
 <!-- /effort -->
@@ -92,20 +92,20 @@ CadQuery 2.8 (OCCT), median of 5 runs:
 
 | | wall time | CPU time | peak memory |
 |---|---|---|---|
-| pykentron, `fast` profile | 4.4 s | 5.3 s | 470 MB |
-| pykentron, `balanced` profile (default) | 5.0 s | 5.9 s | 376 MB |
+| pykentron, `fast` profile (default) | 4.4 s | 5.3 s | 470 MB |
+| pykentron, `balanced` profile | 5.0 s | 5.9 s | 376 MB |
 | pykentron, `low-memory` profile | 5.1 s | 6.1 s | 330 MB |
 | CadQuery 2.8 / OCCT | 41.9 s | 129.9 s | 1,094 MB |
 
-With the `fast` profile, that is 9.4× faster than CadQuery, with 24× less CPU time and 2.3×
+With the default `fast` profile, that is 9.4× faster than CadQuery, with 24× less CPU time and 2.3×
 less memory.
 
 pykentron frees shapes that Python no longer refers to. How much it frees, and which
 allocator it uses, is chosen with `PYKENTRON_PROFILE`:
 
 - `low-memory`: also drops cached data of removed shapes.
-- `balanced` (default): removes unreachable shapes.
-- `fast`: as `balanced`, with mimalloc as allocator.
+- `balanced`: removes unreachable shapes.
+- `fast` (default): as `balanced`, with mimalloc as allocator.
 
 Rust programs using kentron directly make the same choice by declaring their allocator and
 passing `CollectOptions` to `Model::collect_garbage_with`.
