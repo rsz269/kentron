@@ -464,10 +464,15 @@ pub(super) fn split_face(arcs: &[ArcOnFace], pieces: &[Piece], face_polylines: &
             let (lo, hi) = boxes[i];
             probe[0] >= lo[0] - eps && probe[0] <= hi[0] + eps && probe[1] >= lo[1] - eps && probe[1] <= hi[1] + eps
         };
+        // (Not a region whose outer loop runs along the same arcs, the other way round: the
+        // cycle round the outside of that loop, its point taken off it where the arcs' ends
+        // are a little apart.)
+        let along = |r: &Region| r.loops[0].iter().any(|&(a, _)| cycle.iter().any(|&(b, _)| a == b));
         let container = regions
             .iter()
             .enumerate()
             .filter(|&(i, _)| in_box(i))
+            .filter(|(_, r)| !along(r))
             .filter(|(_, r)| geom::inside_polylines(&r.polygons[..1], probe) && !on_polyline(&r.polygons[0], probe, eps))
             .min_by(|a, b| geom::signed_area(&a.1.polygons[0]).total_cmp(&geom::signed_area(&b.1.polygons[0])))
             .map(|(i, _)| i);
@@ -544,4 +549,53 @@ fn trace(arcs: &[ArcOnFace], ends: &[(usize, usize)], alive: &[bool], nodes: &[(
         }
     }
     cycles
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Arcs between vertices (by index), straight through the given (u, v) points.
+    fn arcs(paths: &[(usize, usize, Vec<Uv>)]) -> (Vec<ArcOnFace>, Vec<Piece>) {
+        let towards = |a: Uv, b: Uv| -> Uv {
+            let (du, dv) = (b[0] - a[0], b[1] - a[1]);
+            let l = (du * du + dv * dv).sqrt();
+            [du / l, dv / l]
+        };
+        let mut out = (Vec::new(), Vec::new());
+        for (i, (start, end, uv)) in paths.iter().enumerate() {
+            let n = uv.len();
+            out.1.push(Piece { edge: i, first: 0.0, last: 1.0, start: *start, end: *end, rep: i });
+            out.0.push(ArcOnFace { piece: i, uv: uv.clone(), pcurve: None, leave_start: towards(uv[0], uv[1]), leave_end: towards(uv[n - 1], uv[n - 2]) });
+        }
+        out
+    }
+
+    /// A square face with a square hole, its outer edges' ends a little apart in (u, v) at
+    /// the vertices they share (as a fillet's edges may end, within their tolerances): one
+    /// region with the hole, not the hole's inside, nor the outer loop again as a hole.
+    #[test]
+    fn a_face_whose_edges_end_a_little_apart() {
+        let gap = 3e-5;
+        let corners: [Uv; 4] = [[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]];
+        let mut paths = Vec::new();
+        for i in 0..4 {
+            let (a, b) = (corners[i], corners[(i + 1) % 4]);
+            // (Each edge ends a little inside the corner where the next starts.)
+            let b = [b[0] + gap * (5.0 - b[0]).signum(), b[1] + gap * (5.0 - b[1]).signum()];
+            paths.push((i, (i + 1) % 4, vec![a, [0.5 * (a[0] + b[0]), 0.5 * (a[1] + b[1])], b]));
+        }
+        let hole = [[4.0, 4.0], [4.0, 6.0], [6.0, 6.0], [6.0, 4.0]];
+        for i in 0..4 {
+            paths.push((4 + i, 4 + (i + 1) % 4, vec![hole[i], hole[(i + 1) % 4]]));
+        }
+        let (arcs, pieces) = arcs(&paths);
+        let mut outer: Vec<Uv> = corners.to_vec();
+        outer.push(corners[0]);
+        let mut inner: Vec<Uv> = hole.to_vec();
+        inner.push(hole[0]);
+        let regions = split_face(&arcs, &pieces, &[outer, inner], 10.0, false);
+        assert_eq!(regions.len(), 1);
+        assert_eq!(regions[0].loops.len(), 2);
+    }
 }

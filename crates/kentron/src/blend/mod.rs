@@ -40,20 +40,32 @@ pub fn fillet(model: &mut Model, shape: Shape, edges: &[Shape], radius: f64) -> 
 #[doc(alias = "BRepFilletAPI_MakeFillet::Add")]
 pub fn fillet_edges(model: &mut Model, shape: Shape, edges: &[(Shape, f64)]) -> Result<Shape> {
     let edges = &sharp(model, shape, edges, |e| e.0)?;
-    on_solids(model, shape, |model, shape| each_solid(model, shape, edges, |e| e.0, fillet_solid_edges))
+    on_solids(model, shape, |model, shape| each_solid(model, shape, edges, |e| e.0, |e, c| Some((c, e.1)), fillet_solid_edges))
 }
 
 /// [`fillet`] of all `edges`, those where the faces meet smoothly too (as an offset's
 /// parting edges, which may meet so but for rounding).
 pub(crate) fn fillet_all(model: &mut Model, shape: Shape, edges: &[Shape], radius: f64) -> Result<Shape> {
     let edges: Vec<(Shape, f64)> = edges.iter().map(|&e| (e, radius)).collect();
-    on_solids(model, shape, |model, shape| each_solid(model, shape, &edges, |e| e.0, fillet_solid_edges))
+    on_solids(model, shape, |model, shape| each_solid(model, shape, &edges, |e| e.0, |e, c| Some((c, e.1)), fillet_solid_edges))
 }
 
 /// `op` on each solid of `shape` with the edges of `edges` it has (by node and placement:
 /// one solid placed twice has the same edges twice, each pair apart), the solids without
 /// any left as they are; `op` on `shape` itself where it has one solid, or more than solids.
-fn each_solid<T: Copy>(model: &mut Model, shape: Shape, edges: &[T], edge: impl Fn(&T) -> Shape, op: impl Fn(&mut Model, Shape, &[T]) -> Result<Shape>) -> Result<Shape> {
+fn each_solid<T: Copy>(model: &mut Model, shape: Shape, edges: &[T], edge: impl Fn(&T) -> Shape, with_edge: impl Fn(&T, Shape) -> Option<T>, op: impl Fn(&mut Model, Shape, &[T]) -> Result<Shape>) -> Result<Shape> {
+    // Edges placed apart from the shape (in a placed solid of a compound, or a placed face of
+    // a solid) are rounded on a copy with the placements applied, where all are as the
+    // copy is: nowhere (where each can be taken onto the copy).
+    let placement = shape.placement;
+    if edges.iter().any(|e| edge(e).placement != placement) {
+        let wanted: Vec<Shape> = edges.iter().map(&edge).collect();
+        let (copy, copies) = crate::modify::copy_unplaced(model, shape, &wanted)?;
+        let moved: Option<Vec<T>> = edges.iter().zip(copies).map(|(e, c)| with_edge(e, c)).collect();
+        if let Some(moved) = moved {
+            return each_solid(model, copy, &moved, edge, with_edge, op);
+        }
+    }
     let solids: Vec<Shape> = model.explore(shape, NodeKind::Solid).collect();
     let shells_in = |model: &Model, s: Shape| model.explore(s, NodeKind::Shell).count();
     let only_solids = shells_in(model, shape) == solids.iter().map(|&s| shells_in(model, s)).sum::<usize>();
@@ -581,7 +593,7 @@ pub fn chamfer_edges(model: &mut Model, shape: Shape, edges: &[ChamferedEdge]) -
         return Err(Error::InvalidInput("no edges to chamfer".into()));
     }
     let edges = &sharp(model, shape, edges, |e| e.edge)?;
-    on_solids(model, shape, |model, shape| each_solid(model, shape, edges, |e| e.edge, chamfer_solid_edges))
+    on_solids(model, shape, |model, shape| each_solid(model, shape, edges, |e| e.edge, |e, c| e.face.is_none().then_some(ChamferedEdge { edge: c, ..*e }), chamfer_solid_edges))
 }
 
 /// [`chamfer_edges`] of a shape with solids.
@@ -2195,6 +2207,46 @@ mod tests {
         let rolled = ball::fillet_network(&mut model, shape, &edges).unwrap();
         let report = validity::check(&model, rolled);
         assert!(report.is_valid(), "{report:?}");
+    }
+
+    /// A loft through rounded squares, placed in a compound: its top rim (between the plane
+    /// and the loft's free-form sides, rolled) is rounded on the loft as placed, as on the
+    /// loft placed after rounding.
+    #[test]
+    fn rounding_a_loft_placed_in_a_compound() {
+        use crate::math::Transform;
+        let mut model = Model::new();
+        let square = |model: &mut Model, side: f64, radius: f64, z: f64| {
+            let h = side / 2.0;
+            let corners: Vec<Shape> = [(-h, -h), (h, -h), (h, h), (-h, h)].iter().map(|&(x, y)| crate::make::vertex(model, Point::new(x, y, z))).collect();
+            let edges: Vec<Shape> = (0..4).map(|i| crate::make::edge(model, corners[i], corners[(i + 1) % 4]).unwrap()).collect();
+            let wire = crate::make::wire(model, &edges).unwrap();
+            corner2d::fillet_wire_2d(model, wire, radius, None).unwrap()
+        };
+        let (bottom, top) = (square(&mut model, 20.0, 2.0, 0.0), square(&mut model, 14.0, 3.0, 8.0));
+        let options = crate::loft::LoftOptions { solid: true, ..Default::default() };
+        let cap = crate::loft::loft(&mut model, &[bottom, top], &options).unwrap().shape;
+        let rim = |model: &Model, shape: Shape| -> Vec<Shape> {
+            let top = model.unique_subshapes(shape, NodeKind::Vertex).into_iter().map(|v| model.point(v).z).fold(f64::MIN, f64::max);
+            model.unique_subshapes(shape, NodeKind::Edge).into_iter().filter(|&e| {
+                let (a, b) = model.edge_vertices(e);
+                [a, b].iter().all(|&v| (model.point(v).z - top).abs() < 1e-9)
+            }).collect()
+        };
+        let lift = Transform::translation(Vector::new(5.0, -3.0, 2.0));
+        let placed = model.new_empty(NodeKind::Compound);
+        model.add(placed, cap.moved(&lift)).unwrap();
+        let edges = rim(&model, placed);
+        assert_eq!(edges.len(), 8);
+        assert!(edges.iter().all(|e| e.placement != placed.placement));
+        let rounded = fillet(&mut model, placed, &edges, 1.0).unwrap();
+        let own = rim(&model, cap);
+        let alone = fillet(&mut model, cap, &own, 1.0).unwrap();
+        assert!(validity::check(&model, rounded).is_valid());
+        let (v, w) = (properties::volume(&model, rounded).mass, properties::volume(&model, alone).mass);
+        assert!((v - w).abs() < 1e-7 * w, "{v} != {w}");
+        let (b, c) = (properties::volume(&model, rounded).center_of_mass, properties::volume(&model, alone).center_of_mass);
+        assert!((b - (c + Vector::new(5.0, -3.0, 2.0))).length() < 1e-7, "{b:?} {c:?}");
     }
 
     /// A keycap: a loft from a square of 18.3 rounded by 1.5 to one of 13.5 rounded by 2.5,

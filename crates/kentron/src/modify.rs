@@ -346,6 +346,22 @@ pub fn copy(model: &mut Model, shape: Shape, copy_meshes: bool) -> Result<Shape>
     Ok(Shape { orientation: shape.orientation, ..copy })
 }
 
+/// [`copy`] of `shape` with all its placements applied to the geometry (the copy placed
+/// as it is, nowhere), and the copies of `edges` (edges of `shape`, as placed in it).
+pub(crate) fn copy_unplaced(model: &mut Model, shape: Shape, edges: &[Shape]) -> Result<(Shape, Vec<Shape>)> {
+    let mut copier = Copier::default();
+    let copy = copier.copy(model, Shape { orientation: Orientation::Forward, ..shape })?;
+    let copies = edges
+        .iter()
+        .map(|e| {
+            let found = copier.edges.get(&e.node).and_then(|l| l.iter().find(|(t, _)| *t == e.placement));
+            let &(_, id) = found.ok_or_else(|| Error::InvalidInput("an edge not of the shape".into()))?;
+            Ok(Shape { orientation: e.orientation, ..Shape::from(id) })
+        })
+        .collect::<Result<Vec<Shape>>>()?;
+    Ok((Shape { orientation: shape.orientation, ..copy }, copies))
+}
+
 /// How a curve's parameter changes when the curve is scaled by `s` (OCCT's
 /// `Geom_Curve::TransformedParameter`): a distance along a line scales, an angle does not.
 fn parameter_scale(curve: &Curve, s: f64) -> f64 {
