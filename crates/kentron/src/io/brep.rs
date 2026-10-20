@@ -1014,11 +1014,13 @@ impl<'a> Builder<'a> {
         };
         let candidates: Vec<&OnSurface> = on_surfaces.iter().filter(|o| o.surface == face.surface).collect();
         let at = |o: &&&OnSurface| self.location(o.location).is_ok_and(|t| same_transform(&t, expected));
+        // (On a plane, only a curve for the surface placed as expected is taken: OCCT finds
+        // the curve on a plane from the edge's own where none is, as kentron does.)
+        let plane = self.file.surfaces.get(face.surface.wrapping_sub(1)).and_then(|r| r.build().ok()).is_some_and(|s| matches!(s, Surface::Plane(_)));
         let Some(on) = candidates
             .iter()
             .find(at)
-            .or_else(|| candidates.iter().find(|o| o.location == face.location))
-            .or(candidates.first())
+            .or_else(|| if plane { None } else { candidates.iter().find(|o| o.location == face.location).or(candidates.first()) })
         else {
             return Ok(());
         };
