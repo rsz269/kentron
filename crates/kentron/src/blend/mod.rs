@@ -2209,6 +2209,40 @@ mod tests {
         assert!(report.is_valid(), "{report:?}");
     }
 
+    /// A loft through ellipses (a tooth's blade, leaning over to its tip), its top rim
+    /// rounded: a closed edge, the side's own seam through its vertex, the side closing on
+    /// itself there without a period. The ball rolls all round from the vertex on the right
+    /// side of the tip, the side's contact curve running on across its seam and the fillet
+    /// closing where it started (as OCCT rounds this loft).
+    #[test]
+    fn rounding_the_tip_of_a_loft_through_ellipses() {
+        use crate::geometry::curve::{Curve, Ellipse};
+        let mut model = Model::new();
+        let (w, h) = (0.97, 27.0 * 0.85);
+        let sections: Vec<Shape> = [(0.0, 6.0, 4.8, 0.0), (0.2, 5.62, 4.38, 0.35), (0.45, 4.69, 3.54, 1.4), (0.7, 3.38, 2.46, 3.1), (0.88, 2.35, 1.62, 5.1), (1.0, 1.85, 1.35, 6.6)]
+            .iter()
+            .map(|&(f, a, b, x)| {
+                let frame = Frame::new(Point::new(x * 0.85, 0.0, f * h), Direction::Z, Direction::X);
+                let edge = crate::make::edge_from_curve(&mut model, Curve::Ellipse(Ellipse::new(frame, a * w, b * w))).unwrap();
+                crate::make::wire(&mut model, &[edge]).unwrap()
+            })
+            .collect();
+        let options = crate::loft::LoftOptions { solid: true, spacing: crate::loft::Spacing::Even, ..Default::default() };
+        let blade = crate::loft::loft(&mut model, &sections, &options).unwrap().shape;
+        let before = properties::volume(&model, blade).mass;
+        assert!((before - 1022.6989).abs() < 1e-3, "{before}");
+        let tip = model.unique_subshapes(blade, NodeKind::Edge).into_iter().find(|&e| {
+            let (a, b) = model.edge_vertices(e);
+            a.node == b.node && (model.point(a).z - h).abs() < 1e-9
+        }).unwrap();
+        let rounded = fillet(&mut model, blade, &[tip], 0.45 * w).unwrap();
+        let report = validity::check(&model, rounded);
+        assert!(report.is_valid(), "{report:?}");
+        assert_eq!(model.unique_subshapes(rounded, NodeKind::Face).len(), 4);
+        let after = properties::volume(&model, rounded).mass;
+        assert!((after - 1022.3408).abs() < 3e-3, "{after}");
+    }
+
     /// A loft through rounded squares, placed in a compound: its top rim (between the plane
     /// and the loft's free-form sides, rolled) is rounded on the loft as placed, as on the
     /// loft placed after rounding.

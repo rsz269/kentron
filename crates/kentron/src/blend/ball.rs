@@ -47,6 +47,10 @@ struct Side {
     /// The parameters of the last point projected (where the surface has no closed-form
     /// inverse, the next projection starts there).
     last: std::cell::Cell<Option<(f64, f64)>>,
+    /// Whether the surface closes on itself across its bounds of `u` and of `v` (without a
+    /// period, as a loft through closed sections does): a foot found on such a bound is
+    /// looked for across it too.
+    closed: [bool; 2],
     /// The face's range of `v`: a surface of revolution's inverse may take a point to its
     /// meridian's half across the axis (the same point, with the normal the other way).
     v_range: (f64, f64),
@@ -56,6 +60,14 @@ struct Side {
 }
 
 impl Side {
+    /// The side of `face` on `surface` (its own, or carried on past its patch).
+    fn new(model: &Model, face: Shape, surface: Surface, sign: f64, along: f64) -> Side {
+        let b = model.face_uv_bounds(face);
+        let size = { let b = crate::properties::bounding_box(model, face); (b.max - b.min).length() };
+        let closed = closes_across(&surface, (b.0, b.1, b.2, b.3), 1e-7 * (1.0 + size));
+        Side { face, surface, sign, along, last: Default::default(), closed, v_range: (b.2, b.3), own_range: Default::default() }
+    }
+
     /// The signed distance from the surface (positive outside the solid), the foot point
     /// and the outward unit normal there.
     /// The parameters of `p`'s foot on the surface.
@@ -77,8 +89,28 @@ impl Side {
             // (Locally from the last foot, the points following one another; the whole
             // surface searched the first time.)
             return match self.last.get() {
-                Some(start) => {
-                    let foot = crate::geometry::extrema::newton_foot(p, &self.surface, start);
+                Some((u, v)) => {
+                    let mut foot = crate::geometry::extrema::newton_foot(p, &self.surface, (u, v));
+                    // (On a bound the surface closes across: on from the other side of it
+                    // too, the nearer foot taken.)
+                    let (u0, u1, v0, v1) = self.surface.bounds();
+                    let across = |x: f64, lo: f64, hi: f64| {
+                        let near = 1e-9 * (hi - lo);
+                        if x <= lo + near { Some(hi) } else if x >= hi - near { Some(lo) } else { None }
+                    };
+                    let others = [
+                        self.closed[0].then(|| across(foot.u, u0, u1).map(|u| (u, foot.v))).flatten(),
+                        self.closed[1].then(|| across(foot.v, v0, v1).map(|v| (foot.u, v))).flatten(),
+                    ];
+                    // (Clearly nearer: a point on the seam itself stays on the side it was
+                    // found on.)
+                    let clearly = 1e-9 * (1.0 + (p - Point::ORIGIN).length());
+                    for start in others.into_iter().flatten() {
+                        let other = crate::geometry::extrema::newton_foot(p, &self.surface, start);
+                        if other.point.distance(p) < foot.point.distance(p) - clearly {
+                            foot = other;
+                        }
+                    }
                     self.last.set(Some((foot.u, foot.v)));
                     ((foot.u, foot.v), Some((foot.point, foot.du, foot.dv)))
                 }
@@ -446,6 +478,43 @@ fn rolling_on(model: &Model, shape: Shape, edge: Shape, profile: &Profile, far: 
             if !short[1] && !vanishing[1] {
                 sections.extend(past(t1, t_max));
             }
+            // (Along a closed edge the last section is the first again: found apart, the two
+            // may differ a little where a face's normal turns across its own seam there. Its
+            // parameters on the faces stay its own, on its side of such a seam.)
+            if closed && sections.len() > 2 && sections[0].t == t0 && sections[sections.len() - 1].t == t1 {
+                let (center, contacts) = (sections[0].center, sections[0].contacts);
+                let last = sections.last_mut().expect("sections");
+                for i in 0..2 {
+                    last.contact_uv[i] = sides[i].uv(contacts[i]).unwrap_or(last.contact_uv[i]);
+                }
+                (last.center, last.contacts) = (center, contacts);
+            }
+            // (A contact at an end on a bound its face closes across (to within the face's
+            // seam's tolerance), taken onto the bound on the side its neighbour is: its curve on
+            // the face then runs on to the seam without a leap.)
+            if sections.len() > 1 {
+                let n = sections.len();
+                let onto = |x: f64, near: f64, lo: f64, hi: f64| -> f64 {
+                    let close = 1e-3 * (hi - lo);
+                    if x - lo > close && hi - x > close {
+                        return x;
+                    }
+                    if (near - lo).abs() < (hi - near).abs() { lo } else { hi }
+                };
+                for i in 0..2 {
+                    let (u0, u1, v0, v1) = sides[i].surface.bounds();
+                    for (end, next) in [(0, 1), (n - 1, n - 2)] {
+                        let near = sections[next].contact_uv[i];
+                        let uv = &mut sections[end].contact_uv[i];
+                        if sides[i].closed[0] {
+                            uv.x = onto(uv.x, near.x, u0, u1);
+                        }
+                        if sides[i].closed[1] {
+                            uv.y = onto(uv.y, near.y, v0, v1);
+                        }
+                    }
+                }
+            }
             let ts: Vec<f64> = sections.iter().map(|s| s.t).collect();
             let contact = |i: usize| -> Result<BSplineCurve> {
                 let points: Vec<Point> = sections.iter().map(|s| s.contacts[i]).collect();
@@ -685,15 +754,7 @@ fn sides_of(model: &Model, shape: Shape, id: EdgeId, carry: Option<f64>) -> Resu
                     None => surface,
                 };
                 let sign = |o: Orientation| if o == Orientation::Reversed { -1.0 } else { 1.0 };
-                sides.push(Side {
-                    face,
-                    surface,
-                    sign: sign(face.orientation),
-                    along: sign(model[c].orientation.compose(wire.orientation)),
-                    last: Default::default(),
-                    v_range: { let b = model.face_uv_bounds(face); (b.2, b.3) },
-                    own_range: Default::default(),
-                });
+                sides.push(Side::new(model, face, surface, sign(face.orientation), sign(model[c].orientation.compose(wire.orientation))));
             }
         }
     }
@@ -1094,6 +1155,20 @@ fn off_patch(model: &Model, side: &Side, pcurve: &Curve2, lo: f64, hi: f64) -> b
     })
 }
 
+/// Whether `surface` closes on itself across its bounds of `u`, and of `v`, where the
+/// patch `bounds` (`u0, u1, v0, v1`) reaches them: its points on the two bounds the same
+/// (within `tolerance`) over the patch's range of the other parameter.
+fn closes_across(surface: &Surface, bounds: (f64, f64, f64, f64), tolerance: f64) -> [bool; 2] {
+    let (u0, u1, v0, v1) = bounds;
+    let (b0, b1, c0, c1) = surface.bounds();
+    let same = |x: f64, y: f64| (x - y).abs() <= 1e-12 * (1.0 + y.abs());
+    let closes = |at: &dyn Fn(f64) -> (Point, Point)| (0..=8).all(|k| { let (a, b) = at(k as f64 / 8.0); a.distance(b) <= tolerance });
+    let finite = [u0, u1, v0, v1].iter().all(|x| x.is_finite());
+    let u = finite && same(u0, b0) && same(u1, b1) && closes(&|s| { let v = v0 + (v1 - v0) * s; (surface.point(b0, v), surface.point(b1, v)) });
+    let v = finite && same(v0, c0) && same(v1, c1) && closes(&|s| { let u = u0 + (u1 - u0) * s; (surface.point(u, c0), surface.point(u, c1)) });
+    [u, v]
+}
+
 /// `surface` carried on past each bound by about `length`, if it is a patch (a Bezier or
 /// B-spline surface).
 fn carried_on(surface: &Surface, length: f64) -> Option<Surface> {
@@ -1106,8 +1181,21 @@ fn carried_on(surface: &Surface, length: f64) -> Option<Surface> {
     if u_periodic || v_periodic {
         return None;
     }
+    // (Nor across a seam where it closes on itself without a period, as a loft through
+    // closed sections does: carried on past it both ways, it would overlap itself there.)
+    let [u_closed, v_closed] = closes_across(surface, surface.bounds(), 1e-7 * (1.0 + length));
+    let mut sides = Vec::new();
+    if !u_closed {
+        sides.extend([extend::SurfaceSide::UMin, extend::SurfaceSide::UMax]);
+    }
+    if !v_closed {
+        sides.extend([extend::SurfaceSide::VMin, extend::SurfaceSide::VMax]);
+    }
+    if sides.is_empty() {
+        return None;
+    }
     let mut carried = surface.clone();
-    for side in [extend::SurfaceSide::UMin, extend::SurfaceSide::UMax, extend::SurfaceSide::VMin, extend::SurfaceSide::VMax] {
+    for side in sides {
         carried = Surface::BSpline(extend::surface_by_length(&carried, length, 2, side)?);
     }
     Some(carried)
@@ -1174,15 +1262,7 @@ fn end_cut_on(
             (faces[0], Some((faces, inner)))
         }
     };
-    let side_of = |face: Shape| Side {
-        face,
-        surface: model.surface(face).expect("a face's surface").clone(),
-        sign: if face.orientation == Orientation::Reversed { -1.0 } else { 1.0 },
-        along: 1.0,
-        last: Default::default(),
-        v_range: { let b = model.face_uv_bounds(face); (b.2, b.3) },
-        own_range: Default::default(),
-    };
+    let side_of = |face: Shape| Side::new(model, face, model.surface(face).expect("a face's surface").clone(), if face.orientation == Orientation::Reversed { -1.0 } else { 1.0 }, 1.0);
     let fan_sides: Vec<Side> = fan.as_ref().map(|(faces, _)| faces.iter().map(|&f| side_of(f)).collect()).unwrap_or_default();
     let carry = carry && fan.is_none();
     let sign = if face.orientation == Orientation::Reversed { -1.0 } else { 1.0 };
@@ -1195,7 +1275,7 @@ fn end_cut_on(
         None
     };
     let carries = carried.is_some();
-    let end = Side { face, surface: carried.unwrap_or(surface), sign, along: 1.0, last: Default::default(), v_range: { let b = model.face_uv_bounds(face); (b.2, b.3) }, own_range: Default::default() };
+    let end = Side::new(model, face, carried.unwrap_or(surface), sign, 1.0);
 
     // Across the fillet, where it leaves the end face's surface: going from the middle of
     // the edge towards this end, the outward distance turns positive.
@@ -1338,7 +1418,7 @@ fn end_cut_on(
             .collect();
         let [g] = beyond_faces[..] else { return Ok(None) };
         let sign = if g.orientation == Orientation::Reversed { -1.0 } else { 1.0 };
-        let next = Side { face: g, surface: model.surface(g).expect("a face's surface").clone(), sign, along: 1.0, last: Default::default(), v_range: { let b = model.face_uv_bounds(g); (b.2, b.3) }, own_range: Default::default() };
+        let next = Side::new(model, g, model.surface(g).expect("a face's surface").clone(), sign, 1.0);
         // Across the fillet from this contact, the crossing with the end face's surface
         // outside the face beyond, then inside it: where it goes in, the end face's edge.
         let outside = |u: f64| -> Result<f64> {
@@ -1832,7 +1912,15 @@ impl Rebuild<'_> {
                 }
                 let v = 0.5 * (lo + hi);
                 let span = (v_end[i] - v_start[i]).abs();
-                if v > v_start[i] + 1e-6 * span && v < v_end[i] - 1e-6 * span {
+                // (Not where the contact's start or end is on the edge already, to within a
+                // little, and it crosses as near that as that is to the edge: the same meeting,
+                // the end's section found on its face's seam only so nearly.)
+                let point = self.contacts[i].point(v);
+                let apart = |end: f64| {
+                    let off = gap(end);
+                    off > 1e-5 * size || point.distance(self.contacts[i].point(end)) > 2.0 * off.max(tolerance)
+                };
+                if v > v_start[i] + 1e-6 * span && v < v_end[i] - 1e-6 * span && apart(v_start[i]) && apart(v_end[i]) {
                     splits[i] = Some((v, self.model.add_vertex(self.contacts[i].point(v), tolerance)));
                 }
             }
