@@ -77,8 +77,11 @@ pub fn length_with(model: &Model, shape: Shape, options: Options) -> MassPropert
                 let mut knots: Vec<f64> = vec![first];
                 knots.extend(b.knots().iter().copied().filter(|&k| k > first && k < last));
                 knots.push(last);
+                // (Eight pieces a span on a curve of few, fewer on one of many: at least 64
+                // in all, as many as its spans where they are more.)
+                let per_span = (64 / (knots.len() - 1)).clamp(1, 8);
                 for w in knots.windows(2) {
-                    breaks.extend((1..=8).map(|i| w[0] + (w[1] - w[0]) * i as f64 / 8.0));
+                    breaks.extend((1..=per_span).map(|i| w[0] + (w[1] - w[0]) * i as f64 / per_span as f64));
                 }
                 breaks.pop();
             }

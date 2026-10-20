@@ -1140,6 +1140,50 @@ fn end_cut(
     }
 }
 
+/// Where `f` changes sign between `lo` and `hi` (`f(lo) = flo`, `f(hi) = fhi`, on either
+/// side of zero): by false position, the end kept twice running halving its value (the
+/// Illinois rule), until the bracket closes to the last bits or a value is zero. As exact as
+/// halving the bracket until it closes, in far fewer steps.
+fn bracketed_root(f: &dyn Fn(f64) -> Result<f64>, mut lo: f64, mut hi: f64, mut flo: f64, mut fhi: f64) -> Result<f64> {
+    // (Signs as the bracket's sides count them: zero with the negatives.)
+    let low = |x: f64| x <= 0.0;
+    let mut kept: i8 = 0;
+    for _ in 0..200 {
+        let width = hi - lo;
+        let mut m = if flo != fhi { lo - flo * width / (fhi - flo) } else { 0.5 * (lo + hi) };
+        // (Not at or past an end: halving instead.)
+        if !(m > lo.min(hi) && m < lo.max(hi)) {
+            m = 0.5 * (lo + hi);
+        }
+        if m == lo || m == hi {
+            break;
+        }
+        let fm = f(m)?;
+        if fm == 0.0 {
+            return Ok(m);
+        }
+        if low(fm) == low(flo) {
+            (lo, flo) = (m, fm);
+            if kept == -1 {
+                fhi *= 0.5;
+            }
+            kept = -1;
+        } else {
+            (hi, fhi) = (m, fm);
+            if kept == 1 {
+                flo *= 0.5;
+            }
+            kept = 1;
+        }
+        // (Closed to the last bits.)
+        let mid = 0.5 * (lo + hi);
+        if mid == lo || mid == hi {
+            break;
+        }
+    }
+    Ok(0.5 * (lo + hi))
+}
+
 /// Whether `pcurve` over [`lo`, `hi`] leaves the patch of `side`'s face (its surface
 /// carried on past it, the face then to take that surface).
 fn off_patch(model: &Model, side: &Side, pcurve: &Curve2, lo: f64, hi: f64) -> bool {
@@ -1328,20 +1372,7 @@ fn end_cut_on(
                 let w = [order[k], order[k + 1]];
                 let db = if k + 1 == to { last } else { d(w[1])? };
                 if (da <= 0.0) != (db <= 0.0) && (da <= 0.0) == outwards {
-                    let (mut lo, mut hi) = (w[0], w[1]);
-                    // (Halved until the halves meet in the last bits: no further step moves.)
-                    for _ in 0..80 {
-                        let m = 0.5 * (lo + hi);
-                        if m == lo || m == hi {
-                            break;
-                        }
-                        if (d(m)? <= 0.0) == (da <= 0.0) {
-                            lo = m;
-                        } else {
-                            hi = m;
-                        }
-                    }
-                    let v = 0.5 * (lo + hi);
+                    let v = bracketed_root(&d, w[0], w[1], da, db)?;
                     // (Outwards the first from the middle; the other way, the one nearest the
                     // vertex.)
                     if outwards {
@@ -1359,6 +1390,36 @@ fn end_cut_on(
         }
         }
         best.map(|(_, v)| (u, v)).ok_or_else(|| Error::InvalidInput(NOT_REACHED.into()))
+    };
+    // (The crossing for `u` near one found for a `u` beside it, at `v` with the distance
+    // rising along `order` there or not: among the sections next to it first, the same way
+    // round, the nearest; `None` where there is none there.)
+    let crossing_near = |side: &Side, u: f64, v: f64, rising: bool| -> Result<Option<(f64, f64)>> {
+        let d = |v: f64| -> Result<f64> { Ok(side.distance(fillet.point(u, v))?.0) };
+        let k = order.iter().enumerate().min_by(|a, b| (a.1 - v).abs().total_cmp(&(b.1 - v).abs())).map_or(0, |(i, _)| i);
+        let (lo, hi) = (k.saturating_sub(2), (k + 2).min(order.len() - 1));
+        let values: Vec<f64> = order[lo..=hi].iter().map(|&t| d(t)).collect::<Result<_>>()?;
+        let mut best: Option<(f64, f64, f64, f64, f64)> = None;
+        for i in 0..values.len() - 1 {
+            let (da, db) = (values[i], values[i + 1]);
+            if (da <= 0.0) != (db <= 0.0) && (da <= 0.0) == rising {
+                let (a, b) = (order[lo + i], order[lo + i + 1]);
+                let gap = (0.5 * (a + b) - v).abs();
+                if best.is_none_or(|x| gap < x.0) {
+                    best = Some((gap, a, b, da, db));
+                }
+            }
+        }
+        match best {
+            Some((_, a, b, da, db)) => Ok(Some((u, bracketed_root(&d, a, b, da, db)?))),
+            None => Ok(None),
+        }
+    };
+    // (Whether the distance rises along `order` through the crossing at `v`.)
+    let rising_at = |side: &Side, u: f64, v: f64| -> Result<bool> {
+        let h = 1e-6 * (order[0] - order[order.len() - 1]).abs().max(1e-12);
+        let ahead = if order.len() > 1 && order[1] > order[0] { v + h } else { v - h };
+        Ok(side.distance(fillet.point(u, ahead))?.0 > 0.0)
     };
     let crossing = |u: f64| crossing_on(&end, u);
     // Where the contact curves meet the edges at the vertex.
@@ -1492,12 +1553,26 @@ fn end_cut_on(
         let mut before: Vec<(f64, f64)> = Vec::new();
         let (uv, curve, on_fillet) = loop {
             // (Those of the samples before, every other one now, kept.)
-            let uv: Vec<(f64, f64)> = (0..=across)
-                .map(|j| match before.get(j / 2) {
-                    Some(&x) if j % 2 == 0 => Ok(x),
-                    _ => crossing_on(side, lo + (hi - lo) * j as f64 / across as f64),
-                })
-                .collect::<Result<_>>()?;
+            // (Each new one near its neighbour's, kept from before or found just now, where
+            // there is one there.)
+            let mut uv: Vec<(f64, f64)> = Vec::with_capacity(across + 1);
+            for j in 0..=across {
+                let found = match before.get(j / 2) {
+                    Some(&x) if j % 2 == 0 => x,
+                    _ => {
+                        let u = lo + (hi - lo) * j as f64 / across as f64;
+                        let near = match uv.last() {
+                            Some(&(pu, pv)) => crossing_near(side, u, pv, rising_at(side, pu, pv)?)?,
+                            None => None,
+                        };
+                        match near {
+                            Some(x) => x,
+                            None => crossing_on(side, u)?,
+                        }
+                    }
+                };
+                uv.push(found);
+            }
             let params: Vec<f64> = (0..=across).map(|j| j as f64 / across as f64).collect();
             let points: Vec<Point> = uv.iter().map(|&(u, v)| fillet.point(u, v)).collect();
             let curve = fit::interpolate_with_parameters(&points, &params)?;
