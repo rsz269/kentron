@@ -1,10 +1,8 @@
 # CadQuery v2.8.0 tests that fail on pykentron (cadquery_tests.py --update-baseline)
 ::tests.test_nurbs
 ::tests.test_vis
-tests.test_assembly::test_assembly_multi_subshape_import[step]
 tests.test_assembly::test_assembly_multi_subshape_import[xbf]
 tests.test_assembly::test_assembly_multi_subshape_import[xml]
-tests.test_assembly::test_assembly_step_import
 tests.test_assembly::test_assembly_step_import_roundtrip[boxes0_assy-xbf]
 tests.test_assembly::test_assembly_step_import_roundtrip[boxes0_assy-xml]
 tests.test_assembly::test_assembly_step_import_roundtrip[nested_assy-xbf]
@@ -13,7 +11,6 @@ tests.test_assembly::test_assembly_step_import_roundtrip[simple_assy-xbf]
 tests.test_assembly::test_assembly_step_import_roundtrip[simple_assy-xml]
 tests.test_assembly::test_assembly_step_import_roundtrip[subshape_assy-xbf]
 tests.test_assembly::test_assembly_step_import_roundtrip[subshape_assy-xml]
-tests.test_assembly::test_assembly_subshape_import[step]
 tests.test_assembly::test_assembly_subshape_import[xbf]
 tests.test_assembly::test_assembly_subshape_import[xml]
 tests.test_assembly::test_assy_root_name[nested_assy-TOP]
@@ -32,13 +29,10 @@ tests.test_assembly::test_colors_assy1[boxes3_assy-xbf]
 tests.test_assembly::test_colors_assy1[boxes4_assy-xbf]
 tests.test_assembly::test_colors_assy1[boxes5_assy-xbf]
 tests.test_assembly::test_colors_assy1[boxes6_assy-xbf]
-tests.test_assembly::test_colors_assy1[boxes7_assy-step]
 tests.test_assembly::test_colors_assy1[boxes7_assy-xbf]
 tests.test_assembly::test_colors_assy1[empty_top_assy-xbf]
-tests.test_assembly::test_colors_assy1[multi_subshape_assy-step]
 tests.test_assembly::test_colors_assy1[multi_subshape_assy-xbf]
 tests.test_assembly::test_colors_assy1[nested_assy-xbf]
-tests.test_assembly::test_colors_assy1[subshape_assy-step]
 tests.test_assembly::test_colors_assy1[subshape_assy-xbf]
 tests.test_assembly::test_colors_fused_assy[boxes2_assy-expected4]
 tests.test_assembly::test_colors_fused_assy[chassis0_assy-expected5]
@@ -59,10 +53,8 @@ tests.test_assembly::test_imprinting
 tests.test_assembly::test_leaf_node_count[empty_top_assy-1]
 tests.test_assembly::test_leaf_node_count[nested_assy-3]
 tests.test_assembly::test_leaf_node_count[simple_assy-3]
-tests.test_assembly::test_meta_step_export
 tests.test_assembly::test_name_geometries
 tests.test_assembly::test_native_export
-tests.test_assembly::test_plain_assembly_import
 tests.test_assembly::test_save[caf-args3]
 tests.test_assembly::test_save[wrl-args4]
 tests.test_assembly::test_save[xml-args1]
@@ -71,11 +63,6 @@ tests.test_assembly::test_save_gltf_boxes2
 tests.test_assembly::test_save_stl_formats
 tests.test_assembly::test_save_vtkjs
 tests.test_assembly::test_shallow_assy
-tests.test_assembly::test_step_export_loc[boxes8_assy-expected0]
-tests.test_assembly::test_step_export_loc[boxes9_assy-expected1]
-tests.test_assembly::test_step_roundtrip_with_materials[step]
-tests.test_assembly::test_step_roundtrip_with_materials[xbf]
-tests.test_assembly::test_step_roundtrip_with_materials[xml]
 tests.test_assembly::test_toJSON
 tests.test_assembly::test_vrml_export
 tests.test_assembly::test_vtkjs_export
@@ -108,13 +95,6 @@ tests.test_exporters.TestExporters::testVRML
 tests.test_exporters.TestExporters::testVTP
 tests.test_exporters::test_assy_vtk_rotation
 tests.test_exporters::test_dxf_approx
-tests.test_exporters::test_fused_assembly
-tests.test_exporters::test_fused_assembly_glue_tol
-tests.test_exporters::test_fused_assembly_top_level_only
-tests.test_exporters::test_fused_assembly_top_level_with_children
-tests.test_exporters::test_fused_assembly_with_one_part
-tests.test_exporters::test_fused_not_touching_assembly
-tests.test_exporters::test_nested_fused_assembly
 tests.test_exporters::test_stl_binary[0-None-STL Exported by Open CASCADE]
 tests.test_exporters::test_stl_binary[1-opt1-STL Exported by Open CASCADE]
 tests.test_exporters::test_stl_binary[2-opt2-STL Exported by Open CASCADE]

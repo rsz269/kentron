@@ -1108,8 +1108,12 @@ fn read_step_assembly(py: Python<'_>, path: &str) -> PyResult<Vec<Py<PyAny>>> {
     fn convert(py: Python<'_>, node: &kentron::io::step::Node) -> PyResult<Py<PyAny>> {
         let children = node.children.iter().map(|c| convert(py, c)).collect::<PyResult<Vec<_>>>()?;
         let shape = node.shape.map(handle);
-        let color = node.color.map(|c| (c[0], c[1], c[2]));
-        Ok((node.name.clone(), shape, node.placement.rows(), color, children).into_pyobject(py)?.into_any().unbind())
+        let color = node.color.map(|c| (c[0], c[1], c[2], node.alpha.unwrap_or(1.0)));
+        let extras = pyo3::types::PyDict::new(py);
+        let subshapes: Vec<_> = node.subshapes.iter().map(|s| (handle(s.shape), s.name.clone(), s.color.map(|c| (c[0], c[1], c[2], c[3])), s.layer.clone())).collect();
+        extras.set_item("subshapes", subshapes)?;
+        extras.set_item("material", node.material.as_ref().map(|m| (m.name.clone(), m.description.clone(), m.density, m.density_unit.clone())))?;
+        Ok((node.name.clone(), shape, node.placement.rows(), color, children, extras).into_pyobject(py)?.into_any().unbind())
     }
     roots.iter().map(|n| convert(py, n)).collect()
 }
@@ -1193,15 +1197,39 @@ fn write_step(shape: Handle, path: &str, name: &str, color: Option<Xyz>, unit: &
 #[pyo3(signature = (path, roots, unit="MM"))]
 fn write_step_assembly(path: &str, roots: Vec<Bound<'_, PyAny>>, unit: &str) -> PyResult<()> {
     let unit = length_unit(unit)?;
+    // (name, shape, placement rows, (r, g, b[, a]), children[, {"subshapes": [(shape, name,
+    // (r, g, b, a), layer)], "material": (name, description, density, unit)}])
     fn convert(node: &Bound<'_, PyAny>) -> PyResult<kentron::io::step::Node> {
-        let (name, shape, rows, color, children): (String, Option<Handle>, [[f64; 4]; 3], Option<Xyz>, Vec<Bound<'_, PyAny>>) = node.extract()?;
+        let tuple = node.cast::<pyo3::types::PyTuple>()?;
+        let (name, shape, rows): (String, Option<Handle>, [[f64; 4]; 3]) = (tuple.get_item(0)?.extract()?, tuple.get_item(1)?.extract()?, tuple.get_item(2)?.extract()?);
+        let color: Option<Vec<f64>> = tuple.get_item(3)?.extract()?;
+        let children: Vec<Bound<'_, PyAny>> = tuple.get_item(4)?.extract()?;
         let placement = Transform::from_rows(rows).ok_or_else(|| PyValueError::new_err("a singular placement"))?;
+        let mut subshapes = Vec::new();
+        let mut material = None;
+        if tuple.len() > 5 {
+            let extras = tuple.get_item(5)?;
+            if let Ok(list) = extras.get_item("subshapes") {
+                let list: Vec<(Handle, Option<String>, Option<Vec<f64>>, Option<String>)> = list.extract()?;
+                for (s, name, color, layer) in list {
+                    let color = color.map(|c| [c[0], c[1], c[2], c.get(3).copied().unwrap_or(1.0)]);
+                    subshapes.push(kentron::io::step::Subshape { shape: s.shape, name, color, layer });
+                }
+            }
+            if let Ok(m) = extras.get_item("material") {
+                let m: Option<(String, String, f64, String)> = m.extract()?;
+                material = m.map(|(name, description, density, density_unit)| kentron::io::step::Material { name, description, density, density_unit });
+            }
+        }
         Ok(kentron::io::step::Node {
             name,
             shape: shape.map(|h| h.shape),
-            color: color.map(|c| [c.0, c.1, c.2]),
+            color: color.as_ref().map(|c| [c[0], c[1], c[2]]),
+            alpha: color.as_ref().and_then(|c| c.get(3).copied()).filter(|&a| a < 1.0),
             placement,
             children: children.iter().map(convert).collect::<PyResult<Vec<_>>>()?,
+            subshapes,
+            material,
         })
     }
     let roots = roots.iter().map(convert).collect::<PyResult<Vec<_>>>()?;

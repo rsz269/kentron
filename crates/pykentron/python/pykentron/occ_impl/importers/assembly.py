@@ -21,28 +21,53 @@ def importStep(assy, path: str, unit: str = "MM") -> None:
     if factor != 1.0:
 
         def scaled(node):
-            name, handle, rows, rgb, children = node
+            name, handle, rows, rgb, children, extras = node
             if handle is not None:
                 handle = Shape.cast(handle).scale(factor).wrapped
             rows = [list(r[:3]) + [r[3] * factor] for r in rows]
-            return (name, handle, rows, rgb, [scaled(c) for c in children])
+            # (Subshapes are found by identity: on a scaled copy, none.)
+            return (name, handle, rows, rgb, [scaled(c) for c in children], dict(extras, subshapes=[]))
 
         roots = [scaled(r) for r in roots]
 
+    from ..assembly import Material
+
+    def annotate(target, extras) -> None:
+        """The node's subshapes' names, colours and layers, and its material, on `target`."""
+        for handle, name, rgba, layer in extras.get("subshapes", []):
+            s = Shape.cast(handle)
+            if name is not None:
+                target._subshape_names[s] = name
+            if rgba is not None:
+                target._subshape_colors[s] = Color(*rgba)
+            if layer is not None:
+                target._subshape_layers[s] = layer
+        m = extras.get("material")
+        if m is not None:
+            name, description, density, unit = m
+            kwargs = {"description": description}
+            if density:
+                kwargs["density"] = density
+            if unit:
+                kwargs["densityUnit"] = unit
+            target.material = Material(name, **kwargs)
+
     def leaf(node, parent) -> None:
-        name, handle, rows, rgb, children = node
+        name, handle, rows, rgb, children, extras = node
         shape = Shape.cast(handle)
         loc = Location([list(r) for r in rows])
         color = Color(*rgb) if rgb is not None else None
         # (CadQuery writes an assembly's own shape as a "<name>_part" child.)
         if name.endswith("_part"):
             parent.obj, parent.loc, parent.color = shape, loc, color
+            annotate(parent, extras)
         else:
             parent.add(assy.__class__(shape, loc=loc, name=name, color=color))
+            annotate(parent.children[-1], extras)
 
     def fill(node, parent) -> None:
         for child in node[4]:
-            name, handle, rows, rgb, children = child
+            name, handle, rows, rgb, children, extras = child
             if children:
                 sub = assy.__class__(name=name)
                 fill(child, sub)
@@ -51,7 +76,13 @@ def importStep(assy, path: str, unit: str = "MM") -> None:
                 leaf(child, parent)
 
     top = roots[0]
-    name, handle, rows, rgb, children = top
+    name, handle, rows, rgb, children, extras = top
+    # (A top level written placed: the one child of a root of its name.)
+    if handle is None and len(children) == 1 and children[0][0] == name and children[0][4]:
+        top = children[0]
+        name, handle, rows, rgb, children, extras = top
+    if not children:
+        raise ValueError(f"The STEP file holds no assembly: {path}")
     if children:
         # The top-level assembly: its name and placement taken by `assy`.
         assy.objects.pop(assy.name)

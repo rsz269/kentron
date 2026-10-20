@@ -29,7 +29,7 @@ pub fn write(model: &Model, shape: Shape, name: &str, color: Option<[f64; 3]>, o
 /// [`write`], the shape's lengths taken to be in `unit`: written as they are, the file
 /// declaring that unit.
 pub fn write_in(model: &Model, shape: Shape, name: &str, color: Option<[f64; 3]>, unit: LengthUnit, out: &mut dyn Write) -> Result<()> {
-    let root = Node { name: name.to_string(), shape: Some(shape), color, placement: Transform::IDENTITY, children: Vec::new() };
+    let root = Node { name: name.to_string(), shape: Some(shape), color, ..Default::default() };
     write_assembly_in(model, &[root], unit, out)
 }
 
@@ -48,6 +48,12 @@ pub fn write_assembly_in(model: &Model, roots: &[Node], unit: LengthUnit, out: &
     for root in roots {
         w.product(root, &application, (product_context, definition_context))?;
     }
+    // The layers, each with the faces and edges on it.
+    for (name, items) in std::mem::take(&mut w.layers) {
+        let list = items.iter().map(|i| format!("#{i}")).collect::<Vec<_>>().join(",");
+        let name = w.escape(&name);
+        w.add(format!("PRESENTATION_LAYER_ASSIGNMENT('{name}','visible',({list}))"));
+    }
     let mut text = String::new();
     text.push_str("ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION(('kentron model'),'2;1');\n");
     let _ = writeln!(text, "FILE_NAME('{}','',(''),(''),'kentron','kentron','');", w.escape(roots.first().map_or("", |r| r.name.as_str())));
@@ -60,9 +66,23 @@ pub fn write_assembly_in(model: &Model, roots: &[Node], unit: LengthUnit, out: &
 }
 
 
+/// A face's or edge's own name, colour (with its opacity) and layer.
+#[derive(Debug, Clone, Default)]
+struct Mark {
+    name: Option<String>,
+    color: Option<[f64; 4]>,
+    layer: Option<String>,
+}
+
 struct Writer<'a> {
     model: &'a Model,
     lines: Vec<String>,
+    /// The marks of the product being written's faces and edges, by node.
+    marks: HashMap<NodeId, Mark>,
+    /// Styles of the product being written's faces.
+    face_styles: Vec<usize>,
+    /// Layers and the items on each, in the order met.
+    layers: Vec<(String, Vec<usize>)>,
     /// Shapes written, by node and placement within the product being written.
     vertices: HashMap<(NodeId, [u64; 12]), usize>,
     edges: HashMap<(NodeId, [u64; 12]), usize>,
@@ -83,7 +103,17 @@ fn key(t: &Transform) -> [u64; 12] {
 
 impl<'a> Writer<'a> {
     fn new(model: &'a Model) -> Self {
-        Writer { model, lines: Vec::new(), vertices: HashMap::default(), edges: HashMap::default(), context: None, unit: LengthUnit::Millimetre }
+        Writer {
+            model,
+            lines: Vec::new(),
+            marks: HashMap::default(),
+            face_styles: Vec::new(),
+            layers: Vec::new(),
+            vertices: HashMap::default(),
+            edges: HashMap::default(),
+            context: None,
+            unit: LengthUnit::Millimetre,
+        }
     }
 
     /// Adds an entity; its number.
@@ -155,8 +185,27 @@ impl<'a> Writer<'a> {
         let formation = self.add(format!("PRODUCT_DEFINITION_FORMATION('','',#{product})"));
         let definition = self.add(format!("PRODUCT_DEFINITION('design','',#{formation},#{definition_context})"));
         let definition_shape = self.add(format!("PRODUCT_DEFINITION_SHAPE('','',#{definition})"));
+        if let Some(material) = &node.material {
+            self.material(material, definition_shape);
+        }
         let context = self.geometric_context();
         let origin = self.axis(&Frame::WORLD);
+        // The faces' and edges' own names, colours and layers (a wire's are its edges', a
+        // solid's or shell's its faces').
+        self.marks.clear();
+        for sub in &node.subshapes {
+            let targets: Vec<NodeId> = match sub.shape.kind() {
+                NodeKind::Face | NodeKind::Edge => vec![sub.shape.node],
+                NodeKind::Wire => self.model.unique_subshapes(sub.shape, NodeKind::Edge).iter().map(|e| e.node).collect(),
+                _ => self.model.unique_subshapes(sub.shape, NodeKind::Face).iter().map(|f| f.node).collect(),
+            };
+            for t in targets {
+                let mark = self.marks.entry(t).or_default();
+                mark.name = sub.name.clone().or(mark.name.take());
+                mark.color = sub.color.or(mark.color);
+                mark.layer = sub.layer.clone().or(mark.layer.take());
+            }
+        }
         // The product's own geometry.
         let (mut items, mut styled) = (vec![origin], Vec::new());
         let mut has_shells = false;
@@ -166,10 +215,11 @@ impl<'a> Writer<'a> {
                 items.push(item);
                 has_shells |= shell;
                 if let Some(c) = node.color {
-                    styled.push(self.style(item, c));
+                    styled.push(self.style(item, c, node.alpha));
                 }
             }
         }
+        styled.append(&mut self.face_styles);
         // Placements of the children.
         let mut child_axes = Vec::new();
         for child in &node.children {
@@ -200,16 +250,70 @@ impl<'a> Writer<'a> {
         Ok((definition, representation))
     }
 
-    /// A colour on an item.
-    fn style(&mut self, item: usize, [r, g, b]: [f64; 3]) -> usize {
-        let colour = self.add(format!("COLOUR_RGB('',{},{},{})", real(r), real(g), real(b)));
+    /// A colour on an item, with its opacity where it is not opaque (written as the
+    /// rendering's transparency).
+    fn style(&mut self, item: usize, rgb: [f64; 3], alpha: Option<f64>) -> usize {
+        let colour = self.colour(rgb);
         let fill_colour = self.add(format!("FILL_AREA_STYLE_COLOUR('',#{colour})"));
         let fill = self.add(format!("FILL_AREA_STYLE('',(#{fill_colour}))"));
         let area = self.add(format!("SURFACE_STYLE_FILL_AREA(#{fill})"));
-        let side = self.add(format!("SURFACE_SIDE_STYLE('',(#{area}))"));
+        let side = match alpha.filter(|&a| a < 1.0) {
+            Some(a) => {
+                let transparent = self.add(format!("SURFACE_STYLE_TRANSPARENT({})", real((1.0 - a).clamp(0.0, 1.0))));
+                let rendering = self.add(format!("SURFACE_STYLE_RENDERING_WITH_PROPERTIES(.NORMAL_SHADING.,#{colour},(#{transparent}))"));
+                self.add(format!("SURFACE_SIDE_STYLE('',(#{area},#{rendering}))"))
+            }
+            None => self.add(format!("SURFACE_SIDE_STYLE('',(#{area}))")),
+        };
         let usage = self.add(format!("SURFACE_STYLE_USAGE(.BOTH.,#{side})"));
         let assignment = self.add(format!("PRESENTATION_STYLE_ASSIGNMENT((#{usage}))"));
         self.add(format!("STYLED_ITEM('color',(#{assignment}),#{item})"))
+    }
+
+    /// A colour: one of the predefined ones by its name where it is exactly that (as OCCT
+    /// writes them), else by its components.
+    fn colour(&mut self, [r, g, b]: [f64; 3]) -> usize {
+        const NAMED: [(&str, [f64; 3]); 8] = [
+            ("black", [0.0, 0.0, 0.0]),
+            ("white", [1.0, 1.0, 1.0]),
+            ("red", [1.0, 0.0, 0.0]),
+            ("green", [0.0, 1.0, 0.0]),
+            ("blue", [0.0, 0.0, 1.0]),
+            ("yellow", [1.0, 1.0, 0.0]),
+            ("magenta", [1.0, 0.0, 1.0]),
+            ("cyan", [0.0, 1.0, 1.0]),
+        ];
+        match NAMED.iter().find(|(_, c)| (c[0] - r).abs() <= 1e-9 && (c[1] - g).abs() <= 1e-9 && (c[2] - b).abs() <= 1e-9) {
+            Some((name, _)) => self.add(format!("DRAUGHTING_PRE_DEFINED_COLOUR('{name}')")),
+            None => self.add(format!("COLOUR_RGB('',{},{},{})", real(r), real(g), real(b))),
+        }
+    }
+
+    /// A product's material: its designation, and a property of its description, density
+    /// and the density's unit.
+    fn material(&mut self, material: &super::Material, definition_shape: usize) {
+        let name = self.escape(&material.name);
+        self.add(format!("MATERIAL_DESIGNATION('{name}',#{definition_shape})"));
+        let property = self.add(format!("PROPERTY_DEFINITION('material property','{name}',#{definition_shape})"));
+        let description = self.escape(&material.description);
+        let unit = self.escape(&material.density_unit);
+        let items = [
+            self.add(format!("DESCRIPTIVE_REPRESENTATION_ITEM('description','{description}')")),
+            self.add(format!("DESCRIPTIVE_REPRESENTATION_ITEM('density','{}')", real(material.density))),
+            self.add(format!("DESCRIPTIVE_REPRESENTATION_ITEM('density unit','{unit}')")),
+        ];
+        let list = items.iter().map(|i| format!("#{i}")).collect::<Vec<_>>().join(",");
+        let context = self.geometric_context();
+        let representation = self.add(format!("REPRESENTATION('material property',({list}),#{context})"));
+        self.add(format!("PROPERTY_DEFINITION_REPRESENTATION(#{property},#{representation})"));
+    }
+
+    /// Puts `item` on the layer `name`.
+    fn layer(&mut self, name: &str, item: usize) {
+        match self.layers.iter_mut().find(|(n, _)| n == name) {
+            Some((_, items)) => items.push(item),
+            None => self.layers.push((name.to_string(), vec![item])),
+        }
     }
 
     /// The solids (as manifold solid B-reps) and the shells outside solids (as shell-based
@@ -297,7 +401,17 @@ impl<'a> Writer<'a> {
         // The face's sense against its written surface: the model's (forward or reversed),
         // turned again where the written surface's normal runs the other way.
         let same_sense = forward != flipped;
-        Ok(self.add(format!("ADVANCED_FACE('',({list}),#{surface_id},{})", if same_sense { ".T." } else { ".F." })))
+        let mark = self.marks.get(&face.node).cloned().unwrap_or_default();
+        let name = mark.name.as_deref().map(|n| self.escape(n)).unwrap_or_default();
+        let id = self.add(format!("ADVANCED_FACE('{name}',({list}),#{surface_id},{})", if same_sense { ".T." } else { ".F." }));
+        if let Some([r, g, b, a]) = mark.color {
+            let styled = self.style(id, [r, g, b], Some(a));
+            self.face_styles.push(styled);
+        }
+        if let Some(layer) = &mark.layer {
+            self.layer(layer, id);
+        }
+        Ok(id)
     }
 
     fn vertex(&mut self, vertex: Shape) -> usize {
@@ -324,7 +438,12 @@ impl<'a> Writer<'a> {
             .edge_curve(Shape { orientation: Orientation::Forward, ..edge })
             .ok_or_else(|| Error::InvalidInput("writing STEP: an edge without a curve".into()))?;
         let curve = self.curve(&curve, first, last)?;
-        let e = self.add(format!("EDGE_CURVE('',#{va},#{vb},#{curve},.T.)"));
+        let mark = self.marks.get(&edge.node).cloned().unwrap_or_default();
+        let name = mark.name.as_deref().map(|n| self.escape(n)).unwrap_or_default();
+        let e = self.add(format!("EDGE_CURVE('{name}',#{va},#{vb},#{curve},.T.)"));
+        if let Some(layer) = &mark.layer {
+            self.layer(layer, e);
+        }
         self.edges.insert(k, e);
         Ok(e)
     }
@@ -538,9 +657,10 @@ mod tests {
             color: None,
             placement: Transform::IDENTITY,
             children: vec![
-                Node { name: "cube".into(), shape: Some(cube), color: Some([1.0, 0.0, 0.0]), placement: Transform::translation(Vector::new(5.0, 0.0, 0.0)), children: vec![] },
-                Node { name: "rod".into(), shape: Some(rod), color: Some([0.0, 0.0, 1.0]), placement: Transform::IDENTITY, children: vec![] },
+                Node { name: "cube".into(), shape: Some(cube), color: Some([1.0, 0.0, 0.0]), placement: Transform::translation(Vector::new(5.0, 0.0, 0.0)), ..Default::default() },
+                Node { name: "rod".into(), shape: Some(rod), color: Some([0.0, 0.0, 1.0]), ..Default::default() },
             ],
+            ..Default::default()
         }];
         let mut bytes = Vec::new();
         write_assembly(&model, &roots, &mut bytes).unwrap();
@@ -555,5 +675,54 @@ mod tests {
         assert!((volume(&children[1], &other) - 0.5 * std::f64::consts::PI).abs() < 1e-6);
         assert!(crate::validity::check(&other, children[1].shape.unwrap()).is_valid());
         assert!((Point::ORIGIN.transformed(&children[0].placement).x - 5.0).abs() < 1e-12);
+    }
+
+    /// A face's name, colour and layer, an edge's layer, a part's translucent colour and
+    /// its material: written (named colours by name, as OCCT writes them) and read back.
+    #[test]
+    fn subshapes_and_materials_read_back() {
+        use super::super::{Material, Subshape};
+        let mut model = Model::new();
+        let cube = Cuboid::new(1.0, 2.0, 3.0).build(&mut model).unwrap();
+        let top = model.unique_subshapes(cube, NodeKind::Face).into_iter().max_by(|a, b| {
+            let z = |f: &Shape| crate::properties::area(&model, *f).center_of_mass.z;
+            z(a).total_cmp(&z(b))
+        }).unwrap();
+        let edge = model.unique_subshapes(cube, NodeKind::Edge)[0];
+        let material = Material { name: "copper".into(), description: "a metal".into(), density: 8.96, density_unit: "g/cm^3".into() };
+        let roots = [Node {
+            name: "top".into(),
+            children: vec![Node {
+                name: "cube".into(),
+                shape: Some(cube),
+                color: Some([0.2, 0.4, 0.6]),
+                alpha: Some(0.5),
+                subshapes: vec![
+                    Subshape { shape: top, name: Some("lid".into()), color: Some([1.0, 0.0, 0.0, 1.0]), layer: Some("lids".into()) },
+                    Subshape { shape: edge, name: None, color: None, layer: Some("edges".into()) },
+                ],
+                material: Some(material.clone()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }];
+        let mut bytes = Vec::new();
+        write_assembly(&model, &roots, &mut bytes).unwrap();
+        let text = String::from_utf8(bytes.clone()).unwrap();
+        assert!(text.contains("ADVANCED_FACE('lid'") && text.contains("DRAUGHTING_PRE_DEFINED_COLOUR('red')"));
+        assert!(text.contains("PRESENTATION_LAYER_ASSIGNMENT('lids','visible'") && text.contains("MATERIAL_DESIGNATION('copper'"));
+        let mut other = Model::new();
+        let back = super::super::read_assembly(&mut other, &mut bytes.as_slice()).unwrap();
+        let cube = &back[0].children[0];
+        assert_eq!(cube.color, Some([0.2, 0.4, 0.6]));
+        assert!((cube.alpha.unwrap() - 0.5).abs() < 1e-12);
+        assert_eq!(cube.material.as_ref(), Some(&material));
+        let lid = cube.subshapes.iter().find(|s| s.name.as_deref() == Some("lid")).unwrap();
+        assert_eq!((lid.shape.kind(), lid.color, lid.layer.as_deref()), (NodeKind::Face, Some([1.0, 0.0, 0.0, 1.0]), Some("lids")));
+        let height = crate::properties::area(&model, top).center_of_mass.z;
+        assert!((crate::properties::area(&other, lid.shape).center_of_mass.z - height).abs() < 1e-9);
+        let edges: Vec<&Subshape> = cube.subshapes.iter().filter(|s| s.layer.as_deref() == Some("edges")).collect();
+        assert_eq!(edges.len(), 1);
+        assert_eq!(edges[0].shape.kind(), NodeKind::Edge);
     }
 }

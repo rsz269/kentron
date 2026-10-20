@@ -792,3 +792,10 @@ class _RGB:
 
     def Blue(self) -> float:
         return self._rgb[2]
+
+    def Name(self):
+        """The named colour nearest these components (OCCT's Quantity_Color::Name), among
+        the primaries and greys."""
+        from OCP.Quantity import Quantity_NameOfColor
+
+        return Quantity_NameOfColor._nearest(self._rgb)

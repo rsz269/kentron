@@ -20,7 +20,7 @@ def _step_roots(fileName) -> list:
     from .geom import Location
 
     def shape_of(node):
-        name, handle, rows, rgb, children = node
+        name, handle, rows, rgb, children = node[:5]
         parts = [Shape.cast(handle)] if handle is not None else []
         for child in children:
             part = shape_of(child)
@@ -56,7 +56,7 @@ def importStepAssembly(fileName):
     from .assembly import Assembly
 
     def build(node):
-        name, handle, rows, color, children = node
+        name, handle, rows, color, children = node[:5]
         a = Assembly(
             Shape.cast(handle) if handle is not None else None,
             loc=Location([list(r) for r in rows]),

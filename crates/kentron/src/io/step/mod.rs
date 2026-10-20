@@ -32,7 +32,7 @@ pub use parse::{parse, Exchange, Instance, Value};
 
 /// A node of a file's assembly structure: a product (part or assembly) as placed in its
 /// parent.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Node {
     /// The occurrence's name (or the product's, for a root or an unnamed occurrence).
     pub name: String,
@@ -41,9 +41,37 @@ pub struct Node {
     pub shape: Option<Shape>,
     /// The colour of all its solids, if they share one.
     pub color: Option<[f64; 3]>,
+    /// That colour's opacity, where it is not opaque (1 opaque, 0 clear).
+    pub alpha: Option<f64>,
     /// Where the product sits in its parent.
     pub placement: Transform,
     pub children: Vec<Node>,
+    /// Faces and edges of the shape with names, colours or layers of their own (a wire's
+    /// layer is its edges').
+    pub subshapes: Vec<Subshape>,
+    /// What the product is made of.
+    pub material: Option<Material>,
+}
+
+/// A face or edge of a product's shape with a name, colour or layer of its own.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Subshape {
+    /// A face, edge or wire of the product's shape (unplaced within it).
+    pub shape: Shape,
+    pub name: Option<String>,
+    /// Red, green, blue and opacity.
+    pub color: Option<[f64; 4]>,
+    pub layer: Option<String>,
+}
+
+/// A product's material: its name and description, and its density (in its unit, a name
+/// such as "g/cm^3").
+#[derive(Debug, Clone, PartialEq)]
+pub struct Material {
+    pub name: String,
+    pub description: String,
+    pub density: f64,
+    pub density_unit: String,
 }
 
 /// A length unit of a STEP file.
@@ -201,7 +229,12 @@ struct Reader<'a> {
     surfaces: HashMap<usize, Surface>,
     /// Solids and shells by their instance, made once.
     bodies: HashMap<usize, Shape>,
-    colors: HashMap<usize, [f64; 3]>,
+    colors: HashMap<usize, [f64; 4]>,
+    layers: HashMap<usize, String>,
+    materials: HashMap<usize, Material>,
+    /// The file's instance of each face and edge read (for their names, colours and layers).
+    face_instances: HashMap<crate::topology::NodeId, usize>,
+    edge_instances: HashMap<crate::topology::NodeId, usize>,
     /// Tolerances needed to cover the gaps between the file's curves, pcurves and points.
     edge_tolerance: HashMap<EdgeId, f64>,
     vertex_tolerance: HashMap<VertexId, f64>,
@@ -221,10 +254,16 @@ impl<'a> Reader<'a> {
             surfaces: HashMap::default(),
             bodies: HashMap::default(),
             colors: HashMap::default(),
+            layers: HashMap::default(),
+            materials: HashMap::default(),
+            face_instances: HashMap::default(),
+            edge_instances: HashMap::default(),
             edge_tolerance: HashMap::default(),
             vertex_tolerance: HashMap::default(),
         };
         reader.colors = colors(x);
+        reader.layers = layers(x);
+        reader.materials = materials(x);
         Ok(reader)
     }
 
@@ -589,6 +628,7 @@ impl<'a> Reader<'a> {
         self.model.set_edge_range(edge.into(), first, last)?;
         let made = EdgeMade { id: edge, flipped, curve, first, last, scale, pcurves };
         self.edges.insert(id, made.clone());
+        self.edge_instances.insert(edge.into(), id);
         Ok(made)
     }
 
@@ -604,6 +644,7 @@ impl<'a> Reader<'a> {
         let same_sense = p[3].as_bool().unwrap_or(true);
         let face = self.model.new_empty(NodeKind::Face);
         self.model.set_face_surface(face, surface.clone(), crate::tolerance::LINEAR)?;
+        self.face_instances.insert(face.node, id);
         // Boundaries: (outer?, coedges with pcurves).
         let mut loops: Vec<(bool, Vec<(EdgeId, bool, Curve2, f64, f64)>)> = Vec::new();
         for bound in self.list(&p[1])? {
@@ -1056,7 +1097,7 @@ impl<'a> Reader<'a> {
                 }
             }
             let shape = self.compound_of(shapes)?;
-            nodes.push(Node { name: String::new(), shape, color: None, placement: Transform::IDENTITY, children: Vec::new() });
+            nodes.push(Node { shape, ..Default::default() });
         }
         Ok(nodes)
     }
@@ -1109,10 +1150,27 @@ impl<'a> Reader<'a> {
                 }
             }
         }
-        let color = match colors.first() {
+        let shared = match colors.first() {
             Some(&Some(c)) if colors.iter().all(|&k| k == Some(c)) => Some(c),
             _ => None,
         };
+        let (color, alpha) = (shared.map(|[r, g, b, _]| [r, g, b]), shared.map(|c| c[3]).filter(|&a| a < 1.0));
+        // The faces and edges with names, colours or layers of their own.
+        let mut subshapes = Vec::new();
+        for &body in &bodies {
+            for (kind, instances) in [(NodeKind::Face, &self.face_instances), (NodeKind::Edge, &self.edge_instances)] {
+                for s in self.model.unique_subshapes(body, kind) {
+                    let Some(&inst) = instances.get(&s.node) else { continue };
+                    let name = self.x.get(inst).ok().and_then(|i| i.params().first().and_then(Value::as_str).map(str::to_string)).filter(|n| !n.is_empty() && n != "NONE");
+                    let color = if kind == NodeKind::Face { self.colors.get(&inst).copied() } else { None };
+                    let layer = self.layers.get(&inst).cloned();
+                    if name.is_some() || color.is_some() || layer.is_some() {
+                        subshapes.push(Subshape { shape: Shape { orientation: crate::topology::Orientation::Forward, ..s }, name, color, layer });
+                    }
+                }
+            }
+        }
+        let material = self.materials.get(&definition).cloned();
         let shape = self.compound_of(bodies)?;
         let mut kids = Vec::new();
         for (child, occurrence, occurrence_name) in children.get(&definition).cloned().unwrap_or_default() {
@@ -1120,7 +1178,7 @@ impl<'a> Reader<'a> {
             let at = placement_of.get(&occurrence).copied().unwrap_or(Transform::IDENTITY);
             kids.push(self.node(child, child_name, at, reps_of, linked, children, placement_of, depth + 1)?);
         }
-        Ok(Node { name, shape, color, placement, children: kids })
+        Ok(Node { name, shape, color, alpha, placement, children: kids, subshapes, material })
     }
 
     fn compound_of(&mut self, shapes: Vec<Shape>) -> Result<Option<Shape>> {
@@ -1197,7 +1255,7 @@ fn unit_factor(x: &Exchange, u: &Instance, is_length: bool) -> f64 {
 }
 
 /// The colours of styled items: item instance -> RGB.
-fn colors(x: &Exchange) -> HashMap<usize, [f64; 3]> {
+fn colors(x: &Exchange) -> HashMap<usize, [f64; 4]> {
     let mut out = HashMap::default();
     for (_, inst) in x.of_type("STYLED_ITEM") {
         let p = inst.record("STYLED_ITEM").expect("record");
@@ -1205,6 +1263,8 @@ fn colors(x: &Exchange) -> HashMap<usize, [f64; 3]> {
         let mut stack: Vec<&Value> = vec![&p[1]];
         let mut depth = 0;
         let mut found = None;
+        // (The transparency of its rendering, where it has one.)
+        let mut transparency: Option<f64> = None;
         while let Some(v) = stack.pop() {
             depth += 1;
             if depth > 200 {
@@ -1215,17 +1275,20 @@ fn colors(x: &Exchange) -> HashMap<usize, [f64; 3]> {
                 Value::Typed(_) => stack.extend(x.typed(v).map_or(&[][..], |(_, params)| params)),
                 Value::Reference(r) => {
                     let Ok(i) = x.get(*r) else { continue };
+                    if let Some(t) = i.record("SURFACE_STYLE_TRANSPARENT") {
+                        transparency = transparency.or(t.first().and_then(|v| x.real(v)));
+                    }
                     if let Some(c) = i.record("COLOUR_RGB") {
                         let rgb = [x.real(&c[1]), x.real(&c[2]), x.real(&c[3])];
                         if let [Some(r), Some(g), Some(b)] = rgb {
-                            found = Some([r, g, b]);
-                            break;
+                            found = found.or(Some([r, g, b]));
+                            continue;
                         }
                     }
                     if let Some(c) = i.record("DRAUGHTING_PRE_DEFINED_COLOUR") {
-                        found = c[0].as_str().and_then(named_colour);
-                        if found.is_some() {
-                            break;
+                        if let Some(c) = c[0].as_str().and_then(named_colour) {
+                            found = found.or(Some(c));
+                            continue;
                         }
                     }
                     for (_, params) in i.records() {
@@ -1235,8 +1298,79 @@ fn colors(x: &Exchange) -> HashMap<usize, [f64; 3]> {
                 _ => {}
             }
         }
-        if let Some(c) = found {
-            out.entry(item).or_insert(c);
+        if let Some([r, g, b]) = found {
+            out.entry(item).or_insert([r, g, b, 1.0 - transparency.unwrap_or(0.0).clamp(0.0, 1.0)]);
+        }
+    }
+    out
+}
+
+/// The layers items are on: item -> the layer's name.
+fn layers(x: &Exchange) -> HashMap<usize, String> {
+    let mut out = HashMap::default();
+    for (_, inst) in x.of_type("PRESENTATION_LAYER_ASSIGNMENT") {
+        let p = inst.params();
+        let Some(name) = p.first().and_then(Value::as_str) else { continue };
+        for item in p.get(2).and_then(|v| x.list(v)).unwrap_or(&[]) {
+            if let Some(r) = item.as_reference() {
+                out.entry(r).or_insert_with(|| name.to_string());
+            }
+        }
+    }
+    out
+}
+
+/// The products' materials: product definition -> material (its designation's name; its
+/// description, density and density's unit where a property gives them).
+fn materials(x: &Exchange) -> HashMap<usize, Material> {
+    let definition_of = |pds: usize| x.get(pds).ok().and_then(|i| i.record("PRODUCT_DEFINITION_SHAPE").and_then(|d| d.get(2)?.as_reference()));
+    let mut out: HashMap<usize, Material> = HashMap::default();
+    for (_, inst) in x.of_type("MATERIAL_DESIGNATION") {
+        let p = inst.params();
+        let Some(name) = p.first().and_then(Value::as_str) else { continue };
+        // (Of one definition, or a set of them.)
+        let targets: Vec<usize> = match p.get(1) {
+            Some(v) if x.list(v).is_some() => x.list(v).unwrap_or(&[]).iter().filter_map(Value::as_reference).collect(),
+            Some(v) => v.as_reference().into_iter().collect(),
+            None => Vec::new(),
+        };
+        for pds in targets {
+            if let Some(pd) = definition_of(pds) {
+                out.insert(pd, Material { name: name.to_string(), description: String::new(), density: 0.0, density_unit: String::new() });
+            }
+        }
+    }
+    // Properties of a material: description, density and its unit.
+    for (_, inst) in x.of_type("PROPERTY_DEFINITION_REPRESENTATION") {
+        let p = inst.params();
+        let (Some(prop), Some(rep)) = (p.first().and_then(Value::as_reference), p.get(1).and_then(Value::as_reference)) else { continue };
+        let Ok(prop) = x.get(prop) else { continue };
+        let Some(pp) = prop.record("PROPERTY_DEFINITION") else { continue };
+        if pp.first().and_then(Value::as_str) != Some("material property") {
+            continue;
+        }
+        let Some(pd) = pp.get(2).and_then(Value::as_reference).and_then(definition_of) else { continue };
+        let Some(material) = out.get_mut(&pd) else { continue };
+        let Ok(rep) = x.get(rep) else { continue };
+        let Some(items) = rep.records().find(|(_, v)| v.len() >= 2 && x.list(&v[1]).is_some()).and_then(|(_, v)| x.list(&v[1])) else { continue };
+        for item in items.iter().filter_map(Value::as_reference) {
+            let Ok(i) = x.get(item) else { continue };
+            if let Some(d) = i.record("DESCRIPTIVE_REPRESENTATION_ITEM") {
+                let (key, value) = (d.first().and_then(Value::as_str).unwrap_or(""), d.get(1).and_then(Value::as_str).unwrap_or(""));
+                match key {
+                    "description" => material.description = value.to_string(),
+                    "density" => material.density = value.trim().parse().unwrap_or(material.density),
+                    "density unit" => material.density_unit = value.to_string(),
+                    _ => {}
+                }
+            } else if let Some(m) = i.record("MEASURE_REPRESENTATION_ITEM") {
+                // (As OCCT writes a density: a measure with a unit.)
+                if m.first().and_then(Value::as_str).is_some_and(|k| k.contains("density")) {
+                    if let Some(v) = m.get(1).and_then(|v| x.real(v)) {
+                        material.density = v;
+                    }
+                }
+            }
         }
     }
     out
