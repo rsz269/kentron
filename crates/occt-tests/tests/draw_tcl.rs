@@ -43,6 +43,17 @@ fn main() {
             if std::env::var_os("KENTRON_CASE_TIMES").is_some() {
                 eprintln!("case time {:.3}s {timed}", started.elapsed().as_secs_f64());
             }
+            // (With `KENTRON_EXPECTED_REASONS` set, why each listed script fails, as the cases'.)
+            if listed && std::env::var_os("KENTRON_EXPECTED_REASONS").is_some() {
+                let why = match &outcome {
+                    Ok(Outcome::Failed(lines)) => lines.first().cloned().unwrap_or_default(),
+                    Err(e) => e.lines().next().unwrap_or("").to_string(),
+                    _ => String::new(),
+                };
+                if !why.is_empty() {
+                    eprintln!("expected failure {timed}: {why}");
+                }
+            }
             match (outcome, listed) {
                 (Ok(Outcome::Passed | Outcome::Skipped(_) | Outcome::KnownFailure(_)), false) => Ok(()),
                 (Ok(Outcome::Failed(_)) | Err(_), true) => Ok(()),

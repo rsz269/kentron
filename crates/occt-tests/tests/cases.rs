@@ -7,7 +7,8 @@
 //! `tools/run_tests.py` keeps them), the slowest cases start first, so that the run does
 //! not end waiting for a few long ones started last. With
 //! `KENTRON_SKIP_EXPECTED_FAILURES` set, `expect: not_done` cases are ignored (a quicker run,
-//! which does not notice one starting to pass).
+//! which does not notice one starting to pass); with `KENTRON_EXPECTED_REASONS` set, each
+//! such case's failure is reported.
 
 use std::path::Path;
 
@@ -41,6 +42,12 @@ fn main() {
                 let outcome = run_with_timeout(case);
                 if std::env::var_os("KENTRON_CASE_TIMES").is_some() {
                     eprintln!("case time {:.3}s {timed}", started.elapsed().as_secs_f64());
+                }
+                // (With `KENTRON_EXPECTED_REASONS` set, why each expected failure fails.)
+                if let (Err(e), true) = (&outcome, not_done) {
+                    if std::env::var_os("KENTRON_EXPECTED_REASONS").is_some() {
+                        eprintln!("expected failure {timed}: {}", e.lines().next().unwrap_or(""));
+                    }
                 }
                 match (outcome, not_done) {
                     (Ok(()), false) | (Err(_), true) => Ok(()),

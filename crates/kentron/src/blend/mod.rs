@@ -40,14 +40,21 @@ pub fn fillet(model: &mut Model, shape: Shape, edges: &[Shape], radius: f64) -> 
 #[doc(alias = "BRepFilletAPI_MakeFillet::Add")]
 pub fn fillet_edges(model: &mut Model, shape: Shape, edges: &[(Shape, f64)]) -> Result<Shape> {
     let edges = &sharp(model, shape, edges, |e| e.0)?;
-    on_solids(model, shape, |model, shape| each_solid(model, shape, edges, |e| e.0, |e, c| Some((c, e.1)), fillet_solid_edges))
+    let reach = edges.iter().map(|e| e.1).fold(0.0, f64::max);
+    on_solids(model, shape, reach, |model, shape, found| {
+        let edges = remapped(model, shape, edges, |e| e.0, |e, c| Some((c, e.1)), found)?;
+        each_solid(model, shape, &edges, |e| e.0, |e, c| Some((c, e.1)), fillet_solid_edges)
+    })
 }
 
 /// [`fillet`] of all `edges`, those where the faces meet smoothly too (as an offset's
 /// parting edges, which may meet so but for rounding).
 pub(crate) fn fillet_all(model: &mut Model, shape: Shape, edges: &[Shape], radius: f64) -> Result<Shape> {
     let edges: Vec<(Shape, f64)> = edges.iter().map(|&e| (e, radius)).collect();
-    on_solids(model, shape, |model, shape| each_solid(model, shape, &edges, |e| e.0, |e, c| Some((c, e.1)), fillet_solid_edges))
+    on_solids(model, shape, radius, |model, shape, found| {
+        let edges = remapped(model, shape, &edges, |e| e.0, |e, c| Some((c, e.1)), found)?;
+        each_solid(model, shape, &edges, |e| e.0, |e, c| Some((c, e.1)), fillet_solid_edges)
+    })
 }
 
 /// `op` on each solid of `shape` with the edges of `edges` it has (by node and placement:
@@ -356,16 +363,32 @@ fn rolls_off(model: &Model, shape: Shape, corner: &Corner, radius: f64) -> bool 
     runover::rolls_off(model, [a, b], corner.tangent, length, [t1, t2])
 }
 
-/// `op` on `shape`, or where `shape` has no solids but closed shells (as revolving a closed
-/// wire makes), on those shells made solids, the result's shells given back (one shell, or
-/// a compound of them): OCCT rounds shells as well.
-fn on_solids(model: &mut Model, shape: Shape, op: impl FnOnce(&mut Model, Shape) -> Result<Shape>) -> Result<Shape> {
+/// `op` on `shape` where it has solids; on the solids closed shells bound, given back as
+/// shells; and on an open shell (alone) as the solid it bounds with its offset back by
+/// twice `reach` (the largest radius or distance) and walls between the two's free edges,
+/// the faces of the offset and the walls then left out of the result: the rounding made on
+/// the shell's side and ending at its free edges. `op` is given how to find an edge of
+/// `shape` again in what it is given (itself but on an open shell, where the faces are sewn
+/// anew).
+fn on_solids(model: &mut Model, shape: Shape, reach: f64, op: impl Fn(&mut Model, Shape, &dyn Fn(&Model, Shape, Shape) -> Option<Shape>) -> Result<Shape>) -> Result<Shape> {
+    let same = |_: &Model, _: Shape, edge: Shape| Some(edge);
     if !model.unique_subshapes(shape, NodeKind::Solid).is_empty() {
-        return op(model, shape);
+        return op(model, shape, &same);
     }
     let shells = model.unique_subshapes(shape, NodeKind::Shell);
-    if shells.is_empty() || !shells.iter().all(|&s| crate::topology::ShellId::try_from(s.node).is_ok_and(|id| model.is_closed_shell(id))) {
-        return op(model, shape);
+    let closed = |model: &Model, s: Shape| crate::topology::ShellId::try_from(s.node).is_ok_and(|id| model.is_closed_shell(id));
+    if let [shell] = shells[..] {
+        if !closed(model, shell) && reach > 0.0 {
+            // (Directly first: cut by their tools, a shell's convex edges are rounded as
+            // they are.)
+            if let Ok(direct) = op(model, shape, &same) {
+                return Ok(direct);
+            }
+            return on_open_shell(model, shell, 2.0 * reach, op);
+        }
+    }
+    if shells.is_empty() || !shells.iter().all(|&s| closed(model, s)) {
+        return op(model, shape, &same);
     }
     let compound = model.new_empty(NodeKind::Compound);
     for shell in shells {
@@ -381,7 +404,7 @@ fn on_solids(model: &mut Model, shape: Shape, op: impl FnOnce(&mut Model, Shape)
         };
         model.add(compound, solid)?;
     }
-    let result = op(model, compound)?;
+    let result = op(model, compound, &same)?;
     let shells = model.unique_subshapes(result, NodeKind::Shell);
     match &shells[..] {
         [one] => Ok(*one),
@@ -393,6 +416,104 @@ fn on_solids(model: &mut Model, shape: Shape, op: impl FnOnce(&mut Model, Shape)
             Ok(out)
         }
     }
+}
+
+/// [`on_solids`] on an open shell: `shell` closed by its offset back by `depth` and the walls
+/// between the two's free edges into a solid, `op` on it, and the faces of the result not on
+/// the offset or the walls as a shell.
+fn on_open_shell(model: &mut Model, shell: Shape, depth: f64, op: impl Fn(&mut Model, Shape, &dyn Fn(&Model, Shape, Shape) -> Option<Shape>) -> Result<Shape>) -> Result<Shape> {
+    use crate::geometry::ParametricCurve;
+    let back = crate::offset::shape(model, shell, -depth, crate::offset::Join::Intersection)?;
+    // The free edges: used once (a seam twice, in its face).
+    let free = |model: &Model, s: Shape| -> Vec<Shape> {
+        let mut uses: Vec<(NodeId, usize, Shape)> = Vec::new();
+        for e in model.explore(s, NodeKind::Edge) {
+            match uses.iter_mut().find(|u| u.0 == e.node) {
+                Some(u) => u.1 += 1,
+                None => uses.push((e.node, 1, e)),
+            }
+        }
+        uses.into_iter().filter(|u| u.1 == 1 && !model.is_degenerate(u.2)).map(|u| u.2).collect()
+    };
+    let middle = |model: &Model, e: Shape| model.edge_curve(Shape { orientation: Orientation::Forward, ..e }).map(|(c, a, b)| c.point(0.5 * (a + b)));
+    let theirs: Vec<(Shape, Point)> = free(model, back).into_iter().filter_map(|e| Some((e, middle(model, e)?))).collect();
+    let mut faces: Vec<Shape> = model.unique_subshapes(shell, NodeKind::Face);
+    let mut left_out: Vec<Surface> = model.unique_subshapes(back, NodeKind::Face).iter().filter_map(|&f| model.surface(f).map(|s| s.transformed(&f.placement))).collect();
+    faces.extend(model.unique_subshapes(back, NodeKind::Face));
+    for e in free(model, shell) {
+        let Some(m) = middle(model, e) else { continue };
+        let Some(&(other, _)) = theirs.iter().min_by(|a, b| a.1.distance(m).total_cmp(&b.1.distance(m))) else {
+            return Err(Error::Failed("a free edge of the shell without its offset".into()));
+        };
+        let (a, b) = (crate::make::wire(model, &[e])?, crate::make::wire(model, &[other])?);
+        let wall = crate::loft::loft(model, &[a, b], &crate::loft::LoftOptions { solid: false, ruled: true, ..Default::default() })?.shape;
+        for f in model.unique_subshapes(wall, NodeKind::Face) {
+            left_out.extend(model.surface(f).map(|s| s.transformed(&f.placement)));
+            faces.push(f);
+        }
+    }
+    // (Sewn within the shell's tolerances: a tolerant shell's edges stray from its faces.)
+    let gap = model.unique_subshapes(shell, NodeKind::Edge).iter().map(|&e| model.tolerance(e)).fold(tolerance::LINEAR, f64::max);
+    let sewn = crate::sew::sew(model, &faces, &crate::sew::SewOptions { tolerance: 2.0 * gap + tolerance::LINEAR, ..Default::default() })?;
+    let shells = model.unique_subshapes(sewn, NodeKind::Shell);
+    let [closed] = shells[..] else {
+        return Err(Error::Failed(format!("the shell and its offset back sewn into {} shells, not one", shells.len())));
+    };
+    let solid = model.new_empty(NodeKind::Solid);
+    model.add(solid, closed)?;
+    let solid = if volume_of(model, solid) < 0.0 {
+        let turned = model.new_empty(NodeKind::Solid);
+        model.add(turned, closed.reversed())?;
+        turned
+    } else {
+        solid
+    };
+    // An edge of the shell found again on the solid by its curve (within the tolerances it
+    // was sewn within).
+    let found = move |model: &Model, solid: Shape, edge: Shape| -> Option<Shape> {
+        let (curve, first, last) = model.edge_curve(Shape { orientation: Orientation::Forward, ..edge })?;
+        let size = curve.point(first).distance(curve.point(0.5 * (first + last))) + curve.point(0.5 * (first + last)).distance(curve.point(last));
+        let tol = (1e-6 * size.max(1.0)).max(2.0 * gap + tolerance::LINEAR);
+        model
+            .unique_subshapes(solid, NodeKind::Edge)
+            .into_iter()
+            .filter_map(|e| {
+                let (c, a, b) = model.edge_curve(Shape { orientation: Orientation::Forward, ..e })?;
+                let near = |p: Point| crate::geometry::extrema::nearest_on_curve(p, &curve, first, last).distance;
+                let gap = near(c.point(a)).max(near(c.point(b))).max(near(c.point(0.5 * (a + b))));
+                (gap <= tol).then_some((e, gap))
+            })
+            .min_by(|x, y| x.1.total_cmp(&y.1))
+            .map(|(e, _)| Shape { orientation: edge.orientation, ..e })
+    };
+    // (Taken only where the solid comes out as sound as it went in: else a wrong shell.)
+    let before = fault_kinds(model, solid);
+    let result = op(model, solid, &found).and_then(|r| sound(model, &before, r))?;
+    // The result's faces on neither the offset nor the walls (the middle of their surface's
+    // range over them on one of those: a face of the shell's side is no nearer them than the
+    // depth, but at their edges), as a shell.
+    let on_left_out = |model: &Model, f: Shape| -> bool {
+        let Some(surface) = model.surface(f).map(|s| s.transformed(&f.placement)) else { return false };
+        let (u0, u1, v0, v1) = model.face_uv_bounds(f);
+        let points = [surface.point(0.5 * (u0 + u1), 0.5 * (v0 + v1))];
+        let tol = 1e-6 * depth + 2.0 * gap + tolerance::LINEAR;
+        left_out.iter().any(|w| points.iter().all(|&p| crate::geometry::extrema::nearest_on_surface(p, w, None).2 <= tol))
+    };
+    let kept: Vec<Shape> = model.explore(result, NodeKind::Face).filter(|&f| !on_left_out(model, f)).collect();
+    let out = model.new_empty(NodeKind::Shell);
+    for f in kept {
+        model.add(out, f)?;
+    }
+    Ok(out)
+}
+
+/// `edges`, each found again on `shape` by `found` (see [`on_solids`]).
+fn remapped<T: Copy>(model: &Model, shape: Shape, edges: &[T], edge: impl Fn(&T) -> Shape, with_edge: impl Fn(&T, Shape) -> Option<T>, found: &dyn Fn(&Model, Shape, Shape) -> Option<Shape>) -> Result<Vec<T>> {
+    edges
+        .iter()
+        .map(|e| found(model, shape, edge(e)).and_then(|c| if c == edge(e) { Some(*e) } else { with_edge(e, c) }))
+        .collect::<Option<Vec<T>>>()
+        .ok_or_else(|| Error::Failed("an edge to round not found again on the shell made solid".into()))
 }
 
 /// Where two straight corners' tools meet at an end of their edges, at an angle, on a plane
@@ -593,7 +714,18 @@ pub fn chamfer_edges(model: &mut Model, shape: Shape, edges: &[ChamferedEdge]) -
         return Err(Error::InvalidInput("no edges to chamfer".into()));
     }
     let edges = &sharp(model, shape, edges, |e| e.edge)?;
-    on_solids(model, shape, |model, shape| each_solid(model, shape, edges, |e| e.edge, |e, c| e.face.is_none().then_some(ChamferedEdge { edge: c, ..*e }), chamfer_solid_edges))
+    let reach = edges
+        .iter()
+        .map(|e| match e.size {
+            ChamferSize::Distances(a, b) => a.max(b),
+            ChamferSize::DistanceAngle(d, angle) => d * (1.0 + angle.tan().abs().min(10.0)),
+        })
+        .fold(0.0, f64::max);
+    let with_edge = |e: &ChamferedEdge, c: Shape| e.face.is_none().then_some(ChamferedEdge { edge: c, ..*e });
+    on_solids(model, shape, reach, |model, shape, found| {
+        let edges = remapped(model, shape, edges, |e| e.edge, with_edge, found)?;
+        each_solid(model, shape, &edges, |e| e.edge, with_edge, chamfer_solid_edges)
+    })
 }
 
 /// [`chamfer_edges`] of a shape with solids.
@@ -1095,7 +1227,12 @@ fn merge_arcs(mut corners: Vec<(Corner, f64)>) -> Vec<(Corner, f64)> {
 #[doc(alias = "BRepFilletAPI_MakeFillet::Add")]
 #[doc(alias = "BRepFilletAPI_MakeFillet::SetRadius")]
 pub fn fillet_evolving(model: &mut Model, shape: Shape, edges: &[(Shape, Vec<(f64, f64)>)]) -> Result<Shape> {
-    on_solids(model, shape, |model, shape| fillet_solid_evolving(model, shape, edges))
+    let reach = edges.iter().flat_map(|(_, law)| law.iter().map(|&(_, r)| r)).fold(0.0, f64::max);
+    on_solids(model, shape, reach, |model, shape, found| {
+        let edges: Option<Vec<(Shape, Vec<(f64, f64)>)>> = edges.iter().map(|(e, law)| found(model, shape, *e).map(|c| (c, law.clone()))).collect();
+        let edges = edges.ok_or_else(|| Error::Failed("an edge to fillet not found again on the shell made solid".into()))?;
+        fillet_solid_evolving(model, shape, &edges)
+    })
 }
 
 /// [`fillet_evolving`] of a shape with solids.

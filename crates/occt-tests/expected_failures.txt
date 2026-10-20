@@ -80,11 +80,9 @@ tests/blend/tolblend_simple/D6
 tests/blend/tolblend_simple/D8
 tests/blend/tolblend_simple/D9
 tests/blend/tolblend_simple/E2
-tests/blend/tolblend_simple/E3
 tests/blend/tolblend_simple/E5
 tests/blend/tolblend_simple/E9
 tests/blend/tolblend_simple/F1
-tests/blend/tolblend_simple/F2
 tests/blend/tolblend_simple/F3
 tests/blend/tolblend_simple/F4
 tests/blend/tolblend_simple/F5
