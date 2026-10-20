@@ -37,7 +37,7 @@ def run(mode, script, project, tag):
     work.mkdir(parents=True, exist_ok=True)
     # (Where scripts commonly export to: CadQuery writes nothing to a missing directory,
     # quietly.)
-    for d in ('stl', 'step', 'out', 'output', 'export', 'exports', 'gltf', 'svg', 'dxf'):
+    for d in ('stl', 'step', 'out', 'output', 'export', 'exports', 'gltf', 'svg', 'dxf', 'docs'):
         (work / d).mkdir(exist_ok=True)
     env = dict(os.environ, OPENBLAS_NUM_THREADS='1', PYKENTRON_PROFILE='fast', MPLBACKEND='Agg')
     t = time.time()
@@ -62,8 +62,11 @@ def compare(k, c):
             diffs.append(f'{name}: missing')
             continue
         for key in ('volume', 'area'):
-            # (Volumes of solids only, areas of faces only: OCCT's of wires mean nothing.)
+            # (Volumes of solids only, areas of faces only: OCCT's of wires mean nothing. Nor
+            # of a shape OCCT made invalid where kentron's is valid: no reference.)
             if (key == 'volume' and not co.get('solids')) or (key == 'area' and not co.get('faces')):
+                continue
+            if co.get('valid') is False and ko.get('valid') is True:
                 continue
             a, b = ko.get(key), co.get(key)
             if isinstance(a, (int, float)) and isinstance(b, (int, float)):
@@ -75,7 +78,10 @@ def compare(k, c):
             diffs.append(f'{name}: invalid')
         if 'bbox' in ko and 'bbox' in co:
             size = max(1e-6, max(co['bbox'][3] - co['bbox'][0], co['bbox'][4] - co['bbox'][1], co['bbox'][5] - co['bbox'][2]))
-            if max(abs(x - y) for x, y in zip(ko['bbox'], co['bbox'])) > 1e-2 * size:
+            # (CadQuery's boxes are OCCT's, enlarged by tolerances and control points: ours
+            # may lie inside one, short of it by a little.)
+            within = all(k >= c - 1e-2 * size for k, c in zip(ko['bbox'][:3], co['bbox'][:3])) and all(k <= c + 1e-2 * size for k, c in zip(ko['bbox'][3:], co['bbox'][3:]))
+            if max(abs(x - y) for x, y in zip(ko['bbox'], co['bbox'])) > (3e-2 if within else 1e-2) * size:
                 diffs.append(f'{name}: bbox differs')
         if ko.get('solids') != co.get('solids') and co.get('solids'):
             diffs.append(f"{name}: solids {ko.get('solids')} vs {co.get('solids')}")

@@ -1,0 +1,275 @@
+project	script	source	licence	kentron s	kentron cpu s	cadquery s	cadquery cpu s	objects
+3DPrintedClocks	clocks/cuckoo_bits.py	MrBunsy/3DPrintedClocks@256f900	not copied (CERN-OHL-S-2.0)	0.016	0.016	0.178	0.223	3
+CadQuery-Examples	Tetrakaidecahedron.py	bragostin/CadQuery-Examples@9473c58	not copied (none)	1.329	2.336	19.660	32.772	9
+KeyCaps	driver.py	CutRightHand/KeyCaps@84c6ea1	MIT	0.127	0.108	0.792	2.258	22
+KeyCaps	playground.py	CutRightHand/KeyCaps@84c6ea1	MIT	0.001	0.001	0.007	0.007	4
+LatticeQuery	lattice_scripts/lego_brick.py	jalovisko/LatticeQuery@4d3d608	Apache-2.0	0.013	0.013	0.046	0.147	2
+LatticeQuery	lattice_scripts/support_plate.py	jalovisko/LatticeQuery@4d3d608	Apache-2.0	0.001	0.001	0.004	0.004	1
+LatticeQuery	lattice_scripts/tetra_lattice.py	jalovisko/LatticeQuery@4d3d608	Apache-2.0	1.288	2.274	19.583	32.501	8
+LatticeQuery	lattice_scripts/unit_cell.py	jalovisko/LatticeQuery@4d3d608	Apache-2.0	1.617	2.615	0.320	2.227	3
+parametric-tensile-specimens	cadquery_models/astm/ASTM638_solid.py	TanerOzpinar/parametric-tensile-specimens@cce3e1a	MIT	0.005	0.005	0.030	0.048	3
+parametric-tensile-specimens	cadquery_models/iso/527-2/type1a.py	TanerOzpinar/parametric-tensile-specimens@cce3e1a	MIT	0.003	0.003	0.022	0.032	1
+parametric-tensile-specimens	cadquery_models/iso/527-2/type1b.py	TanerOzpinar/parametric-tensile-specimens@cce3e1a	MIT	0.003	0.003	0.021	0.033	1
+parametric-tensile-specimens	cadquery_models/iso/527-2/type1b_auxetic.py	TanerOzpinar/parametric-tensile-specimens@cce3e1a	MIT	0.198	0.211	0.475	1.056	2
+parametric-tensile-specimens	cadquery_models/iso/527-2/type1b_circular.py	TanerOzpinar/parametric-tensile-specimens@cce3e1a	MIT	0.280	0.292	0.216	1.623	1
+parametric-tensile-specimens	cadquery_models/iso/527-2/type1b_grid.py	TanerOzpinar/parametric-tensile-specimens@cce3e1a	MIT	1.688	1.705	1.183	3.145	1
+parametric-tensile-specimens	cadquery_models/iso/527-2/type2.py	TanerOzpinar/parametric-tensile-specimens@cce3e1a	MIT	0.003	0.003	0.025	0.035	2
+cadquery-designs	models/bell-shaped-handle.py	VSamokhin/cadquery-designs@f6abc9f	BSD-3-Clause	0.251	0.287	0.413	0.866	4
+cadquery-designs	models/ikea-kvartal-hook-adapter.py	VSamokhin/cadquery-designs@f6abc9f	BSD-3-Clause	2.157	2.450	0.493	1.486	4
+cadquery-designs	models/mb-a205-windshield-lug.py	VSamokhin/cadquery-designs@f6abc9f	BSD-3-Clause	0.328	0.650	0.495	1.744	13
+cadquery-designs	models/phono-preamp-psu.py	VSamokhin/cadquery-designs@f6abc9f	BSD-3-Clause	2.350	2.579	5.706	15.882	24
+cadquery-designs	models/round-furniture-leg-spacer.py	VSamokhin/cadquery-designs@f6abc9f	BSD-3-Clause	0.006	0.006	0.030	0.047	3
+cadquery-designs	models/square-furniture-leg-spacer.py	VSamokhin/cadquery-designs@f6abc9f	BSD-3-Clause	0.011	0.011	0.044	0.070	3
+cadquery-designs	models/step-display-stand.py	VSamokhin/cadquery-designs@f6abc9f	BSD-3-Clause	0.561	0.571	3.697	7.039	3
+cadquery-designs	models/wrench-bits-holder.py	VSamokhin/cadquery-designs@f6abc9f	BSD-3-Clause	0.525	0.607	0.317	0.665	6
+CQCAD	aircon/window_clamp.py	Wren6991/CQCAD@7c47152	CC0-1.0	0.259	0.435	0.433	1.497	5
+CQCAD	boox-page-stand/stand-v1.py	Wren6991/CQCAD@7c47152	CC0-1.0	0.474	0.619	0.408	1.241	5
+CQCAD	boox-page-stand/stand-v3.py	Wren6991/CQCAD@7c47152	CC0-1.0	0.641	0.804	0.493	1.362	7
+CQCAD	boox-page-stand/stand-with-base.py	Wren6991/CQCAD@7c47152	CC0-1.0	0.808	0.985	0.787	2.323	10
+CQCAD	boox-page-stand/stand.py	Wren6991/CQCAD@7c47152	CC0-1.0	0.589	0.688	0.495	1.346	7
+CQCAD	qfn_box/qfn_box.py	Wren6991/CQCAD@7c47152	CC0-1.0	0.577	0.760	1.306	3.025	6
+CQCAD	random/amy_card_boxy.py	Wren6991/CQCAD@7c47152	CC0-1.0	1.009	1.381	0.863	2.794	3
+CQCAD	random/broom_clip.py	Wren6991/CQCAD@7c47152	CC0-1.0	0.051	0.079	0.081	0.131	5
+CQCAD	random/choc_block.py	Wren6991/CQCAD@7c47152	CC0-1.0	0.125	0.178	0.499	1.333	6
+CQCAD	random/pcb_sled.py	Wren6991/CQCAD@7c47152	CC0-1.0	0.215	0.370	0.370	1.184	3
+CQCAD	random/steaming_hook.py	Wren6991/CQCAD@7c47152	CC0-1.0	0.144	0.202	0.136	0.454	4
+CQCAD	random/toothbrush_holder.py	Wren6991/CQCAD@7c47152	CC0-1.0	0.085	0.174	0.131	0.268	2
+alphabets	V2/Hardware/Final/mechanical/view_enclosure.py	TheBeachLab/alphabets@1661729	MIT	0.664	0.724	2.356	8.626	1
+alphabets	V2/Hardware/Prototype/mechanical/view_enclosure.py	TheBeachLab/alphabets@1661729	MIT	0.645	0.717	1.708	6.868	1
+3d-models	models/cadquery/macbook-stand/macbook-stand.py	aoshimash/3d-models@86b8637	MIT	0.819	1.007	3.378	9.793	17
+french_cleats	src/utilities/generate_versorium_needle.py	atiretoo/french_cleats@608ea0a	not copied (CC-BY-SA-4.0)	0.014	0.021	0.077	0.185	1
+cadkit	examples/tutorial/01_box.py	aurkakoak/cadkit@212aa3f	Apache-2.0	0.002	0.002	0.020	0.023	2
+cadquery_models	yoto/card_holder.py	benpops89/cadquery_models@d536e6d	not copied (none)	0.002	0.002	0.014	0.021	4
+cad-as-code-book	_md/ch02_first_parts.py	DavidMStraub/cad-as-code-book@5766b52	not copied (CC-BY-4.0)	0.009	0.009	0.029	0.036	7
+cadquery-contrib	examples/Braille.py	CadQuery/cadquery-contrib@3543aef	MIT	0.384	0.599	0.099	0.313	1
+cadquery-contrib	examples/Classic_OCC_Bottle.py	CadQuery/cadquery-contrib@3543aef	MIT	0.036	0.036	0.033	0.035	3
+cadquery-contrib	examples/Numpy.py	CadQuery/cadquery-contrib@3543aef	MIT	0.003	0.003	0.017	0.031	2
+cadquery-contrib	examples/Panel_with_Various_Holes_for_Connector_Installation.py	CadQuery/cadquery-contrib@3543aef	MIT	2.579	2.737	10.988	11.478	2
+cadquery-contrib	examples/Parametric_Enclosure.py	CadQuery/cadquery-contrib@3543aef	MIT	0.277	0.750	0.367	1.331	10
+cadquery-contrib	examples/Reinforce_Junction_UsingFillet.py	CadQuery/cadquery-contrib@3543aef	MIT	0.043	0.062	0.063	0.127	3
+cadquery-contrib	examples/Resin_Mold.py	CadQuery/cadquery-contrib@3543aef	MIT	0.082	0.092	0.295	1.108	4
+cadquery-contrib	examples/Shelled_Cube_Inside_Chamfer_With_Logical_Selector_Operators.py	CadQuery/cadquery-contrib@3543aef	MIT	0.008	0.008	0.020	0.020	2
+cadquery-contrib	examples/Tetrakaidecahedron.py	CadQuery/cadquery-contrib@3543aef	MIT	1.578	2.899	28.367	45.955	9
+cadquery-contrib	examples/cylindrical_gear.py	CadQuery/cadquery-contrib@3543aef	MIT	3.503	3.576	5.640	17.382	4
+cadquery-contrib	examples/hexagonal_drawers/organiser_blank.py	CadQuery/cadquery-contrib@3543aef	MIT	0.147	0.265	0.593	2.524	2
+cadquery-contrib	examples/hexagonal_drawers/organiser_collets.py	CadQuery/cadquery-contrib@3543aef	MIT	0.198	0.351	0.865	3.577	3
+cadquery-models	case/case.py	tanius/cadquery-models@fa4ccf0	Unlicense	0.004	0.004	0.040	0.060	6
+cadquery-models	chuteloft/chute_loft.py	tanius/cadquery-models@fa4ccf0	Unlicense	0.007	0.007	0.024	0.024	3
+cadquery-models	demos/rounded_open_box.py	tanius/cadquery-models@fa4ccf0	Unlicense	0.097	0.105	0.010	0.010	1
+cadquery-models	demos/split_cube.py	tanius/cadquery-models@fa4ccf0	Unlicense	0.004	0.004	0.034	0.043	2
+cadquery-models	demos/stacked_boxes.py	tanius/cadquery-models@fa4ccf0	Unlicense	0.002	0.002	0.015	0.019	2
+cadquery-models	demos/svg_export.py	tanius/cadquery-models@fa4ccf0	Unlicense	0.037	0.048	0.155	0.264	4
+cadquery-models	demos/tagged_faces.py	tanius/cadquery-models@fa4ccf0	Unlicense	0.002	0.002	0.014	0.017	2
+cadquery-models	footblock/foot_block.py	tanius/cadquery-models@fa4ccf0	Unlicense	0.412	0.478	0.729	1.583	2
+cadquery-models	latchmount/latch_mount.py	tanius/cadquery-models@fa4ccf0	Unlicense	0.023	0.023	0.103	0.157	2
+cadquery-models	mollemount/caseplate.py	tanius/cadquery-models@fa4ccf0	Unlicense	0.120	0.175	0.407	1.266	10
+cadquery-models	motormount/motor_mount_l.py	tanius/cadquery-models@fa4ccf0	Unlicense	0.016	0.016	0.107	0.177	1
+cadquery-models	rodclip/rod_clip.py	tanius/cadquery-models@fa4ccf0	Unlicense	0.050	0.050	0.204	0.383	2
+cadquery-models	slidingknob/sliding_knob.py	tanius/cadquery-models@fa4ccf0	Unlicense	0.032	0.048	0.056	0.064	2
+cadquery-models	zspacer/z_spacer.py	tanius/cadquery-models@fa4ccf0	Unlicense	0.005	0.005	0.024	0.031	1
+cadquery-projects	nimble-ziptie-topplate/nimble_ziptie_topplate.py	jmwright/cadquery-projects@f563e1b	Apache-2.0	0.108	0.127	1.549	1.950	2
+cadquery	examples/Ex001_Simple_Block.py	CadQuery/cadquery@5f5bc62	not copied (NOASSERTION)	0.001	0.001	0.004	0.004	2
+cadquery	examples/Ex002_Block_With_Bored_Center_Hole.py	CadQuery/cadquery@5f5bc62	not copied (NOASSERTION)	0.002	0.002	0.012	0.015	2
+cadquery	examples/Ex003_Pillow_Block_With_Counterbored_Holes.py	CadQuery/cadquery@5f5bc62	not copied (NOASSERTION)	0.012	0.012	0.043	0.070	2
+cadquery	examples/Ex004_Extruded_Cylindrical_Plate.py	CadQuery/cadquery@5f5bc62	not copied (NOASSERTION)	0.001	0.001	0.008	0.008	2
+cadquery	examples/Ex005_Extruded_Lines_and_Arcs.py	CadQuery/cadquery@5f5bc62	not copied (NOASSERTION)	0.001	0.001	0.008	0.008	2
+cadquery	examples/Ex006_Moving_the_Current_Working_Point.py	CadQuery/cadquery@5f5bc62	not copied (NOASSERTION)	0.002	0.002	0.009	0.009	2
+cadquery	examples/Ex007_Using_Point_Lists.py	CadQuery/cadquery@5f5bc62	not copied (NOASSERTION)	0.002	0.002	0.009	0.009	3
+cadquery	examples/Ex008_Polygon_Creation.py	CadQuery/cadquery@5f5bc62	not copied (NOASSERTION)	0.003	0.003	0.029	0.029	2
+cadquery	examples/Ex009_Polylines.py	CadQuery/cadquery@5f5bc62	not copied (NOASSERTION)	0.002	0.002	0.010	0.010	2
+cadquery	examples/Ex010_Defining_an_Edge_with_a_Spline.py	CadQuery/cadquery@5f5bc62	not copied (NOASSERTION)	0.002	0.002	0.007	0.007	3
+cadquery	examples/Ex011_Mirroring_Symmetric_Geometry.py	CadQuery/cadquery@5f5bc62	not copied (NOASSERTION)	0.002	0.002	0.011	0.011	3
+cadquery	examples/Ex012_Creating_Workplanes_on_Faces.py	CadQuery/cadquery@5f5bc62	not copied (NOASSERTION)	0.002	0.002	0.012	0.015	2
+cadquery	examples/Ex013_Locating_a_Workplane_on_a_Vertex.py	CadQuery/cadquery@5f5bc62	not copied (NOASSERTION)	0.002	0.002	0.017	0.017	2
+cadquery	examples/Ex014_Offset_Workplanes.py	CadQuery/cadquery@5f5bc62	not copied (NOASSERTION)	0.002	0.002	0.011	0.013	2
+cadquery	examples/Ex015_Rotated_Workplanes.py	CadQuery/cadquery@5f5bc62	not copied (NOASSERTION)	0.007	0.007	0.037	0.165	2
+cadquery	examples/Ex016_Using_Construction_Geometry.py	CadQuery/cadquery@5f5bc62	not copied (NOASSERTION)	0.004	0.004	0.018	0.044	2
+cadquery	examples/Ex017_Shelling_to_Create_Thin_Features.py	CadQuery/cadquery@5f5bc62	not copied (NOASSERTION)	0.091	0.095	0.010	0.010	2
+cadquery	examples/Ex018_Making_Lofts.py	CadQuery/cadquery@5f5bc62	not copied (NOASSERTION)	0.015	0.022	0.022	0.036	2
+cadquery	examples/Ex019_Counter_Sunk_Holes.py	CadQuery/cadquery@5f5bc62	not copied (NOASSERTION)	0.018	0.018	0.025	0.053	2
+cadquery	examples/Ex020_Rounding_Corners_with_Fillets.py	CadQuery/cadquery@5f5bc62	not copied (NOASSERTION)	0.005	0.005	0.012	0.012	2
+cadquery	examples/Ex021_Splitting_an_Object.py	CadQuery/cadquery@5f5bc62	not copied (NOASSERTION)	0.004	0.004	0.036	0.046	3
+cadquery	examples/Ex022_Revolution.py	CadQuery/cadquery@5f5bc62	not copied (NOASSERTION)	0.001	0.001	0.007	0.007	2
+cadquery	examples/Ex023_Sweep.py	CadQuery/cadquery@5f5bc62	not copied (NOASSERTION)	0.012	0.012	0.036	0.036	11
+cadquery	examples/Ex025_Swept_Helix.py	CadQuery/cadquery@5f5bc62	not copied (NOASSERTION)	0.014	0.014	0.013	0.013	4
+cadquery	examples/Ex026_Case_Seam_Lip.py	CadQuery/cadquery@5f5bc62	not copied (NOASSERTION)	0.266	0.268	0.150	0.549	4
+cadquery	examples/Ex100_Lego_Brick.py	CadQuery/cadquery@5f5bc62	not copied (NOASSERTION)	0.004	0.004	0.021	0.023	3
+cadqueryhelper	example/grid/cell_single.py	medicationforall/cadqueryhelper@5e70aa7	Apache-2.0	0.008	0.008	0.051	0.053	1
+cadqueryhelper	example/grid/cell_stretch_points.py	medicationforall/cadqueryhelper@5e70aa7	Apache-2.0	0.029	0.029	0.224	0.302	5
+cadqueryhelper	example/grid/cell_tile.py	medicationforall/cadqueryhelper@5e70aa7	Apache-2.0	0.008	0.008	0.044	0.047	1
+cadqueryhelper	example/grid/exampleGrid.py	medicationforall/cadqueryhelper@5e70aa7	Apache-2.0	0.013	0.012	0.081	0.192	5
+cadqueryhelper	example/grid/grid_arc_points.py	medicationforall/cadqueryhelper@5e70aa7	Apache-2.0	0.020	0.020	0.096	0.159	1
+cadqueryhelper	example/grid/grid_arc_points_coords.py	medicationforall/cadqueryhelper@5e70aa7	Apache-2.0	0.298	0.689	1.696	6.027	1
+cadqueryhelper	example/grid/grid_cell_basic.py	medicationforall/cadqueryhelper@5e70aa7	Apache-2.0	0.012	0.012	0.141	0.153	1
+cadqueryhelper	example/grid/grid_cell_basic_arc.py	medicationforall/cadqueryhelper@5e70aa7	Apache-2.0	0.048	0.065	0.822	0.989	1
+cadqueryhelper	example/grid/grid_cell_basic_mod.py	medicationforall/cadqueryhelper@5e70aa7	Apache-2.0	0.033	0.043	0.483	0.579	1
+cadqueryhelper	example/grid/grid_points.py	medicationforall/cadqueryhelper@5e70aa7	Apache-2.0	0.012	0.012	0.064	0.089	1
+cadqueryhelper	example/grid/grid_points_coords.py	medicationforall/cadqueryhelper@5e70aa7	Apache-2.0	0.213	0.464	1.282	4.479	1
+cadqueryhelper	example/grid/grid_points_mod.py	medicationforall/cadqueryhelper@5e70aa7	Apache-2.0	0.016	0.016	0.081	0.127	1
+cadqueryhelper	example/grid/hexagonGrid.py	medicationforall/cadqueryhelper@5e70aa7	Apache-2.0	0.013	0.011	0.067	0.128	2
+cadqueryhelper	example/grid/irregularGrid.py	medicationforall/cadqueryhelper@5e70aa7	Apache-2.0	5.473	5.493	6.058	9.676	4
+cadqueryhelper	example/grid/irregularGrid_hardCoded.py	medicationforall/cadqueryhelper@5e70aa7	Apache-2.0	0.010	0.010	0.072	0.098	1
+cadqueryhelper	example/grid/join_cells_interlock.py	medicationforall/cadqueryhelper@5e70aa7	Apache-2.0	0.015	0.015	0.156	0.193	1
+cadqueryhelper	example/grid/rotate_grid.py	medicationforall/cadqueryhelper@5e70aa7	Apache-2.0	0.009	0.009	0.075	0.127	2
+cadqueryhelper	example/grid/scheme_grid.py	medicationforall/cadqueryhelper@5e70aa7	Apache-2.0	0.010	0.010	0.084	0.111	2
+cadqueryhelper	example/grid/series.py	medicationforall/cadqueryhelper@5e70aa7	Apache-2.0	0.009	0.009	0.067	0.079	3
+cadqueryhelper	example/grid/seriesOperation.py	medicationforall/cadqueryhelper@5e70aa7	Apache-2.0	0.010	0.010	0.087	0.115	2
+cadqueryhelper	example/grid/starGrid.py	medicationforall/cadqueryhelper@5e70aa7	Apache-2.0	0.014	0.013	0.097	0.227	2
+cosyKong	case/cos_y_case.py	weteor/cosyKong@7cbfcdc	not copied (CERN-OHL-P-2.0)	0.754	1.128	1.384	3.376	5
+cq-electronics	examples/bga.py	sethfischer/cq-electronics@bf4d391	MIT	0.002	0.002	0.011	0.013	1
+cq-electronics	examples/din_clip.py	sethfischer/cq-electronics@bf4d391	MIT	0.112	0.112	0.049	0.069	1
+cq-electronics	examples/din_rail.py	sethfischer/cq-electronics@bf4d391	MIT	0.010	0.010	0.063	0.067	1
+cq-electronics	examples/pin_header.py	sethfischer/cq-electronics@bf4d391	MIT	0.034	0.032	0.298	0.297	1
+cq-electronics	examples/pitray_clip.py	sethfischer/cq-electronics@bf4d391	MIT	0.129	0.127	0.113	0.167	1
+cq-electronics	examples/raspberry_pi_3b.py	sethfischer/cq-electronics@bf4d391	MIT	0.228	0.226	1.206	1.287	1
+cq-electronics	examples/rj45_jack.py	sethfischer/cq-electronics@bf4d391	MIT	0.005	0.005	0.042	0.070	1
+cq-queryabolt	examples/assembly.py	mmalecki/cq-queryabolt@2517509	MIT	0.050	0.046	0.139	0.244	5
+cq-queryabolt	examples/simple.py	mmalecki/cq-queryabolt@2517509	MIT	0.044	0.044	0.176	0.272	3
+cqMore	examples/platonic_dice.py	JustinSDK/cqMore@a490603	Apache-2.0	0.214	0.210	0.732	5.140	3
+cq_gears	_nb/gear_rack.py	meadiode/cq_gears@e73874c	Apache-2.0	2.431	5.828	6.788	28.051	1
+cq_gears	_nb/ring_gears_and_planetary_gearsets.py	meadiode/cq_gears@e73874c	Apache-2.0	12.517	49.385	9.327	42.820	2
+cq_gears	_nb/worm_gear.py	meadiode/cq_gears@e73874c	Apache-2.0	0.762	0.965	2.185	2.382	1
+cq_warehouse	examples/captive_nuts.py	gumyr/cq_warehouse@a57bb7a	Apache-2.0	0.081	0.092	0.197	0.718	4
+cq_warehouse	examples/chain_examples.py	gumyr/cq_warehouse@a57bb7a	Apache-2.0	3.824	6.306	17.515	17.622	4
+cq_warehouse	examples/cylinder_with_holes.py	gumyr/cq_warehouse@a57bb7a	Apache-2.0	1.110	1.648	0.777	3.165	7
+cq_warehouse	examples/finger_jointed_boxes.py	gumyr/cq_warehouse@a57bb7a	Apache-2.0	0.080	0.079	0.509	0.831	4
+cq_warehouse	examples/sprocket_examples.py	gumyr/cq_warehouse@a57bb7a	Apache-2.0	2.212	3.323	4.251	4.250	3
+cq_warehouse	examples/subclass_examples.py	gumyr/cq_warehouse@a57bb7a	Apache-2.0	0.275	0.297	0.206	0.910	5
+cq_warehouse	examples/thread_examples.py	gumyr/cq_warehouse@a57bb7a	Apache-2.0	0.065	0.065	0.065	0.065	1
+cqindustry	example/barricade/stylized_panels.py	medicationforall/cqindustry@c583078	Apache-2.0	0.041	0.072	0.158	0.603	2
+cqindustry	example/barricade/wall.py	medicationforall/cqindustry@c583078	Apache-2.0	0.692	1.068	2.717	16.650	2
+cqindustry	example/barricade/wall_ruin_corner.py	medicationforall/cqindustry@c583078	Apache-2.0	0.444	0.746	2.261	14.933	2
+cqindustry	example/barricade/wall_ruin_segment.py	medicationforall/cqindustry@c583078	Apache-2.0	0.840	1.320	2.448	12.578	2
+cqindustry	example/bridge/straight.py	medicationforall/cqindustry@c583078	Apache-2.0	2.685	2.756	2.714	5.069	2
+cqindustry	example/can/can_platform.py	medicationforall/cqindustry@c583078	Apache-2.0	0.253	0.466	1.471	6.424	2
+cqindustry	example/can/can_platform_conduit.py	medicationforall/cqindustry@c583078	Apache-2.0	0.048	0.071	0.387	1.832	2
+cqindustry	example/can/can_rail.py	medicationforall/cqindustry@c583078	Apache-2.0	0.427	0.485	2.764	10.459	3
+cqindustry	example/can/can_tower.py	medicationforall/cqindustry@c583078	Apache-2.0	1.382	2.006	7.337	32.476	4
+cqindustry	example/can/can_tower_alt_ring.py	medicationforall/cqindustry@c583078	Apache-2.0	1.361	2.047	7.750	34.184	4
+cqindustry	example/can/can_tower_set.py	medicationforall/cqindustry@c583078	Apache-2.0	2.403	3.330	12.825	56.488	6
+cqindustry	example/can/can_tower_stairs.py	medicationforall/cqindustry@c583078	Apache-2.0	2.283	3.360	10.480	64.833	2
+cqindustry	example/can/round_platform.py	medicationforall/cqindustry@c583078	Apache-2.0	0.017	0.017	0.088	0.151	2
+cqindustry	example/can/round_platform_greebled_circles.py	medicationforall/cqindustry@c583078	Apache-2.0	0.249	0.291	1.278	7.281	2
+cqindustry	example/can/stair_segment.py	medicationforall/cqindustry@c583078	Apache-2.0	0.513	0.733	2.764	14.773	2
+cqindustry	example/chip/chip_can.py	medicationforall/cqindustry@c583078	Apache-2.0	0.014	0.014	0.054	0.058	2
+cqindustry	example/chip/chip_tower_set.py	medicationforall/cqindustry@c583078	Apache-2.0	0.589	0.734	2.847	8.696	2
+cqindustry	example/chip/chip_tower_set_2.py	medicationforall/cqindustry@c583078	Apache-2.0	0.636	0.799	3.301	9.478	2
+cqindustry	example/chip/chiptower_readme_example.py	medicationforall/cqindustry@c583078	Apache-2.0	1.181	1.519	8.052	20.633	2
+cqindustry	example/chip/combine.py	medicationforall/cqindustry@c583078	Apache-2.0	0.540	0.662	4.313	11.010	4
+cqindustry	example/chip/guard_rail.py	medicationforall/cqindustry@c583078	Apache-2.0	0.025	0.025	0.160	0.287	2
+cqindustry	example/chip/guard_rail_platform.py	medicationforall/cqindustry@c583078	Apache-2.0	0.076	0.089	0.691	1.327	7
+cqindustry	example/chip/platformExample.py	medicationforall/cqindustry@c583078	Apache-2.0	1.129	1.401	9.635	23.326	4
+cqindustry	example/chip/ring.py	medicationforall/cqindustry@c583078	Apache-2.0	0.078	0.100	0.302	1.254	2
+cqindustry	example/chip/ring_conduit.py	medicationforall/cqindustry@c583078	Apache-2.0	0.095	0.174	0.452	1.894	2
+cqindustry	example/chip/ring_support.py	medicationforall/cqindustry@c583078	Apache-2.0	0.064	0.077	0.226	0.803	2
+cqindustry	example/container/container.py	medicationforall/cqindustry@c583078	Apache-2.0	0.935	1.399	2.020	5.318	2
+cqindustry	example/container/containerDoor.py	medicationforall/cqindustry@c583078	Apache-2.0	0.111	0.151	0.127	0.194	2
+cqindustry	example/container/container_frame.py	medicationforall/cqindustry@c583078	Apache-2.0	0.025	0.025	0.132	0.212	2
+cqindustry	example/container/container_greeble_hack.py	medicationforall/cqindustry@c583078	Apache-2.0	1.689	2.582	5.360	20.264	10
+cqterrain	example/barrier/barrier.py	medicationforall/cqterrain@6604257	Apache-2.0	0.016	0.016	0.139	0.193	12
+cqterrain	example/barrier/barrier_alt.py	medicationforall/cqterrain@6604257	Apache-2.0	0.016	0.016	0.143	0.190	12
+cqterrain	example/barrier/barrier_greebled.py	medicationforall/cqterrain@6604257	Apache-2.0	0.116	0.160	0.557	1.308	22
+cqterrain	example/barrier/barrier_magnet_template.py	medicationforall/cqterrain@6604257	Apache-2.0	0.014	0.014	0.095	0.125	10
+cqterrain	example/board.py	medicationforall/cqterrain@6604257	Apache-2.0	0.144	0.146	0.964	1.476	1
+cqterrain	example/book/book.py	medicationforall/cqterrain@6604257	Apache-2.0	0.013	0.013	0.076	0.116	1
+cqterrain	example/book/bookcase.py	medicationforall/cqterrain@6604257	Apache-2.0	0.010	0.010	0.067	0.106	1
+cqterrain	example/book/bookcase_class.py	medicationforall/cqterrain@6604257	Apache-2.0	0.898	0.984	12.138	21.841	1
+cqterrain	example/book/books.py	medicationforall/cqterrain@6604257	Apache-2.0	0.037	0.039	0.319	0.554	1
+cqterrain	example/bridge/base_ramp.py	medicationforall/cqterrain@6604257	Apache-2.0	0.012	0.012	0.050	0.051	1
+cqterrain	example/bridge/base_straight.py	medicationforall/cqterrain@6604257	Apache-2.0	0.012	0.012	0.048	0.052	1
+cqterrain	example/bridge/bridge.py	medicationforall/cqterrain@6604257	Apache-2.0	0.012	0.012	0.054	0.060	1
+cqterrain	example/bridge/tile_bridge.py	medicationforall/cqterrain@6604257	Apache-2.0	0.087	0.115	1.261	9.959	1
+cqterrain	example/bridge/tile_straight.py	medicationforall/cqterrain@6604257	Apache-2.0	0.023	0.023	0.140	0.273	1
+cqterrain	example/building/Wall.py	medicationforall/cqterrain@6604257	Apache-2.0	0.013	0.013	0.050	0.052	1
+cqterrain	example/building/floor.py	medicationforall/cqterrain@6604257	Apache-2.0	0.013	0.013	0.050	0.052	1
+cqterrain	example/building/floorTile.py	medicationforall/cqterrain@6604257	Apache-2.0	0.057	0.083	0.208	1.439	4
+cqterrain	example/building/room.py	medicationforall/cqterrain@6604257	Apache-2.0	0.054	0.054	0.315	0.518	1
+cqterrain	example/building/room_custom_door.py	medicationforall/cqterrain@6604257	Apache-2.0	0.149	0.153	2.028	3.678	1
+cqterrain	example/building/room_with_tile.py	medicationforall/cqterrain@6604257	Apache-2.0	41.905	45.654	22.364	42.992	3
+cqterrain	example/building/wallTile.py	medicationforall/cqterrain@6604257	Apache-2.0	0.020	0.019	0.119	0.259	3
+cqterrain	example/crystal/crystal.py	medicationforall/cqterrain@6604257	Apache-2.0	0.013	0.013	0.093	0.168	1
+frenchfinity-tool-holders	frenchfinity/mount.py	drewmoseley/frenchfinity-tool-holders@3aa22c8	not copied (none)	0.498	0.488	0.586	0.618	2
+frenchfinity-tool-holders	holders/black_decker_fs350.py	drewmoseley/frenchfinity-tool-holders@3aa22c8	not copied (none)	0.401	0.398	0.485	0.517	2
+frenchfinity-tool-holders	holders/chicago_electric_62302.py	drewmoseley/frenchfinity-tool-holders@3aa22c8	not copied (none)	1.213	1.255	2.024	2.574	6
+frenchfinity-tool-holders	holders/tacklife_prs01as.py	drewmoseley/frenchfinity-tool-holders@3aa22c8	not copied (none)	1.013	1.034	1.300	1.431	6
+cup-ganizer	cup-ganizer.py	fire-h0und/cup-ganizer@a3aa16a	MIT	0.630	1.017	0.289	0.564	5
+gridfinity-cadquery	baseplate_magnet_jig.py	kmeisthax/gridfinity-cadquery@637a5c4	not copied (NOASSERTION)	0.058	0.092	0.166	0.438	2
+gridfinity-cadquery	block_test.py	kmeisthax/gridfinity-cadquery@637a5c4	not copied (NOASSERTION)	0.656	1.084	0.467	1.361	1
+gridfinity-cadquery	examples/game_carts/ds.py	kmeisthax/gridfinity-cadquery@637a5c4	not copied (NOASSERTION)	0.411	0.931	0.355	0.732	3
+gridfinity-cadquery	examples/game_carts/gb.py	kmeisthax/gridfinity-cadquery@637a5c4	not copied (NOASSERTION)	0.531	1.080	0.716	1.413	3
+gridfinity-cadquery	examples/game_carts/switch.py	kmeisthax/gridfinity-cadquery@637a5c4	not copied (NOASSERTION)	0.506	1.001	1.403	2.863	3
+cadquery-models	exercises/001.py	helmecke/cadquery-models@1bdb732	MIT	0.056	0.097	0.090	0.127	3
+cadquery-models	exercises/002.py	helmecke/cadquery-models@1bdb732	MIT	0.006	0.006	0.007	0.007	3
+cadquery-models	exercises/003.py	helmecke/cadquery-models@1bdb732	MIT	0.023	0.027	0.046	0.072	3
+cadquery-models	exercises/004.py	helmecke/cadquery-models@1bdb732	MIT	0.012	0.012	0.052	0.166	3
+cadquery-models	exercises/006.py	helmecke/cadquery-models@1bdb732	MIT	0.014	0.014	0.051	0.062	4
+cadquery-models	exercises/009.py	helmecke/cadquery-models@1bdb732	MIT	0.028	0.038	0.063	0.091	3
+cadquery-models	exercises/010.py	helmecke/cadquery-models@1bdb732	MIT	0.044	0.045	0.101	0.161	3
+cadquery-models	keyboard/keyboard.py	helmecke/cadquery-models@1bdb732	MIT	3.509	3.511	2.398	7.569	1
+jigs	electronics/pcb-stand/r1/pcb-stand.cq.py	shapoco/jigs@50cb46e	not copied (none)	0.087	0.087	1.100	2.276	4
+jigs	electronics/smd-led-orientation-scope/r1/smd-led-orientation-scope.cq.py	shapoco/jigs@50cb46e	not copied (none)	0.729	0.943	0.426	1.793	7
+jigs	special/compressed-teslacoil/r1/comp_tesla.py	shapoco/jigs@50cb46e	not copied (none)	1.496	4.448	5.395	29.993	6
+jigs	special/picopad/r1/pivot.cq.py	shapoco/jigs@50cb46e	not copied (none)	0.014	0.014	0.124	0.286	7
+jigs	tool/sandpaper-attachment/r1/sandpaper-attachment.cq.py	shapoco/jigs@50cb46e	not copied (none)	0.027	0.044	0.085	0.132	14
+nuc5-drive-base	build_nuc_box.py	jo-che/nuc5-drive-base@217de4c	not copied (CC-BY-SA-4.0)	0.255	0.339	2.366	6.922	6
+cad-models	mouse_pad/mouse_pad.py	jpurzner/cad-models@30231f6	not copied (none)	0.067	0.135	0.191	0.805	17
+cad-models	raptor-jaw-teeth/raptor_jaw.py	jpurzner/cad-models@30231f6	not copied (none)	0.982	1.273	3.201	8.179	2
+cad-models	raptor-jaw-teeth/raptor_teeth.py	jpurzner/cad-models@30231f6	not copied (none)	0.731	1.067	2.554	5.896	10
+cad-models	smoke_test/smoke_test.py	jpurzner/cad-models@30231f6	not copied (none)	0.009	0.009	0.029	0.051	2
+cad-models	toothbrush_dock/toothbrush_dock.py	jpurzner/cad-models@30231f6	not copied (none)	0.035	0.076	0.281	0.571	7
+cad-models	trackpad_holder/trackpad_holder.py	jpurzner/cad-models@30231f6	not copied (none)	0.041	0.047	0.141	0.220	9
+keyboard-plate-proto	calibration.py	k1-c/keyboard-plate-proto@2867feb	not copied (none)	0.014	0.011	0.080	0.132	3
+keyboard-plate-proto	keyboard_plate.py	k1-c/keyboard-plate-proto@2867feb	not copied (none)	0.041	0.060	0.381	0.653	3
+CadQuery-Cookbook	examples/bevel gear.py	khaledelhady44/CadQuery-Cookbook@885288e	MIT	0.442	0.577	1.598	16.733	2
+CadQuery-Cookbook	examples/cylinderical hole in block.py	khaledelhady44/CadQuery-Cookbook@885288e	MIT	0.004	0.004	0.014	0.021	2
+CadQuery-Cookbook	examples/prism_cut_corner.py	khaledelhady44/CadQuery-Cookbook@885288e	MIT	0.003	0.003	0.018	0.021	2
+CadQuery-Cookbook	examples/rectangular plate with numerous holes.py	khaledelhady44/CadQuery-Cookbook@885288e	MIT	3.296	3.577	13.756	17.289	2
+CadQuery-Cookbook	examples/rectangular prisms stacked.py	khaledelhady44/CadQuery-Cookbook@885288e	MIT	0.008	0.007	0.038	0.094	8
+CadQuery-Cookbook	examples/spur gears meshed together.py	khaledelhady44/CadQuery-Cookbook@885288e	MIT	0.828	1.085	1.653	7.538	2
+cq_models	bat_adapter.py	mar0x/cq_models@9ec4045	not copied (none)	0.426	2.155	0.342	2.629	4
+cq_models	cam_pan_tilt/cam_pan_tilt.py	mar0x/cq_models@9ec4045	not copied (none)	0.066	0.076	0.293	0.548	6
+cq_models	foot_ball.py	mar0x/cq_models@9ec4045	not copied (none)	0.002	0.002	0.011	0.013	1
+cq_models	gr_mark.py	mar0x/cq_models@9ec4045	not copied (none)	0.003	0.003	0.009	0.009	1
+cq_models	gr_ring.py	mar0x/cq_models@9ec4045	not copied (none)	0.004	0.004	0.022	0.027	2
+cq_models	gr_template.py	mar0x/cq_models@9ec4045	not copied (none)	0.141	0.141	0.322	2.013	5
+cq_models	guitar_bridge/bridge-20220105-1.py	mar0x/cq_models@9ec4045	not copied (none)	0.017	0.017	0.068	0.118	1
+cq_models	guitar_bridge/bridge-20220105-3.py	mar0x/cq_models@9ec4045	not copied (none)	0.012	0.012	0.043	0.051	1
+cq_models	guitar_bridge/bridge-top.py	mar0x/cq_models@9ec4045	not copied (none)	0.068	0.068	0.128	0.305	2
+cq_models	guitar_bridge/bridge.py	mar0x/cq_models@9ec4045	not copied (none)	0.012	0.012	0.045	0.051	1
+cq_models	guitar_sensor_cover.py	mar0x/cq_models@9ec4045	not copied (none)	0.778	1.643	0.843	2.761	4
+cq_models	lock_angle.py	mar0x/cq_models@9ec4045	not copied (none)	0.025	0.025	0.057	0.140	1
+cq_models	magic_box/magic_box.py	mar0x/cq_models@9ec4045	not copied (none)	0.003	0.003	0.014	0.014	2
+cq_models	mon_mount.py	mar0x/cq_models@9ec4045	not copied (none)	0.710	0.897	0.549	0.768	1
+cq_models	mon_stand.py	mar0x/cq_models@9ec4045	not copied (none)	0.009	0.009	0.079	0.319	4
+cq_models	sd_card_lock.py	mar0x/cq_models@9ec4045	not copied (none)	0.012	0.012	0.061	0.121	1
+cq_models	spindle_handle.py	mar0x/cq_models@9ec4045	not copied (none)	0.284	0.318	0.468	1.900	9
+cq_models	spool.py	mar0x/cq_models@9ec4045	not copied (none)	0.007	0.007	0.042	0.056	1
+cq_models	tube_ring.py	mar0x/cq_models@9ec4045	not copied (none)	0.001	0.001	0.006	0.006	1
+cq_models	v_rail.py	mar0x/cq_models@9ec4045	not copied (none)	0.010	0.010	0.074	0.102	1
+enclozure	enclosure.py	morganelectronics/enclozure@8d936f2	not copied (GPL-3.0)	0.083	0.082	0.981	3.942	1
+cadquery_plaground	enclosure.py	mryndzionek/cadquery_plaground@8169dde	MIT	0.791	1.264	1.464	3.643	9
+3dprints	frame/frame.py	mshafir/3dprints@3b0eb70	MIT	2.464	2.883	2.045	5.668	13
+3dprints	pill-case/pill_case.py	mshafir/3dprints@3b0eb70	MIT	6.974	12.105	26.561	107.605	17
+3dprints	sink-organizer/sink_organizer.py	mshafir/3dprints@3b0eb70	MIT	6.791	11.626	31.562	136.023	38
+duplo-compatible-brick	duplo_brick.py	noricha-vr/duplo-compatible-brick@2f054e4	MIT	0.966	1.606	1.930	4.347	6
+octahedroflake	octahedroflake.py	nat-a-cyborg/octahedroflake@4554763	not copied (NOASSERTION)	0.527	0.666	13.697	17.123	1
+ols	generate_choc_lg.py	DeltaWhy/ols@55e2fd2	not copied (none)	8.489	8.964	7.539	39.966	42
+ols	generate_choc_sm.py	DeltaWhy/ols@55e2fd2	not copied (none)	6.960	7.458	7.246	37.558	42
+ols	generate_mx.py	DeltaWhy/ols@55e2fd2	not copied (none)	9.664	10.343	7.121	30.511	42
+ols	other/ks33_socket.py	DeltaWhy/ols@55e2fd2	not copied (none)	0.128	0.138	0.613	0.727	7
+ols	test.py	DeltaWhy/ols@55e2fd2	not copied (none)	0.005	0.005	0.022	0.022	3
+partcad	examples/produce_software/controller.py	partcad/partcad@a20137b	Apache-2.0	0.001	0.001	0.004	0.004	2
+smallopticalsorter	mechanics/bolt_mount.py	tanius/smallopticalsorter@b510739	Unlicense	0.252	0.415	0.301	0.326	1
+smallopticalsorter	mechanics/conveyor_unit.py	tanius/smallopticalsorter@b510739	Unlicense	0.104	0.104	0.756	1.754	6
+smallopticalsorter	mechanics/diverter.py	tanius/smallopticalsorter@b510739	Unlicense	0.276	0.359	0.479	0.867	2
+smallopticalsorter	mechanics/plate.py	tanius/smallopticalsorter@b510739	Unlicense	0.009	0.009	0.031	0.031	2
+smallopticalsorter	mechanics/plate_guide.py	tanius/smallopticalsorter@b510739	Unlicense	0.199	0.199	0.098	0.125	1
+smallopticalsorter	mechanics/plate_spacer.py	tanius/smallopticalsorter@b510739	Unlicense	0.037	0.037	0.066	0.092	1
+spindle-assy-example	bracket.py	marcus7070/spindle-assy-example@0be10a3	MIT	0.014	0.014	0.048	0.139	1
+spindle-assy-example	chimney.py	marcus7070/spindle-assy-example@0be10a3	MIT	0.954	1.304	0.451	1.177	4
+spindle-assy-example	clamp.py	marcus7070/spindle-assy-example@0be10a3	MIT	0.015	0.015	0.102	0.133	2
+cq_models	magnet-test.py	talf301/cq_models@941401b	not copied (none)	0.008	0.008	0.026	0.040	4
+vibe-cading	examples/screw_cutter.py	fa-mc/vibe-cading@a78645b	not copied (AGPL-3.0)	0.028	0.025	0.038	0.044	5
+vibe-cading	examples/snap_fit_hook.py	fa-mc/vibe-cading@a78645b	not copied (AGPL-3.0)	0.026	0.022	0.038	0.052	6
+Kresling_CadQuery	Kresling_array.py	yanis-hub/Kresling_CadQuery@c4289b9	MIT	0.291	0.295	2.360	20.559	5
+Kresling_CadQuery	Kresling_unit.py	yanis-hub/Kresling_CadQuery@c4289b9	MIT	0.331	0.331	2.433	20.691	15

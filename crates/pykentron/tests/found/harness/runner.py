@@ -25,6 +25,13 @@ builtins.show_object = show_object
 builtins.show = lambda *objs, **kw: [show_object(o) for o in objs]
 builtins.show_all = lambda *a, **k: None
 builtins.set_defaults = lambda *a, **k: None
+# (And the VS Code viewer's module, which scripts import to show what they make.)
+import types
+viewer = types.ModuleType('ocp_vscode')
+viewer.show = builtins.show
+viewer.show_object = show_object
+viewer.__getattr__ = lambda name: (lambda *a, **k: None)
+sys.modules.setdefault('ocp_vscode', viewer)
 builtins.cq = cq
 # (What a script exports counts as shown, named by its file.)
 def recording(f, at=0):

@@ -37,6 +37,14 @@ Many scripts import their project's own library: cq_warehouse, cqterrain, cadque
 
 A second round (2026-10-19) took 57 more projects from GitHub's repository search (`cadquery`, `topic:cadquery`, and `cadquery` with gridfinity, keyboard, enclosure, printable, parametric and the like), leaving out lists, AI pipelines and datasets: 382 scripts, of which CadQuery built 187. pykentron built 129 of those as CadQuery does. Of the other 58, the 53 cases at the end of `cases.tsv`; left out are two scripts writing to a directory that does not exist, one reading a file on its author's disk, one using unseeded randomness and one showing nothing to compare.
 
+A third round (2026-10-20) took 10 more projects from the search (`cadquery` with 3d print, parametric, stl, design and the like): 61 scripts, of which CadQuery built 44. pykentron built 29 of those as CadQuery does; 14 of the others are the last cases in `cases.tsv` (one more imports `random`, unused, and is left out). For these, the runner stands in for the VS Code viewer's module (`ocp_vscode`) as it does for CQ-editor's `show_object`.
+
+## Scripts that build as on CadQuery
+
+`passing.tsv` lists every script of all three rounds that CadQuery built and pykentron builds as it does (the same checks as for the cases, run again on 2026-10-20): 274 scripts, 189 of them copied here under their projects' licences, with the project's own modules they import. Each row gives both kernels' wall and CPU times (CadQuery's from the hunt, in a fresh process each; it runs several threads, so its CPU time is often over its wall time). In all, pykentron took 194 s where CadQuery took 469 s (CPU: 284 s against 1408 s), and was faster on 238 of the 274.
+
+`harness/timing.py` runs the copied ones on pykentron again, each in a fresh process, and prints their times against CadQuery's, with the totals: `python3 harness/timing.py --python PYTHON [FILTER...] [--repeat N]`. `PYTHON` needs the libraries some scripts import (cq_warehouse, cqterrain and the like, installed as above, and numpy); CadQuery itself is not used.
+
 ## Since
 
 Fixed since the cases were found (running them again):
