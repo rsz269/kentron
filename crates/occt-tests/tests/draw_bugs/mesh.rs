@@ -1340,6 +1340,16 @@ fn bug27384_2() -> DrawResult<()> {
     Ok(())
 }
 
+/// `tests/bugs/mesh/bug27685`
+#[ignore = "missing OCCT test data: bug27685_MyShoeLast.igs"]
+#[test]
+fn bug27685() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.igesread(&[data_file("bug27685_MyShoeLast.igs").as_str(), "result", "*"])?;
+    d.incmesh(&["result", "0.9363477928", "-a", "20"])?;
+    Ok(())
+}
+
 /// `tests/bugs/mesh/bug28089_1`
 #[test]
 fn bug28089_1() -> DrawResult<()> {

@@ -269,6 +269,29 @@ fn bug150_2() -> DrawResult<()> {
     Ok(())
 }
 
+/// `tests/bugs/moddata_1/bug15570`
+#[ignore = "missing OCCT test data: OCC15570.igs"]
+#[test]
+fn bug15570() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.igesbrep(&[data_file("OCC15570.igs").as_str(), "a", "*"])?;
+    d.tpcompound(&["result"])?;
+    d.bounding(&["result", "-save", "xmin", "ymin", "zmin", "xmax", "ymax", "zmax", "-nodraw"])?;
+    let t1 = d.dval(&["xmin"])?;
+    d.checkreal(&["xmin", t1.as_str(), "-22.500000100000001", "0", "0.001"])?;
+    let t2 = d.dval(&["ymin"])?;
+    d.checkreal(&["ymin", t2.as_str(), "-88.366946209482094", "0", "0.001"])?;
+    let t3 = d.dval(&["zmin"])?;
+    d.checkreal(&["zmin", t3.as_str(), "-1.0000002775557561e-07", "0", "0.001"])?;
+    let t4 = d.dval(&["xmax"])?;
+    d.checkreal(&["xmax", t4.as_str(), "22.500000100000001", "0", "0.001"])?;
+    let t5 = d.dval(&["ymax"])?;
+    d.checkreal(&["ymax", t5.as_str(), "22.776076069021901", "0", "0.001"])?;
+    let t6 = d.dval(&["zmax"])?;
+    d.checkreal(&["zmax", t6.as_str(), "86.12676222997429", "0", "0.001"])?;
+    Ok(())
+}
+
 /// `tests/bugs/moddata_1/bug16`
 #[test]
 #[should_panic]

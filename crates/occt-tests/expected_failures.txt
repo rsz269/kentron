@@ -389,7 +389,6 @@ tests/bugs/modalg_2/bug5805_45
 tests/bugs/modalg_2/bug5805_46
 tests/bugs/modalg_2/bug5805_47
 tests/bugs/modalg_2/bug5805_48
-tests/bugs/modalg_2/bug5805_49
 tests/bugs/modalg_3/bug5805_50
 tests/bugs/modalg_3/bug5805_51
 tests/bugs/modalg_3/bug5805_52
@@ -412,8 +411,6 @@ tests/bugs/modalg_4/bug745_5
 tests/bugs/modalg_4/bug78
 tests/bugs/modalg_4/bug8842_1
 tests/bugs/modalg_4/bug8842_10
-tests/bugs/modalg_4/bug8842_11
-tests/bugs/modalg_4/bug8842_12
 tests/bugs/modalg_4/bug8842_13
 tests/bugs/modalg_4/bug8842_14
 tests/bugs/modalg_4/bug8842_15
@@ -421,7 +418,6 @@ tests/bugs/modalg_4/bug8842_16
 tests/bugs/modalg_4/bug8842_6
 tests/bugs/modalg_4/bug8842_7
 tests/bugs/modalg_4/bug8842_8
-tests/bugs/modalg_4/bug8842_9
 tests/bugs/modalg_4/bug906
 tests/bugs/modalg_5/bug23706_10
 tests/bugs/modalg_5/bug23706_11
@@ -467,6 +463,7 @@ tests/bugs/modalg_5/bug23706_61
 tests/bugs/modalg_5/bug23706_9
 tests/bugs/modalg_5/bug23952_1
 tests/bugs/modalg_5/bug23952_2
+tests/bugs/modalg_5/bug24012
 tests/bugs/modalg_5/bug24086
 tests/bugs/modalg_5/bug24220
 tests/bugs/modalg_5/bug24347
@@ -630,7 +627,6 @@ tests/bugs/modalg_6/bug8040
 tests/bugs/modalg_7/bug21264
 tests/bugs/modalg_7/bug22750
 tests/bugs/modalg_7/bug22886
-tests/bugs/modalg_7/bug23171_2
 tests/bugs/modalg_7/bug23187
 tests/bugs/modalg_7/bug23378_1
 tests/bugs/modalg_7/bug23378_2
@@ -638,8 +634,6 @@ tests/bugs/modalg_7/bug23386
 tests/bugs/modalg_7/bug23667
 tests/bugs/modalg_7/bug23838
 tests/bugs/modalg_7/bug25023
-tests/bugs/modalg_7/bug25930
-tests/bugs/modalg_7/bug25939
 tests/bugs/modalg_7/bug25968
 tests/bugs/modalg_7/bug25983_2
 tests/bugs/modalg_7/bug25994
@@ -748,10 +742,6 @@ tests/bugs/modalg_7/bug31496
 tests/bugs/modalg_7/bug31835_1
 tests/bugs/modalg_7/bug31835_2
 tests/bugs/modalg_7/bug31836
-tests/bugs/modalg_7/bug31845_3
-tests/bugs/modalg_7/bug31845_4
-tests/bugs/modalg_7/bug31845_f
-tests/bugs/modalg_7/bug31845_i
 tests/bugs/modalg_7/bug31850_1
 tests/bugs/modalg_7/bug31850_2
 tests/bugs/modalg_7/bug32444
@@ -765,7 +755,6 @@ tests/bugs/modalg_7/bug32578
 tests/bugs/modalg_7/bug32717
 tests/bugs/modalg_7/bug32744
 tests/bugs/modalg_7/bug32863
-tests/bugs/modalg_7/bug5081_2
 tests/bugs/modalg_7/bug83
 tests/bugs/modalg_7/optimal_bndbox_exception
 tests/bugs/modalg_8/bug31479_1

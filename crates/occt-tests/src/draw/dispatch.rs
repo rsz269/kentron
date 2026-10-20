@@ -219,6 +219,8 @@ pub fn dispatch(d: &mut Draw, name: &str, args: &[&str]) -> Option<DrawResult> {
         "hsetprj" => d.hsetprj(args),
         "hupdate" => d.hupdate(args),
         "hyperbola" => d.hyperbola(args),
+        "igesbrep" => d.igesbrep(args),
+        "igesread" => d.igesread(args),
         "incdeg" => d.incdeg(args),
         "incmesh" => d.incmesh(args),
         "incudeg" => d.incudeg(args),
@@ -346,6 +348,7 @@ pub fn dispatch(d: &mut Draw, name: &str, args: &[&str]) -> Option<DrawResult> {
         "tclean" => d.tclean(args),
         "tcopy" => d.tcopy(args),
         "tessellate" => d.tessellate(args),
+        "testreadiges" => d.testreadiges(args),
         "thickshell" => d.thickshell(args),
         "thrusections" => d.thrusections(args),
         "tmirror" => d.tmirror(args),
@@ -354,6 +357,7 @@ pub fn dispatch(d: &mut Draw, name: &str, args: &[&str]) -> Option<DrawResult> {
         "tolerance" => d.tolerance(args),
         "topoload" => d.topoload(args),
         "torus" => d.torus(args),
+        "tpcompound" => d.tpcompound(args),
         "translate" => d.translate(args),
         "treverse" => d.treverse(args),
         "triangles" => d.triangles(args),
@@ -381,6 +385,7 @@ pub fn dispatch(d: &mut Draw, name: &str, args: &[&str]) -> Option<DrawResult> {
         "wexplo" => d.wexplo(args),
         "wire" => d.wire(args),
         "xdistcs" => d.xdistcs(args),
+        "xdistef" => d.xdistef(args),
         _ => return None,
     })
 }

@@ -601,6 +601,17 @@ fn bug26572() -> DrawResult<()> {
     Ok(())
 }
 
+/// `tests/bugs/heal/bug26671`
+#[ignore = "missing OCCT test data: bug26671.igs"]
+#[test]
+fn bug26671() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.igesbrep(&[data_file("bug26671.igs").as_str(), "result", "*"])?;
+    d.checkshape(&["result"])?;
+    d.tolerance(&["result"])?;
+    Ok(())
+}
+
 /// `tests/bugs/heal/bug26708`
 #[test]
 #[should_panic]
@@ -708,6 +719,16 @@ fn bug27004() -> DrawResult<()> {
     d.checkshape(&["result"])?;
     d.checknbshapes(&["result", "-vertex", "12", "-edge", "18", "-wire", "8", "-face", "8", "-solid", "1"])?;
     d.checkprops(&["result", "-s", "223704", "-v", "3.27888e+006"])?;
+    Ok(())
+}
+
+/// `tests/bugs/heal/bug27078`
+#[ignore = "missing OCCT test data: bug27078.igs"]
+#[test]
+fn bug27078() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.testreadiges(&[data_file("bug27078.igs").as_str(), "a"])?;
+    d.fixshape(&["result", "a"])?;
     Ok(())
 }
 

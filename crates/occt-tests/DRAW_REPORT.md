@@ -3,9 +3,9 @@
 OCCT: `V8_0_1-42-g3d097a0328`; groups: blend, boolean, bugs, chamfer, cr, draft, evolved, feat, fillet2d, geometry, heal, helix, lowalgos, mesh, mkface, nproject, offset, pipe, prism, prj, sewing, thrusection
 
 - scripts considered: 16420
-- converted: 10245 (2858 ignored for missing data), 6373 of them as YAML cases (cases/occt/draw)
-- skipped: 6175
-- distinct DRAW commands used by converted scripts: 342
+- converted: 10254 (2866 ignored for missing data), 6373 of them as YAML cases (cases/occt/draw)
+- skipped: 6166
+- distinct DRAW commands used by converted scripts: 347
 
 ## Skip reasons
 
@@ -47,7 +47,6 @@ OCCT: `V8_0_1-42-g3d097a0328`; groups: blend, boolean, bugs, chamfer, cr, draft,
 | data-exchange:testreadstep | 7 | bugs/modalg_5/bug25477_2, bugs/modalg_6/bug28028, bugs/modalg_7/bug30196 |
 | proc:val2d | 7 | geometry/2dbeziecurve/B1, geometry/2dbsplinecurve/B7, geometry/circle/C2 |
 | data-exchange:ReadStep | 6 | bugs/modalg_5/bug24140, bugs/modalg_5/bug24746, bugs/modalg_6/bug26308 |
-| data-exchange:igesread | 5 | bugs/modalg_4/bug8370, bugs/modalg_5/bug24012, bugs/modalg_5/bug24074 |
 | array variable | 5 | bugs/modalg_7/bug30273, bugs/moddata_3/bug31136_1, bugs/moddata_3/bug31136_2 |
 | data-exchange:param | 5 | bugs/mesh/bug25281, bugs/mesh/bug25287, bugs/mesh/bug25837_1 |
 | grid end file: array variable | 5 | heal/elementary_to_revolution/A1, heal/elementary_to_revolution/A2, heal/elementary_to_revolution/A3 |
@@ -59,9 +58,7 @@ OCCT: `V8_0_1-42-g3d097a0328`; groups: blend, boolean, bugs, chamfer, cr, draft,
 | tcl:encoding | 3 | bugs/fclasses/bug25367_brep, bugs/fclasses/bug25367_igs, bugs/fclasses/bug63 |
 | viewer:vmoveto | 2 | bugs/modalg_2/bug21909, bugs/mesh/bug25469_3 |
 | viewer:vselect | 2 | bugs/modalg_2/bug22781_2, bugs/modalg_2/bug22781_4 |
-| data-exchange:testreadiges | 2 | bugs/modalg_5/bug25410, bugs/heal/bug27078 |
 | proc:checkarea | 2 | bugs/modalg_6/bug26607, bugs/heal/bug26644 |
-| data-exchange:igesbrep | 2 | bugs/moddata_1/bug15570, bugs/heal/bug26671 |
 | proc:CheckExtResult | 2 | lowalgos/extcc/bug29465_1, lowalgos/extcc/bug29465_2 |
 | draw_deviations.json: Known to fail: the volume maker's union of these faces fails after about 45 s (a section edge left without a pcurve), and the test then runs about 90 s in all; not converted until the faces' union succeeds. | 1 | boolean/volumemaker/G1 |
 | draw_deviations.json: checks OCCT's shape sharing, not geometry (nbshapes counts a vertex and its moved copy once) | 1 | bugs/modalg_2/bug22588 |
@@ -80,10 +77,10 @@ OCCT: `V8_0_1-42-g3d097a0328`; groups: blend, boolean, bugs, chamfer, cr, draft,
 | command | uses | scripts |
 |---|---|---|
 | `restore` | 9669 | 6957 |
-| `checkprops` | 8074 | 7435 |
+| `checkprops` | 8076 | 7437 |
 | `dset` | 5768 | 4077 |
-| `checkshape` | 3425 | 2814 |
-| `checknbshapes` | 3392 | 3010 |
+| `checkshape` | 3427 | 2816 |
+| `checknbshapes` | 3395 | 3013 |
 | `bop` | 2746 | 2685 |
 | `box` | 2522 | 1670 |
 | `explode` | 1751 | 1439 |
@@ -96,11 +93,11 @@ OCCT: `V8_0_1-42-g3d097a0328`; groups: blend, boolean, bugs, chamfer, cr, draft,
 | `offsetparameter` | 852 | 852 |
 | `offsetload` | 852 | 852 |
 | `offsetperform` | 852 | 852 |
-| `checkmaxtol` | 842 | 836 |
+| `checkmaxtol` | 843 | 837 |
 | `mkface` | 824 | 347 |
-| `sewing` | 752 | 747 |
+| `sewing` | 753 | 748 |
+| `checkfreebounds` | 740 | 739 |
 | `bcut` | 739 | 587 |
-| `checkfreebounds` | 739 | 738 |
 | `wire` | 726 | 498 |
 | `bopcommon` | 709 | 706 |
 | `checkfaults` | 700 | 700 |
@@ -136,14 +133,14 @@ OCCT: `V8_0_1-42-g3d097a0328`; groups: blend, boolean, bugs, chamfer, cr, draft,
 | `featperform` | 220 | 218 |
 | `bsection` | 219 | 211 |
 | `checktrinfo` | 186 | 173 |
-| `tclean` | 182 | 168 |
+| `tclean` | 183 | 169 |
 | `trim` | 179 | 105 |
+| `incmesh` | 170 | 154 |
 | `addsweep` | 169 | 108 |
-| `incmesh` | 169 | 153 |
 | `checklength` | 165 | 158 |
 | `bopsection` | 152 | 151 |
 | `pipe` | 149 | 137 |
-| `fixshape` | 146 | 133 |
+| `fixshape` | 147 | 134 |
 | `settolerance` | 145 | 45 |
 | `featprism` | 143 | 141 |
 | `baddtools` | 142 | 133 |
@@ -178,8 +175,8 @@ OCCT: `V8_0_1-42-g3d097a0328`; groups: blend, boolean, bugs, chamfer, cr, draft,
 | `offsetshapesimple` | 78 | 77 |
 | `bcremoveall` | 74 | 59 |
 | `bsplinecurve` | 72 | 71 |
-| `dval` | 65 | 22 |
-| `checkreal` | 59 | 20 |
+| `dval` | 71 | 23 |
+| `checkreal` | 65 | 21 |
 | `DT_ClosedSplit` | 59 | 59 |
 | `DT_ToBspl` | 58 | 58 |
 | `fsameparameter` | 55 | 49 |
@@ -210,17 +207,17 @@ OCCT: `V8_0_1-42-g3d097a0328`; groups: blend, boolean, bugs, chamfer, cr, draft,
 | `DT_SplitByNumber` | 26 | 26 |
 | `trimv` | 25 | 12 |
 | `binrestore` | 25 | 17 |
+| `bopargcheck` | 24 | 17 |
+| `tolerance` | 24 | 17 |
 | `to3d` | 24 | 4 |
 | `sameparameter` | 23 | 21 |
-| `tolerance` | 23 | 16 |
+| `mkoffset` | 22 | 18 |
+| `nproject` | 22 | 22 |
 | `polyvertex` | 22 | 19 |
 | `wedge` | 21 | 21 |
 | `distmini` | 21 | 16 |
-| `nproject` | 21 | 21 |
-| `bopargcheck` | 20 | 16 |
+| `bounding` | 20 | 16 |
 | `translate` | 20 | 19 |
-| `bounding` | 19 | 15 |
-| `mkoffset` | 19 | 17 |
 | `pcurve` | 19 | 17 |
 | `beziersurf` | 19 | 19 |
 | `bfuseblend` | 18 | 18 |
@@ -273,6 +270,7 @@ OCCT: `V8_0_1-42-g3d097a0328`; groups: blend, boolean, bugs, chamfer, cr, draft,
 | `2dlmirror` | 7 | 7 |
 | `side` | 6 | 3 |
 | `drawcont` | 6 | 6 |
+| `igesread` | 6 | 5 |
 | `baddcompound` | 6 | 5 |
 | `Open` | 6 | 6 |
 | `bounds` | 6 | 5 |
@@ -318,6 +316,8 @@ OCCT: `V8_0_1-42-g3d097a0328`; groups: blend, boolean, bugs, chamfer, cr, draft,
 | `movep` | 4 | 4 |
 | `viso` | 3 | 3 |
 | `fixsmallfaces` | 3 | 2 |
+| `testreadiges` | 3 | 2 |
+| `checkcurveonsurf` | 3 | 2 |
 | `appro` | 3 | 1 |
 | `appsurf` | 3 | 1 |
 | `circ2d3Tan` | 3 | 3 |
@@ -331,6 +331,7 @@ OCCT: `V8_0_1-42-g3d097a0328`; groups: blend, boolean, bugs, chamfer, cr, draft,
 | `offset2dcurve` | 2 | 2 |
 | `offsetcurve` | 2 | 2 |
 | `bclassify` | 2 | 2 |
+| `xdistef` | 2 | 1 |
 | `parameters` | 2 | 1 |
 | `firsthole` | 2 | 2 |
 | `intersect` | 2 | 2 |
@@ -339,6 +340,7 @@ OCCT: `V8_0_1-42-g3d097a0328`; groups: blend, boolean, bugs, chamfer, cr, draft,
 | `numshapes` | 2 | 2 |
 | `BUC60843` | 2 | 2 |
 | `segment` | 2 | 2 |
+| `igesbrep` | 2 | 2 |
 | `tocanon` | 2 | 2 |
 | `bclear` | 2 | 2 |
 | `OCC26930` | 2 | 2 |
@@ -366,7 +368,6 @@ OCCT: `V8_0_1-42-g3d097a0328`; groups: blend, boolean, bugs, chamfer, cr, draft,
 | `concatwire` | 1 | 1 |
 | `cprj` | 1 | 1 |
 | `proximity` | 1 | 1 |
-| `checkcurveonsurf` | 1 | 1 |
 | `lprops` | 1 | 1 |
 | `cvalue` | 1 | 1 |
 | `bhaspc` | 1 | 1 |
@@ -389,6 +390,7 @@ OCCT: `V8_0_1-42-g3d097a0328`; groups: blend, boolean, bugs, chamfer, cr, draft,
 | `OCC566` | 1 | 1 |
 | `BUC60792` | 1 | 1 |
 | `OCC14376` | 1 | 1 |
+| `tpcompound` | 1 | 1 |
 | `projonplane` | 1 | 1 |
 | `OCC367` | 1 | 1 |
 | `fixsmalledges` | 1 | 1 |

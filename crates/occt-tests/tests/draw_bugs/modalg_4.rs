@@ -651,6 +651,19 @@ fn bug81() -> DrawResult<()> {
     Ok(())
 }
 
+/// `tests/bugs/modalg_4/bug8370`
+#[ignore = "missing OCCT test data: OCC8370-part1.igs"]
+#[test]
+fn bug8370() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.igesread(&[data_file("OCC8370-part1.igs").as_str(), "result", "*"])?;
+    d.checkprops(&["result", "-s", "25310.8"])?;
+    d.checkshape(&["result"])?;
+    d.checknbshapes(&["result", "-vertex", "5065", "-edge", "5105", "-wire", "416", "-face", "399", "-shell", "0", "-solid", "0", "-compsolid", "0", "-compound", "1", "-shape", "10986"])?;
+    d.tclean(&["result"])?;
+    Ok(())
+}
+
 /// `tests/bugs/modalg_4/pro16983`
 #[ignore = "missing OCCT test data: pro16983a.brep"]
 #[test]

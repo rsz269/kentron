@@ -713,6 +713,21 @@ fn bug23998() -> DrawResult<()> {
     Ok(())
 }
 
+/// `tests/bugs/modalg_5/bug24012`
+#[test]
+#[should_panic]
+fn bug24012() {
+    expected_failure(|| {
+        let mut d = Draw::new();
+        d.igesread(&[data_file("bug24012_face.igs").as_str(), "face", "*"])?;
+        d.igesread(&[data_file("bug24012_line.igs").as_str(), "edge", "*"])?;
+        d.nproject(&["r", "edge", "face"])?;
+        d.checknbshapes(&["r", "-edge", "1"])?;
+        d.checkprops(&["r", "-l", "5.96"])?;
+        Ok(())
+    })
+}
+
 /// `tests/bugs/modalg_5/bug24036`
 #[ignore = "missing OCCT test data: bug24036_data.brep"]
 #[test]
@@ -763,6 +778,20 @@ fn bug24037_2() -> DrawResult<()> {
     d.bfillds(&[])?;
     d.bbuild(&["result"])?;
     d.checknbshapes(&["result", "-t", "-vertex", "16", "-edge", "24", "-wire", "13", "-face", "12", "-shell", "2", "-solid", "2", "-compsolid", "0", "-compound", "1", "-shape", "70"])?;
+    Ok(())
+}
+
+/// `tests/bugs/modalg_5/bug24074`
+/// OCCT TODO OCC24074 (ALL): Error: Offset is not done
+/// OCCT TODO OCC24074 (ALL): TEST INCOMPLETE
+#[ignore = "missing OCCT test data: bug24074_file.iges"]
+#[test]
+fn bug24074() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.igesread(&[data_file("bug24074_file.iges").as_str(), "a", "*"])?;
+    d.mkoffset(&["p", "a", "1", "-1.0"])?;
+    d.mkoffset(&["p", "a", "1", "-0.5"])?;
+    d.mkoffset(&["p", "a", "1", "-1.6"])?;
     Ok(())
 }
 
@@ -1552,6 +1581,19 @@ fn bug25111() {
     })
 }
 
+/// `tests/bugs/modalg_5/bug25175`
+#[ignore = "missing OCCT test data: bug25175_3.igs"]
+#[test]
+fn bug25175() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.igesread(&[data_file("bug25175_3.igs").as_str(), "a", "*"])?;
+    d.sewing(&["result", "0.1", "a"])?;
+    d.checkmaxtol(&["result", "-ref", "0.21794517334615857"])?;
+    d.checknbshapes(&["result", "-shell", "1"])?;
+    d.checkfreebounds(&["result", "0"])?;
+    Ok(())
+}
+
 /// `tests/bugs/modalg_5/bug25210`
 #[ignore = "missing OCCT test data: bug25210_fileCurveToProj.brep, bug25210_fileFaceProjOn.brep"]
 #[test]
@@ -2292,6 +2334,24 @@ fn bug25408() -> DrawResult<()> {
     d.checkprops(&["result", "-s", "57200.9"])?;
     d.checkshape(&["result"])?;
     d.checknbshapes(&["result", "-vertex", "54", "-edge", "129", "-wire", "95", "-face", "95", "-shell", "22", "-solid", "22", "-compsolid", "0", "-compound", "2", "-shape", "419"])?;
+    Ok(())
+}
+
+/// `tests/bugs/modalg_5/bug25410`
+#[ignore = "missing OCCT test data: bug25410_Tank7.igs, bug25410_Tank8.igs"]
+#[test]
+fn bug25410() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.testreadiges(&[data_file("bug25410_Tank8.igs").as_str(), "b1"])?;
+    d.checkcurveonsurf(&["b1"])?;
+    d.xdistef(&["e_0", "f_0"])?;
+    d.bopargcheck(&["b1", "/ic", "#f"])?;
+    d.bopargcheck(&["b1", "/ics", "#f"])?;
+    d.testreadiges(&[data_file("bug25410_Tank7.igs").as_str(), "b2"])?;
+    d.checkcurveonsurf(&["b2"])?;
+    d.xdistef(&["e_0", "f_0"])?;
+    d.bopargcheck(&["b2", "/ic", "#f"])?;
+    d.bopargcheck(&["b2", "/ics", "#f"])?;
     Ok(())
 }
 

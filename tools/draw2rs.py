@@ -84,13 +84,14 @@ VIEWER_COMMANDS = {
     "vselect", "vmoveto", "vreadpixel", "vdump", "vhlr", "vhlrtype", "vcomputehlr", "vstate",
     "vdetected", "vchangeselected", "vmanipulator", "vprs", "vdisplayall",
 }
-# Data-exchange commands (STEP/IGES/STL/VRML/XDE): out of scope, the script is skipped.
+# Data-exchange commands (STEP/IGES/STL/VRML/XDE) other than reading IGES: out of scope, the
+# script is skipped.
 DE_COMMANDS = {
     "stepread", "stepwrite", "testreadstep", "testwritestep", "ReadStep", "WriteStep",
-    "igesbrep", "igesread", "igeswrite", "brepiges", "testreadiges", "ReadIges", "WriteIges",
+    "igeswrite", "brepiges", "ReadIges", "WriteIges",
     "readstl", "writestl", "loadvrml", "writevrml", "ReadGltf", "WriteGltf", "ReadObj",
     "WriteObj", "ReadPly", "WritePly", "XNewDoc", "XOpen", "XSave", "XShow", "XGetOneShape",
-    "newmodel", "tpcompound", "tpstat", "data", "param", "xstep", "XReadStep", "XWriteStep",
+    "newmodel", "tpstat", "data", "param", "xstep", "XReadStep", "XWriteStep",
     "readfile", "writefile",
 }
 # Tcl built-ins (other than `set`, `puts` and constant `expr`) mean the script is not simple.

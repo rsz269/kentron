@@ -581,19 +581,16 @@ fn bug25856_2() -> DrawResult<()> {
 /// `tests/bugs/modalg_7/bug25930`
 /// kentron: sub-shapes named by OCCT's enumeration are selected by position (draw_selectors.json)
 #[test]
-#[should_panic]
-fn bug25930() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.psphere(&["Sphere", "5", "-90", "40", "360"])?;
-        d.explode(&["Sphere", "F"])?;
-        d.nearest(&["Sphere_2", "Sphere", "F", "0.0", "-1.73799e-16", "3.21394", "46.0891"])?;
-        d.offsetparameter(&["1e-7", "p", "a"])?;
-        d.offsetload(&["Sphere", "-1", "Sphere_2"])?;
-        d.offsetperform(&["Thickness"])?;
-        d.checkshape(&["Thickness"])?;
-        Ok(())
-    })
+fn bug25930() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.psphere(&["Sphere", "5", "-90", "40", "360"])?;
+    d.explode(&["Sphere", "F"])?;
+    d.nearest(&["Sphere_2", "Sphere", "F", "0.0", "-1.73799e-16", "3.21394", "46.0891"])?;
+    d.offsetparameter(&["1e-7", "p", "a"])?;
+    d.offsetload(&["Sphere", "-1", "Sphere_2"])?;
+    d.offsetperform(&["Thickness"])?;
+    d.checkshape(&["Thickness"])?;
+    Ok(())
 }
 
 /// `tests/bugs/modalg_7/bug25983_1`
@@ -3093,79 +3090,67 @@ fn bug31662() -> DrawResult<()> {
 /// `tests/bugs/modalg_7/bug31845_3`
 /// kentron: sub-shapes named by OCCT's enumeration are selected by position (draw_selectors.json)
 #[test]
-#[should_panic]
-fn bug31845_3() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.restore(&[data_file("bug31845_1.brep").as_str(), "a"])?;
-        d.explode(&["a", "f"])?;
-        d.nearest(&["a_5", "a", "F", "0.1", "-5.60717e-06", "3.87185e-06", "20.4263"])?;
-        d.nearest(&["a_6", "a", "F", "11.9", "-5.60717e-06", "3.87185e-06", "20.4263"])?;
-        d.offsetparameter(&["1e-7", "p", "i"])?;
-        d.offsetload(&["a", "0.2", "a_5", "a_6"])?;
-        d.offsetperform(&["result"])?;
-        d.checkshape(&["result"])?;
-        d.checkprops(&["result", "-s", "423.33"])?;
-        d.checknbshapes(&["result", "-t", "-edge", "24", "-wire", "12", "-face", "10", "-shell", "1", "-solid", "1"])?;
-        Ok(())
-    })
+fn bug31845_3() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.restore(&[data_file("bug31845_1.brep").as_str(), "a"])?;
+    d.explode(&["a", "f"])?;
+    d.nearest(&["a_5", "a", "F", "0.1", "-5.60717e-06", "3.87185e-06", "20.4263"])?;
+    d.nearest(&["a_6", "a", "F", "11.9", "-5.60717e-06", "3.87185e-06", "20.4263"])?;
+    d.offsetparameter(&["1e-7", "p", "i"])?;
+    d.offsetload(&["a", "0.2", "a_5", "a_6"])?;
+    d.offsetperform(&["result"])?;
+    d.checkshape(&["result"])?;
+    d.checkprops(&["result", "-s", "423.33"])?;
+    d.checknbshapes(&["result", "-t", "-edge", "24", "-wire", "12", "-face", "10", "-shell", "1", "-solid", "1"])?;
+    Ok(())
 }
 
 /// `tests/bugs/modalg_7/bug31845_4`
 /// kentron: sub-shapes named by OCCT's enumeration are selected by position (draw_selectors.json)
 #[test]
-#[should_panic]
-fn bug31845_4() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.restore(&[data_file("bug31845_1.brep").as_str(), "a"])?;
-        d.explode(&["a", "f"])?;
-        d.nearest(&["a_5", "a", "F", "0.1", "-5.60717e-06", "3.87185e-06", "20.4263"])?;
-        d.nearest(&["a_6", "a", "F", "11.9", "-5.60717e-06", "3.87185e-06", "20.4263"])?;
-        d.offsetparameter(&["1e-7", "p", "i"])?;
-        d.offsetload(&["a", "-0.2", "a_5", "a_6"])?;
-        d.offsetperform(&["result"])?;
-        d.checkshape(&["result"])?;
-        d.checkprops(&["result", "-s", "388.879"])?;
-        d.checknbshapes(&["result", "-t", "-edge", "24", "-wire", "12", "-face", "10", "-shell", "1", "-solid", "1"])?;
-        Ok(())
-    })
+fn bug31845_4() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.restore(&[data_file("bug31845_1.brep").as_str(), "a"])?;
+    d.explode(&["a", "f"])?;
+    d.nearest(&["a_5", "a", "F", "0.1", "-5.60717e-06", "3.87185e-06", "20.4263"])?;
+    d.nearest(&["a_6", "a", "F", "11.9", "-5.60717e-06", "3.87185e-06", "20.4263"])?;
+    d.offsetparameter(&["1e-7", "p", "i"])?;
+    d.offsetload(&["a", "-0.2", "a_5", "a_6"])?;
+    d.offsetperform(&["result"])?;
+    d.checkshape(&["result"])?;
+    d.checkprops(&["result", "-s", "388.879"])?;
+    d.checknbshapes(&["result", "-t", "-edge", "24", "-wire", "12", "-face", "10", "-shell", "1", "-solid", "1"])?;
+    Ok(())
 }
 
 /// `tests/bugs/modalg_7/bug31845_f`
 /// kentron: sub-shapes named by OCCT's enumeration are selected by position (draw_selectors.json)
 #[test]
-#[should_panic]
-fn bug31845_f() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.restore(&[data_file("bug31845_f.brep").as_str(), "a"])?;
-        d.explode(&["a", "f"])?;
-        d.nearest(&["a_4", "a", "F", "0.839877", "0.062279", "0.0", "0.330011"])?;
-        d.nearest(&["a_5", "a", "F", "0.520287", "0.0155011", "6.0", "0.0548388"])?;
-        d.offsetparameter(&["1e-7", "p", "i"])?;
-        d.offsetload(&["a", "0.001", "a_4", "a_5"])?;
-        d.offsetperform(&["result"])?;
-        Ok(())
-    })
+fn bug31845_f() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.restore(&[data_file("bug31845_f.brep").as_str(), "a"])?;
+    d.explode(&["a", "f"])?;
+    d.nearest(&["a_4", "a", "F", "0.839877", "0.062279", "0.0", "0.330011"])?;
+    d.nearest(&["a_5", "a", "F", "0.520287", "0.0155011", "6.0", "0.0548388"])?;
+    d.offsetparameter(&["1e-7", "p", "i"])?;
+    d.offsetload(&["a", "0.001", "a_4", "a_5"])?;
+    d.offsetperform(&["result"])?;
+    Ok(())
 }
 
 /// `tests/bugs/modalg_7/bug31845_i`
 /// kentron: sub-shapes named by OCCT's enumeration are selected by position (draw_selectors.json)
 #[test]
-#[should_panic]
-fn bug31845_i() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.restore(&[data_file("bug31845_h.brep").as_str(), "a"])?;
-        d.explode(&["a", "f"])?;
-        d.nearest(&["a_3", "a", "F", "1.0", "5.94602e-17", "0.0", "0.32092"])?;
-        d.nearest(&["a_4", "a", "F", "0.6", "1.82725e-17", "6.0", "0.0534015"])?;
-        d.offsetparameter(&["1e-7", "p", "i"])?;
-        d.offsetload(&["a", "0.001", "a_3", "a_4"])?;
-        d.offsetperform(&["result"])?;
-        Ok(())
-    })
+fn bug31845_i() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.restore(&[data_file("bug31845_h.brep").as_str(), "a"])?;
+    d.explode(&["a", "f"])?;
+    d.nearest(&["a_3", "a", "F", "1.0", "5.94602e-17", "0.0", "0.32092"])?;
+    d.nearest(&["a_4", "a", "F", "0.6", "1.82725e-17", "6.0", "0.0534015"])?;
+    d.offsetparameter(&["1e-7", "p", "i"])?;
+    d.offsetload(&["a", "0.001", "a_3", "a_4"])?;
+    d.offsetperform(&["result"])?;
+    Ok(())
 }
 
 /// `tests/bugs/modalg_7/bug31984`

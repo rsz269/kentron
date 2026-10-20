@@ -245,6 +245,8 @@ pub struct Draw {
     /// Whether the offset's faces are merged where they share a surface (`offsetparameter
     /// ... r`).
     pub(crate) offset_merge: bool,
+    /// What the last reading of a file transferred (`tpcompound`).
+    pub(crate) last_transfer: Option<Shape>,
     /// The form features defined by `featprism`, `featrevol` and `featdprism` (by kind:
     /// `prism`, `revol`, `dprism`): base, profile, sweep and mode.
     pub(crate) features: HashMap<String, (Shape, Shape, kentron::feature::FeatureSweep, kentron::feature::FeatureMode)>,

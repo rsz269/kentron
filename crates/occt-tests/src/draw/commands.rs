@@ -2659,6 +2659,46 @@ impl Draw {
         let result = kentron::make::faces_from_edges(&mut self.model, edges, shared)?;
         self.set_shape_var(args[0], result)
     }
+    /// DRAW command `igesbrep`.
+    ///
+    /// Example: `igesbrep file.igs a *`
+    pub fn igesbrep(&mut self, args: &[&str]) -> DrawResult {
+        // `igesbrep file name [entities]`: the file's independent entities, a compound named
+        // `name` (and kept for `tpcompound`).
+        need(args, 2, "igesbrep file name [*]")?;
+        let shape = self.read_iges(args[0])?;
+        self.last_transfer = Some(shape);
+        self.set_shape_var(args[1], shape)
+    }
+    /// DRAW command `igesread`.
+    ///
+    /// Example: `igesread file.igs result *`
+    pub fn igesread(&mut self, args: &[&str]) -> DrawResult {
+        self.igesbrep(args)
+    }
+    /// DRAW command `testreadiges`.
+    ///
+    /// Example: `testreadiges file.igs b1`
+    pub fn testreadiges(&mut self, args: &[&str]) -> DrawResult {
+        need(args, 2, "testreadiges file name")?;
+        let shape = self.read_iges(args[0])?;
+        self.set_shape_var(args[1], shape)
+    }
+    /// DRAW command `tpcompound`.
+    ///
+    /// Example: `tpcompound result`
+    pub fn tpcompound(&mut self, args: &[&str]) -> DrawResult {
+        // `tpcompound name`: what the last reading transferred, as a compound.
+        need(args, 1, "tpcompound name")?;
+        let shape = self.last_transfer.ok_or_else(|| DrawError::Failed("tpcompound: nothing transferred".into()))?;
+        self.set_shape_var(args[0], shape)
+    }
+    /// An IGES file (found as `locate_data_file` finds it) read into the model.
+    fn read_iges(&mut self, file: &str) -> std::result::Result<kentron::topology::Shape, DrawError> {
+        let path = super::find_data_file(file).unwrap_or_else(|| file.to_string());
+        let mut f = std::fs::File::open(&path).map_err(|e| DrawError::Failed(format!("{path}: {e}")))?;
+        Ok(kentron::io::iges::read(&mut self.model, &mut f)?)
+    }
     /// DRAW command `emptycopy`: 5 uses in 5 converted scripts.
     ///
     /// Example: `emptycopy b1 b`
@@ -4072,11 +4112,12 @@ impl Draw {
     ///
     /// Example: `offsetparameter 1.e-7 c i`
     pub fn offsetparameter(&mut self, args: &[&str]) -> DrawResult {
-        // `offsetparameter tol c|p a|i [r|u]`: complete intersection, arc or intersection
-        // joins; with `r`, faces split by edges inside the result's planes and surfaces are
-        // merged (OCCT's RemoveIntEdges).
+        // `offsetparameter tol c|p a|i [r|u]`: complete or partial intersection (kentron's
+        // offsets find all intersections either way), arc or intersection joins; with `r`,
+        // faces split by edges inside the result's planes and surfaces are merged (OCCT's
+        // RemoveIntEdges).
         match args {
-            [_, "c", join, rest @ ..] if rest.is_empty() || rest == ["u"] || rest == ["r"] => {
+            [_, "c" | "p", join, rest @ ..] if rest.is_empty() || rest == ["u"] || rest == ["r"] => {
                 self.offset_merge = rest == ["r"];
                 self.offset_join = match *join {
                     "a" => kentron::offset::Join::Arc,
@@ -6187,5 +6228,17 @@ impl Draw {
             }
             Err(e) => Ok(format!("ErrorStatus = 1 ({e})\n")),
         }
+    }
+}
+
+// Shims appended by tools/draw2rs.py. Implement in place; the tool never
+// modifies an existing method.
+#[allow(non_snake_case)]
+impl Draw {
+    /// DRAW command `xdistef`: 2 uses in 1 converted scripts.
+    ///
+    /// Example: `xdistef e_0 f_0`
+    pub fn xdistef(&mut self, args: &[&str]) -> DrawResult {
+        self.not_implemented("xdistef", args)
     }
 }
