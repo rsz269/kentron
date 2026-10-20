@@ -2635,6 +2635,30 @@ impl Draw {
         self.set(args[0], object);
         Ok(String::new())
     }
+    /// DRAW command `edgestofaces`.
+    ///
+    /// Example: `edgestofaces result c`
+    pub fn edgestofaces(&mut self, args: &[&str]) -> DrawResult {
+        // `edgestofaces result edges [-a angular] [-s shared]`: the planar faces the edges
+        // bound (`-s 1`: they already share their vertices; the angular tolerance is not
+        // needed).
+        need(args, 2, "edgestofaces result edges [-a angle] [-s 0/1]")?;
+        let edges = self.shape_var(args[1])?;
+        let mut shared = false;
+        let mut k = 2;
+        while k < args.len() {
+            match args[k] {
+                "-s" if k + 1 < args.len() => {
+                    shared = args[k + 1] != "0";
+                    k += 2;
+                }
+                "-a" if k + 1 < args.len() => k += 2,
+                other => return Err(DrawError::Failed(format!("edgestofaces: unknown option {other}"))),
+            }
+        }
+        let result = kentron::make::faces_from_edges(&mut self.model, edges, shared)?;
+        self.set_shape_var(args[0], result)
+    }
     /// DRAW command `emptycopy`: 5 uses in 5 converted scripts.
     ///
     /// Example: `emptycopy b1 b`

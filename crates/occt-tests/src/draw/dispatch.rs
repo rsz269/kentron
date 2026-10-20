@@ -174,6 +174,7 @@ pub fn dispatch(d: &mut Draw, name: &str, args: &[&str]) -> Option<DrawResult> {
         "dset" => d.dset(args),
         "dval" => d.dval(args),
         "edge" => d.edge(args),
+        "edgestofaces" => d.edgestofaces(args),
         "ellipse" => d.ellipse(args),
         "emptycopy" => d.emptycopy(args),
         "encoderegularity" => d.encoderegularity(args),

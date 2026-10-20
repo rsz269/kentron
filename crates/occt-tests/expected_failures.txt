@@ -1228,17 +1228,6 @@ tests/mesh/standard_shading/U9
 tests/mesh/standard_shading/W1
 tests/mesh/standard_shading/W7
 tests/mesh/standard_shading/X4
-tests/mkface/edges_to_faces/A1
-tests/mkface/edges_to_faces/A2
-tests/mkface/edges_to_faces/A3
-tests/mkface/edges_to_faces/A4
-tests/mkface/edges_to_faces/A5
-tests/mkface/edges_to_faces/D6
-tests/mkface/edges_to_faces/D7
-tests/mkface/edges_to_faces/D8
-tests/mkface/edges_to_faces/D9
-tests/mkface/edges_to_faces/E1
-tests/mkface/edges_to_faces/E2
 tests/mkface/mkplane/A2
 tests/offset/bugs/bug26233
 tests/offset/bugs/bug5806

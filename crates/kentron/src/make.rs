@@ -484,6 +484,36 @@ mod tests {
     use super::*;
     use crate::topology::NodeKind;
 
+    /// The edges of a box bound its six faces; two circles crossing each other, inside a
+    /// third, its regions: the lens, the two crescents, and the rest with both as a hole.
+    #[test]
+    fn faces_from_box_edges_and_crossing_circles() {
+        use crate::geometry::curve::Circle;
+        use crate::math::Frame;
+        let mut model = Model::new();
+        let solid = crate::primitives::Cuboid::new(1.0, 2.0, 3.0).build(&mut model).unwrap();
+        let edges = model.new_empty(NodeKind::Compound);
+        for e in model.unique_subshapes(solid, NodeKind::Edge) {
+            model.add(edges, e).unwrap();
+        }
+        let faces = super::faces_from_edges(&mut model, edges, false).unwrap();
+        assert_eq!(model.unique_subshapes(faces, NodeKind::Face).len(), 6);
+        let area = crate::properties::area(&model, faces).mass;
+        assert!((area - 22.0).abs() < 1e-9, "{area}");
+        let circles = model.new_empty(NodeKind::Compound);
+        for (x, r) in [(0.0, 10.0), (-2.0, 5.0), (2.0, 5.0)] {
+            let c = Circle::new(Frame::new(Point::new(x, 0.0, 0.0), Direction::Z, Direction::X), r);
+            let e = super::edge_from_curve(&mut model, Curve::Circle(c)).unwrap();
+            model.add(circles, e).unwrap();
+        }
+        let regions = super::faces_from_edges(&mut model, circles, false).unwrap();
+        let faces = model.unique_subshapes(regions, NodeKind::Face);
+        assert_eq!(faces.len(), 4);
+        assert_eq!(model.unique_subshapes(regions, NodeKind::Wire).len(), 5);
+        let total = crate::properties::area(&model, regions).mass;
+        assert!((total - std::f64::consts::PI * 100.0).abs() < 1e-6, "{total}");
+    }
+
     /// Separately built edges whose ends coincide become one closed loop.
     #[test]
     fn wire_merges_coincident_vertices() {
@@ -528,4 +558,241 @@ mod tests {
             assert!((area - expected).abs() < 1e-6, "{area} != {expected}");
         }
     }
+}
+
+/// The planar faces `edges` bound (OCCT's `BOPAlgo_Tools::EdgesToWires` then `WiresToFaces`):
+/// in each plane the edges span, every region they enclose, holes and all, a compound of
+/// them. Unless `shared` (the edges already meet at shared vertices), the edges are first
+/// split where they cross or touch. Edges bounding nothing are left out.
+#[doc(alias = "BOPAlgo_Tools::EdgesToWires")]
+#[doc(alias = "BOPAlgo_Tools::WiresToFaces")]
+#[doc(alias = "edgestofaces")]
+pub fn faces_from_edges(model: &mut Model, edges: Shape, shared: bool) -> Result<Shape> {
+    let input: Vec<Shape> = model.unique_subshapes(edges, NodeKind::Edge).into_iter().filter(|&e| !model.is_degenerate(e)).collect();
+    if input.is_empty() {
+        return Err(Error::InvalidInput("no edges to make faces of".into()));
+    }
+    // The edges meeting where they cross: split by one another.
+    let pieces: Vec<Shape> = if shared || input.len() == 1 {
+        input
+    } else {
+        let cells = crate::boolean::cells(model, &input)?;
+        cells.into_iter().map(|c| c.shape).collect()
+    };
+    let samples = |model: &Model, e: Shape| -> Vec<Point> {
+        model.edge_curve(Shape { orientation: Orientation::Forward, ..e }).map_or_else(Vec::new, |(c, a, b)| (0..=8).map(|i| c.point(a + (b - a) * i as f64 / 8.0)).collect())
+    };
+    let points: Vec<Vec<Point>> = pieces.iter().map(|&e| samples(model, e)).collect();
+    let size = {
+        let all: Vec<Point> = points.iter().flatten().copied().collect();
+        let b = crate::math::BoundingBox::from_points(all);
+        b.min.distance(b.max)
+    };
+    let tol = pieces.iter().map(|&e| model.tolerance(e)).fold(tolerance::LINEAR, f64::max).max(1e-9 * size);
+    // The planes the edges span: of each curved edge lying in one, and of each two edges
+    // meeting at an angle at a vertex.
+    let mut planes: Vec<Plane> = Vec::new();
+    let mut add = |plane: Plane| {
+        let n = Vector::from(plane.normal());
+        let known = planes.iter().any(|q| Vector::from(q.normal()).cross(n).length() <= 1e-9 && (plane.origin() - q.origin()).dot(Vector::from(q.normal())).abs() <= tol);
+        if !known {
+            planes.push(plane);
+        }
+    };
+    let plane_through = |ps: &[Point]| -> Option<Plane> {
+        let o = *ps.first()?;
+        let far = ps.iter().copied().max_by(|a, b| a.distance(o).total_cmp(&b.distance(o)))?;
+        let normal = ps.iter().map(|&p| (far - o).cross(p - o)).max_by(|a, b| a.length().total_cmp(&b.length()))?;
+        let plane = Plane::new(o, Direction::try_from_vector(normal)?);
+        let n = Vector::from(plane.normal());
+        ps.iter().all(|&p| (p - o).dot(n).abs() <= tol).then_some(plane)
+    };
+    for (k, &e) in pieces.iter().enumerate() {
+        let straight = matches!(model.edge_curve(e), Some((Curve::Line(_), _, _)));
+        if !straight {
+            if let Some(p) = plane_through(&points[k]) {
+                add(p);
+            }
+        }
+    }
+    // (Each edge's direction away from each of its ends.)
+    let mut ends: Vec<(Point, Vector)> = Vec::new();
+    for &e in &pieces {
+        let Some((curve, a, b)) = model.edge_curve(Shape { orientation: Orientation::Forward, ..e }) else { continue };
+        let (pa, da) = curve.d1(a);
+        let (pb, db) = curve.d1(b);
+        ends.push((pa, da));
+        ends.push((pb, -db));
+    }
+    for i in 0..ends.len() {
+        for j in i + 1..ends.len() {
+            let ((p, d), (q, f)) = (ends[i], ends[j]);
+            if p.distance(q) > tol {
+                continue;
+            }
+            if let Some(n) = Direction::try_from_vector(d.cross(f)).filter(|_| d.normalized().cross(f.normalized()).length() > 1e-6) {
+                add(Plane::new(p, n));
+            }
+        }
+    }
+    // In each plane, the regions its edges enclose.
+    let out = model.new_empty(NodeKind::Compound);
+    for plane in planes {
+        let n = Vector::from(plane.normal());
+        let on: Vec<Shape> = (0..pieces.len()).filter(|&k| !points[k].is_empty() && points[k].iter().all(|&p| (p - plane.origin()).dot(n).abs() <= tol)).map(|k| pieces[k]).collect();
+        for face in plane_regions(model, &plane, &on, tol)? {
+            model.add(out, face)?;
+        }
+    }
+    Ok(out)
+}
+
+/// The faces of the regions `edges` (lying in `plane`, meeting at shared vertices) enclose
+/// there: the edges' arrangement traced loop by loop, each turning at every vertex to the
+/// next edge clockwise; the loops running anticlockwise (in the plane's parameters) bound
+/// faces, the clockwise ones are holes of the least face holding them (or the outside).
+/// Edges bounding nothing (ending at a vertex of no other) are left out.
+fn plane_regions(model: &mut Model, plane: &Plane, edges: &[Shape], tol: f64) -> Result<Vec<Shape>> {
+    use crate::math::Point2;
+    // The edges by their end vertices, with their curves sampled in the plane's parameters.
+    struct Arc {
+        edge: Shape,
+        ends: [VertexId; 2],
+        uv: Vec<Point2>,
+    }
+    let mut arcs: Vec<Arc> = Vec::new();
+    for &e in edges {
+        let e = Shape { orientation: Orientation::Forward, ..e };
+        let Some((curve, a, b)) = model.edge_curve(e) else { continue };
+        let (va, vb) = model.edge_vertices(e);
+        let (Ok(va), Ok(vb)) = (VertexId::try_from(va.node), VertexId::try_from(vb.node)) else { continue };
+        let n = 64;
+        let uv = (0..=n).map(|i| { let (u, v) = plane.parameters(curve.point(a + (b - a) * i as f64 / n as f64)); Point2::new(u, v) }).collect();
+        if !arcs.iter().any(|x| x.edge.node == e.node) {
+            arcs.push(Arc { edge: e, ends: [va, vb], uv });
+        }
+    }
+    // (Edges ending where no other does bound nothing: taken away, repeatedly.)
+    loop {
+        let degree = |v: VertexId, arcs: &[Arc]| arcs.iter().map(|a| a.ends.iter().filter(|&&x| x == v).count()).sum::<usize>();
+        let before = arcs.len();
+        let kept: Vec<bool> = arcs.iter().map(|a| a.ends.iter().all(|&v| degree(v, &arcs) >= 2)).collect();
+        let mut k = 0;
+        arcs.retain(|_| { k += 1; kept[k - 1] });
+        if arcs.len() == before {
+            break;
+        }
+    }
+    // Half-edges: (arc, forward); each leaves a vertex at an angle (of its chord to a point
+    // a little along it, which also tells apart arcs leaving tangent to each other).
+    let leaving = |a: &Arc, forward: bool| -> (VertexId, f64) {
+        let m = a.uv.len() - 1;
+        let (from, to) = if forward { (a.uv[0], a.uv[1]) } else { (a.uv[m], a.uv[m - 1]) };
+        (if forward { a.ends[0] } else { a.ends[1] }, (to.y - from.y).atan2(to.x - from.x))
+    };
+    let halves: Vec<(usize, bool)> = (0..arcs.len()).flat_map(|i| [(i, true), (i, false)]).collect();
+    let mut out_of: crate::hashing::FastMap<VertexId, Vec<(f64, usize)>> = Default::default();
+    for (h, &(i, forward)) in halves.iter().enumerate() {
+        let (v, angle) = leaving(&arcs[i], forward);
+        out_of.entry(v).or_default().push((angle, h));
+    }
+    for list in out_of.values_mut() {
+        list.sort_by(|a, b| a.0.total_cmp(&b.0));
+    }
+    let twin = |h: usize| h ^ 1;
+    // After arriving along h at its end, the next half-edge: the one leaving that vertex
+    // clockwise next from the way back.
+    let next = |h: usize| -> Option<usize> {
+        let back = twin(h);
+        let (i, forward) = halves[back];
+        let (v, _) = leaving(&arcs[i], forward);
+        let list = out_of.get(&v)?;
+        let k = list.iter().position(|&(_, x)| x == back)?;
+        Some(list[(k + list.len() - 1) % list.len()].1)
+    };
+    let mut used = vec![false; halves.len()];
+    let mut loops: Vec<(Vec<usize>, f64, Vec<Point2>)> = Vec::new();
+    for start in 0..halves.len() {
+        if used[start] {
+            continue;
+        }
+        let mut lp = Vec::new();
+        let mut h = start;
+        while !used[h] {
+            used[h] = true;
+            lp.push(h);
+            match next(h) {
+                Some(x) => h = x,
+                None => break,
+            }
+        }
+        if h != start {
+            continue;
+        }
+        let polygon: Vec<Point2> = lp
+            .iter()
+            .flat_map(|&h| {
+                let (i, forward) = halves[h];
+                let mut pts = arcs[i].uv.clone();
+                if !forward {
+                    pts.reverse();
+                }
+                pts.pop();
+                pts
+            })
+            .collect();
+        let n = polygon.len();
+        let area = 0.5 * (0..n).map(|k| polygon[k].x * polygon[(k + 1) % n].y - polygon[(k + 1) % n].x * polygon[k].y).sum::<f64>();
+        loops.push((lp, area, polygon));
+    }
+    let inside = |p: Point2, polygon: &[Point2]| {
+        let n = polygon.len();
+        let mut c = false;
+        for k in 0..n {
+            let (a, b) = (polygon[k], polygon[(k + 1) % n]);
+            if (a.y > p.y) != (b.y > p.y) && p.x < a.x + (p.y - a.y) * (b.x - a.x) / (b.y - a.y) {
+                c = !c;
+            }
+        }
+        c
+    };
+    let small = tol * tol;
+    let outer: Vec<usize> = (0..loops.len()).filter(|&k| loops[k].1 > small).collect();
+    let mut holes_of: Vec<Vec<usize>> = vec![Vec::new(); loops.len()];
+    for k in (0..loops.len()).filter(|&k| loops[k].1 < -small) {
+        // (A point of the hole's own boundary, off the faces' in general: its middle sample.)
+        let polygon = &loops[k].2;
+        let p = polygon[polygon.len() / 2];
+        // (Not a face's own boundary run the other way: the outside of it.)
+        let twins: Vec<usize> = loops[k].0.iter().map(|&h| twin(h)).collect();
+        let holder = outer
+            .iter()
+            .copied()
+            .filter(|&o| !loops[o].0.iter().all(|h| twins.contains(h)) && loops[o].1 > -loops[k].1 + small && inside(p, &loops[o].2))
+            .min_by(|&a, &b| loops[a].1.total_cmp(&loops[b].1));
+        if let Some(o) = holder {
+            holes_of[o].push(k);
+        }
+    }
+    let wire_of = |model: &mut Model, lp: &[usize]| -> Result<Shape> {
+        let uses: Vec<Shape> = lp
+            .iter()
+            .map(|&h| {
+                let (i, forward) = halves[h];
+                Shape { orientation: if forward { Orientation::Forward } else { Orientation::Reversed }, ..arcs[i].edge }
+            })
+            .collect();
+        wire(model, &uses)
+    };
+    let mut faces = Vec::new();
+    for &o in &outer {
+        let w = wire_of(model, &loops[o].0)?;
+        let mut face = face_on(model, Surface::Plane(*plane), w)?;
+        if !holes_of[o].is_empty() {
+            let holes: Vec<Shape> = holes_of[o].iter().map(|&k| wire_of(model, &loops[k].0)).collect::<Result<_>>()?;
+            face = face_with_holes(model, face, &holes)?;
+        }
+        faces.push(face);
+    }
+    Ok(faces)
 }
