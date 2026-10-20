@@ -372,7 +372,7 @@ fn on_solids(model: &mut Model, shape: Shape, op: impl FnOnce(&mut Model, Shape)
         let solid = model.new_empty(NodeKind::Solid);
         model.add(solid, shell)?;
         // (Its faces facing out.)
-        let solid = if crate::properties::volume(model, solid).mass < 0.0 {
+        let solid = if volume_of(model, solid) < 0.0 {
             let turned = model.new_empty(NodeKind::Solid);
             model.add(turned, shell.reversed())?;
             turned
@@ -871,7 +871,7 @@ fn tetrahedron(model: &mut Model, points: [Point; 4]) -> Result<Shape> {
     let solid = model.new_empty(NodeKind::Solid);
     model.add(solid, shell)?;
     // (Outward: a positive volume.)
-    if crate::properties::volume(model, solid).mass < 0.0 {
+    if volume_of(model, solid) < 0.0 {
         let solid = model.new_empty(NodeKind::Solid);
         model.add(solid, shell.reversed())?;
         return Ok(solid);
@@ -1267,7 +1267,7 @@ fn over_features(
     // (Only their solids: what else a difference leaves, as faces where the solids touch,
     // is nothing to cut or join.)
     let some = |model: &Model, s: Shape| {
-        !model.unique_subshapes(s, NodeKind::Solid).is_empty() && crate::properties::volume(model, s).mass.abs() > tolerance::LINEAR.powi(3)
+        !model.unique_subshapes(s, NodeKind::Solid).is_empty() && volume_of(model, s).abs() > tolerance::LINEAR.powi(3)
     };
     let solids_of = |model: &mut Model, s: Shape| -> Result<Shape> {
         let compound = model.new_empty(NodeKind::Compound);
@@ -1968,6 +1968,12 @@ fn intersections(a: &Offset, b: &Offset) -> Vec<[f64; 2]> {
     }
 }
 
+
+/// The volume of a shape: of solids, from their faces' terms the model keeps (most faces met
+/// again from one edge's fillet to the next).
+pub(super) fn volume_of(model: &Model, s: Shape) -> f64 {
+    crate::properties::solid_volume(model, s).map_or_else(|| crate::properties::volume(model, s).mass, |(v, _)| v)
+}
 #[cfg(test)]
 mod tests {
     use std::f64::consts::PI;

@@ -1420,13 +1420,22 @@ class Face(Shape):
         # wires side by side, rotated rectangles for one).
         bounded = {}
 
+        # (Only where the outer wire's box holds the wire's: most wires side by side are
+        # told apart by their boxes, without a face.)
+        points = {}
+
         def within(outer, w) -> bool:
+            o, b = outer.BoundingBox(), w.BoundingBox()
+            tol = 1e-7 * (1.0 + max(o.DiagonalLength, 1.0))
+            if b.xmin < o.xmin - tol or b.ymin < o.ymin - tol or b.zmin < o.zmin - tol or b.xmax > o.xmax + tol or b.ymax > o.ymax + tol or b.zmax > o.zmax + tol:
+                return False
             key = id(outer)
             if key not in bounded:
                 bounded[key] = Shape.cast(native.make_face(outer.wrapped, []))
             face = bounded[key]
-            p = w.positionAt(0.5)
-            tol = 1e-7 * (1.0 + max(outer.BoundingBox().DiagonalLength, 1.0))
+            if id(w) not in points:
+                points[id(w)] = w.positionAt(0.5)
+            p = points[id(w)]
             return face.distance(Vertex.makeVertex(p.x, p.y, p.z)) <= tol
 
         groups = [[outerWire]]

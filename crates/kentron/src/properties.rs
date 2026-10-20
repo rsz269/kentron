@@ -111,7 +111,7 @@ pub fn area_with(model: &Model, shape: Shape, options: Options) -> MassPropertie
     let mut total = Moments::default();
     let mut plane: Option<Option<crate::geometry::surface::Plane>> = None;
     for face in faces(model, shape, options) {
-        let moments = face_terms(model, face).2;
+        let moments = face_area_moments(model, face);
         // The sign follows the boundary's direction of travel; an area is positive.
         total.merge_area(&moments, moments.measure.signum());
         // (Whether all the faces lie in one plane.)
@@ -198,6 +198,26 @@ fn face_terms(model: &Model, face: Shape) -> (f64, Vector, Moments) {
     }
 }
 
+/// A face occurrence's area moments (see [`face_terms`]): of a face placed without
+/// reflecting or scaling it, its unplaced face's (kept in the model), moved.
+fn face_area_moments(model: &Model, face: Shape) -> Moments {
+    let t = face.placement;
+    if t == crate::math::Transform::IDENTITY || (t.scale_factor() - 1.0).abs() > 1e-12 || t.is_negative() {
+        return face_terms(model, face).2;
+    }
+    let local = face_terms(model, Shape { placement: crate::math::Transform::IDENTITY, ..face }).2;
+    // About the moved origin, a point's q turns with it: first R f, second R S Rᵀ.
+    let r: [Vector; 3] = std::array::from_fn(|c| Vector::new(f64::from(c == 0), f64::from(c == 1), f64::from(c == 2)).transformed(&t));
+    let rot = |row: usize, col: usize| r[col][row];
+    let mut second = [[0.0; 3]; 3];
+    for i in 0..3 {
+        for j in 0..3 {
+            second[i][j] = (0..3).map(|a| (0..3).map(|b| rot(i, a) * local.second[a][b] * rot(j, b)).sum::<f64>()).sum();
+        }
+    }
+    Moments { origin: local.origin.map(|o| o.transformed(&t)), measure: local.measure, first: local.first.transformed(&t), second }
+}
+
 /// The volume a closed shell bounds, from its faces' terms (kept in the model).
 pub(crate) fn closed_shell_volume(model: &Model, shell: Shape) -> f64 {
     model.explore(shell, NodeKind::Face).map(|f| face_volume_term(model, f)).sum()
@@ -217,9 +237,24 @@ pub fn solid_volume(model: &Model, shape: Shape) -> Option<(f64, Point)> {
     if faces.is_empty() || on_solids != faces.len() {
         return None;
     }
-    let (volume, moment) = faces.iter().fold((0.0, Vector::new(0.0, 0.0, 0.0)), |(v, m), &f| {
-        let (fv, fm) = face_volume_terms(model, f);
-        (v + fv, m + fm)
+    // A solid placed without reflecting or scaling it bounds the volume it bounds unplaced,
+    // its centre moved: found from its unplaced faces' kept terms (a lattice's cells, each a
+    // placed copy of one, at the cost of one). Others from their placed faces' terms.
+    let terms = |faces: &mut dyn Iterator<Item = Shape>| {
+        faces.fold((0.0, Vector::new(0.0, 0.0, 0.0)), |(v, m), f| {
+            let (fv, fm) = face_volume_terms(model, f);
+            (v + fv, m + fm)
+        })
+    };
+    let rigid = |t: &crate::math::Transform| (t.scale_factor() - 1.0).abs() <= 1e-12 && !t.is_negative();
+    let (volume, moment) = model.explore(shape, NodeKind::Solid).fold((0.0, Vector::new(0.0, 0.0, 0.0)), |(v, m), s| {
+        let (sv, sm) = if s.placement != crate::math::Transform::IDENTITY && rigid(&s.placement) {
+            let (sv, sm) = terms(&mut model.explore(Shape { placement: crate::math::Transform::IDENTITY, ..s }, NodeKind::Face));
+            (sv, sm.transformed(&s.placement) + s.placement.translation_part() * sv)
+        } else {
+            terms(&mut model.explore(s, NodeKind::Face))
+        };
+        (v + sv, m + sm)
     });
     let center = if volume != 0.0 { Point::ORIGIN + moment * (1.0 / volume) } else { Point::ORIGIN };
     Some((volume, center))
@@ -972,6 +1007,28 @@ pub fn bounding_box_using_meshes(model: &Model, shape: Shape) -> BoundingBox {
 #[doc(alias = "BRepBndLib::AddOptimal")]
 pub fn tight_bounding_box(model: &Model, shape: Shape) -> BoundingBox {
     let mut b = BoundingBox::EMPTY;
+    // A compound's children bounded each alone: copies of one shape placed apart without
+    // turning (a lattice's cells) bounded once, the box moved to each.
+    if shape.node.kind == NodeKind::Compound {
+        let mut bounded: std::collections::HashMap<crate::topology::NodeId, Vec<(crate::math::Transform, BoundingBox)>> = Default::default();
+        for child in model.children(shape) {
+            let by = child.placement.translation_part();
+            let turned = crate::math::Transform::translation(-by) * child.placement;
+            let kept = bounded.entry(child.node).or_default();
+            let local = match kept.iter().find(|(t, _)| *t == turned) {
+                Some(&(_, local)) => local,
+                None => {
+                    let local = tight_bounding_box(model, Shape { placement: turned, ..child });
+                    kept.push((turned, local));
+                    local
+                }
+            };
+            if !local.is_empty() {
+                b.add_box(&BoundingBox::new(local.min + by, local.max + by));
+            }
+        }
+        return b;
+    }
     for v in model.explore(shape, NodeKind::Vertex) {
         b.add_point(model.point(v));
     }
@@ -1577,6 +1634,38 @@ mod tests {
         let expected = Point::new(0.0, 4.0 * r / (3.0 * PI), h / 2.0);
         assert!(props.center_of_mass.distance(expected) <= 1e-9, "{props:?}");
         assert!(near(area(&model, half).mass, PI * r * h + PI * r * r + 2.0 * r * h));
+    }
+
+    /// A compound of one cylinder placed three ways (moved, and turned two ways and moved): its
+    /// volume, centre, area and box those of the three cylinders, the placed copies measured
+    /// from the unplaced one.
+    #[test]
+    fn copies_of_a_cylinder_placed_in_a_compound() {
+        use crate::math::{Axis, Transform};
+        use crate::primitives::Cylinder;
+        use std::f64::consts::PI;
+        let (r, h) = (2.0, 7.0);
+        let mut model = Model::new();
+        let cylinder = Cylinder::new(r, h).build(&mut model).unwrap();
+        let x = Direction::from_vector(Vector::new(1.0, 0.0, 0.0));
+        let placements = [
+            Transform::translation(Vector::new(0.0, 20.0, 0.0)),
+            Transform::translation(Vector::new(10.0, 0.0, 0.0)) * Transform::rotation(Axis::new(Point::ORIGIN, x), PI / 2.0),
+            Transform::translation(Vector::new(0.0, 0.0, -17.0)) * Transform::rotation(Axis::new(Point::ORIGIN, Direction::from_vector(Vector::new(0.0, 0.0, 1.0))), PI / 3.0),
+        ];
+        let compound = model.new_empty(NodeKind::Compound);
+        for t in &placements {
+            model.add(compound, cylinder.moved(t)).unwrap();
+        }
+        let props = volume(&model, compound);
+        assert!(near(props.mass, 3.0 * PI * r * r * h), "{props:?}");
+        let centre = Point::new(10.0 / 3.0, (20.0 - 3.5) / 3.0, (3.5 - 13.5) / 3.0);
+        assert!(props.center_of_mass.distance(centre) <= 1e-9, "{props:?}");
+        let props = area(&model, compound);
+        assert!(near(props.mass, 3.0 * (2.0 * PI * r * h + 2.0 * PI * r * r)), "{props:?}");
+        assert!(props.center_of_mass.distance(centre) <= 1e-9, "{props:?}");
+        let b = tight_bounding_box(&model, compound);
+        assert!(b.min.distance(Point::new(-2.0, -7.0, -17.0)) <= 1e-9 && b.max.distance(Point::new(12.0, 22.0, 7.0)) <= 1e-9, "{b:?}");
     }
 
     #[test]

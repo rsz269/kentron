@@ -641,8 +641,7 @@ pub(super) fn fillet_along(model: &mut Model, shape: Shape, edge: Shape, law: &d
     let result = unify::unify_same_domain(model, solid)?;
     // (Checked: valid, and what it takes away (at a concave edge, adds) no more than the
     // wedge, nor less than nothing.)
-    let volume = |model: &Model, s: Shape| crate::properties::volume(model, s).mass;
-    let (before, after, wedge_volume) = (volume(model, shape), volume(model, result), volume(model, wedge));
+    let (before, after, wedge_volume) = (super::volume_of(model, shape), super::volume_of(model, result), super::volume_of(model, wedge));
     let slack = 1e-6 * before.abs().max(1.0);
     let change = if convex { before - after } else { after - before };
     if !crate::validity::check(model, result).is_valid() || change < -slack || change > wedge_volume + slack {
@@ -700,7 +699,7 @@ fn copied(model: &mut Model, shape: Shape, edge: Shape) -> Result<(Shape, Shape)
 fn solid_of(model: &mut Model, shell: Shape) -> Result<Shape> {
     let solid = model.new_empty(NodeKind::Solid);
     model.add(solid, shell)?;
-    if crate::properties::volume(model, solid).mass >= 0.0 {
+    if super::volume_of(model, solid) >= 0.0 {
         return Ok(solid);
     }
     let turned = model.new_empty(NodeKind::Solid);

@@ -109,7 +109,13 @@ pub(super) fn face_data(model: &Model, face: Shape) -> Option<Arc<FaceData>> {
     if graph::planar_bspline(original).is_some() {
         return None;
     }
-    let kept = model.derived(face.node, model.face_fingerprint(id), || Kept(compute(model, Shape::from(id), original.clone())));
+    let fingerprint = model.face_fingerprint(id);
+    let kept = model.derived(face.node, fingerprint, || Kept(compute(model, Shape::from(id), original.clone())));
+    // (Its samples kept as the graph keeps a face's, the same: the same surface, boundary
+    // and ranges.)
+    if let Some(data) = &kept.0 {
+        model.derived(face.node, fingerprint, || data.sample.clone());
+    }
     kept.0.clone()
 }
 
@@ -194,15 +200,8 @@ pub(super) fn prepare(model: &Model, shapes: [Shape; 2], shape_edges: [&[Shape];
     faces.dedup();
     edges.sort_unstable_by_key(|e| e.index());
     edges.dedup();
-    // The data, and its samples kept as the graph keeps a face's (the same: the same
-    // surface, boundary and ranges).
-    let found = crate::parallel::map(&faces, |&id| {
-        let data = face_data(model, Shape::from(id));
-        if let Some(data) = &data {
-            model.derived(id.into(), model.face_fingerprint(id), || data.sample.clone());
-        }
-        data
-    });
+    // The data (and its samples, kept for the graph).
+    let found = crate::parallel::map(&faces, |&id| face_data(model, Shape::from(id)));
     crate::parallel::map(&edges, |&id| graph::warm_edge_box(model, id));
     faces.into_iter().map(NodeId::from).zip(found).collect()
 }

@@ -679,29 +679,42 @@ pub(super) fn sample_pcurve_closely(pcurve: &Curve2, first: f64, last: f64) -> V
     let mut points: Vec<Uv> = pcurve.points_along(&params).into_iter().map(|p| [p.x, p.y]).collect();
     let (lo, hi) = polyline_box(&points);
     let tol = 1e-7 * (hi[0] - lo[0]).hypot(hi[1] - lo[1]);
+    // (Each round halves the stretches whose middles stray; a stretch whose middle did not
+    // stays as it is, and is not looked at again.)
+    let mut settled = vec![false; params.len() - 1];
     for _ in 0..6 {
-        let mids: Vec<f64> = params.windows(2).map(|w| 0.5 * (w[0] + w[1])).collect();
+        let open: Vec<usize> = (0..settled.len()).filter(|&i| !settled[i]).collect();
+        let mids: Vec<f64> = open.iter().map(|&i| 0.5 * (params[i] + params[i + 1])).collect();
         let at: Vec<Uv> = pcurve.points_along(&mids).into_iter().map(|p| [p.x, p.y]).collect();
-        let stray = |i: usize| {
-            let (a, b, m) = (points[i], points[i + 1], at[i]);
+        let stray = |k: usize| {
+            let i = open[k];
+            let (a, b, m) = (points[i], points[i + 1], at[k]);
             let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
             let len = dx.hypot(dy);
             let off = if len > 0.0 { ((m[0] - a[0]) * dy - (m[1] - a[1]) * dx).abs() / len } else { (m[0] - a[0]).hypot(m[1] - a[1]) };
             off > tol
         };
-        if !(0..mids.len()).any(stray) {
+        let strays: Vec<bool> = (0..open.len()).map(stray).collect();
+        if !strays.iter().any(|&s| s) {
             break;
         }
-        let (mut p2, mut q2) = (vec![params[0]], vec![points[0]]);
-        for i in 0..mids.len() {
-            if stray(i) {
-                p2.push(mids[i]);
-                q2.push(at[i]);
+        let (mut p2, mut q2, mut s2) = (vec![params[0]], vec![points[0]], Vec::with_capacity(settled.len() * 2));
+        let mut k = 0;
+        for i in 0..settled.len() {
+            if !settled[i] && strays[k] {
+                p2.push(mids[k]);
+                q2.push(at[k]);
+                s2.extend([false, false]);
+            } else {
+                s2.push(true);
+            }
+            if !settled[i] {
+                k += 1;
             }
             p2.push(params[i + 1]);
             q2.push(points[i + 1]);
         }
-        (params, points) = (p2, q2);
+        (params, points, settled) = (p2, q2, s2);
     }
     points
 }

@@ -470,11 +470,20 @@ enum Section {
     Closed(Curve),
     /// A chain of branches of a cylinder's or cone's intersection with another quadric,
     /// each run forwards or backwards; closed, or open where it leaves the faces' range.
-    Chain(Vec<(QuadricCurve, bool)>, bool),
+    Chain(Vec<(QuadricCurve, bool)>, bool, ChainSamples),
     /// A curve traced on a parametrized surface (`(u, v)` samples) where another,
     /// elementary surface meets it, closed or not; points in between are interpolated in
     /// `(u, v)` and pulled onto the other surface.
     Sampled(Vec<Point>, bool, Box<Traced>),
+}
+
+/// A chain's points at even steps of its parameter, found once (slow to find, and looked for
+/// near each point the section may pass): 512 a branch, as [`Section::passes`] steps, and
+/// 256, as [`Section::project`] does.
+#[derive(Default)]
+struct ChainSamples {
+    passes: std::sync::OnceLock<Vec<Point>>,
+    project: std::sync::OnceLock<Vec<Point>>,
 }
 
 /// A traced curve: its samples in the base surface's parameters, and the two surfaces.
@@ -772,7 +781,7 @@ impl Section {
         match self {
             Section::Open(_, a, b) => (*a, *b),
             Section::Closed(_) => (0.0, TAU),
-            Section::Chain(branches, _) => (0.0, branches.len() as f64),
+            Section::Chain(branches, ..) => (0.0, branches.len() as f64),
             Section::Sampled(points, closed, _) => (0.0, if *closed { points.len() } else { points.len() - 1 } as f64),
         }
     }
@@ -781,7 +790,7 @@ impl Section {
         match self {
             Section::Open(..) => false,
             Section::Closed(_) => true,
-            Section::Chain(_, closed) => *closed,
+            Section::Chain(_, closed, _) => *closed,
             Section::Sampled(_, closed, _) => *closed,
         }
     }
@@ -789,7 +798,7 @@ impl Section {
     fn point(&self, t: f64) -> Point {
         match self {
             Section::Open(c, ..) | Section::Closed(c) => c.point(t),
-            Section::Chain(branches, closed) => {
+            Section::Chain(branches, closed, _) => {
                 let n = branches.len();
                 let t = if *closed { t.rem_euclid(n as f64) } else { t.clamp(0.0, n as f64) };
                 let k = (t.floor() as usize).min(n - 1);
@@ -876,13 +885,14 @@ impl Section {
                 }
                 self.project_near(p, best.0)
             }
-            Section::Chain(..) => {
+            Section::Chain(_, _, samples) => {
                 let len = self.range().1;
                 let n = (len as usize) * 256;
+                let points = samples.project.get_or_init(|| (0..n).map(|i| self.point(len * i as f64 / n as f64)).collect());
                 let mut best = (0.0, f64::INFINITY);
-                for i in 0..n {
+                for (i, q) in points.iter().enumerate() {
                     let t = len * i as f64 / n as f64;
-                    let d = self.point(t).distance(p);
+                    let d = q.distance(p);
                     if d < best.1 {
                         best = (t, d);
                     }
@@ -960,8 +970,8 @@ impl Section {
             return out;
         }
         let closed = &self.closed();
-        let n = match self {
-            Section::Chain(branches, _) => branches.len() * 512,
+        let (n, cached) = match self {
+            Section::Chain(branches, _, samples) => (branches.len() * 512, samples),
             _ => {
                 let (t, d) = self.project(p);
                 return if d <= on_tol() { vec![(t, false)] } else { Vec::new() };
@@ -969,7 +979,7 @@ impl Section {
         };
         let len = self.range().1;
         let step = len / n as f64;
-        let samples: Vec<Point> = (0..n).map(|i| self.point(step * i as f64)).collect();
+        let samples = cached.passes.get_or_init(|| (0..n).map(|i| self.point(step * i as f64)).collect());
         let d: Vec<f64> = samples.iter().map(|q| q.distance(p)).collect();
         let mut out: Vec<f64> = Vec::new();
         for i in 0..n {
@@ -1860,18 +1870,18 @@ fn chains(curves: &intersect::QuadricCurves) -> Vec<Section> {
         };
         if full {
             used[i] = true;
-            out.push(Section::Chain(vec![(curves.curves[i].clone(), false)], true));
+            out.push(Section::Chain(vec![(curves.curves[i].clone(), false)], true, ChainSamples::default()));
             continue;
         }
         if let Some(e) = free {
             let (chain, closed) = walk(i, e, &mut used);
-            out.push(Section::Chain(chain, closed));
+            out.push(Section::Chain(chain, closed, ChainSamples::default()));
         }
     }
     for i in 0..n {
         if !used[i] {
             let (chain, closed) = walk(i, 0, &mut used);
-            out.push(Section::Chain(chain, closed));
+            out.push(Section::Chain(chain, closed, ChainSamples::default()));
         }
     }
     out
@@ -2234,7 +2244,7 @@ impl Graph {
         });
         // On a chain of quadric branches (slow to find points on), only points near a
         // polyline of it, sampled once, can be on it.
-        if let Section::Chain(branches, _) = section {
+        if let Section::Chain(branches, ..) = section {
             let n = branches.len() * 256;
             let polyline: Vec<Point> = (0..=n).map(|i| section.point(hi * i as f64 / n as f64)).collect();
             let spacing = polyline.windows(2).map(|w| w[0].distance(w[1])).fold(0.0, f64::max) + on_tol();
