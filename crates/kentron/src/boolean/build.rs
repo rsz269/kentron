@@ -282,7 +282,7 @@ impl Output {
                                 }
                                 None => arc.uv[arc.uv.len() / 2],
                             };
-                            aligned_pcurve(curve, &surface, out.first, out.last, middle, [face_data.u_period, face_data.v_period])?
+                            aligned_pcurve(curve, &surface, out.first, out.last, middle, [face_data.u_period, face_data.v_period], face_data.drift)?
                         }
                         (None, None) => return Err(Error::InvalidInput("a degenerate edge without a pcurve".into())),
                     };
@@ -398,8 +398,9 @@ fn result_vertex(model: &mut Model, graph: &Graph, v: usize) -> VertexId {
 }
 
 /// The pcurve of `curve` over `[first, last]` on `surface`, shifted by whole periods of
-/// `u` to have its middle at the arc's, `target`.
-fn aligned_pcurve(curve: &Curve, surface: &crate::geometry::surface::Surface, first: f64, last: f64, target: Uv, periods: [Option<f64>; 2]) -> Result<Curve2> {
+/// `u` to have its middle at the arc's, `target`; straying from the surface by no more than
+/// the face's edges may (`drift`) where nothing nearer holds.
+fn aligned_pcurve(curve: &Curve, surface: &crate::geometry::surface::Surface, first: f64, last: f64, target: Uv, periods: [Option<f64>; 2], drift: f64) -> Result<Curve2> {
     // An analytic pcurve may hold on part of the curve only (a meridian up to the poles,
     // beyond which it would leave the surface's parameter domain): it must match over the
     // edge's range, within the domain.
@@ -428,6 +429,9 @@ fn aligned_pcurve(curve: &Curve, surface: &crate::geometry::surface::Surface, fi
                 .or_else(|| project::polyline_pcurve_on_range(curve, surface, first, last, 1e-7))
                 .or_else(|| project::polyline_pcurve_on_range(curve, surface, first, last, 1e-5))
                 .or_else(|| project::pcurve_on_range_within(curve, surface, first, last, &loose))
+                // (A section in the tolerance of the face's edges, as where faces meet within
+                // it past the surface's domain: as far off as those edges may be.)
+                .or_else(|| (drift > TOL).then(|| project::polyline_pcurve_on_range(curve, surface, first, last, drift)).flatten())
                 .map(Curve2::BSpline)
                 .ok_or_else(|| Error::InvalidInput("no pcurve for a section edge".into()))?
         }

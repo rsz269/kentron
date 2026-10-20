@@ -738,12 +738,8 @@ fn trace_edge(
         s => matches!(s, Surface::Plane(_)),
     };
     let straight = matches!(curve, Curve::Line(_)) && distinct.iter().all(|&f| plane(&faces[f].offset));
-    let n = if straight { 1 } else { 32 };
-    let ts: Vec<f64> = (0..=n).map(|i| t0 + (t1 - t0) * i as f64 / n as f64).collect();
     // Per sample: the point and the parameters on each use's face.
-    let mut xs: Vec<Point> = Vec::with_capacity(ts.len());
-    let mut uvs: Vec<Vec<Point2>> = vec![Vec::with_capacity(ts.len()); edge.uses.len()];
-    for &t in &ts {
+    let sample = |t: f64| -> (Point, Vec<Point2>) {
         // Each use's parameters: those of the old pcurve (offsets keep the parametrization),
         // corrected where two faces' offsets cross.
         let mut on: Vec<Point2> = edge.uses.iter().map(|u| u.pcurve.point(t)).collect();
@@ -770,10 +766,40 @@ fn trace_edge(
             // A seam (both uses on one face) or an edge of one face: along the face.
             faces[distinct[0]].offset.point(on[0].x, on[0].y)
         };
-        xs.push(x);
-        for (k, uv) in on.into_iter().enumerate() {
-            uvs[k].push(uv);
+        (x, on)
+    };
+    // As many samples as the curve through them takes to hold to the new edge midway between
+    // them (to within the tolerance, or as near as 512 come), while twice as many at least
+    // halve how far it strays (else as many as before: where the edge turns too sharply
+    // between samples, more do not help).
+    let take = |n: usize| {
+        let ts: Vec<f64> = (0..=n).map(|i| t0 + (t1 - t0) * i as f64 / n as f64).collect();
+        let mut xs = Vec::with_capacity(ts.len());
+        let mut uvs = vec![Vec::with_capacity(ts.len()); edge.uses.len()];
+        for &t in &ts {
+            let (x, on) = sample(t);
+            xs.push(x);
+            for (k, uv) in on.into_iter().enumerate() {
+                uvs[k].push(uv);
+            }
         }
+        // (How far the curve through them strays from the edge midway.)
+        let off = if n == 1 {
+            0.0
+        } else {
+            fit::interpolate_with_parameters(&xs, &ts).map_or(f64::INFINITY, |fitted| (0..n).map(|i| 0.5 * (ts[i] + ts[i + 1])).map(|t| fitted.point(t).distance(sample(t).0)).fold(0.0, f64::max))
+        };
+        (ts, xs, uvs, off)
+    };
+    let mut n = if straight { 1 } else { 32 };
+    let (mut ts, mut xs, mut uvs, mut off) = take(n);
+    while n > 1 && n < 512 && off > tolerance {
+        let finer = take(2 * n);
+        if !(finer.3 < 0.5 * off) {
+            break;
+        }
+        (ts, xs, uvs, off) = finer;
+        n *= 2;
     }
     // The ends exactly at the new vertices, also in each face's parameters (the traced
     // parameters are poor at a pole).
@@ -1119,6 +1145,53 @@ mod tests {
         let inner = thick_solid(&mut model, c, &[top], -1.0, Join::Intersection).unwrap();
         let expected = std::f64::consts::PI * (25.0 * 15.0 - 16.0 * 14.0);
         assert!((volume(&model, inner).mass - expected).abs() < 1e-5 * expected, "{}", volume(&model, inner).mass);
+    }
+
+    /// A wavy face (a cubic B-spline on a 13 x 13 grid of poles at sin x · sin y, two waves
+    /// each way) offset by 0.3: its new edges lie on the offset surface, along their pcurves,
+    /// within their tolerance (traced through samples enough to hold them to it, where 32
+    /// leave them 0.03 off).
+    #[test]
+    fn a_wavy_face_offset_keeps_its_edges_on_it() {
+        use crate::geometry::surface::{BSplineSurface, KnotVector};
+        use crate::geometry::ParametricCurve;
+        let mut model = Model::new();
+        let n = 13;
+        let poles: Vec<Vec<Point>> = (0..n)
+            .map(|i| (0..n).map(|j| {
+                let (x, y) = (i as f64 * 4.0 * std::f64::consts::PI / (n - 1) as f64, j as f64 * 4.0 * std::f64::consts::PI / (n - 1) as f64);
+                Point::new(x, y, 3.0 * x.sin() * y.sin())
+            }).collect())
+            .collect();
+        let knots = || {
+            let inner = n - 3;
+            let values: Vec<f64> = (0..=inner).map(|k| k as f64 / inner as f64).collect();
+            let mut multiplicities = vec![1; values.len()];
+            multiplicities[0] = 4;
+            *multiplicities.last_mut().unwrap() = 4;
+            KnotVector::new(values, multiplicities, 3)
+        };
+        let surface = BSplineSurface::try_new(poles, knots(), knots()).unwrap();
+        let face = crate::make::face_on_surface(&mut model, Surface::BSpline(surface)).unwrap();
+        let moved = shape(&mut model, face, 0.3, Join::Intersection).unwrap();
+        let new_face = model.unique_subshapes(moved, NodeKind::Face)[0];
+        let offset = model.surface(new_face).unwrap().clone();
+        // (Each edge against its pcurve on the face, at the same parameters.)
+        for c in model.unique_subshapes(new_face, NodeKind::CoEdge) {
+            let id = crate::topology::CoEdgeId::try_from(c.node).unwrap();
+            let edge = Shape::from(model[id].edge);
+            let Some((curve, first, last)) = model.edge_curve(edge) else { continue };
+            let (pcurve, _, _) = model.effective_pcurve(id).unwrap();
+            let tolerance = model.tolerance(edge);
+            let off = (0..=256)
+                .map(|k| first + (last - first) * k as f64 / 256.0)
+                .map(|t| {
+                    let uv = pcurve.point(t);
+                    offset.point(uv.x, uv.y).distance(curve.point(t))
+                })
+                .fold(0.0, f64::max);
+            assert!(off <= tolerance.max(1e-6), "an edge {off} off its face (tolerance {tolerance})");
+        }
     }
 
     /// A teapot's lid: a dome revolved from a spline meeting the axis at an angle, hollowed
