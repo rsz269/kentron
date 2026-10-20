@@ -284,10 +284,13 @@ fn merge_faces(model: &Model, specs: &mut Vec<Spec>, same_surface_only: bool) ->
     let mut internal: HashSet<EdgeId> = HashSet::default();
     for (&edge, faces) in &uses_of {
         let [f, g] = faces[..] else { continue };
-        if f == g || !elementary(&specs[f].surface) || !same_domain(&specs[f].surface, &specs[g].surface) {
+        // (Pieces of one face, on the very same surface, merge whatever the surface: their
+        // pcurves are on one parametrization.)
+        let pieces = same_surface_only && specs[f].surface == specs[g].surface;
+        if f == g || (!pieces && (!elementary(&specs[f].surface) || !same_domain(&specs[f].surface, &specs[g].surface))) {
             continue;
         }
-        if same_surface_only && specs[f].surface != specs[g].surface {
+        if same_surface_only && !pieces {
             continue;
         }
         let Some((curve, first, last)) = model.edge_curve(Shape::from(edge)) else { continue };
@@ -549,6 +552,76 @@ fn same_carrier(a: &(Curve, f64, f64), b: &(Curve, f64, f64)) -> bool {
     }
 }
 
+/// [`merge_general_chain`] for pieces of one curve over abutting ranges, with one pcurve in
+/// each face (as a face split and merged back leaves its edges): the curve itself over their
+/// union, and the pcurve likewise. `None` where the chain is not so.
+fn merge_pieces_of_one_curve(
+    model: &mut Model,
+    specs: &mut [Spec],
+    chain: &[EdgeId],
+    head: VertexId,
+    tail: VertexId,
+    curves: &HashMap<EdgeId, (Curve, f64, f64)>,
+) -> Result<Option<bool>> {
+    let curve = &curves[&chain[0]].0;
+    if chain.iter().any(|e| &curves[e].0 != curve) {
+        return Ok(None);
+    }
+    let mut ranges: Vec<(f64, f64)> = chain.iter().map(|e| { let (_, a, b) = curves[e]; (a.min(b), a.max(b)) }).collect();
+    ranges.sort_by(|x, y| x.0.total_cmp(&y.0));
+    if ranges.windows(2).any(|w| (w[1].0 - w[0].1).abs() > 1e-9 * (1.0 + w[0].1.abs())) {
+        return Ok(None);
+    }
+    let (first, last) = (ranges[0].0, ranges[ranges.len() - 1].1);
+    // The edge runs along the curve from the vertex at its start.
+    let (pa, pb) = (model.point(Shape::from(head)), model.point(Shape::from(tail)));
+    let (start, end) = if curve.point(first).distance(pa) <= curve.point(first).distance(pb) { (head, tail) } else { (tail, head) };
+    let members: HashSet<EdgeId> = chain.iter().copied().collect();
+    let mut replacements: Vec<(usize, usize, usize, usize, Use)> = Vec::new();
+    for (si, spec) in specs.iter().enumerate() {
+        for (li, l) in spec.loops.iter().enumerate() {
+            let n = l.len();
+            if !l.iter().any(|u| members.contains(&u.edge)) {
+                continue;
+            }
+            if n <= chain.len() {
+                return Ok(None);
+            }
+            let Some(begin) = (0..n).find(|&i| members.contains(&l[i].edge) && !members.contains(&l[(i + n - 1) % n].edge)) else {
+                return Ok(None);
+            };
+            let count = (0..n).take_while(|&k| members.contains(&l[(begin + k) % n].edge)).count();
+            if count != chain.len() || l.iter().filter(|u| members.contains(&u.edge)).count() != count {
+                return Ok(None);
+            }
+            // One pcurve for all the pieces, used all the same way.
+            let uses: Vec<&Use> = (0..count).map(|k| &l[(begin + k) % n]).collect();
+            let (Some(pcurve), orientation) = (uses[0].pcurve.clone(), uses[0].orientation) else { return Ok(None) };
+            if uses.iter().any(|u| u.pcurve.as_ref() != Some(&pcurve) || u.orientation != orientation) {
+                return Ok(None);
+            }
+            let u = Use { edge: chain[0], orientation, pcurve: Some(pcurve), first, last };
+            replacements.push((si, li, begin, count, u));
+        }
+    }
+    if replacements.is_empty() {
+        return Ok(None);
+    }
+    let tolerance = chain.iter().map(|&e| model.tolerance(Shape::from(e))).fold(tolerance::LINEAR, f64::max);
+    let edge = model.add_edge(start, end, tolerance)?;
+    model.set_edge_curve(edge.into(), curve.clone(), tolerance)?;
+    model.set_edge_range(edge.into(), first, last)?;
+    for (si, li, begin, count, mut u) in replacements {
+        u.edge = edge;
+        let spec = &mut specs[si];
+        spec.original = None;
+        let l = &mut spec.loops[li];
+        l.rotate_left(begin);
+        l.splice(0..count, std::iter::once(u));
+    }
+    Ok(Some(true))
+}
+
 /// Replaces a chain of edges (in order, from vertex `head` to `tail`) by one edge in every
 /// loop using them, if each such face takes a closed-form pcurve for it. True if done.
 fn merge_chain(
@@ -656,6 +729,9 @@ fn merge_general_chain(
     tail: VertexId,
     curves: &HashMap<EdgeId, (Curve, f64, f64)>,
 ) -> Result<bool> {
+    if let Some(done) = merge_pieces_of_one_curve(model, specs, chain, head, tail, curves)? {
+        return Ok(done);
+    }
     const SAMPLES: usize = 32;
     // Each edge's parameters along the chain, from head to tail.
     let mut at = head;

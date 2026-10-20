@@ -40,6 +40,55 @@ pub fn fillet(model: &mut Model, shape: Shape, edges: &[Shape], radius: f64) -> 
 #[doc(alias = "BRepFilletAPI_MakeFillet::Add")]
 pub fn fillet_edges(model: &mut Model, shape: Shape, edges: &[(Shape, f64)]) -> Result<Shape> {
     let edges = &sharp(model, shape, edges, |e| e.0)?;
+    // An edge where a face meets itself at an angle (a prism of an outline closing at a
+    // corner): rounded on a copy with such faces split in two, as at any edge between two
+    // faces, the pieces of each merged back after.
+    if edges.iter().any(|e| self_meeting_at_angle(model, shape, e.0)) {
+        let copy = crate::modify::copy(model, shape, false)?;
+        crate::heal::split_closed_faces(model, copy)?;
+        // (The pieces of a face each on its surface trimmed to its own range: the fillet's
+        // feet on either side then lie on the piece on that side, where on the surface they
+        // would be on either at the corner.)
+        let faces = model.unique_subshapes(copy, NodeKind::Face);
+        let surfaces: Vec<Option<Surface>> = faces.iter().map(|&f| model.surface(f).cloned()).collect();
+        let mut bases: Vec<Surface> = Vec::new();
+        for (i, &f) in faces.iter().enumerate() {
+            let Some(surface) = &surfaces[i] else { continue };
+            if surfaces.iter().enumerate().any(|(j, s)| j != i && s.as_ref() == Some(surface)) {
+                // (Trimmed only the way the split cut it: the fillet's sections run on past the
+                // edge's ends.)
+                let (u0, u1, v0, v1) = model.face_uv_bounds(Shape { placement: Transform::IDENTITY, ..f });
+                let (su0, su1, sv0, sv1) = surface.bounds();
+                let narrower = |a: f64, b: f64, lo: f64, hi: f64| (b - a) < 0.999 * (hi - lo);
+                let (u0, u1) = if narrower(u0, u1, su0, su1) { (u0, u1) } else { (su0, su1) };
+                let (v0, v1) = if narrower(v0, v1, sv0, sv1) { (v0, v1) } else { (sv0, sv1) };
+                let tol = model.tolerance(f);
+                model.set_face_surface(f, Surface::Trimmed(crate::geometry::surface::TrimmedSurface::new(surface.clone(), u0, u1, v0, v1)), tol)?;
+                if !bases.contains(surface) {
+                    bases.push(surface.clone());
+                }
+            }
+        }
+        let mut found = Vec::with_capacity(edges.len());
+        for &(edge, radius) in edges {
+            let (curve, first, last) = model.edge_curve(Shape { orientation: Orientation::Forward, ..edge }).ok_or_else(|| Error::InvalidInput("a fillet edge without a curve".into()))?;
+            let piece = find_edge(model, copy, &curve, first, last).ok_or_else(|| Error::Failed("a fillet edge not found again on its faces split".into()))?;
+            found.push((piece, radius));
+        }
+        let rounded = fillet_edges(model, copy, &found)?;
+        // The pieces back on their surface, and merged.
+        for f in model.unique_subshapes(rounded, NodeKind::Face) {
+            if let Some(Surface::Trimmed(t)) = model.surface(f) {
+                if bases.contains(t.basis()) {
+                    let (basis, tol) = (t.basis().clone(), model.tolerance(f));
+                    model.set_face_surface(f, basis, tol)?;
+                }
+            }
+        }
+        let merged = crate::unify::unify_same_domain_with(model, rounded, crate::unify::UnifyOptions { faces: true, edges: false, same_surface_only: true })?;
+        // (Then the edges the split cut, once the split's own edges are gone.)
+        return crate::unify::unify_same_domain_with(model, merged, crate::unify::UnifyOptions { faces: false, edges: true, same_surface_only: true });
+    }
     let reach = edges.iter().map(|e| e.1).fold(0.0, f64::max);
     on_solids(model, shape, reach, |model, shape, found| {
         let edges = remapped(model, shape, edges, |e| e.0, |e, c| Some((c, e.1)), found)?;
@@ -111,7 +160,15 @@ fn smooth(model: &Model, shape: Shape, edge: Shape) -> bool {
         }
     }
     match uses[..] {
-        [a, b] if a == b => true,
+        // (A face meeting itself: smooth where its normals on the edge's two sides agree, as
+        // across a seam; not where it closes at a corner, as a prism of an outline ending
+        // where it began at an angle.)
+        [a, b] if a == b => edge_normals(model, shape, edge).is_none_or(|pairs| pairs.iter().all(|(n, m)| n.dot(*m).abs() >= 1.0 - tolerance::ANGULAR.sqrt())),
+        // (By the faces' pcurves where both have them: faces on one surface, as a face split
+        // in two, meet at an angle where the surface's own point there is ambiguous.)
+        [_, _] if edge_normals(model, shape, edge).is_some() => {
+            edge_normals(model, shape, edge).is_some_and(|pairs| pairs.iter().all(|(n, m)| n.dot(*m).abs() >= 1.0 - tolerance::ANGULAR.sqrt()))
+        }
         [a, b] => {
             let Some((curve, first, last)) = model.edge_curve(Shape { orientation: Orientation::Forward, ..edge }) else { return false };
             [0.2, 0.5, 0.8].iter().all(|&s| {
@@ -124,6 +181,44 @@ fn smooth(model: &Model, shape: Shape, edge: Shape) -> bool {
         }
         _ => false,
     }
+}
+
+/// The unit normals of the faces of `shape` on `edge`'s two sides (of one face on both
+/// where it uses the edge twice), by the pcurves of its two uses, at points along it; `None`
+/// where they cannot be found (not two uses, a use without a pcurve).
+fn edge_normals(model: &Model, shape: Shape, edge: Shape) -> Option<Vec<(Vector, Vector)>> {
+    use crate::geometry::ParametricCurve;
+    let mut uses = Vec::new();
+    for face in model.explore(shape, NodeKind::Face) {
+        for wire in model.children(face) {
+            for coedge in model.children(wire) {
+                let id = CoEdgeId::try_from(coedge.node).ok()?;
+                if NodeId::from(model[id].edge) == edge.node {
+                    uses.push((face, model.effective_pcurve(id)?));
+                }
+            }
+        }
+    }
+    let [(f, (p, a0, a1)), (g, (q, b0, b1))] = <[_; 2]>::try_from(uses).ok()?;
+    let normal = |face: Shape, uv: crate::math::Point2| {
+        let surface = model.surface(face)?.transformed(&face.placement);
+        let (_, du, dv) = surface.d1(uv.x, uv.y);
+        let n = du.cross(dv);
+        (n.length() > 1e-300).then(|| n.normalized())
+    };
+    [0.2, 0.5, 0.8]
+        .iter()
+        .map(|&s| Some((normal(f, p.point(a0 + (a1 - a0) * s))?, normal(g, q.point(b0 + (b1 - b0) * s))?)))
+        .collect()
+}
+
+/// Whether a face of `shape` uses `edge` twice, meeting itself there at an angle.
+fn self_meeting_at_angle(model: &Model, shape: Shape, edge: Shape) -> bool {
+    let faces: Vec<NodeId> = model
+        .explore(shape, NodeKind::Face)
+        .flat_map(|f| model.explore(f, NodeKind::Edge).filter(move |e| e.node == edge.node).map(move |_| f.node).collect::<Vec<_>>())
+        .collect();
+    matches!(faces[..], [a, b] if a == b) && !smooth(model, shape, edge)
 }
 
 /// `edges` less those where the faces meet smoothly; an error if that leaves none.
