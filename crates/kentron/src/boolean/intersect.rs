@@ -189,6 +189,11 @@ fn contact_from(curve: &Curve, first: f64, last: f64, surface: &Surface, toleran
             if b.abs() > TOL && b.abs() <= a.abs() && b.abs() <= c.abs() && (a.abs() - b.abs() > flat || c.abs() - b.abs() > flat) && a * b > 0.0 && b * c > 0.0 {
                 let slope = |t: f64| {
                     let (p, dp) = curve.d1(t);
+                    // (On a free-form surface the gradient comes with the distance, from one
+                    // foot: the unit normal there, the way the distance grows.)
+                    if let (_, Some(n)) = geom::signed_distance_and_normal(surface, p) {
+                        return n.dot(dp);
+                    }
                     let h = 1e-7 * (1.0 + (p - Point::ORIGIN).length());
                     let n = geom::normal_at_point(surface, p);
                     let n = if geom::signed_distance(surface, p + n * h) < geom::signed_distance(surface, p - n * h) { -n } else { n };
