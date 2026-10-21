@@ -34,17 +34,14 @@ fn a2() -> DrawResult<()> {
 /// `tests/offset/compshape/A5`
 /// kentron: sub-shapes named by OCCT's enumeration are selected by position (draw_selectors.json)
 #[test]
-#[should_panic]
-fn a5() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.restore(&[data_file("2_E1.rle").as_str(), "s"])?;
-        d.explode(&["s", "F"])?;
-        d.nearest(&["s_2", "s", "F", "0.0", "52.0826", "45.1269", "8922.84"])?;
-        d.offsetcompshape(&["result", "s", "-3", "s_2"])?;
-        d.checkprops(&["result", "-v", "142832"])?;
-        Ok(())
-    })
+fn a5() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.restore(&[data_file("2_E1.rle").as_str(), "s"])?;
+    d.explode(&["s", "F"])?;
+    d.nearest(&["s_2", "s", "F", "0.0", "52.0826", "45.1269", "8922.84"])?;
+    d.offsetcompshape(&["result", "s", "-3", "s_2"])?;
+    d.checkprops(&["result", "-v", "142832"])?;
+    Ok(())
 }
 
 /// `tests/offset/compshape/A6`

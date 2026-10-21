@@ -2190,7 +2190,8 @@ impl Draw {
             let (name, actual) = match kind {
                 "-l" => ("length", properties::length(&self.model, shape).mass),
                 "-s" => ("area", properties::area(&self.model, shape).mass),
-                "-v" => ("volume", properties::volume(&self.model, shape).mass),
+                // (Of solids, from their faces' terms, kept in the model.)
+                "-v" => ("volume", properties::solid_volume(&self.model, shape).map_or_else(|| properties::volume(&self.model, shape).mass, |(v, _)| v)),
                 _ => return self.not_implemented("checkprops", args),
             };
             match expected {

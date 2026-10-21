@@ -723,7 +723,6 @@ tests/bugs/modalg_7/bug30679
 tests/bugs/modalg_7/bug30760
 tests/bugs/modalg_7/bug30788
 tests/bugs/modalg_7/bug30940_2
-tests/bugs/modalg_7/bug30940_3
 tests/bugs/modalg_7/bug30940_4
 tests/bugs/modalg_7/bug30940_5
 tests/bugs/modalg_7/bug30940_6
@@ -1222,7 +1221,6 @@ tests/offset/bugs/bug26233
 tests/offset/bugs/bug5806
 tests/offset/compshape/A1
 tests/offset/compshape/A4
-tests/offset/compshape/A5
 tests/offset/faces_type_a/B1
 tests/offset/faces_type_i/B4
 tests/offset/faces_type_i/B5

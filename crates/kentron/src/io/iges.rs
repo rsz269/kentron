@@ -949,7 +949,7 @@ impl Reader<'_> {
         }
         let solid = self.placed(e, solid)?;
         // (Outward: a positive volume.)
-        if crate::properties::volume(self.model, solid).mass < 0.0 {
+        if crate::properties::solid_volume(self.model, solid).map_or_else(|| crate::properties::volume(self.model, solid).mass, |(v, _)| v) < 0.0 {
             return Ok(solid.reversed());
         }
         Ok(solid)

@@ -1124,7 +1124,8 @@ fn build(model: &mut Model, sections: &[Section], grid: &Grid, closed: bool, loo
         model.add(shell, face)?;
     }
     let solid = model.new_empty(NodeKind::Solid);
-    let volume = properties::volume(model, shell).mass;
+    // (Its sign from the faces' terms, kept in the model for the checks to come.)
+    let volume = properties::closed_shell_volume(model, shell);
     model.add(solid, if volume < 0.0 { shell.reversed() } else { shell })?;
     Ok(Built { shape: solid, columns, across })
 }

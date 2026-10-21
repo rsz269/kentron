@@ -1063,7 +1063,9 @@ impl Env {
             }
             let s = self.shape(&y[quantity])?;
             let actual = match quantity {
-                "volume" => properties::volume(&self.model, s).mass,
+                // (Of solids, from their faces' terms, kept in the model since the validity
+                // check integrated them.)
+                "volume" => properties::solid_volume(&self.model, s).map_or_else(|| properties::volume(&self.model, s).mass, |(v, _)| v),
                 "area" => properties::area(&self.model, s).mass,
                 "length" => properties::length(&self.model, s).mass,
                 // The largest of the vertices', edges' and faces' tolerances.
