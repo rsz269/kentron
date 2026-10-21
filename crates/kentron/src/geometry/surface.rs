@@ -638,7 +638,15 @@ pub struct ExtrusionSurface {
     basis: Box<Curve>,
     direction: Direction,
     /// The points of a bounded basis that [`Self::parameters`] scans (made on first use).
-    scan: super::patches::Shared<Vec<Point>>,
+    scan: super::patches::Shared<ExtrusionScan>,
+}
+
+/// The points of an extrusion's basis that [`ExtrusionSurface::parameters`] scans, and their
+/// coordinates across the direction (in the frame `across` of the plane square to it).
+#[derive(Debug)]
+pub(crate) struct ExtrusionScan {
+    across: (Vector, Vector),
+    xy: Vec<(f64, f64)>,
 }
 
 impl ExtrusionSurface {
@@ -681,13 +689,29 @@ impl ExtrusionSurface {
         // A coarse scan, then Newton steps on the derivative of the squared gap.
         let n = 64;
         let step = (b - a) / n as f64;
-        // (A bounded basis's points scanned are the same each time: kept.)
-        let scan = bounded.then(|| self.scan.get(|| Some((0..=n).map(|i| self.basis.point(a + step * i as f64)).collect()))).flatten();
+        // (A bounded basis's points scanned are the same each time: kept, as coordinates across
+        // the direction, the nearest found by those.)
+        let scan = bounded
+            .then(|| {
+                self.scan.get(|| {
+                    let x = if d.x.abs() < 0.9 { Vector::new(1.0, 0.0, 0.0) } else { Vector::new(0.0, 1.0, 0.0) };
+                    let e1 = flat(x).normalized();
+                    let e2 = d.cross(e1);
+                    let xy = (0..=n).map(|i| self.basis.point(a + step * i as f64) - Point::ORIGIN).map(|q| (q.dot(e1), q.dot(e2))).collect();
+                    Some(ExtrusionScan { across: (e1, e2), xy })
+                })
+            })
+            .flatten();
         let (i, scanned) = match scan {
-            Some(points) => points.iter().enumerate().map(|(i, &q)| (i, flat(q - p).length_squared())).min_by(|x, y| x.1.total_cmp(&y.1)),
-            None => (0..=n).map(|i| (i, gap(a + step * i as f64))).min_by(|x, y| x.1.total_cmp(&y.1)),
-        }
-        .expect("samples");
+            Some(scan) => {
+                let (e1, e2) = scan.across;
+                let (px, py) = ((p - Point::ORIGIN).dot(e1), (p - Point::ORIGIN).dot(e2));
+                let (i, _) = scan.xy.iter().enumerate().map(|(i, &(x, y))| (i, (x - px) * (x - px) + (y - py) * (y - py))).min_by(|x, y| x.1.total_cmp(&y.1)).expect("samples");
+                // (Its gap as the steps measure it.)
+                (i, gap(a + step * i as f64))
+            }
+            None => (0..=n).map(|i| (i, gap(a + step * i as f64))).min_by(|x, y| x.1.total_cmp(&y.1)).expect("samples"),
+        };
         let start = a + step * i as f64;
         let mut u = start;
         let (lo, hi) = (u - step, u + step);
