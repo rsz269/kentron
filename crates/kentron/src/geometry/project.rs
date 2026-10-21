@@ -314,6 +314,11 @@ fn cylinder_distance(cylinder: &Cylinder, p: Point) -> f64 {
 /// surfaces, otherwise by inversion, from `near` (the previous point's, with how far that
 /// point was off the surface) if given.
 fn parameters_near(surface: &Surface, p: Point, near: Option<((f64, f64), f64)>) -> Option<(f64, f64)> {
+    parameters_near_with(surface, &Collapse::of(surface), p, near)
+}
+
+/// [`parameters_near`], with the surface's [`Collapse`] found already.
+fn parameters_near_with(surface: &Surface, collapse: &Collapse, p: Point, near: Option<((f64, f64), f64)>) -> Option<(f64, f64)> {
     if let Some(uv) = surface.parameters(p) {
         return Some(uv);
     }
@@ -346,7 +351,7 @@ fn parameters_near(surface: &Surface, p: Point, near: Option<((f64, f64), f64)>)
     // the surface, as from too far away, the whole surface searched: off it by more than the
     // point before was, a curve lying off its surface (as in files accurate to 1e-3) followed
     // on from the foot before.)
-    let (u_free, v_free) = collapsed_at(surface, start.0, start.1);
+    let (u_free, v_free) = collapse.at(surface, start.0, start.1);
     let scale = 1e-6 * (1.0 + (p - Point::ORIGIN).length());
     let best = found.iter().map(|f| f.2).fold(f64::INFINITY, f64::min);
     let off = !(best <= scale || best <= 2.0 * gap + scale);
@@ -419,28 +424,40 @@ fn sides_of_seams(surface: &Surface, points: &mut [Point2]) {
     }
 }
 
-/// Where `(u, v)` lies on a collapsed edge of a free-form surface (all of an iso-line one
-/// point, as a sphere's pole made a B-spline): whether `u` is arbitrary there (the line of
-/// constant `v` collapses), and whether `v` is.
-fn collapsed_at(surface: &Surface, u: f64, v: f64) -> (bool, bool) {
-    use super::ParametricSurface;
-    if !matches!(surface, Surface::BSpline(_) | Surface::Bezier(_)) {
-        return (false, false);
+/// What [`Collapse::at`] needs of a surface, found once for many points: its bounds and the
+/// distance below which points are one (none where the surface is not free-form).
+#[derive(Clone, Copy)]
+struct Collapse(Option<((f64, f64, f64, f64), f64)>);
+
+impl Collapse {
+    fn of(surface: &Surface) -> Collapse {
+        use super::ParametricSurface;
+        if !matches!(surface, Surface::BSpline(_) | Surface::Bezier(_)) {
+            return Collapse(None);
+        }
+        let (u0, u1, v0, v1) = surface.bounds();
+        let size = surface.point(u0, v0).distance(surface.point(u1, v1)) + surface.point(u0, v1).distance(surface.point(u1, v0));
+        Collapse(Some(((u0, u1, v0, v1), 1e-9 * (1.0 + size))))
     }
-    let (u0, u1, v0, v1) = surface.bounds();
-    let size = surface.point(u0, v0).distance(surface.point(u1, v1)) + surface.point(u0, v1).distance(surface.point(u1, v0));
-    let tiny = 1e-9 * (1.0 + size);
-    let same = |a: Point, b: Point, c: Point| a.distance(b) <= tiny && a.distance(c) <= tiny;
-    let u_free = same(surface.point(u0, v), surface.point(u1, v), surface.point(0.5 * (u0 + u1), v));
-    let v_free = same(surface.point(u, v0), surface.point(u, v1), surface.point(u, 0.5 * (v0 + v1)));
-    (u_free, v_free)
+
+    /// Where `(u, v)` lies on a collapsed edge of a free-form surface (all of an iso-line one
+    /// point, as a sphere's pole made a B-spline): whether `u` is arbitrary there (the line
+    /// of constant `v` collapses), and whether `v` is. (The far end only where the middle
+    /// meets the near one: across a surface closed that way the middle is apart.)
+    fn at(&self, surface: &Surface, u: f64, v: f64) -> (bool, bool) {
+        use super::ParametricSurface;
+        let Some(((u0, u1, v0, v1), tiny)) = self.0 else { return (false, false) };
+        let same = |a: Point, middle: &dyn Fn() -> Point, end: &dyn Fn() -> Point| a.distance(middle()) <= tiny && a.distance(end()) <= tiny;
+        let u_free = same(surface.point(u0, v), &|| surface.point(0.5 * (u0 + u1), v), &|| surface.point(u1, v));
+        let v_free = same(surface.point(u, v0), &|| surface.point(u, 0.5 * (v0 + v1)), &|| surface.point(u, v1));
+        (u_free, v_free)
+    }
 }
 
-/// Samples on a collapsed edge of a free-form surface ([`collapsed_at`]) given the arbitrary
-/// parameter of their neighbour along the curve.
-fn off_collapsed_edges(surface: &Surface, points: &mut [Point2]) {
+/// Samples on a collapsed edge of a free-form surface (`free`, as [`Collapse::at`] tells)
+/// given the arbitrary parameter of their neighbour along the curve.
+fn off_collapsed_edges(points: &mut [Point2], free: &[(bool, bool)]) {
     let n = points.len();
-    let free: Vec<(bool, bool)> = points.iter().map(|p| collapsed_at(surface, p.x, p.y)).collect();
     for i in 0..n {
         let (u_free, v_free) = free[i];
         if !(u_free || v_free) {
@@ -488,8 +505,10 @@ pub fn pcurve_on_range_within(curve: &Curve, surface: &Surface, first: f64, last
     // Each doubling keeps the samples so far (their parameters come out the same) and adds
     // the middles, where the last fit was checked.
     let mut raw: Vec<Point2> = Vec::new();
-    // (And how far each is off the surface.)
+    // (And how far each is off the surface, and whether it is on a collapsed edge.)
     let mut gaps: Vec<f64> = Vec::new();
+    let collapse = Collapse::of(surface);
+    let mut free: Vec<(bool, bool)> = Vec::new();
     let mut middles: Vec<Point> = Vec::new();
     // How far the curve is off the surface at the samples.
     let mut offset: f64 = 0.0;
@@ -498,13 +517,17 @@ pub fn pcurve_on_range_within(curve: &Curve, surface: &Surface, first: f64, last
         let params: Vec<f64> = (0..=intervals).map(|i| first + (last - first) * i as f64 / intervals as f64).collect();
         let mut next: Vec<Point2> = Vec::with_capacity(params.len());
         let mut next_gaps: Vec<f64> = Vec::with_capacity(params.len());
+        let mut next_free: Vec<(bool, bool)> = Vec::with_capacity(params.len());
         for (i, &t) in params.iter().enumerate() {
             let (uv, off) = match raw.is_empty() {
-                false if i % 2 == 0 => (raw[i / 2], gaps[i / 2]),
+                false if i % 2 == 0 => {
+                    next_free.push(free[i / 2]);
+                    (raw[i / 2], gaps[i / 2])
+                }
                 _ => {
                     let p = if raw.is_empty() { curve.point(t) } else { middles[i / 2] };
                     let found = match (next.last(), next_gaps.last()) {
-                        (Some(q), Some(&gap)) => parameters_near(surface, p, Some(((q.x, q.y), gap))),
+                        (Some(q), Some(&gap)) => parameters_near_with(surface, &collapse, p, Some(((q.x, q.y), gap))),
                         _ => first_foot(curve, surface, first, last),
                     };
                     let Some((u, v)) = found else {
@@ -512,6 +535,7 @@ pub fn pcurve_on_range_within(curve: &Curve, surface: &Surface, first: f64, last
                     };
                     let off = surface.point(u, v).distance(p);
                     offset = if off.is_nan() { f64::INFINITY } else { offset.max(off) };
+                    next_free.push(collapse.at(surface, u, v));
                     (Point2::new(u, v), off)
                 }
             };
@@ -520,6 +544,7 @@ pub fn pcurve_on_range_within(curve: &Curve, surface: &Surface, first: f64, last
         }
         raw = next;
         gaps = next_gaps;
+        free = next_free;
         // A fit is off by as much as the curve is off the surface at its samples, and finer
         // fits check near them: tolerances well below that are out of reach.
         let in_reach = |tolerance: f64| 2.0 * tolerance >= offset;
@@ -537,7 +562,7 @@ pub fn pcurve_on_range_within(curve: &Curve, surface: &Surface, first: f64, last
                 points[i].x = points[neighbour].x;
             }
         }
-        off_collapsed_edges(surface, &mut points);
+        off_collapsed_edges(&mut points, &free);
         sides_of_seams(surface, &mut points);
         if let Some(period) = u_period {
             for i in 1..n {
