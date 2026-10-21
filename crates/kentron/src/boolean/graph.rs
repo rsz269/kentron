@@ -290,7 +290,7 @@ impl Face {
     }
 
     /// The copies of `uv` (shifted by whole periods) within the face's parameter ranges.
-    pub fn representatives(&self, uv: Uv) -> Vec<Uv> {
+    pub fn representatives(&self, uv: Uv) -> impl Iterator<Item = Uv> {
         representatives(uv, [self.u_period, self.v_period], self.u_range, self.v_range)
     }
 
@@ -401,15 +401,26 @@ impl Face {
 }
 
 /// The copies of `(u, v)` by whole periods that fall within a face's parameter ranges.
-pub(super) fn representatives([u, v]: Uv, periods: [Option<f64>; 2], u_range: (f64, f64), v_range: (f64, f64)) -> Vec<Uv> {
-    let copies = |x: f64, period: Option<f64>, (lo, hi): (f64, f64)| -> Vec<f64> {
+/// (At most three each way, in a fixed array: asked for every point located.)
+pub(super) fn representatives([u, v]: Uv, periods: [Option<f64>; 2], u_range: (f64, f64), v_range: (f64, f64)) -> impl Iterator<Item = Uv> {
+    let copies = |x: f64, period: Option<f64>, (lo, hi): (f64, f64)| -> ([f64; 3], usize) {
         match period {
-            Some(p) => [x - p, x, x + p].into_iter().filter(|&y| y >= lo - 1e-9 && y <= hi + 1e-9).collect(),
-            None => vec![x],
+            Some(p) => {
+                let mut out = ([0.0; 3], 0);
+                for y in [x - p, x, x + p] {
+                    if y >= lo - 1e-9 && y <= hi + 1e-9 {
+                        out.0[out.1] = y;
+                        out.1 += 1;
+                    }
+                }
+                out
+            }
+            None => ([x, 0.0, 0.0], 1),
         }
     };
-    let vs = copies(v, periods[1], v_range);
-    copies(u, periods[0], u_range).into_iter().flat_map(|u| vs.iter().map(move |&v| [u, v])).collect()
+    let (us, nu) = copies(u, periods[0], u_range);
+    let (vs, nv) = copies(v, periods[1], v_range);
+    us.into_iter().take(nu).flat_map(move |u| vs.into_iter().take(nv).map(move |v| [u, v]))
 }
 
 /// The surface of revolution of the torus's meridian circle (at u = 0), parametrized like
@@ -584,7 +595,9 @@ impl Index {
         match &self.all_faces {
             None => self.faces_overlapping(1 - k, b),
             Some((tree, ids)) => {
-                let mut found: Vec<usize> = tree.overlapping(&to_box(b)).into_iter().map(|i| ids[i]).filter(|&f| self.face_operand[f] != k).collect();
+                let mut found = tree.overlapping(&to_box(b));
+                found.iter_mut().for_each(|i| *i = ids[*i]);
+                found.retain(|&f| self.face_operand[f] != k);
                 found.sort_unstable();
                 found
             }
@@ -596,7 +609,9 @@ impl Index {
         match &self.all_faces {
             None => self.faces_containing(1 - k, p),
             Some((tree, ids)) => {
-                let mut found: Vec<usize> = tree.containing(p).into_iter().map(|i| ids[i]).filter(|&f| self.face_operand[f] != k).collect();
+                let mut found = tree.containing(p);
+                found.iter_mut().for_each(|i| *i = ids[*i]);
+                found.retain(|&f| self.face_operand[f] != k);
                 found.sort_unstable();
                 found
             }
@@ -608,7 +623,9 @@ impl Index {
         match &self.all_edges {
             None => self.edges_containing(1 - k, p),
             Some((tree, ids)) => {
-                let mut found: Vec<usize> = tree.containing(p).into_iter().map(|i| ids[i]).filter(|&e| self.edge_operand[e] != Some(k)).collect();
+                let mut found = tree.containing(p);
+                found.iter_mut().for_each(|i| *i = ids[*i]);
+                found.retain(|&e| self.edge_operand[e] != Some(k));
                 found.sort_unstable();
                 found
             }

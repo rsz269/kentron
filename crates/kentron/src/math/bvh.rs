@@ -397,8 +397,20 @@ impl Bvh {
         if self.nodes.is_empty() {
             return;
         }
-        let mut stack = vec![0usize];
-        while let Some(n) = stack.pop() {
+        // (The nodes still to visit on a stack in place, deeper ones spilled to the heap:
+        // queries are many, the trees shallow.)
+        let mut stack = [0usize; 64];
+        let mut len = 1;
+        let mut spilled: Vec<usize> = Vec::new();
+        loop {
+            let n = match spilled.pop() {
+                Some(n) => n,
+                None if len > 0 => {
+                    len -= 1;
+                    stack[len]
+                }
+                None => break,
+            };
             let node = &self.nodes[n];
             if !enter(&node.bbox) {
                 continue;
@@ -410,8 +422,14 @@ impl Bvh {
                     }
                 }
             } else {
-                stack.push(node.first);
-                stack.push(node.first + 1);
+                for child in [node.first, node.first + 1] {
+                    if len < stack.len() && spilled.is_empty() {
+                        stack[len] = child;
+                        len += 1;
+                    } else {
+                        spilled.push(child);
+                    }
+                }
             }
         }
     }
