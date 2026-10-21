@@ -194,12 +194,20 @@ pub(super) fn foot_on(surface: &Surface, p: Point) -> crate::geometry::extrema::
 }
 
 /// Where the last point's foot was found on a free-form surface: its parameters, the point
-/// and its distance.
+/// and its distance, and the unit normal there.
 #[derive(Clone, Copy)]
 pub(super) struct Foot {
     uv: Uv,
     point: Point,
     distance: f64,
+    normal: Vector,
+}
+
+impl Foot {
+    /// The unit normal at the foot: the gradient of the signed distance there.
+    pub(super) fn normal(&self) -> Vector {
+        self.normal
+    }
 }
 
 /// The signed distance from `p` to a surface; on a free-form surface numerically, from the
@@ -218,8 +226,22 @@ pub(super) fn signed_distance_from(surface: &Surface, p: Point, last: Option<Foo
         }
         None => fresh(),
     };
-    let signed = (p - foot.point).dot(unit_normal(foot.du, foot.dv));
-    (signed, Some(Foot { uv: [foot.u, foot.v], point: p, distance: foot.point.distance(p) }))
+    let normal = unit_normal(foot.du, foot.dv);
+    let signed = (p - foot.point).dot(normal);
+    (signed, Some(Foot { uv: [foot.u, foot.v], point: p, distance: foot.point.distance(p), normal }))
+}
+
+/// The signed distance from `p` to a surface and, on a free-form surface, the unit normal
+/// at the same foot (the distance's gradient there): both from one search, as
+/// [`signed_distance`] and [`normal_at_point`] would give them. (`None` for the normal where
+/// the point's parameters have a closed form, which `normal_at_point` takes.)
+pub(super) fn signed_distance_and_normal(surface: &Surface, p: Point) -> (f64, Option<Vector>) {
+    if !freeform(surface) || surface.parameters(p).is_some() {
+        return (signed_distance(surface, p), None);
+    }
+    let foot = foot_on(surface, p);
+    let normal = unit_normal(foot.du, foot.dv);
+    ((p - foot.point).dot(normal), Some(normal))
 }
 
 /// Surfaces without closed-form parameters, handled numerically (B-spline and Bezier

@@ -527,7 +527,11 @@ impl Traced {
                 if value.abs() <= 1e-12 {
                     break;
                 }
-                let n = geom::normal_at_point(&self.other, p);
+                // (The normal at the foot just found: the gradient of that distance.)
+                let n = match &last {
+                    Some(foot) => foot.normal(),
+                    None => geom::normal_at_point(&self.other, p),
+                };
                 let (fu, fv) = (n.dot(du), n.dot(dv));
                 let norm = fu * fu + fv * fv;
                 if norm <= 1e-300 {
@@ -2414,16 +2418,19 @@ impl Graph {
 /// The point on both surfaces nearest `p` (Newton steps along their normals).
 fn onto_both(a: &Surface, b: &Surface, mut p: Point) -> Point {
     for _ in 0..20 {
-        let (da, db) = (geom::signed_distance(a, p), geom::signed_distance(b, p));
+        // (On a free-form surface the distance and its normal from one foot: that normal is
+        // the distance's gradient, the way it grows.)
+        let ((da, foot_na), (db, foot_nb)) = (geom::signed_distance_and_normal(a, p), geom::signed_distance_and_normal(b, p));
         if da.abs().max(db.abs()) <= 1e-12 {
             break;
         }
-        let (na, nb) = (geom::normal_at_point(a, p), geom::normal_at_point(b, p));
         // (The normals as the distances grow along them.)
-        let (na, nb) = (
-            if geom::signed_distance(a, p + na * 1e-6) > da { na } else { -na },
-            if geom::signed_distance(b, p + nb * 1e-6) > db { nb } else { -nb },
-        );
+        let toward = |s: &Surface, d: f64| {
+            let n = geom::normal_at_point(s, p);
+            if geom::signed_distance(s, p + n * 1e-6) > d { n } else { -n }
+        };
+        let na = foot_na.unwrap_or_else(|| toward(a, da));
+        let nb = foot_nb.unwrap_or_else(|| toward(b, db));
         let (m11, m12, m22) = (na.dot(na), na.dot(nb), nb.dot(nb));
         let det = m11 * m22 - m12 * m12;
         if det.abs() <= 1e-18 {
