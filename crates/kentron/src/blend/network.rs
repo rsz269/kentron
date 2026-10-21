@@ -436,7 +436,15 @@ fn joint(model: &Model, shape: Shape, vertex: VertexId, stripes: &[Stripe], a: (
         let (va1, vb1) = (at_end(sa, a.1), at_end(sb, b.1));
         let tangent_sides = || {
             let p = model.point(Shape::from(vertex));
-            let normal = |s: &Stripe, i: usize| s.rolling.sides[i].distance(p).ok().map(|d| d.2);
+            // (From a search of the whole surface, not from the last foot found, wherever the
+            // sections' solving left it: a free-form face's foot found from afar may be another.)
+            let normal = |s: &Stripe, i: usize| {
+                let side = &s.rolling.sides[i];
+                let saved = side.last.replace(None);
+                let found = side.distance(p).ok().map(|d| d.2);
+                side.last.set(saved);
+                found
+            };
             let tangent = |i: usize, j: usize| matches!((normal(sa, i), normal(sb, j)), (Some(x), Some(y)) if x.dot(y) >= 1.0 - crate::tolerance::ANGULAR.sqrt());
             if tangent(0, 0) && tangent(1, 1) {
                 Some(0)
