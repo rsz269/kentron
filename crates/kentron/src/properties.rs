@@ -436,6 +436,28 @@ fn integrate_face(model: &Model, face: Shape, mut sample: impl FnMut(Point, Vect
         _ => false,
     };
     let inner_rule: &[(f64, f64)] = if planar || straight_u { &GAUSS_LEGENDRE_2 } else { &GAUSS_LEGENDRE };
+    // On a surface of revolution (u its angle about the axis) a point, its derivatives and
+    // so the integrands of the moments (of degree 3 at most in them) are trigonometric
+    // polynomials of degree 3 at most in u: their integral along u is exact from 7 samples
+    // a seventh of a turn apart, each the point at the pcurve turned (one evaluation).
+    fn revolution_axis(surface: &Surface) -> Option<crate::math::Axis> {
+        let about = |f: &crate::math::Frame| {
+            let z = Vector::from(f.x()).cross(Vector::from(f.y()));
+            Some(crate::math::Axis::new(f.origin(), Direction::new(z.x, z.y, z.z)))
+        };
+        match surface {
+            Surface::Cylinder(c) => about(c.frame()),
+            Surface::Cone(c) => about(c.frame()),
+            Surface::Sphere(s) => about(s.frame()),
+            Surface::Torus(t) => about(t.frame()),
+            Surface::Revolution(r) => Some(r.axis()),
+            Surface::Trimmed(t) => revolution_axis(t.basis()),
+            Surface::Offset(o) => revolution_axis(o.basis()),
+            _ => None,
+        }
+    }
+    let turns: Option<[crate::math::Transform; 7]> =
+        revolution_axis(surface).map(|axis| std::array::from_fn(|j| crate::math::Transform::rotation(axis, std::f64::consts::TAU * j as f64 / 7.0)));
     let mut u0 = None;
     // (Buffers reused from node to node.)
     let (mut ends, mut nodes, mut us, mut graded): (Vec<f64>, Vec<(f64, f64, f64)>, Vec<f64>, Vec<f64>) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
@@ -532,6 +554,24 @@ fn integrate_face(model: &Model, face: Shape, mut sample: impl FnMut(Point, Vect
                         continue;
                     }
                     let u_start = *u0.get_or_insert(uv.x);
+                    if let Some(turns) = &turns {
+                        // ∫ from u_start to u of the samples' interpolant (the Dirichlet
+                        // kernel D(s) = 1 + 2 Σ cos ks about each), in a form exact for
+                        // short spans.
+                        let span = uv.x - u_start;
+                        let half: [(f64, f64); 3] = std::array::from_fn(|k| ((k + 1) as f64 * span / 2.0).sin_cos());
+                        let (p, su, sv) = surface.d1(uv.x, uv.y);
+                        for (j, turn) in turns.iter().enumerate() {
+                            // (cos k(s/2 + θ) by the sum rule, k θ's sine and cosine tabled.)
+                            let kernel: f64 = (0..3).map(|k| {
+                                let (sin_t, cos_t) = SEVENTHS[(k + 1) * j % 7];
+                                half[k].0 * (half[k].1 * cos_t - half[k].0 * sin_t) / (k + 1) as f64
+                            }).sum();
+                            let (p, n) = place(p.transformed(turn), su.transformed(turn), sv.transformed(turn));
+                            sample(p, n, outer_weight * (span + 4.0 * kernel) / 7.0);
+                        }
+                        continue;
+                    }
                     // From u_start to the point, in stretches between the surface's kinks.
                     ends.clear();
                     ends.push(u_start);
@@ -616,6 +656,17 @@ fn turning_breaks(curve: &crate::geometry::curve::Curve, a: f64, b: f64, out: &m
 }
 
 const MAX_ANGLE_STEP: f64 = std::f64::consts::PI / 4.0;
+
+/// The sine and cosine of `2π j / 7` for `j` in `0..7`.
+const SEVENTHS: [(f64, f64); 7] = [
+    (0.0, 1.0),
+    (0.781_831_482_468_029_8, 0.623_489_801_858_733_5),
+    (0.974_927_912_181_823_6, -0.222_520_933_956_314_4),
+    (0.433_883_739_117_558_1, -0.900_968_867_902_419_1),
+    (-0.433_883_739_117_558_1, -0.900_968_867_902_419_1),
+    (-0.974_927_912_181_823_6, -0.222_520_933_956_314_4),
+    (-0.781_831_482_468_029_8, 0.623_489_801_858_733_5),
+];
 
 /// The 2-point Gauss–Legendre rule on [-1, 1] (exact for cubics).
 const GAUSS_LEGENDRE_2: [(f64, f64); 2] = [(-0.577_350_269_189_625_8, 1.0), (0.577_350_269_189_625_8, 1.0)];
