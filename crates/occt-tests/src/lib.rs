@@ -10,6 +10,11 @@ pub mod draw;
 pub mod gtest;
 pub mod limit;
 
+/// The allocator of the test binaries (which link this library): mimalloc, as pykentron's
+/// `fast` profile has it, a few percent quicker than the system's on these tests.
+#[global_allocator]
+static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 /// Whether tests expected to fail (`expected_failures.txt`, `expect: not_done`) are left out:
 /// with `KENTRON_SKIP_EXPECTED_FAILURES` set (to anything but `0`), for a quicker run, which
 /// does not notice one starting to pass.

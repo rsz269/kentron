@@ -373,6 +373,7 @@ dependencies = [
  "kentron",
  "libc",
  "libtest-mimic",
+ "mimalloc",
  "molt-forked",
  "rayon",
  "regex",

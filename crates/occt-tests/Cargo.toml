@@ -18,6 +18,8 @@ molt-forked = { version = "0.6.0", features = ["full"] }
 regex = "1.11"
 # Tests' time limits (src/limit.rs): their threads' processor time, and a pool of their own.
 rayon = "1.11"
+# The test binaries' allocator (src/lib.rs).
+mimalloc = { version = "0.1", default-features = false }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
