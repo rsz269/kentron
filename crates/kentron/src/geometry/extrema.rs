@@ -1455,8 +1455,8 @@ pub fn nearest_on_surface(p: Point, surface: &Surface, start: Option<(f64, f64)>
         starts.push(q);
         let (du, dv) = (1e-3 * (u1 - u0), 1e-3 * (v1 - v0));
         let inward = |x: f64, lo: f64, hi: f64, d: f64| if x - lo < hi - x { x + d } else { x - d };
-        let collapsed_u = surface.point(u, v).distance(surface.point(inward(u, u0, u1, du), v)) <= same;
-        let collapsed_v = surface.point(u, v).distance(surface.point(u, inward(v, v0, v1, dv))) <= same;
+        let collapsed_u = q.distance(surface.point(inward(u, u0, u1, du), v)) <= same;
+        let collapsed_v = q.distance(surface.point(u, inward(v, v0, v1, dv))) <= same;
         let start = (if collapsed_v { inward(u, u0, u1, du) } else { u }, if collapsed_u { inward(v, v0, v1, dv) } else { v });
         let found = newton(start);
         if found.2 < best.2 {

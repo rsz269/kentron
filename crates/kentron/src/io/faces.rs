@@ -215,12 +215,15 @@ pub(crate) fn project(edge: &CurveSpan, surface: &Surface, has_pcurve: bool) -> 
     if let Some(pc) = pr::analytic_pcurve(edge.curve, surface) {
         return Ok(pc);
     }
-    // An edge well off the surface (bad data) fails at once, before costly fitting.
+    // An edge well off the surface (bad data) fails at once, before costly fitting. (Each
+    // point's foot from the one before, the whole surface searched only to confirm one off.)
     if surface.parameters(edge.curve.point(edge.first)).is_none() {
+        use crate::geometry::extrema::{nearest_on_surface, newton_on_surface};
         let mut start = None;
         for i in 0..=4 {
             let p = edge.curve.point(edge.first + (edge.last - edge.first) * i as f64 / 4.0);
-            let (u, v, d) = crate::geometry::extrema::nearest_on_surface(p, surface, start);
+            let near = start.map(|s| newton_on_surface(p, surface, s)).filter(|f| f.2 <= 1e-2);
+            let (u, v, d) = near.unwrap_or_else(|| nearest_on_surface(p, surface, start));
             start = Some((u, v));
             if d > 1e-2 {
                 return Err(invalid("an edge that does not project onto its face".into()));
