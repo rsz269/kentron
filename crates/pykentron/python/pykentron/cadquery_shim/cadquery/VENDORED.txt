@@ -13,3 +13,4 @@ Copied unchanged from CadQuery v2.8.0 (https://github.com/CadQuery/cadquery.git)
   occ_impl/shape_protocols.py
   occ_impl/sketch_solver.py
   occ_impl/solver.py
+Patched there (imports deferred to first use): hull.py, occ_impl/sketch_solver.py, selectors.py.

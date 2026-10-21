@@ -1,6 +1,23 @@
 from typing import List, Tuple, Union, Iterable, Set
 from math import pi, sin, cos, atan2, sqrt, inf, degrees
-from numpy import lexsort, argmin, argmax
+# (pykentron: numpy imported on first use, not with the module.)
+def lexsort(*args, **kwargs):
+    from numpy import lexsort
+
+    return lexsort(*args, **kwargs)
+
+
+def argmin(*args, **kwargs):
+    from numpy import argmin
+
+    return argmin(*args, **kwargs)
+
+
+def argmax(*args, **kwargs):
+    from numpy import argmax
+
+    return argmax(*args, **kwargs)
+
 
 from .occ_impl.shapes import Edge, Wire
 from .occ_impl.geom import Vector

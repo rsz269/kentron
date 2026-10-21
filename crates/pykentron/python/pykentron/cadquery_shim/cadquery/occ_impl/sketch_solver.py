@@ -1,13 +1,58 @@
 from typing import Tuple, Union, Any, Callable, List, Optional, Iterable, Dict, Sequence
 from typing import Literal
-from numpy.typing import NDArray as Array
-from numpy import float64 as Float
+# (pykentron: numpy and nlopt imported on first use, not with the module: the names
+# below stand in for theirs.)
+class Array:
+    """numpy.typing.NDArray, in annotations."""
+
+    def __class_getitem__(cls, item):
+        return cls
+
+
+Float = float
 from itertools import accumulate, chain
 from math import sin, cos, radians
 
-from numpy import array, full, inf, sign
-from numpy.linalg import norm
-import nlopt
+inf = float("inf")
+
+
+def array(*args, **kwargs):
+    from numpy import array
+
+    return array(*args, **kwargs)
+
+
+def full(*args, **kwargs):
+    from numpy import full
+
+    return full(*args, **kwargs)
+
+
+def sign(*args, **kwargs):
+    from numpy import sign
+
+    return sign(*args, **kwargs)
+
+
+def norm(*args, **kwargs):
+    from numpy.linalg import norm
+
+    return norm(*args, **kwargs)
+
+
+class _OnFirstUse:
+    """A module imported when one of its names is first read."""
+
+    def __init__(self, name):
+        self._name = name
+
+    def __getattr__(self, attr):
+        import importlib
+
+        return getattr(importlib.import_module(self._name), attr)
+
+
+nlopt = _OnFirstUse("nlopt")
 
 from OCP.gp import gp_Vec2d
 

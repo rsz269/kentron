@@ -8,18 +8,7 @@ from .occ_impl.shape_protocols import (
     geom_LUT_EDGE,
     geom_LUT_FACE,
 )
-from pyparsing import (
-    pyparsing_common,
-    Literal,
-    Word,
-    nums,
-    Optional,
-    Combine,
-    one_of,
-    Group,
-    infix_notation,
-    opAssoc,
-)
+# (pykentron: pyparsing imported, and the grammars below made, on first use.)
 from functools import reduce
 from typing import Iterable, List, Sequence, TypeVar, cast
 
@@ -663,7 +652,6 @@ def _makeGrammar():
     )
 
 
-_grammar = _makeGrammar()  # make a grammar instance
 
 
 class _SimpleStringSyntaxSelector(Selector):
@@ -819,7 +807,22 @@ def _makeExpressionGrammar(atom):
     return expr
 
 
-_expression_grammar = _makeExpressionGrammar(_grammar)
+def _grammars():
+    """(pykentron) The selector grammars, made on first use."""
+    if "_expression_grammar" not in globals():
+        import pyparsing
+
+        for name in ("pyparsing_common", "Literal", "Word", "nums", "Optional", "Combine", "one_of", "Group", "infix_notation", "opAssoc"):
+            globals()[name] = getattr(pyparsing, name)
+        globals()["_grammar"] = _makeGrammar()
+        globals()["_expression_grammar"] = _makeExpressionGrammar(_grammar)
+    return _grammar, _expression_grammar
+
+
+def __getattr__(name):
+    if name in ("_grammar", "_expression_grammar"):
+        return _grammars()[name == "_expression_grammar"]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 class StringSyntaxSelector(Selector):
@@ -878,7 +881,7 @@ class StringSyntaxSelector(Selector):
         Feed the input string through the parser and construct an relevant complex selector object
         """
         self.selectorString = selectorString
-        parse_result = _expression_grammar.parse_string(selectorString, parse_all=True)
+        parse_result = _grammars()[1].parse_string(selectorString, parse_all=True)
         self.mySelector = parse_result.asList()[0]
 
     def filter(self, objectList: Sequence[Shape]):
