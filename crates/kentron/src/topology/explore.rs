@@ -100,10 +100,15 @@ impl Iterator for Explorer<'_> {
             if descend {
                 // The children onto the stack, then turned round in place (the first on top).
                 let base = self.stack.len();
-                // Only compounds and assemblies place their children.
-                let placing = matches!(kind, NodeKind::Compound | NodeKind::Product);
+                // Only compounds and assemblies place their children: the others' go on at
+                // their parent's placement.
+                let (model, stack) = (self.model, &mut self.stack);
+                let local = model.local_children(step.node, |node, orientation| {
+                    stack.push(Step { node, orientation: orientation.compose(step.orientation), placement: step.placement, depth: step.depth + 1 });
+                });
+                let placing = !local;
                 let mut i = 0;
-                while let Some(child) = self.model.child_at(step.node, i) {
+                while let Some(child) = placing.then(|| self.model.child_at(step.node, i)).flatten() {
                     i += 1;
                     let placement = if placing && child.placement != Transform::IDENTITY {
                         let parent = self.placements[step.placement as usize];

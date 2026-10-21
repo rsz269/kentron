@@ -139,6 +139,75 @@ impl Model {
 }
 
 impl Model {
+    /// The children of `node` it does not place (those of every kind of node but compounds
+    /// and products), each with its orientation relative to `node`, passed to `f` in order,
+    /// as [`Self::child_at`] has them; false, and none passed, for a compound or a product.
+    #[inline]
+    pub(super) fn local_children(&self, node: NodeId, mut f: impl FnMut(NodeId, Orientation)) -> bool {
+        match node.kind {
+            NodeKind::Vertex => {}
+            NodeKind::Edge => {
+                if let Some(edge) = self.get(EdgeId::from_index(node.index)) {
+                    for use_id in [edge.start, edge.end] {
+                        let Some(vertex_use) = self.get(use_id) else { break };
+                        f(vertex_use.vertex.into(), vertex_use.orientation);
+                    }
+                }
+            }
+            NodeKind::CoEdge => {
+                if let Some(coedge) = self.get(CoEdgeId::from_index(node.index)) {
+                    f(coedge.edge.into(), coedge.orientation);
+                }
+            }
+            NodeKind::Wire => {
+                if let Some(wire) = self.get(WireId::from_index(node.index)) {
+                    for &c in &wire.coedges {
+                        f(c.into(), Orientation::Forward);
+                    }
+                }
+            }
+            NodeKind::Face => {
+                if let Some(face) = self.get(FaceId::from_index(node.index)) {
+                    for &w in &face.wires {
+                        let Some(used) = self.get(w) else { break };
+                        f(used.wire.into(), used.orientation);
+                    }
+                }
+            }
+            NodeKind::Shell => {
+                if let Some(shell) = self.get(ShellId::from_index(node.index)) {
+                    for &u in &shell.faces {
+                        let Some(used) = self.get(u) else { break };
+                        f(used.face.into(), used.orientation);
+                    }
+                }
+            }
+            NodeKind::Solid => {
+                if let Some(solid) = self.get(SolidId::from_index(node.index)) {
+                    for &u in &solid.shells {
+                        let Some(used) = self.get(u) else { break };
+                        f(used.shell.into(), used.orientation);
+                    }
+                }
+            }
+            NodeKind::CompSolid => {
+                if let Some(comp_solid) = self.get(CompSolidId::from_index(node.index)) {
+                    for &u in &comp_solid.solids {
+                        let Some(used) = self.get(u) else { break };
+                        f(used.solid.into(), used.orientation);
+                    }
+                }
+            }
+            NodeKind::Instance => {
+                if let Some(instance) = self.get(InstanceId::from_index(node.index)) {
+                    f(instance.target, Orientation::Forward);
+                }
+            }
+            NodeKind::Compound | NodeKind::Product => return false,
+        }
+        true
+    }
+
     /// The direct children of `shape`, with orientation and placement composed with
     /// `shape`'s: a solid's shells, a face's wires, an edge's two vertices, ...
     pub fn children(&self, shape: impl Into<Shape>) -> Children<'_> {
