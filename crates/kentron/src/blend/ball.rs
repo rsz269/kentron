@@ -791,18 +791,22 @@ fn onto_both(sides: &[Side; 2], guess: Point, tangent: Vector) -> Result<Point> 
 /// from between the faces' tangent planes.
 #[allow(clippy::too_many_arguments)]
 fn section(sides: &[Side; 2], o: Point, tangent: Vector, r: f64, side: f64, near: Option<Vector>, characteristic: bool) -> Result<Section> {
-    // (The plane's normal at a centre: the path of the centres runs square to both faces'
-    // normals at the contacts.)
-    let across = |q: Point| -> Result<Vector> {
-        if !characteristic {
-            return Ok(tangent);
-        }
-        let along = sides[0].distance(q)?.2.cross(sides[1].distance(q)?.2);
-        Ok(if along.length() > 1e-9 { along.normalized() * along.normalized().dot(tangent).signum() } else { tangent })
+    // The ball's conditions at a centre `q`: on each face's offset, and in its plane, whose
+    // normal (characteristic) is the path of the centres, square to both faces' normals at
+    // the contacts. (Each face's distance found once for both.)
+    let conditions = |q: Point| -> Result<[f64; 3]> {
+        let (a, b) = (sides[0].distance(q)?, sides[1].distance(q)?);
+        let across = if characteristic {
+            let along = a.2.cross(b.2);
+            if along.length() > 1e-9 { along.normalized() * along.normalized().dot(tangent).signum() } else { tangent }
+        } else {
+            tangent
+        };
+        Ok([a.0 - side * r, b.0 - side * r, (q - o).dot(across)])
     };
     if let Some(offset) = near {
         let start = o + (offset - tangent * offset.dot(tangent));
-        let solved = newton_damped(start, |q| Ok([sides[0].distance(q)?.0 - side * r, sides[1].distance(q)?.0 - side * r, (q - o).dot(across(q)?)]), characteristic);
+        let solved = newton_damped(start, conditions, characteristic);
         if let Ok(center) = solved {
             let contacts = [sides[0].distance(center)?.1, sides[1].distance(center)?.1];
             let contact_uv = [sides[0].uv(center)?, sides[1].uv(center)?];
@@ -826,9 +830,7 @@ fn section(sides: &[Side; 2], o: Point, tangent: Vector, r: f64, side: f64, near
     let into: Vec<Vector> = into.into_iter().map(|v| v.normalized()).collect();
     let half = 0.5 * into[0].dot(into[1]).clamp(-1.0, 1.0).acos();
     let start = o + sum.normalized() * (r / half.sin());
-    let center = newton_damped(start, |q| {
-        Ok([sides[0].distance(q)?.0 - side * r, sides[1].distance(q)?.0 - side * r, (q - o).dot(across(q)?)])
-    }, characteristic)?;
+    let center = newton_damped(start, conditions, characteristic)?;
     let contacts = [sides[0].distance(center)?.1, sides[1].distance(center)?.1];
     let contact_uv = [sides[0].uv(center)?, sides[1].uv(center)?];
     Ok(Section { t: 0.0, center, contacts, contact_uv, radius: r, straight: false })
