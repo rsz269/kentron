@@ -8,7 +8,6 @@ matching pykentron module, and names pykentron does not have yet are placeholder
 NotImplementedError when used (so that code importing more than it uses runs)."""
 
 import importlib
-import importlib.abc
 import importlib.machinery
 import importlib.util
 import sys
@@ -79,7 +78,10 @@ class _ShimModule(_pytypes.ModuleType):
         return value
 
 
-class _ShimFinder(importlib.abc.MetaPathFinder, importlib.abc.Loader):
+class _ShimFinder:
+    """The finder and loader of the CadQuery modules pykentron has no file for. (Not one of
+    importlib.abc's: importing that module costs a sixth of the shim's import.)"""
+
     def find_spec(self, fullname, path, target=None):
         if not fullname.startswith("cadquery."):
             return None
@@ -122,10 +124,23 @@ from .selectors import (  # noqa: E402
 )
 from .sketch import Sketch  # noqa: E402
 from .cq import CQ, Workplane  # noqa: E402
-from .assembly import Assembly, Color, Constraint, Material  # noqa: E402
 from .types import UnitLiterals  # noqa: E402
 from . import selectors  # noqa: E402
 from . import plugins  # noqa: E402
+
+
+
+def __getattr__(name):
+    # (Assemblies on first use: their constraint solver's casadi and their exporters are
+    # otherwise a tenth of the import, for scripts that build none.)
+    if name in ("Assembly", "Color", "Constraint", "Material"):
+        from . import assembly
+
+        value = getattr(assembly, name)
+        globals()[name] = value
+        return value
+    raise AttributeError(f"module 'cadquery' has no attribute {name!r}")
+
 
 __all__ = [
     "CQ", "Workplane", "Assembly", "Color", "Constraint", "Material", "plugins", "selectors", "Plane",

@@ -7,13 +7,14 @@ Memory against speed: `PYKENTRON_PROFILE` (`low-memory`, `balanced` or `fast`, t
 set before the import chooses a profile; `profile()` and `set_profile()` read and change it.
 """
 
-import platform as _platform
+import os as _os
 
 
 def _check_cpu() -> None:
     """The native module is built for x86-64-v2 (SSE4.2, SSSE3, POPCNT): on a processor
     without them (or an emulator hiding them), a clear error, not an illegal instruction."""
-    if _platform.machine().lower() not in ("x86_64", "amd64"):
+    # (os.uname, not platform, whose import alone is a fifth of this module's.)
+    if not hasattr(_os, "uname") or _os.uname().machine.lower() not in ("x86_64", "amd64"):
         return
     try:
         with open("/proc/cpuinfo") as f:
