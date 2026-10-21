@@ -648,24 +648,54 @@ def _siblings(shapes, ctx: Shape, kind: str, level) -> set:
 
 
 def _cut_solid_by_solid(shape, tool):
-    """`shape` with `tool` cut away; a compound of solids one solid at a time, those whose
-    boxes are clear of the tool's kept as they are. (As OCCT, which does not cut an
-    argument's solids by one another: kentron, given the compound whole, would put all its
-    faces through its general fuse, the solids split by one another first.)"""
+    """`shape` with `tool` cut away; a compound of solids in groups of solids that overlap,
+    a solid alone kept as it is where its box is clear of the tool's. (Kentron, given the
+    compound whole, puts all its faces through its general fuse, the solids split by one
+    another first; that only changes solids that overlap, which OCCT splits too: what two of
+    them share comes out a solid of its own. Solids of different groups do not overlap.)"""
     if shape.kind() != "Compound":
         return native.difference(shape, tool)
     solids = native.children(shape)
     if len(solids) < 2 or any(s.kind() != "Solid" for s in solids):
         return native.difference(shape, tool)
-    (tx0, ty0, tz0), (tx1, ty1, tz1) = native.bounding_box(tool, False)
     gap = 1e-6
+    boxes = [native.bounding_box(solid, False) for solid in solids]
+    apart = lambda a, b: any(a[0][k] > b[1][k] + gap or b[0][k] > a[1][k] + gap for k in range(3))
+
+    def overlap(i, j):
+        """Whether solids i and j share more than a sliver `gap` thick across the larger box."""
+        common = native.intersection(solids[i], solids[j])
+        volume = sum(native.volume(c)[0] for c in (native.children(common) if common.kind() == "Compound" else [common]))
+        size = max(boxes[k][1][d] - boxes[k][0][d] for k in (i, j) for d in range(3))
+        return volume > gap * size * size
+
+    # The groups (of the solids' indices): the boxes swept along x, those that meet checked.
+    group = list(range(len(solids)))
+    def root(i):
+        while group[i] != i:
+            group[i] = group[group[i]]
+            i = group[i]
+        return i
+    open_ = []
+    for i in sorted(range(len(solids)), key=lambda i: boxes[i][0][0]):
+        open_ = [j for j in open_ if boxes[j][1][0] + gap >= boxes[i][0][0]]
+        for j in open_:
+            if root(i) != root(j) and not apart(boxes[i], boxes[j]) and overlap(i, j):
+                group[root(i)] = root(j)
+        open_.append(i)
+    groups = {}
+    for i in range(len(solids)):
+        groups.setdefault(root(i), []).append(i)
+    if len(groups) == 1:
+        return native.difference(shape, tool)
+    box = native.bounding_box(tool, False)
     out = []
-    for solid in solids:
-        (x0, y0, z0), (x1, y1, z1) = native.bounding_box(solid, False)
-        if x0 > tx1 + gap or tx0 > x1 + gap or y0 > ty1 + gap or ty0 > y1 + gap or z0 > tz1 + gap or tz0 > z1 + gap:
-            out.append(solid)
+    for members in groups.values():
+        if len(members) == 1 and apart(boxes[members[0]], box):
+            out.append(solids[members[0]])
             continue
-        cut = native.difference(solid, tool)
+        part = solids[members[0]] if len(members) == 1 else native.make_compound([solids[i] for i in members])
+        cut = native.difference(part, tool)
         out.extend(native.children(cut) if cut.kind() == "Compound" else [cut])
     return native.make_compound(out)
 

@@ -331,6 +331,13 @@ def reeded_prisms_under_their_lids(cq):
     return cq.Compound.makeCompound([module(48.7, 48.7, 14.9, 31.7, 38.7), module(99.5, 48.7, 14.9, 100.0, 107.0).translate(cq.Vector(0, 80, 0))])
 
 
+def cut_of_overlapping_solids(cq):
+    # (A compound's solids that overlap are split by one another, what they share a solid of
+    # its own; the solid apart from them is left as it is.)
+    boxes = [cq.Solid.makeBox(10, 10, 10, cq.Vector(x, 0, 0)) for x in (0, 8, 30)]
+    return cq.Compound.makeCompound(boxes).cut(cq.Solid.makeCylinder(2, 20, cq.Vector(4, 5, -5)))
+
+
 CASES = [
     box, cylinder_along_y, cone, workplane_box, fused_boxes, cut_bores, intersected,
     polyline_prism_xz, polyline_prism_custom_plane, hexagon, face_with_hole, loft,
@@ -343,6 +350,7 @@ CASES = [
     asymmetric_chamfer_of_an_extrusion, rounded_corners_between_arcs_and_lines,
     loft_through_three_unevenly_spaced_circles, vertices_of_a_face_placed_twice,
     text_in_fonts_not_installed_and_cff_ones, reeded_prisms_under_their_lids,
+    cut_of_overlapping_solids,
 ]
 
 
