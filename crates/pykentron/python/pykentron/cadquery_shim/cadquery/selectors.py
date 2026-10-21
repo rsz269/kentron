@@ -819,6 +819,22 @@ def _grammars():
     return _grammar, _expression_grammar
 
 
+def _parse(text):
+    """(pykentron) The selector `text` describes, read as the grammars above read it, by
+    pykentron.selector_syntax (without pyparsing, which only the grammars' own users load)."""
+    from pykentron.selector_syntax import parse
+
+    return parse(
+        text,
+        set(geom_LUT_EDGE.values()) | set(geom_LUT_FACE.values()),
+        _SimpleStringSyntaxSelector,
+        lambda items: reduce(AndSelector, items),
+        lambda items: reduce(SumSelector, items),
+        lambda items: reduce(SubtractSelector, items),
+        InverseSelector,
+    )
+
+
 def __getattr__(name):
     if name in ("_grammar", "_expression_grammar"):
         return _grammars()[name == "_expression_grammar"]
@@ -881,8 +897,7 @@ class StringSyntaxSelector(Selector):
         Feed the input string through the parser and construct an relevant complex selector object
         """
         self.selectorString = selectorString
-        parse_result = _grammars()[1].parse_string(selectorString, parse_all=True)
-        self.mySelector = parse_result.asList()[0]
+        self.mySelector = _parse(selectorString)
 
     def filter(self, objectList: Sequence[Shape]):
         """

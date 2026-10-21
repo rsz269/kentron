@@ -44,8 +44,8 @@ VENDORED = [
 
 # Changes to the copies, `(module, CadQuery's text, replacement)`: what the import would
 # otherwise load or build up front, deferred to first use (numpy for hulls and the sketch
-# solver, nlopt, pyparsing and the selector grammars for string selectors: half the shim's
-# import). Each text must occur
+# solver, nlopt, pyparsing and the selector grammars, which string selectors no longer need:
+# they are read by pykentron.selector_syntax). Half the shim's import. Each text must occur
 # once, or vendoring stops.
 PATCHES = [
     (
@@ -134,6 +134,19 @@ PATCHES = [
         "        globals()[\"_grammar\"] = _makeGrammar()\n"
         "        globals()[\"_expression_grammar\"] = _makeExpressionGrammar(_grammar)\n"
         "    return _grammar, _expression_grammar\n\n\n"
+        "def _parse(text):\n"
+        "    \"\"\"(pykentron) The selector `text` describes, read as the grammars above read it, by\n"
+        "    pykentron.selector_syntax (without pyparsing, which only the grammars' own users load).\"\"\"\n"
+        "    from pykentron.selector_syntax import parse\n\n"
+        "    return parse(\n"
+        "        text,\n"
+        "        set(geom_LUT_EDGE.values()) | set(geom_LUT_FACE.values()),\n"
+        "        _SimpleStringSyntaxSelector,\n"
+        "        lambda items: reduce(AndSelector, items),\n"
+        "        lambda items: reduce(SumSelector, items),\n"
+        "        lambda items: reduce(SubtractSelector, items),\n"
+        "        InverseSelector,\n"
+        "    )\n\n\n"
         "def __getattr__(name):\n"
         "    if name in (\"_grammar\", \"_expression_grammar\"):\n"
         "        return _grammars()[name == \"_expression_grammar\"]\n"
@@ -141,8 +154,9 @@ PATCHES = [
     ),
     (
         "selectors.py",
-        "        parse_result = _expression_grammar.parse_string(selectorString, parse_all=True)\n",
-        "        parse_result = _grammars()[1].parse_string(selectorString, parse_all=True)\n",
+        "        parse_result = _expression_grammar.parse_string(selectorString, parse_all=True)\n"
+        "        self.mySelector = parse_result.asList()[0]\n",
+        "        self.mySelector = _parse(selectorString)\n",
     ),
 ]
 
