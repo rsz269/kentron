@@ -311,8 +311,9 @@ fn cylinder_distance(cylinder: &Cylinder, p: Point) -> f64 {
 }
 
 /// The parameters of `p` (or of the nearest point) on `surface`: in closed form on elementary
-/// surfaces, otherwise by inversion, from `near` (the previous point's) if given.
-fn parameters_near(surface: &Surface, p: Point, near: Option<(f64, f64)>) -> Option<(f64, f64)> {
+/// surfaces, otherwise by inversion, from `near` (the previous point's, with how far that
+/// point was off the surface) if given.
+fn parameters_near(surface: &Surface, p: Point, near: Option<((f64, f64), f64)>) -> Option<(f64, f64)> {
     if let Some(uv) = surface.parameters(p) {
         return Some(uv);
     }
@@ -320,7 +321,7 @@ fn parameters_near(surface: &Surface, p: Point, near: Option<(f64, f64)>) -> Opt
     // (the point may lie off the surface, as in files accurate to 1e-3). From a foot on the
     // edge of a closed surface, also from the same place on its other edge (a curve
     // leaving the seam runs on from either side).
-    let Some(start) = near else {
+    let Some((start, gap)) = near else {
         let (u, v, _) = super::extrema::nearest_on_surface(p, surface, None);
         return Some((u, v));
     };
@@ -342,9 +343,13 @@ fn parameters_near(surface: &Surface, p: Point, near: Option<(f64, f64)>) -> Opt
     }
     let mut found: Vec<(f64, f64, f64)> = starts.into_iter().map(|start| super::extrema::newton_on_surface(p, surface, start)).collect();
     // (From a collapsed edge, where one parameter is arbitrary, or where the steps led off
-    // the surface, as from too far away, the whole surface searched.)
+    // the surface, as from too far away, the whole surface searched: off it by more than the
+    // point before was, a curve lying off its surface (as in files accurate to 1e-3) followed
+    // on from the foot before.)
     let (u_free, v_free) = collapsed_at(surface, start.0, start.1);
-    let off = found.iter().map(|f| f.2).fold(f64::INFINITY, f64::min) > 1e-6 * (1.0 + (p - Point::ORIGIN).length());
+    let scale = 1e-6 * (1.0 + (p - Point::ORIGIN).length());
+    let best = found.iter().map(|f| f.2).fold(f64::INFINITY, f64::min);
+    let off = !(best <= scale || best <= 2.0 * gap + scale);
     if u_free || v_free || off {
         found.push(super::extrema::nearest_on_surface(p, surface, None));
     }
@@ -374,9 +379,11 @@ fn first_foot(curve: &Curve, surface: &Surface, first: f64, last: f64) -> Option
         if !(gap(found, q) < 0.1 * off) {
             continue;
         }
-        let mut uv = found;
+        let (mut uv, mut was) = (found, q);
         for j in (0..BACK * k).rev() {
-            uv = parameters_near(surface, curve.point(first + (t - first) * j as f64 / (BACK * k) as f64), Some(uv))?;
+            let r = curve.point(first + (t - first) * j as f64 / (BACK * k) as f64);
+            uv = parameters_near(surface, r, Some((uv, gap(uv, was))))?;
+            was = r;
         }
         return Some(if gap(uv, p) < off { uv } else { start });
     }
@@ -481,6 +488,8 @@ pub fn pcurve_on_range_within(curve: &Curve, surface: &Surface, first: f64, last
     // Each doubling keeps the samples so far (their parameters come out the same) and adds
     // the middles, where the last fit was checked.
     let mut raw: Vec<Point2> = Vec::new();
+    // (And how far each is off the surface.)
+    let mut gaps: Vec<f64> = Vec::new();
     let mut middles: Vec<Point> = Vec::new();
     // How far the curve is off the surface at the samples.
     let mut offset: f64 = 0.0;
@@ -488,26 +497,29 @@ pub fn pcurve_on_range_within(curve: &Curve, surface: &Surface, first: f64, last
     while intervals <= 1024 {
         let params: Vec<f64> = (0..=intervals).map(|i| first + (last - first) * i as f64 / intervals as f64).collect();
         let mut next: Vec<Point2> = Vec::with_capacity(params.len());
+        let mut next_gaps: Vec<f64> = Vec::with_capacity(params.len());
         for (i, &t) in params.iter().enumerate() {
-            let uv = match raw.is_empty() {
-                false if i % 2 == 0 => raw[i / 2],
+            let (uv, off) = match raw.is_empty() {
+                false if i % 2 == 0 => (raw[i / 2], gaps[i / 2]),
                 _ => {
                     let p = if raw.is_empty() { curve.point(t) } else { middles[i / 2] };
-                    let found = match next.last() {
-                        Some(q) => parameters_near(surface, p, Some((q.x, q.y))),
-                        None => first_foot(curve, surface, first, last),
+                    let found = match (next.last(), next_gaps.last()) {
+                        (Some(q), Some(&gap)) => parameters_near(surface, p, Some(((q.x, q.y), gap))),
+                        _ => first_foot(curve, surface, first, last),
                     };
                     let Some((u, v)) = found else {
                         return first_reached(reached);
                     };
                     let off = surface.point(u, v).distance(p);
                     offset = if off.is_nan() { f64::INFINITY } else { offset.max(off) };
-                    Point2::new(u, v)
+                    (Point2::new(u, v), off)
                 }
             };
             next.push(uv);
+            next_gaps.push(off);
         }
         raw = next;
+        gaps = next_gaps;
         // A fit is off by as much as the curve is off the surface at its samples, and finer
         // fits check near them: tolerances well below that are out of reach.
         let in_reach = |tolerance: f64| 2.0 * tolerance >= offset;
@@ -577,16 +589,18 @@ pub fn polyline_pcurve_on_range(curve: &Curve, surface: &Surface, first: f64, la
         _ => false,
     };
     let u_period = surface.u_period();
-    let previous = std::cell::Cell::new(Some(first_foot(curve, surface, first, last)?));
+    let start = first_foot(curve, surface, first, last)?;
+    let previous = std::cell::Cell::new(Some((start, surface.point(start.0, start.1).distance(curve.point(first)))));
     // (None where the curve itself lies off the surface by more than the tolerance: no
     // chords through its feet come within it.)
     let uv = |t: f64| -> Option<Point2> {
         let p = curve.point(t);
         let (u, v) = parameters_near(surface, p, previous.get())?;
-        if !singular(v) && !(surface.point(u, v).distance(p) <= tolerance) {
+        let gap = surface.point(u, v).distance(p);
+        if !singular(v) && !(gap <= tolerance) {
             return None;
         }
-        previous.set(Some((u, v)));
+        previous.set(Some(((u, v), gap)));
         Some(Point2::new(u, v))
     };
     let v_period = surface.v_period();

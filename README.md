@@ -56,8 +56,8 @@ it honest. Every change is checked against the test sources below before it is c
 and no change may make a passing test fail.
 
 <!-- effort -->
-So far (2026-09-25 to 2026-10-21): about 164 hours of the agent's active work, 11.3 million
-tokens written by it, and 6.3 billion tokens processed in all (nearly all of them its
+So far (2026-09-25 to 2026-10-21): about 165 hours of the agent's active work, 11.4 million
+tokens written by it, and 6.4 billion tokens processed in all (nearly all of them its
 conversation's context, read back from the cache).
 <!-- /effort -->
 
