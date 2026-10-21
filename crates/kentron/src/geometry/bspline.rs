@@ -1757,6 +1757,46 @@ impl BSplineSurface {
         self.u.degree
     }
 
+    /// Whether the surface is straight along u, its normal keeping its direction along each
+    /// line of constant v: of degree 1 along u (not periodic), the weights the same along u,
+    /// and each row of poles the one before moved (a cylinder's) or scaled by a positive
+    /// factor about one point (a cone's), to a billionth of the net's size. (Along u, the
+    /// integrands of the mass properties then have degree 3 at most.)
+    pub(crate) fn straight_along_u(&self) -> bool {
+        if self.u.degree != 1 || self.u.periodic || self.poles.len() < 2 || self.poles[0].len() < 2 {
+            return false;
+        }
+        if let Some(weights) = &self.weights {
+            if weights.windows(2).any(|w| w[0] != w[1]) {
+                return false;
+            }
+        }
+        let (lo, hi) = self.poles.iter().flatten().fold((Point::new(f64::INFINITY, f64::INFINITY, f64::INFINITY), Point::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY)), |(lo, hi), p| {
+            (Point::new(lo.x.min(p.x), lo.y.min(p.y), lo.z.min(p.z)), Point::new(hi.x.max(p.x), hi.y.max(p.y), hi.z.max(p.z)))
+        });
+        let tol = 1e-9 * lo.distance(hi);
+        let moved = |a: &[Point], b: &[Point]| {
+            let d = b[0] - a[0];
+            a.iter().zip(b).all(|(&p, &q)| ((q - p) - d).length() <= tol)
+        };
+        let scaled = |a: &[Point], b: &[Point]| {
+            // (The factor from the first pole and the one farthest from it, the apex from the
+            // first poles; a row of one point, a cone's apex, is not taken.)
+            let far = (1..a.len()).max_by(|&i, &j| a[i].distance(a[0]).total_cmp(&a[j].distance(a[0]))).unwrap_or(0);
+            let (from, to) = (a[far].distance(a[0]), b[far].distance(b[0]));
+            if !(from > 0.0) {
+                return false;
+            }
+            let factor = to / from;
+            if !(factor > 0.0) || factor == 1.0 {
+                return false;
+            }
+            let apex = Point::ORIGIN + ((b[0] - Point::ORIGIN) - (a[0] - Point::ORIGIN) * factor) * (1.0 / (1.0 - factor));
+            a.iter().zip(b).all(|(&p, &q)| (q - (apex + (p - apex) * factor)).length() <= tol)
+        };
+        self.poles.windows(2).all(|r| moved(&r[0], &r[1]) || scaled(&r[0], &r[1]))
+    }
+
     pub fn v_degree(&self) -> usize {
         self.v.degree
     }

@@ -427,7 +427,15 @@ fn integrate_face(model: &Model, face: Shape, mut sample: impl FnMut(Point, Vect
     };
 
     let planar = matches!(surface, Surface::Plane(_));
-    let inner_rule: &[(f64, f64)] = if planar { &GAUSS_LEGENDRE_2 } else { &GAUSS_LEGENDRE };
+    // (On a B-spline face straight along u, its normal keeping its direction along each line
+    // of constant v, as files write cylinders and cones, the integrands along u have degree
+    // 3 at most, as on a plane: there too the 2-point rule is exact, a piece between kinks.)
+    let straight_u = match surface {
+        Surface::BSpline(b) => b.straight_along_u(),
+        Surface::Trimmed(t) => matches!(t.basis(), Surface::BSpline(b) if b.straight_along_u()),
+        _ => false,
+    };
+    let inner_rule: &[(f64, f64)] = if planar || straight_u { &GAUSS_LEGENDRE_2 } else { &GAUSS_LEGENDRE };
     let mut u0 = None;
     // (Buffers reused from node to node.)
     let (mut ends, mut nodes, mut us, mut graded): (Vec<f64>, Vec<(f64, f64, f64)>, Vec<f64>, Vec<f64>) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
@@ -547,7 +555,7 @@ fn integrate_face(model: &Model, face: Shape, mut sample: impl FnMut(Point, Vect
                             }
                             continue;
                         }
-                        let inner = pieces((e[1] - e[0]).abs() * u_density * MAX_ANGLE_STEP);
+                        let inner = if straight_u { 1 } else { pieces((e[1] - e[0]).abs() * u_density * MAX_ANGLE_STEP) };
                         let inner_step = (e[1] - e[0]) / inner as f64;
                         for inner_piece in 0..inner {
                             let s0 = e[0] + inner_step * inner_piece as f64;
