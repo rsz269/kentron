@@ -53,3 +53,7 @@ Issues = "https://github.com/rsz269/kentron/issues"
 [tool.maturin]
 python-source = "python"
 module-name = "pykentron._kentron"
+# (The workspace's `dist` profile: link-time optimization across crates, one codegen unit;
+# about 5% faster than `release` on a complex CadQuery model. Wheels and builds from the
+# source distribution alike.)
+profile = "dist"
