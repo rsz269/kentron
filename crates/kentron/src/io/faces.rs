@@ -221,10 +221,14 @@ pub(crate) fn project(edge: &CurveSpan, surface: &Surface, has_pcurve: bool) -> 
     let mut first_foot = None;
     if surface.parameters(edge.curve.point(edge.first)).is_none() {
         use crate::geometry::extrema::{nearest_on_surface, newton_on_surface};
+        use crate::geometry::ParametricSurface;
+        // (On a cylinder or cone written as a B-spline, in closed form.)
+        let circular = pr::Circular::of(surface);
         let mut start = None;
         for i in 0..=4 {
             let p = edge.curve.point(edge.first + (edge.last - edge.first) * i as f64 / 4.0);
-            let near = start.map(|s| newton_on_surface(p, surface, s)).filter(|f| f.2 <= 1e-2);
+            let exact = circular.as_ref().and_then(|c| c.parameters(p)).map(|(u, v)| (u, v, surface.point(u, v).distance(p)));
+            let near = exact.or_else(|| start.map(|s| newton_on_surface(p, surface, s)).filter(|f| f.2 <= 1e-2));
             let (u, v, d) = near.unwrap_or_else(|| nearest_on_surface(p, surface, start));
             start = Some((u, v));
             if i == 0 {

@@ -314,12 +314,12 @@ fn cylinder_distance(cylinder: &Cylinder, p: Point) -> f64 {
 /// surfaces, otherwise by inversion, from `near` (the previous point's, with how far that
 /// point was off the surface) if given.
 fn parameters_near(surface: &Surface, p: Point, near: Option<((f64, f64), f64)>) -> Option<(f64, f64)> {
-    parameters_near_with(surface, &Collapse::of(surface), p, near)
+    parameters_near_with(surface, &Collapse::of(surface), Circular::of(surface).as_ref(), p, near)
 }
 
-/// [`parameters_near`], with the surface's [`Collapse`] found already.
-fn parameters_near_with(surface: &Surface, collapse: &Collapse, p: Point, near: Option<((f64, f64), f64)>) -> Option<(f64, f64)> {
-    if let Some(uv) = surface.parameters(p) {
+/// [`parameters_near`], with the surface's [`Collapse`] and [`Circular`] found already.
+fn parameters_near_with(surface: &Surface, collapse: &Collapse, circular: Option<&Circular>, p: Point, near: Option<((f64, f64), f64)>) -> Option<(f64, f64)> {
+    if let Some(uv) = surface.parameters(p).or_else(|| circular.and_then(|c| c.parameters(p))) {
         return Some(uv);
     }
     // Along a curve the next point's foot is near the last one's: Newton steps from there
@@ -433,6 +433,158 @@ fn sides_of_seams(surface: &Surface, points: &mut [Point2]) {
     }
 }
 
+/// A rational B-spline surface that is exactly a cylinder or a cone, as files write them
+/// (linear one way, circle arcs as rational quadratics the other): two coaxial circles, the
+/// second the first moved along the axis and scaled about it, the surface the lines between
+/// points at the same angle on them. Found from the poles, its points' parameters have a
+/// closed form, as a cylinder's do.
+pub(crate) struct Circular {
+    /// Whether u is the straight parameter (else v).
+    straight_u: bool,
+    /// The straight parameter's range.
+    line: (f64, f64),
+    /// The first circle's centre and frame (`x` towards its first pole, `z` the way its arcs
+    /// turn), its radius, and the second circle's height along `z` and radius.
+    center: Point,
+    x: Vector,
+    y: Vector,
+    z: Vector,
+    radius: f64,
+    second: (f64, f64),
+    /// Each arc: its start angle and sweep, and the arc parameter's range over it.
+    arcs: Vec<(f64, f64, f64, f64)>,
+}
+
+impl Circular {
+    /// The surface as a [`Circular`], if it is one (to a trillionth of its size).
+    pub(crate) fn of(surface: &Surface) -> Option<Circular> {
+        let Surface::BSpline(b) = surface else { return None };
+        [true, false].into_iter().find_map(|straight_u| Circular::with(b, straight_u))
+    }
+
+    fn with(b: &super::bspline::BSplineSurface, straight_u: bool) -> Option<Circular> {
+        let (lk, ak) = if straight_u { (b.u_knot_vector(), b.v_knot_vector()) } else { (b.v_knot_vector(), b.u_knot_vector()) };
+        if lk.degree != 1 || ak.degree != 2 || lk.periodic || ak.periodic || lk.knots.len() != 2 || lk.multiplicities != [2, 2] {
+            return None;
+        }
+        let spans = ak.knots.len().checked_sub(1).filter(|&m| m >= 1)?;
+        let inner_twice = ak.multiplicities[1..spans].iter().all(|&m| m == 2);
+        if ak.multiplicities[0] != 3 || ak.multiplicities[spans] != 3 || !inner_twice {
+            return None;
+        }
+        let pole = |i: usize, j: usize| if straight_u { b.pole(i, j) } else { b.pole(j, i) };
+        let weight = |i: usize, j: usize| if straight_u { b.weight(i, j) } else { b.weight(j, i) };
+        let n = 2 * spans + 1;
+        if (if straight_u { b.u_pole_count() } else { b.v_pole_count() }) != 2 || (if straight_u { b.v_pole_count() } else { b.u_pole_count() }) != n {
+            return None;
+        }
+        // (The ends of the arcs of weight 1, their middles' the cosines of half their sweeps,
+        // the same on both circles.)
+        for j in 0..n {
+            let w = weight(0, j);
+            if weight(1, j) != w || (j % 2 == 0 && (w - 1.0).abs() > 1e-14) || (j % 2 == 1 && !(w > 0.0 && w < 1.0)) {
+                return None;
+            }
+        }
+        let size = (0..n).map(|j| pole(0, j).distance(pole(1, j)) + pole(0, j).distance(pole(0, 0))).fold(0.0, f64::max);
+        let tol = 1e-12 * (1.0 + size);
+        // A circle's centre: of its first arc, from its ends and its middle.
+        let center_of = |i: usize| -> Option<Point> {
+            let w = weight(i, 1);
+            let (a, m, c) = (pole(i, 0), pole(i, 1), pole(i, 2));
+            let mid = Point::ORIGIN + ((a - Point::ORIGIN) + (m - Point::ORIGIN) * (2.0 * w) + (c - Point::ORIGIN)) * (1.0 / (2.0 + 2.0 * w));
+            circumcenter(a, mid, c)
+        };
+        let center = center_of(0)?;
+        let radius = pole(0, 0).distance(center);
+        if !(radius > tol) {
+            return None;
+        }
+        let x = (pole(0, 0) - center) * (1.0 / radius);
+        let turn = (pole(0, 1) - center).cross(pole(0, 2) - center);
+        if !(turn.length() > 0.0) {
+            return None;
+        }
+        let z = turn.normalized();
+        let y = z.cross(x);
+        let angle = |p: Point| {
+            let d = p - center;
+            d.dot(y).atan2(d.dot(x)).rem_euclid(std::f64::consts::TAU)
+        };
+        // Each arc on the circle, in its plane, its sweep its middle weight's, one after the
+        // other round it.
+        let mut arcs = Vec::with_capacity(spans);
+        let mut start = 0.0;
+        for k in 0..spans {
+            let (a, m, c) = (pole(0, 2 * k), pole(0, 2 * k + 1), pole(0, 2 * k + 2));
+            let w = weight(0, 2 * k + 1);
+            let sweep = 2.0 * w.acos();
+            let on = |p: Point, r: f64| ((p - center).length() - r).abs() <= tol && (p - center).dot(z).abs() <= tol;
+            let end = if k + 1 == spans && start + sweep > std::f64::consts::TAU - 1e-9 { start + sweep - std::f64::consts::TAU } else { start + sweep };
+            let turned = (angle(c) - end.rem_euclid(std::f64::consts::TAU)).abs();
+            if !on(a, radius) || !on(c, radius) || !on(m, radius / w) || turned.min(std::f64::consts::TAU - turned) > 1e-10 {
+                return None;
+            }
+            arcs.push((start, sweep, ak.knots[k], ak.knots[k + 1]));
+            start += sweep;
+        }
+        if start > std::f64::consts::TAU + 1e-9 {
+            return None;
+        }
+        // The second circle: the first moved along the axis and scaled about it.
+        let other = center_of(1)?;
+        let shift = other - center;
+        let height = shift.dot(z);
+        if (shift - z * height).length() > tol {
+            return None;
+        }
+        let second_radius = pole(1, 0).distance(other);
+        let factor = second_radius / radius;
+        if !(0..n).all(|j| (pole(1, j) - (other + (pole(0, j) - center) * factor)).length() <= tol) {
+            return None;
+        }
+        Some(Circular { straight_u, line: (lk.knots[0], lk.knots[1]), center, x, y, z, radius, second: (height, second_radius), arcs })
+    }
+
+    /// The parameters of the point of the surface nearest `p`, where that lies within the
+    /// surface's bounds (else `None`).
+    pub(crate) fn parameters(&self, p: Point) -> Option<(f64, f64)> {
+        let d = p - self.center;
+        let phi = d.dot(self.y).atan2(d.dot(self.x)).rem_euclid(std::f64::consts::TAU);
+        // Along the line at that angle from the first circle to the second.
+        let e = self.x * phi.cos() + self.y * phi.sin();
+        let from = self.center + e * self.radius;
+        let along = (self.center + self.z * self.second.0 + e * self.second.1) - from;
+        let t = (p - from).dot(along) / along.dot(along);
+        if !(t >= -1e-12 && t <= 1.0 + 1e-12) {
+            return None;
+        }
+        let t = t.clamp(0.0, 1.0);
+        // On its arc: the parameter whose point is at that angle (a rational quadratic arc of
+        // sweep a turns by 2 atan((2s - 1) tan(a/4)) + a/2 at s).
+        // (A turn short by a hair: at the first arc's start.)
+        let near = 1e-12;
+        let phi = if phi > std::f64::consts::TAU - 1e-9 && phi > self.arcs.last().map_or(0.0, |a| a.0 + a.1) + near { phi - std::f64::consts::TAU } else { phi };
+        let &(start, sweep, k0, k1) = self.arcs.iter().find(|a| phi >= a.0 - near && phi <= a.0 + a.1 + near)?;
+        let psi = (phi - start).clamp(0.0, sweep);
+        let s = (0.5 + 0.5 * (0.5 * psi - 0.25 * sweep).tan() / (0.25 * sweep).tan()).clamp(0.0, 1.0);
+        let (line, arc) = (self.line.0 + t * (self.line.1 - self.line.0), k0 + s * (k1 - k0));
+        Some(if self.straight_u { (line, arc) } else { (arc, line) })
+    }
+}
+
+/// The centre of the circle through three points (`None` where they are in a line).
+fn circumcenter(a: Point, b: Point, c: Point) -> Option<Point> {
+    let (ab, ac) = (b - a, c - a);
+    let n = ab.cross(ac);
+    let n2 = n.dot(n);
+    if !(n2 > 0.0) {
+        return None;
+    }
+    let offset = (n.cross(ab) * ac.dot(ac) + ac.cross(n) * ab.dot(ab)) * (1.0 / (2.0 * n2));
+    Some(a + offset)
+}
+
 /// What [`Collapse::at`] needs of a surface, found once for many points: its bounds and the
 /// distance below which points are one (none where the surface is not free-form).
 #[derive(Clone, Copy)]
@@ -523,6 +675,7 @@ pub(crate) fn pcurve_on_range_from(curve: &Curve, surface: &Surface, first: f64,
     // (And how far each is off the surface, and whether it is on a collapsed edge.)
     let mut gaps: Vec<f64> = Vec::new();
     let collapse = Collapse::of(surface);
+    let circular = Circular::of(surface);
     let mut free: Vec<(bool, bool)> = Vec::new();
     let mut middles: Vec<Point> = Vec::new();
     // How far the curve is off the surface at the samples.
@@ -542,7 +695,7 @@ pub(crate) fn pcurve_on_range_from(curve: &Curve, surface: &Surface, first: f64,
                 _ => {
                     let p = if raw.is_empty() { curve.point(t) } else { middles[i / 2] };
                     let found = match (next.last(), next_gaps.last()) {
-                        (Some(q), Some(&gap)) => parameters_near_with(surface, &collapse, p, Some(((q.x, q.y), gap))),
+                        (Some(q), Some(&gap)) => parameters_near_with(surface, &collapse, circular.as_ref(), p, Some(((q.x, q.y), gap))),
                         _ => first_foot_from(curve, surface, first, last, start),
                     };
                     let Some((u, v)) = found else {
@@ -947,4 +1100,52 @@ fn fitted_pcurve(curve: &Curve, surface: &Surface, tolerance: f64, projecting: b
         spans_per_piece *= 2;
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::geometry::ParametricSurface;
+    use crate::math::{Direction, Frame};
+
+    /// `b` with u and v swapped.
+    fn transposed(b: &super::super::bspline::BSplineSurface) -> super::super::bspline::BSplineSurface {
+        let (nu, nv) = (b.u_pole_count(), b.v_pole_count());
+        let poles: Vec<Vec<Point>> = (0..nv).map(|j| (0..nu).map(|i| b.pole(i, j)).collect()).collect();
+        let weights: Vec<Vec<f64>> = (0..nv).map(|j| (0..nu).map(|i| b.weight(i, j)).collect()).collect();
+        super::super::bspline::BSplineSurface::try_new(poles, b.v_knot_vector().clone(), b.u_knot_vector().clone()).unwrap().with_weights(weights)
+    }
+
+    #[test]
+    fn cylinders_and_cones_as_rational_bsplines_inverted_in_closed_form() {
+        let frame = Frame::new(Point::new(1.0, -2.0, 0.5), Direction::new(0.3, 0.4, 0.86), Direction::new(0.8, -0.6, 0.0));
+        let analytic = [
+            Surface::Cylinder(super::super::surface::Cylinder::new(frame, 2.5)),
+            Surface::Cone(super::super::surface::Cone::new(frame, 0.3, 2.0)),
+        ];
+        for surface in &analytic {
+            let trimmed = Surface::Trimmed(super::super::surface::TrimmedSurface::new(surface.clone(), 0.3, 5.9, -1.0, 2.0));
+            let b = super::super::convert::surface_to_bspline(&trimmed).unwrap();
+            for b in [b.clone(), transposed(&b)] {
+                let s = Surface::BSpline(b);
+                let circular = Circular::of(&s).expect("recognized");
+                let (u0, u1, v0, v1) = s.bounds();
+                for i in 0..=10 {
+                    for j in 0..=10 {
+                        let (u, v) = (u0 + (u1 - u0) * i as f64 / 10.0, v0 + (v1 - v0) * j as f64 / 10.0);
+                        let (p, du, dv) = s.d1(u, v);
+                        let n = du.cross(dv).normalized();
+                        for q in [p, p + n * 0.01] {
+                            let (a, c) = circular.parameters(q).expect("within the bounds");
+                            assert!((a - u).abs() <= 1e-9 * (1.0 + u.abs()) && (c - v).abs() <= 1e-9 * (1.0 + v.abs()), "({u}, {v}) came back as ({a}, {c})");
+                        }
+                    }
+                }
+            }
+        }
+        // (A sphere's B-spline is not one.)
+        let sphere = Surface::Sphere(super::super::surface::Sphere::new(frame, 2.0));
+        let b = super::super::convert::surface_to_bspline(&Surface::Trimmed(super::super::surface::TrimmedSurface::new(sphere, 0.3, 5.9, -1.0, 1.0))).unwrap();
+        assert!(Circular::of(&Surface::BSpline(b)).is_none());
+    }
 }
