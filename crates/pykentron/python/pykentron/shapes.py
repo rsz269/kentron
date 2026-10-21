@@ -242,7 +242,7 @@ class Shape:
     def cut(self, *toCut: "Shape", tol: Optional[float] = None) -> "Shape":
         result = self.wrapped
         for other in toCut:
-            result = native.difference(result, other.wrapped)
+            result = _cut_solid_by_solid(result, other.wrapped)
         return Shape.cast(result)
 
     def intersect(self, *toIntersect: "Shape", tol: Optional[float] = None) -> "Shape":
@@ -645,6 +645,29 @@ def _siblings(shapes, ctx: Shape, kind: str, level) -> set:
         return found if lvl == 1 else step(found, lvl - 1)
 
     return step(list(shapes), level)
+
+
+def _cut_solid_by_solid(shape, tool):
+    """`shape` with `tool` cut away; a compound of solids one solid at a time, those whose
+    boxes are clear of the tool's kept as they are. (As OCCT, which does not cut an
+    argument's solids by one another: kentron, given the compound whole, would put all its
+    faces through its general fuse, the solids split by one another first.)"""
+    if shape.kind() != "Compound":
+        return native.difference(shape, tool)
+    solids = native.children(shape)
+    if len(solids) < 2 or any(s.kind() != "Solid" for s in solids):
+        return native.difference(shape, tool)
+    (tx0, ty0, tz0), (tx1, ty1, tz1) = native.bounding_box(tool, False)
+    gap = 1e-6
+    out = []
+    for solid in solids:
+        (x0, y0, z0), (x1, y1, z1) = native.bounding_box(solid, False)
+        if x0 > tx1 + gap or tx0 > x1 + gap or y0 > ty1 + gap or ty0 > y1 + gap or z0 > tz1 + gap or tz0 > z1 + gap:
+            out.append(solid)
+            continue
+        cut = native.difference(solid, tool)
+        out.extend(native.children(cut) if cut.kind() == "Compound" else [cut])
+    return native.make_compound(out)
 
 
 def _split_pieces(shape: Shape, splitters) -> List[Shape]:
@@ -1818,6 +1841,12 @@ class Compound(Shape, Mixin3D):
         args = list(self) + list(toFuse)
         if len(args) <= 1:
             return args[0] if args else self
+        # (A compound of solids and its tools: one union, which takes the compound's solids
+        # clear of the tools as they are and fuses only those the tools meet, where the
+        # pairwise tree would fuse the compound's own pieces with one another again.)
+        if toFuse and all(c.wrapped.kind() == "Solid" for c in self) and all(t.wrapped.kind() in ("Solid", "Compound") for t in toFuse):
+            tools = toFuse[0] if len(toFuse) == 1 else Shape.fuse(*toFuse)
+            return Shape.cast(native.union(self.wrapped, tools.wrapped))
         return Shape.fuse(args[0], *args[1:])
 
     def ancestors(self, ctx: Shape, kind: str) -> "Compound":

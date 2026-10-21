@@ -14,7 +14,7 @@ from typing import Iterable, List, Literal, Optional, Sequence, Tuple, Union
 from .. import _kentron as native
 from ..geom import Location, Plane, Vector, VectorLike  # noqa: F401
 from ..shapes import *  # noqa: F401,F403
-from ..shapes import Compound, Edge, Face, Shape, Shell, Solid, Vertex, Wire, _edges_to_wires, _split_pieces, _tuple
+from ..shapes import Compound, Edge, Face, Shape, Shell, Solid, Vertex, Wire, _cut_solid_by_solid, _edges_to_wires, _split_pieces, _tuple
 
 Shapes = Literal["Vertex", "Edge", "Wire", "Face", "Shell", "Solid", "CompSolid", "Compound"]
 Real = Union[int, float]
@@ -439,7 +439,7 @@ def fuse(s1: Shape, s2: Shape, *shapes: Shape, tol: float = 0.0, glue=None, hist
 
 
 def cut(s1: Shape, s2: Shape, tol: float = 0.0, glue=None, history=None, name=None) -> Shape:
-    return _compound_or_shape(Shape.cast(native.difference(s1.wrapped, s2.wrapped)))
+    return _compound_or_shape(Shape.cast(_cut_solid_by_solid(s1.wrapped, s2.wrapped)))
 
 
 def intersect(s1: Shape, s2: Shape, tol: float = 0.0, glue=None, history=None, name=None) -> Shape:
