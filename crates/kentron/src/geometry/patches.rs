@@ -288,34 +288,48 @@ impl Patches {
             return false;
         }
         macro_rules! sized {
-            ($n:literal) => {
+            ($nu:expr, $nv:expr, $exact:literal) => {
                 match (order, self.rational) {
-                    (0, false) => self.along_u::<$n, 0, 3>(us, v, out),
-                    (0, true) => self.along_u::<$n, 0, 4>(us, v, out),
-                    (1, false) => self.along_u::<$n, 1, 3>(us, v, out),
-                    (1, true) => self.along_u::<$n, 1, 4>(us, v, out),
-                    (_, false) => self.along_u::<$n, 2, 3>(us, v, out),
-                    (_, true) => self.along_u::<$n, 2, 4>(us, v, out),
+                    (0, false) => self.along_u::<{ $nu }, { $nv }, 0, $exact, 3>(us, v, out),
+                    (0, true) => self.along_u::<{ $nu }, { $nv }, 0, $exact, 4>(us, v, out),
+                    (1, false) => self.along_u::<{ $nu }, { $nv }, 1, $exact, 3>(us, v, out),
+                    (1, true) => self.along_u::<{ $nu }, { $nv }, 1, $exact, 4>(us, v, out),
+                    (_, false) => self.along_u::<{ $nu }, { $nv }, 2, $exact, 3>(us, v, out),
+                    (_, true) => self.along_u::<{ $nu }, { $nv }, 2, $exact, 4>(us, v, out),
                 }
             };
         }
+        // (The usual low degrees with sizes known to the compiler, as for single points.)
+        macro_rules! exact {
+            ($(($pu:literal, $pv:literal)),*) => {
+                match (self.u_degree, self.v_degree) {
+                    $(($pu, $pv) => {
+                        sized!($pu + 1, $pv + 1, true);
+                        return true;
+                    })*
+                    _ => {}
+                }
+            };
+        }
+        exact!((1, 1), (1, 2), (1, 3), (2, 1), (2, 2), (2, 3), (3, 1), (3, 2), (3, 3), (1, 4), (1, 7));
         match self.u_degree.max(self.v_degree) {
-            0..=3 => sized!(4),
-            4..=8 => sized!(9),
-            _ => sized!(26),
+            0..=3 => sized!(4, 4, false),
+            4..=8 => sized!(9, 9, false),
+            _ => sized!(26, 26, false),
         }
         true
     }
 
-    fn along_u<const N: usize, const ORDER: usize, const C: usize>(&self, us: &[f64], v: f64, out: &mut Vec<Option<Derivatives>>) {
-        let (pu, pv) = (self.u_degree, self.v_degree);
+    /// With arrays of `NU` and `NV` (the degrees plus one if `EXACT`, else more than them).
+    fn along_u<const NU: usize, const NV: usize, const ORDER: usize, const EXACT: bool, const C: usize>(&self, us: &[f64], v: f64, out: &mut Vec<Option<Derivatives>>) {
+        let (pu, pv) = if EXACT { (NU - 1, NV - 1) } else { (self.u_degree, self.v_degree) };
         let (u0, u1, _, _) = self.bounds();
         let (b, t, kv) = locate(&self.v_breaks, v, &self.hints.0[1]);
-        let bv = bernstein::<N, ORDER>(pv, t, kv);
+        let bv = bernstein::<NV, ORDER>(pv, t, kv);
         let npv = self.v_breaks.len() - 1;
         // The rows of the patch in use summed along v, per derivative order in v (as `sums`
-        // forms them).
-        let mut rows = [[[0.0f64; 4]; 3]; N];
+        // forms them, over the same ranges).
+        let mut rows = [[[0.0f64; 4]; 3]; NU];
         let mut summed = usize::MAX;
         out.reserve(us.len());
         for &u in us {
@@ -327,12 +341,18 @@ impl Patches {
             if a != summed {
                 summed = a;
                 let patch = &self.points[(a * npv + b) * (pu + 1) * (pv + 1)..][..(pu + 1) * (pv + 1)];
-                for i in 0..=pu {
+                for i in 0..NU {
+                    if i > pu {
+                        break;
+                    }
                     let row = &patch[i * (pv + 1)..][..pv + 1];
                     let mut r = [[0.0f64; 4]; 3];
-                    for j in 0..=pv {
+                    for j in 0..NV {
+                        if j > pv {
+                            break;
+                        }
                         let q = row[j];
-                        for l in 0..=ORDER {
+                        for l in 0..ORDER + 1 {
                             let f = bv[l][j];
                             for c in 0..C {
                                 r[l][c] += f * q[c];
@@ -342,15 +362,20 @@ impl Patches {
                     rows[i] = r;
                 }
             }
-            let bu = bernstein::<N, ORDER>(pu, s, ku);
+            let bu = bernstein::<NU, ORDER>(pu, s, ku);
             let mut h = [[[0.0f64; 4]; 3]; 3];
-            for i in 0..=pu {
+            for i in 0..NU {
+                if i > pu {
+                    break;
+                }
                 let r = &rows[i];
-                for k in 0..=ORDER {
+                for k in 0..ORDER + 1 {
                     let f = bu[k][i];
-                    for l in 0..=ORDER - k {
-                        for c in 0..C {
-                            h[k][l][c] += f * r[l][c];
+                    for l in 0..ORDER + 1 {
+                        if k + l <= ORDER {
+                            for c in 0..C {
+                                h[k][l][c] += f * r[l][c];
+                            }
                         }
                     }
                 }
@@ -387,7 +412,7 @@ impl Patches {
                 }
             };
         }
-        exact!((1, 1), (1, 2), (1, 3), (2, 1), (2, 2), (2, 3), (3, 1), (3, 2), (3, 3), (1, 8), (3, 8), (6, 6), (8, 6), (6, 8));
+        exact!((1, 1), (1, 2), (1, 3), (2, 1), (2, 2), (2, 3), (3, 1), (3, 2), (3, 3), (1, 4), (1, 7), (1, 8), (3, 8), (6, 6), (8, 6), (6, 8));
         match self.u_degree.max(self.v_degree) {
             0..=8 => Some(self.sums::<9, 9, ORDER, false, C>(u, v)),
             9..=25 => Some(self.sums::<26, 26, ORDER, false, C>(u, v)),
