@@ -154,7 +154,7 @@ pub(super) fn uv_within(surface: &Surface, p: Point, reach: f64) -> Option<Uv> {
 /// (the next turn of one winding round), from the nearest sample there too: the nearer foot.
 pub(super) fn foot_on(surface: &Surface, p: Point) -> crate::geometry::extrema::SurfaceFoot {
     let (best, start) = with_samples(surface, |grid| {
-        let best = grid.nearest(p, 0, grid.samples.len());
+        let best = grid.nearest_of_all(p);
         (best, (grid.samples[best.1].0, grid.samples[best.1].1))
     });
     let foot = crate::geometry::extrema::newton_foot_from_sample(p, surface, start);
@@ -266,14 +266,59 @@ struct SampleGrid {
     x: Vec<f64>,
     y: Vec<f64>,
     z: Vec<f64>,
+    /// The boxes of the samples in blocks of [`BLOCK`], in order.
+    boxes: Vec<(Point, Point)>,
+    /// The block the last scan found the nearest sample in, scanned first.
+    last: std::sync::atomic::AtomicUsize,
 }
+
+/// The samples in a block of [`SampleGrid::boxes`].
+const BLOCK: usize = 32;
 
 impl SampleGrid {
     fn new(samples: Vec<(f64, f64, Point)>) -> SampleGrid {
         let x = samples.iter().map(|s| s.2.x).collect();
         let y = samples.iter().map(|s| s.2.y).collect();
         let z = samples.iter().map(|s| s.2.z).collect();
-        SampleGrid { samples, x, y, z }
+        let boxes = samples
+            .chunks(BLOCK)
+            .map(|block| {
+                block.iter().fold((Point::new(f64::INFINITY, f64::INFINITY, f64::INFINITY), Point::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY)), |(lo, hi), s| {
+                    let q = s.2;
+                    (Point::new(lo.x.min(q.x), lo.y.min(q.y), lo.z.min(q.z)), Point::new(hi.x.max(q.x), hi.y.max(q.y), hi.z.max(q.z)))
+                })
+            })
+            .collect();
+        SampleGrid { samples, x, y, z, boxes, last: std::sync::atomic::AtomicUsize::new(0) }
+    }
+
+    /// [`Self::nearest`] among all the samples, the same one found: the block of the last
+    /// one found scanned first, then the others in order, those whose box lies farther than
+    /// the nearest sample so far passed over (none of theirs could be as near). (A box
+    /// with a NaN corner is never passed over.)
+    fn nearest_of_all(&self, p: Point) -> (f64, usize) {
+        use std::sync::atomic::Ordering;
+        let blocks = self.boxes.len();
+        let first = self.last.load(Ordering::Relaxed).min(blocks.saturating_sub(1));
+        let scan = |b: usize| self.nearest(p, b * BLOCK, ((b + 1) * BLOCK).min(self.samples.len()));
+        let mut best = if blocks > 0 { scan(first) } else { (f64::INFINITY, 0) };
+        let mut found = first;
+        for b in (0..blocks).filter(|&b| b != first) {
+            let (lo, hi) = self.boxes[b];
+            let gap = |a: f64, l: f64, h: f64| if a < l { l - a } else if a > h { a - h } else { 0.0 };
+            let (gx, gy, gz) = (gap(p.x, lo.x, hi.x), gap(p.y, lo.y, hi.y), gap(p.z, lo.z, hi.z));
+            if gx * gx + gy * gy + gz * gz > best.0 {
+                continue;
+            }
+            let here = scan(b);
+            if here.0 < best.0 || (here.0 == best.0 && here.0 < f64::INFINITY && here.1 < best.1) {
+                (best, found) = (here, b);
+            }
+        }
+        if best.0 < f64::INFINITY {
+            self.last.store(found, Ordering::Relaxed);
+        }
+        best
     }
 
     /// The sample among `from..to` nearest to `p` (the first of equally near ones) and its
