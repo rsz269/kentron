@@ -74,8 +74,8 @@ cached for them. Which allocator kentron's memory comes from is a profile, chose
 
 | profile | allocator | a complex five-part CadQuery model |
 |---|---|---|
-| `low-memory` | the system's | 316 MB at the peak, 4.0 s |
-| `fast` (default) | mimalloc | 125% of the peak memory, ~12% faster |
+| `low-memory` | the system's | 317 MB at the peak, 3.9 s |
+| `fast` (default) | mimalloc | 132% of the peak memory, ~15% faster |
 
 `pykentron.profile()` gives the profile in use. The allocator is chosen once, at startup, so
 the profile is only had through the variable (`pykentron.set_profile(name)` accepts only the
