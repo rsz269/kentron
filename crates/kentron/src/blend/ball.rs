@@ -184,6 +184,21 @@ impl Side {
     }
 }
 
+/// The gradient at `p` of the distance [`Side::distance`] found there: its foot's normal,
+/// where the foot is square to the surface (not held on a bound of the surface's patch).
+fn gradient(p: Point, (d, foot, n): (f64, Point, Vector)) -> Option<Vector> {
+    let off = ((p - foot) - n * d).length();
+    (off <= 1e-9 * (1.0 + (p - Point::ORIGIN).length()) + 1e-6 * d.abs()).then_some(n)
+}
+
+/// The gradients at `p` of both sides' distances found there ([`gradient`]), where the
+/// normals are well apart: near the same, the system is near singular and its steps turn on
+/// the faces' curvature, which differences see.
+fn gradients(p: Point, a: (f64, Point, Vector), b: (f64, Point, Vector)) -> Option<[Vector; 2]> {
+    let apart = a.2.cross(b.2).length() > 0.05;
+    gradient(p, a).zip(gradient(p, b)).filter(|_| apart).map(|(ga, gb)| [ga, gb])
+}
+
 /// A section of the fillet: the spine point on the edge (or its continuation), the ball's
 /// centre and its contact points with the two faces.
 struct Section {
@@ -779,9 +794,10 @@ fn sides_of(model: &Model, shape: Shape, id: EdgeId, carry: Option<f64>) -> Resu
 }
 
 /// The point on both faces' surfaces nearest to `guess` in the plane through it square to
-/// `tangent` (Newton).
+/// `tangent` (Newton, by differences: past the edge's ends, from the feet's normals it takes
+/// longer to settle, as measured on chamfers).
 fn onto_both(sides: &[Side; 2], guess: Point, tangent: Vector) -> Result<Point> {
-    newton(guess, |x| Ok([sides[0].distance(x)?.0, sides[1].distance(x)?.0, (x - guess).dot(tangent)]))
+    newton(guess, |x| Ok(([sides[0].distance(x)?.0, sides[1].distance(x)?.0, (x - guess).dot(tangent)], None)))
 }
 
 /// The ball of radius `r` touching both faces, centred in the plane through `o` square to
@@ -793,8 +809,9 @@ fn onto_both(sides: &[Side; 2], guess: Point, tangent: Vector) -> Result<Point> 
 fn section(sides: &[Side; 2], o: Point, tangent: Vector, r: f64, side: f64, near: Option<Vector>, characteristic: bool) -> Result<Section> {
     // The ball's conditions at a centre `q`: on each face's offset, and in its plane, whose
     // normal (characteristic) is the path of the centres, square to both faces' normals at
-    // the contacts. (Each face's distance found once for both.)
-    let conditions = |q: Point| -> Result<[f64; 3]> {
+    // the contacts. (Each face's distance found once for both. In a plane of its own, the
+    // plane's normal turns with the centre: its gradients by differences.)
+    let conditions = |q: Point| -> Result<([f64; 3], Option<[Vector; 3]>)> {
         let (a, b) = (sides[0].distance(q)?, sides[1].distance(q)?);
         let across = if characteristic {
             let along = a.2.cross(b.2);
@@ -802,7 +819,8 @@ fn section(sides: &[Side; 2], o: Point, tangent: Vector, r: f64, side: f64, near
         } else {
             tangent
         };
-        Ok([a.0 - side * r, b.0 - side * r, (q - o).dot(across)])
+        let rows = gradients(q, a, b).filter(|_| !characteristic).map(|[ga, gb]| [ga, gb, tangent]);
+        Ok(([a.0 - side * r, b.0 - side * r, (q - o).dot(across)], rows))
     };
     if let Some(offset) = near {
         let start = o + (offset - tangent * offset.dot(tangent));
@@ -874,8 +892,8 @@ fn chamfer_section(sides: &[Side; 2], o: Point, tangent: Vector, distances: [f64
             }
         }
         // (Else in the face's parameters: past a patch's bounds a point's distance from the
-        // surface jumps; its parametric form carries on.)
-        contacts[i] = match newton(start, |x| Ok([sides[i].distance(x)?.0, (x - o).dot(tangent), (x - o).length() - d])) {
+        // surface jumps (which the differences see); its parametric form carries on.)
+        contacts[i] = match newton(start, |x| Ok(([sides[i].distance(x)?.0, (x - o).dot(tangent), (x - o).length() - d], None))) {
             Ok(x) => x,
             Err(e) if on_edge => on_surface_at(&sides[i], start, o, tangent, d).ok_or(e)?,
             Err(e) => return Err(e),
@@ -958,30 +976,40 @@ fn on_surface_at(side: &Side, start: Point, o: Point, tangent: Vector, d: f64) -
     ((p - o).dot(tangent).abs() <= 1e-8 * scale && ((p - o).length() - d).abs() <= 1e-8 * scale).then_some(p)
 }
 
-/// Newton's method on a function of a point with three components, from `start`.
-fn newton(start: Point, f: impl Fn(Point) -> Result<[f64; 3]>) -> Result<Point> {
+/// Newton's method on a function of a point with three components, from `start`: `f` gives
+/// them with their gradients where it knows them (else they are found by differences).
+fn newton(start: Point, f: impl Fn(Point) -> Result<([f64; 3], Option<[Vector; 3]>)>) -> Result<Point> {
     newton_damped(start, f, false)
 }
 
 /// [`newton`], with each step shortened (`damped`) where the whole of it leaves the system
 /// further from solved.
-fn newton_damped(start: Point, f: impl Fn(Point) -> Result<[f64; 3]>, damped: bool) -> Result<Point> {
+fn newton_damped(start: Point, f: impl Fn(Point) -> Result<([f64; 3], Option<[Vector; 3]>)>, damped: bool) -> Result<Point> {
     let scale = 1.0 + (start - Point::ORIGIN).length();
     let h = 1e-7 * scale;
     let mut x = start;
+    // (A damped step's value kept for the next one.)
+    let mut known = None;
     for _ in 0..60 {
-        let fx = f(x)?;
+        let (fx, rows) = match known.take() {
+            Some(found) => found,
+            None => f(x)?,
+        };
         if fx.iter().all(|v| v.abs() <= 1e-12 * scale) {
             return Ok(x);
         }
-        let columns: Vec<[f64; 3]> = [Vector::new(h, 0.0, 0.0), Vector::new(0.0, h, 0.0), Vector::new(0.0, 0.0, h)]
-            .iter()
-            .map(|&d| {
-                let g = f(x + d)?;
-                Ok([(g[0] - fx[0]) / h, (g[1] - fx[1]) / h, (g[2] - fx[2]) / h])
-            })
-            .collect::<Result<_>>()?;
-        let step = super::solve3([columns[0], columns[1], columns[2]], fx)
+        let columns: [[f64; 3]; 3] = match rows {
+            Some(rows) => std::array::from_fn(|c| std::array::from_fn(|r| rows[r][c])),
+            None => {
+                let mut columns = [[0.0; 3]; 3];
+                for (column, d) in columns.iter_mut().zip([Vector::new(h, 0.0, 0.0), Vector::new(0.0, h, 0.0), Vector::new(0.0, 0.0, h)]) {
+                    let g = f(x + d)?.0;
+                    *column = [(g[0] - fx[0]) / h, (g[1] - fx[1]) / h, (g[2] - fx[2]) / h];
+                }
+                columns
+            }
+        };
+        let step = super::solve3(columns, fx)
             .ok_or_else(|| Error::InvalidInput("no fillet section here (singular system)".into()))?;
         let step = Vector::new(step[0], step[1], step[2]);
         // (Shorter where the whole step leaves the system further from solved, as where the
@@ -993,12 +1021,21 @@ fn newton_damped(start: Point, f: impl Fn(Point) -> Result<[f64; 3]>, damped: bo
         let norm = |v: [f64; 3]| v.iter().map(|x| x * x).sum::<f64>();
         let size = norm(fx);
         let mut part = 1.0;
-        while part > 1e-3 && !f(x - step * part).is_ok_and(|g| norm(g) < size) {
+        loop {
+            if let Ok(g) = f(x - step * part) {
+                if norm(g.0) < size {
+                    known = Some(g);
+                    break;
+                }
+            }
             part *= 0.5;
+            if part <= 1e-3 {
+                break;
+            }
         }
         x = x - step * if part > 1e-3 { part } else { 1.0 };
     }
-    if f(x)?.iter().all(|v| v.abs() <= 1e-8 * scale) {
+    if f(x)?.0.iter().all(|v| v.abs() <= 1e-8 * scale) {
         Ok(x)
     } else {
         Err(Error::InvalidInput("no fillet section here (no convergence)".into()))
