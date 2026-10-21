@@ -61,6 +61,19 @@ fn clear_of_face(face: &super::graph::Face, curve: &Curve, first: f64, last: f64
     })
 }
 
+/// The signed distances found lately from points of curves to free-form surfaces (by the
+/// curve's parameter's bits), with the surface, the curve and its range: a boolean operation
+/// run again at the looser tolerances asks for the same ones (shared by the threads of
+/// operations).
+static CONTACT_DISTANCES: std::sync::Mutex<Vec<(ContactKey, std::sync::Arc<HashMap<u64, f64>>)>> = std::sync::Mutex::new(Vec::new());
+
+/// What [`CONTACT_DISTANCES`] keeps distances for: a surface by its identity, the curve whole.
+struct ContactKey {
+    surface: crate::geometry::extrema::SurfaceKey,
+    curve: Curve,
+    range: (u64, u64),
+}
+
 fn surface_contact(curve: &Curve, first: f64, last: f64, surface: &Surface, tolerance: f64) -> Contact {
     if let Some(contact) = plane_contact(curve, first, last, surface).or_else(|| coaxial_contact(curve, first, last, surface)) {
         return contact;
@@ -69,7 +82,43 @@ fn surface_contact(curve: &Curve, first: f64, last: f64, surface: &Surface, tole
     // crossed as often.)
     let n = if matches!(curve, Curve::Line(_)) { 32 } else { 128 }.max(geom::winding_samples(surface));
     let ts: Vec<f64> = (0..=n).map(|i| first + (last - first) * i as f64 / n as f64).collect();
-    let g = |t: f64| geom::signed_distance(surface, curve.point(t));
+    // (On a free-form surface, known by its identity, the distances found before for the same
+    // curve kept: they depend on nothing else, the tolerances only on what is made of them.)
+    let lock = || CONTACT_DISTANCES.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let key = surface.shared_id().map(|_| ContactKey { surface: crate::geometry::extrema::SurfaceKey::of(surface), curve: curve.clone(), range: (first.to_bits(), last.to_bits()) });
+    let same = |k: &ContactKey, key: &ContactKey| k.surface == key.surface && k.range == key.range && k.curve == key.curve;
+    let known = key.as_ref().and_then(|key| lock().iter().find(|(k, _)| same(k, key)).map(|(_, d)| d.clone()));
+    let found: std::cell::RefCell<HashMap<u64, f64>> = Default::default();
+    let g = |t: f64| {
+        if let Some(&d) = known.as_ref().and_then(|k| k.get(&t.to_bits())) {
+            return d;
+        }
+        let d = geom::signed_distance(surface, curve.point(t));
+        if key.is_some() {
+            found.borrow_mut().insert(t.to_bits(), d);
+        }
+        d
+    };
+    let contact = contact_from(curve, first, last, surface, tolerance, n, &ts, &g);
+    if let Some(key) = key {
+        let found = found.into_inner();
+        if !found.is_empty() {
+            let mut all = known.map(|k| (*k).clone()).unwrap_or_default();
+            all.extend(found);
+            let mut cache = lock();
+            cache.retain(|(k, _)| !same(k, &key));
+            if cache.len() >= 1024 {
+                cache.remove(0);
+            }
+            cache.push((key, std::sync::Arc::new(all)));
+        }
+    }
+    contact
+}
+
+/// [`surface_contact`] from the distances `g` gives.
+#[allow(clippy::too_many_arguments)]
+fn contact_from(curve: &Curve, first: f64, last: f64, surface: &Surface, tolerance: f64, n: usize, ts: &[f64], g: &dyn Fn(f64) -> f64) -> Contact {
     let values: Vec<f64> = ts.iter().map(|&t| g(t)).collect();
     // Lying on the surface within the tolerance of meeting points (shapes made by earlier
     // operations put edges on surfaces only that closely).
