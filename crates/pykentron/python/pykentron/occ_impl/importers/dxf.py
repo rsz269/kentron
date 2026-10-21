@@ -7,8 +7,6 @@ import math
 from collections import OrderedDict
 from typing import List
 
-import ezdxf
-
 from ... import _kentron as native
 from ...geom import Vector
 from ..shapes import Edge, Face, Shape, _edges_to_wires, sortWiresByBuildOrder
@@ -94,6 +92,10 @@ def _importDXF(filename: str, tol: float = 1e-6, exclude: List[str] = [], includ
     """The faces bounded by the wires of the file's (selected) layers' curves."""
     if exclude and include:
         raise ValueError("you may specify either 'include' or 'exclude' but not both")
+    # (Imported here, on the first file read: importing the shim, whose sketches import this
+    # module, would otherwise wait a tenth of a second for ezdxf.)
+    import ezdxf
+
     dxf = ezdxf.readfile(filename)
     faces = []
     layers = dxf.modelspace().groupby(dxfattrib="layer")
