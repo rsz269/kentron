@@ -676,6 +676,7 @@ pub(super) fn rolling_tool(model: &mut Model, shape: Shape, edge: Shape, radius:
     let kept: Vec<&Section> = sections.iter().filter(|s| convex || (s.t >= t0.min(t1) - span && s.t <= t0.max(t1) + span)).collect();
     let mut wires = Vec::with_capacity(kept.len());
     let kept_radius = kept.iter().map(|s| s.radius).fold(0.0, f64::max);
+    let mut clear = true;
     for s in kept {
         let (a, b) = (s.contacts[0] - s.center, s.contacts[1] - s.center);
         let half = 0.5 * a.cross(b).length().atan2(a.dot(b));
@@ -686,6 +687,9 @@ pub(super) fn rolling_tool(model: &mut Model, shape: Shape, edge: Shape, radius:
         // Far enough along the rays for the closing segment to pass beyond the edge's
         // corner (which lies within the wedge, at r / sin(half) from the centre).
         let reach = (s.radius / half.sin().max(1e-3) + 0.5 * s.radius) / half.cos().max(1e-3);
+        // (Where the contacts lie further out than that, the segment may cut the arc: the
+        // tool is then left as the booleans have met it, its arcs sampled.)
+        clear &= reach * half.cos() > a.length().max(b.length());
         let far = [s.center + a.normalized() * reach, s.center + b.normalized() * reach];
         let normal = a.cross(b);
         let frame = Frame::new(s.center, Direction::from_vector(normal), Direction::from_vector(a));
@@ -702,10 +706,14 @@ pub(super) fn rolling_tool(model: &mut Model, shape: Shape, edge: Shape, radius:
         wires.push(crate::make::wire(model, &edges)?);
     }
     let options = crate::loft::LoftOptions { solid: true, ruled: false, ..Default::default() };
+    // (Its arcs exact, rational across, not resampled, where they are clear of the segments
+    // closing the sections.)
+    let loft = |model: &mut Model, wires: &[Shape]| if clear { crate::loft::loft_exact_arcs(model, wires, &options) } else { crate::loft::loft(model, wires, &options) };
     let tool = if closed {
         // Along a closed edge: two halves of the loop of sections, overlapping by a quarter
         // of it, lofted each and fused (each one's ends inside the other).
-        // (The last section repeats the first.)
+        // (The last section repeats the first. The halves' arcs sampled: exact, their union
+        // comes out with faces turned the wrong way.)
         let n = wires.len().saturating_sub(1);
         if n < 8 {
             return Err(Error::InvalidInput("a rolling-ball tool along a closed edge with too few sections".into()));
@@ -717,7 +725,7 @@ pub(super) fn rolling_tool(model: &mut Model, shape: Shape, edge: Shape, radius:
         let b = crate::loft::loft(model, &second, &options)?.shape;
         crate::boolean::union(model, a, b)?
     } else {
-        crate::loft::loft(model, &wires, &options)?.shape
+        loft(model, &wires)?.shape
     };
     let reach = 0.05 * kept_radius;
     cover_sides(model, tool, shape, edge, reach)?;

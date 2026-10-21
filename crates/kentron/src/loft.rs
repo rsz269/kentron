@@ -106,13 +106,21 @@ impl Loft {
 #[doc(alias = "BRepOffsetAPI_ThruSections")]
 #[doc(alias = "thrusections")]
 pub fn loft(model: &mut Model, sections: &[Shape], options: &LoftOptions) -> Result<Loft> {
-    loft_traced(model, sections, options, &[])
+    loft_traced(model, sections, options, &[], false)
+}
+
+/// [`loft`], its faces through circle arcs that all sections have at the same place exact:
+/// rational across them, their homogeneous poles interpolated along the loft, the arcs the
+/// section edges as they are (where the arcs' B-spline forms match; else as [`loft`] has
+/// them, sampled).
+pub(crate) fn loft_exact_arcs(model: &mut Model, sections: &[Shape], options: &LoftOptions) -> Result<Loft> {
+    loft_traced(model, sections, options, &[], true)
 }
 
 /// [`loft`], a smooth one smooth only between the sections at `breaks` (their indices): a face
 /// per edge and stretch between breaks, meeting the next at the break's edges.
 pub(crate) fn loft_breaking(model: &mut Model, sections: &[Shape], options: &LoftOptions, breaks: &[usize]) -> Result<Shape> {
-    loft_traced(model, sections, options, breaks).map(|l| l.shape)
+    loft_traced(model, sections, options, breaks, false).map(|l| l.shape)
 }
 
 /// `sections` (wires, or vertices first and last) made to match as a loft matches them:
@@ -143,7 +151,7 @@ pub(crate) fn compatible_sections(model: &mut Model, sections: &[Shape], matchin
     Ok(out)
 }
 
-fn loft_traced(model: &mut Model, sections: &[Shape], options: &LoftOptions, breaks: &[usize]) -> Result<Loft> {
+fn loft_traced(model: &mut Model, sections: &[Shape], options: &LoftOptions, breaks: &[usize], exact_arcs: bool) -> Result<Loft> {
     if sections.len() < 2 {
         return Err(Error::InvalidInput("a loft needs two sections or more".into()));
     }
@@ -172,7 +180,7 @@ fn loft_traced(model: &mut Model, sections: &[Shape], options: &LoftOptions, bre
         return Err(Error::InvalidInput("a loft closing on itself has no end sections to make a solid".into()));
     }
     make_compatible(&mut parsed, closed, looped, options.matching, &mut marks);
-    let grid = Grid::sample(&parsed, options.spacing);
+    let grid = Grid::sample(&parsed, options.spacing, exact_arcs);
     let built = build(model, &parsed, &grid, closed, looped, options, breaks)?;
     // What each section's edges and vertices generated: the faces of their pieces' columns
     // and the edges across at their boundaries.
@@ -773,15 +781,22 @@ fn normal(w: &WireSection) -> Vector {
 struct Grid {
     /// `curves[i][k]`: edge `i` of section `k`, over [0, 1].
     curves: Vec<Vec<BSplineCurve>>,
+    /// Whether edge `i`'s curves are its sections' arcs exactly (rational), not samples.
+    exact: Vec<bool>,
     /// The sections' positions across the loft, from 0 to 1.
     across: Vec<f64>,
 }
 
 impl Grid {
-    fn sample(sections: &[Section], spacing: Spacing) -> Grid {
+    fn sample(sections: &[Section], spacing: Spacing, exact_arcs: bool) -> Grid {
         let edges = sections.iter().find_map(|s| if let Section::Wire(w) = s { Some(w.pieces.len()) } else { None }).expect("a wire");
         let mut curves: Vec<Vec<BSplineCurve>> = Vec::with_capacity(edges);
+        let mut exact = vec![false; edges];
+        // (The rows the spacing across is measured on: the sampled ones also where the
+        // surface has exact rows, which have far fewer poles.)
+        let mut measured: Vec<Option<Vec<BSplineCurve>>> = Vec::with_capacity(edges);
         for i in 0..edges {
+            let exact_row = exact_arcs.then(|| exact_rows(sections, i)).flatten();
             let straight = sections.iter().all(|s| match s {
                 Section::Wire(w) => w.pieces[i].straight(),
                 Section::Point(..) => true,
@@ -823,7 +838,18 @@ impl Grid {
                 }
                 curve
             };
-            curves.push(sections.iter().zip(&counts).map(row).collect());
+            let sampled: Vec<BSplineCurve> = sections.iter().zip(&counts).map(row).collect();
+            match exact_row {
+                Some(rows) => {
+                    curves.push(rows);
+                    measured.push(Some(sampled));
+                    exact[i] = true;
+                }
+                None => {
+                    curves.push(sampled);
+                    measured.push(None);
+                }
+            }
         }
         // Across: by the mean distance between consecutive sections' points (or as `spacing`
         // says otherwise).
@@ -831,7 +857,8 @@ impl Grid {
         for k in 1..sections.len() {
             let mut sum = 0.0;
             let mut count = 0;
-            for row in &curves {
+            for (row, sampled) in curves.iter().zip(&measured) {
+                let row = sampled.as_ref().unwrap_or(row);
                 for j in 0..row[k].poles().len() {
                     sum += row[k].poles()[j].distance(row[k - 1].poles()[j]);
                     count += 1;
@@ -849,7 +876,7 @@ impl Grid {
         for v in &mut across {
             *v /= total;
         }
-        Grid { curves, across }
+        Grid { curves, exact, across }
     }
 
     /// The surface of edge `i` over sections `from..=to`: its poles interpolated across the
@@ -858,6 +885,33 @@ impl Grid {
         let rows = &self.curves[i][from..=to];
         let across: Vec<f64> = self.across[from..=to].to_vec();
         let count = rows[0].poles().len();
+        if rows.iter().any(|r| r.is_rational()) {
+            // Rational rows: their homogeneous poles (w P, and w) interpolated alike.
+            let weight = |r: &BSplineCurve, j: usize| r.weights().map_or(1.0, |w| w[j]);
+            let columns: Vec<(BSplineCurve, BSplineCurve)> = (0..count)
+                .map(|j| {
+                    let points: Vec<Point> = rows.iter().map(|r| Point::ORIGIN + (r.poles()[j] - Point::ORIGIN) * weight(r, j)).collect();
+                    let weights: Vec<Point> = rows.iter().map(|r| Point::new(weight(r, j), 0.0, 0.0)).collect();
+                    (polynomial_through(&points, &across), polynomial_through(&weights, &across))
+                })
+                .collect();
+            let projected = |(h, w): &(BSplineCurve, BSplineCurve)| -> (Vec<Point>, Vec<f64>) {
+                let ws: Vec<f64> = w.poles().iter().map(|p| p.x).collect();
+                (h.poles().iter().zip(&ws).map(|(&p, &w)| Point::ORIGIN + (p - Point::ORIGIN) * (1.0 / w)).collect(), ws)
+            };
+            let (poles, weights): (Vec<Vec<Point>>, Vec<Vec<f64>>) = columns.iter().map(projected).unzip();
+            let u = KnotVector::new(rows[0].knots().to_vec(), rows[0].multiplicities().to_vec(), rows[0].degree());
+            let (h0, _) = &columns[0];
+            let v = KnotVector::new(h0.knots().to_vec(), h0.multiplicities().to_vec(), h0.degree());
+            let surface = Surface::BSpline(BSplineSurface::new(poles, u, v).with_weights(weights));
+            // The curves across at u = 0 and u = 1 (rational where their weights vary).
+            let ends = [0, count - 1].map(|j| {
+                let (p, w) = projected(&columns[j]);
+                let curve = BSplineCurve::new(p, h0.knots().to_vec(), h0.multiplicities().to_vec(), h0.degree());
+                if w.iter().all(|&x| x == 1.0) { curve } else { curve.with_weights(w) }
+            });
+            return (surface, ends.to_vec());
+        }
         let columns: Vec<BSplineCurve> = (0..count)
             .map(|j| {
                 let points: Vec<Point> = rows.iter().map(|r| r.poles()[j]).collect();
@@ -872,6 +926,41 @@ impl Grid {
         let ends = [0, count - 1].map(|j| columns[j].clone());
         (surface, ends.to_vec())
     }
+}
+
+/// Edge `i` of each section as its circle arc exactly, a rational B-spline over [0, 1] from
+/// the piece's start to its end, where every section's is an arc and their B-spline forms
+/// have the same degree and knots; else `None`.
+fn exact_rows(sections: &[Section], i: usize) -> Option<Vec<BSplineCurve>> {
+    let mut rows = Vec::with_capacity(sections.len());
+    for s in sections {
+        let Section::Wire(w) = s else { return None };
+        let piece = &w.pieces[i];
+        if !matches!(piece.curve, Curve::Circle(_)) {
+            return None;
+        }
+        let (lo, hi) = (piece.first.min(piece.last), piece.first.max(piece.last));
+        let trimmed = Curve::Trimmed(crate::geometry::curve::TrimmedCurve::new(piece.curve.clone(), lo, hi));
+        let mut b = crate::geometry::convert::curve_to_bspline(&trimmed)?.clamped();
+        if piece.first > piece.last {
+            b.reverse();
+        }
+        let (k0, k1) = (b.knots()[0], b.knots()[b.knots().len() - 1]);
+        if !(k1 > k0) {
+            return None;
+        }
+        let knots: Vec<f64> = b.knots().iter().map(|k| (k - k0) / (k1 - k0)).collect();
+        let row = BSplineCurve::new(b.poles().to_vec(), knots, b.multiplicities().to_vec(), b.degree());
+        rows.push(match b.weights() {
+            Some(w) => row.with_weights(w.to_vec()),
+            None => row,
+        });
+    }
+    let first = rows.first()?;
+    let alike = |r: &BSplineCurve| {
+        r.degree() == first.degree() && r.multiplicities() == first.multiplicities() && r.knots().len() == first.knots().len() && r.knots().iter().zip(first.knots()).all(|(a, b)| (a - b).abs() <= 1e-12)
+    };
+    rows.iter().all(alike).then_some(rows)
 }
 
 /// The polynomial curve (one Bezier span, of degree one less than the number of points)
@@ -995,7 +1084,7 @@ fn build(model: &mut Model, sections: &[Section], grid: &Grid, closed: bool, loo
                 model.set_edge_curve(id.into(), curve, crate::tolerance::LINEAR)?;
                 model.set_edge_range(id.into(), first, last)?;
                 range = (first, last);
-            } else if matches!(curve, Curve::Line(_) | Curve::Circle(_) | Curve::Ellipse(_)) {
+            } else if matches!(curve, Curve::Line(_) | Curve::Circle(_) | Curve::Ellipse(_)) && !grid.exact[i] {
                 // A line or conic stays one (as its section's edge, meeting the faces beyond
                 // it on the same curve), over the same fraction of its range as the face's
                 // boundary across: within the tolerance of that boundary from it.
