@@ -175,11 +175,11 @@ impl Patches {
     }
 
     /// The point and its derivatives up to `order` (at most 2) at `(u, v)`; `None` above
-    /// degree 25, and outside the bounds (where a short end patch's polynomial, far from its
-    /// own range, magnifies rounding: the B-spline's knot window is evaluated instead).
+    /// degree 25, and beyond the bounds by more than an end patch's length (where a short end
+    /// patch's polynomial, far from its own range, magnifies rounding: the B-spline's knot
+    /// window is evaluated instead).
     pub(super) fn evaluate(&self, u: f64, v: f64, order: usize) -> Option<Derivatives> {
-        let (u0, u1, v0, v1) = self.bounds();
-        if !(u0..=u1).contains(&u) || !(v0..=v1).contains(&v) {
+        if !(near(&self.u_breaks, u) && near(&self.v_breaks, v)) {
             return None;
         }
         match order {
@@ -640,6 +640,14 @@ fn project(a: &[[[f64; 4]; 3]; 3], order: usize) -> Derivatives {
     let s_vv: [f64; 3] = std::array::from_fn(|c| (a[0][2][c] - 2.0 * a[0][1][3] * s_v[c] - a[0][2][3] * s[c]) / w);
     let s_uv: [f64; 3] = std::array::from_fn(|c| (a[1][1][c] - a[1][0][3] * s_v[c] - a[0][1][3] * s_u[c] - a[1][1][3] * s[c]) / w);
     Derivatives { point, du: vector(s_u), dv: vector(s_v), duu: vector(s_uu), dvv: vector(s_vv), duv: vector(s_uv) }
+}
+
+/// Whether `t` is within the breaks, or beyond them by at most the end patch's length (where
+/// its polynomial, the B-spline's own there, is still near its range). Not a NaN.
+#[inline(always)]
+fn near(breaks: &[f64], t: f64) -> bool {
+    let (lo, hi) = (breaks[0], breaks[breaks.len() - 1]);
+    t >= lo - (breaks[1] - lo) && t <= hi + (hi - breaks[breaks.len() - 2])
 }
 
 /// The patch of `t` among the breaks (the last whose start is at most `t`, an end one
