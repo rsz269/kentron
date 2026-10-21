@@ -3,6 +3,7 @@
 //! degree's multiplicity) and shared by its clones, they spare each evaluation the knot
 //! search and the basis recurrences.
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use super::bspline::KnotVector;
@@ -92,10 +93,26 @@ pub(super) struct Patches {
     points: Vec<[f64; 4]>,
     /// Weights other than 1 (else the sums skip them and the quotient rule).
     rational: bool,
+    /// The patches along u and v found last, tried first.
+    hints: Hint<2>,
 }
 
-/// More control points than this are not kept (the surface is evaluated as before).
-const MOST_POINTS: usize = 1 << 18;
+/// The pieces found last by a lookup among breaks (see [`locate`]): where the next
+/// evaluation most often is, Newton steps and marching moving little between them. On a
+/// cache line of its own, so that its updates do not take from other threads the line of
+/// the breaks they read.
+#[repr(align(64))]
+pub(super) struct Hint<const N: usize>([AtomicUsize; N]);
+
+impl<const N: usize> Default for Hint<N> {
+    fn default() -> Self {
+        Hint(std::array::from_fn(|_| AtomicUsize::new(0)))
+    }
+}
+
+/// More control points than this are not kept (the surface is evaluated as before): up to
+/// 64 MB of them, as a rolling-ball tool's surfaces of a few hundred sections need.
+const MOST_POINTS: usize = 1 << 21;
 
 impl Patches {
     /// The patches of the surface with these knots and control points `(w P, w)`
@@ -135,7 +152,7 @@ impl Patches {
             }
         }
         let rational = points.iter().any(|q| q[3] != 1.0);
-        Some(Patches { u_breaks, v_breaks, u_degree: pu, v_degree: pv, points, rational })
+        Some(Patches { u_breaks, v_breaks, u_degree: pu, v_degree: pv, points, rational, hints: Hint::default() })
     }
 
     /// The same patches with each control point `(w P, w)` mapped by `f`.
@@ -147,6 +164,7 @@ impl Patches {
             v_degree: self.v_degree,
             points: self.points.iter().map(|&q| f(q)).collect(),
             rational: self.rational,
+            hints: Hint::default(),
         }
     }
 
@@ -190,8 +208,8 @@ impl Patches {
     fn sums3<const N: usize>(&self, u: f64, v: f64) -> [[[f64; 3]; 4]; 4] {
         const ORDER: usize = 3;
         let (pu, pv) = (self.u_degree, self.v_degree);
-        let (a, s, ku) = locate(&self.u_breaks, u);
-        let (b, t, kv) = locate(&self.v_breaks, v);
+        let (a, s, ku) = locate(&self.u_breaks, u, &self.hints.0[0]);
+        let (b, t, kv) = locate(&self.v_breaks, v, &self.hints.0[1]);
         let bu = bernstein3::<N>(pu, s, ku);
         let bv = bernstein3::<N>(pv, t, kv);
         let npv = self.v_breaks.len() - 1;
@@ -292,7 +310,7 @@ impl Patches {
     fn along_u<const N: usize, const ORDER: usize, const C: usize>(&self, us: &[f64], v: f64, out: &mut Vec<Option<Derivatives>>) {
         let (pu, pv) = (self.u_degree, self.v_degree);
         let (u0, u1, _, _) = self.bounds();
-        let (b, t, kv) = locate(&self.v_breaks, v);
+        let (b, t, kv) = locate(&self.v_breaks, v, &self.hints.0[1]);
         let bv = bernstein::<N, ORDER>(pv, t, kv);
         let npv = self.v_breaks.len() - 1;
         // The rows of the patch in use summed along v, per derivative order in v (as `sums`
@@ -305,7 +323,7 @@ impl Patches {
                 out.push(None);
                 continue;
             }
-            let (a, s, ku) = locate(&self.u_breaks, u);
+            let (a, s, ku) = locate(&self.u_breaks, u, &self.hints.0[0]);
             if a != summed {
                 summed = a;
                 let patch = &self.points[(a * npv + b) * (pu + 1) * (pv + 1)..][..(pu + 1) * (pv + 1)];
@@ -382,32 +400,42 @@ impl Patches {
     #[inline(always)]
     fn sums<const NU: usize, const NV: usize, const ORDER: usize, const EXACT: bool, const C: usize>(&self, u: f64, v: f64) -> Derivatives {
         let (pu, pv) = if EXACT { (NU - 1, NV - 1) } else { (self.u_degree, self.v_degree) };
-        let (a, s, ku) = locate(&self.u_breaks, u);
-        let (b, t, kv) = locate(&self.v_breaks, v);
+        let (a, s, ku) = locate(&self.u_breaks, u, &self.hints.0[0]);
+        let (b, t, kv) = locate(&self.v_breaks, v, &self.hints.0[1]);
         let bu = bernstein::<NU, ORDER>(pu, s, ku);
         let bv = bernstein::<NV, ORDER>(pv, t, kv);
         let npv = self.v_breaks.len() - 1;
         let patch = &self.points[(a * npv + b) * (pu + 1) * (pv + 1)..][..(pu + 1) * (pv + 1)];
         // Homogeneous sums h[k][l] = Σ B_i^(k) B_j^(l) (w P, w) for k + l <= ORDER.
+        // (Every loop over a range known to the compiler, cut short at the degree: with the
+        // exact sizes they unroll, the sums kept in registers, in the same order.)
         let mut h = [[[0.0f64; 4]; 3]; 3];
-        for i in 0..=pu {
+        for i in 0..NU {
+            if i > pu {
+                break;
+            }
             let row = &patch[i * (pv + 1)..][..pv + 1];
             // Along v first: row sums for each derivative order in v.
             let mut r = [[0.0f64; 4]; 3];
-            for j in 0..=pv {
+            for j in 0..NV {
+                if j > pv {
+                    break;
+                }
                 let q = row[j];
-                for l in 0..=ORDER {
+                for l in 0..ORDER + 1 {
                     let f = bv[l][j];
                     for c in 0..C {
                         r[l][c] += f * q[c];
                     }
                 }
             }
-            for k in 0..=ORDER {
+            for k in 0..ORDER + 1 {
                 let f = bu[k][i];
-                for l in 0..=ORDER - k {
-                    for c in 0..C {
-                        h[k][l][c] += f * r[l][c];
+                for l in 0..ORDER + 1 {
+                    if k + l <= ORDER {
+                        for c in 0..C {
+                            h[k][l][c] += f * r[l][c];
+                        }
                     }
                 }
             }
@@ -438,6 +466,8 @@ pub(super) struct Segments {
     rational: bool,
     /// For a periodic curve, its period's range (parameters outside are wrapped into it).
     period: Option<(f64, f64)>,
+    /// The segment found last, tried first.
+    hint: Hint<1>,
 }
 
 impl Segments {
@@ -454,7 +484,7 @@ impl Segments {
         let points: Vec<[f64; 4]> = split.chunks(4).map(|c| [c[0], c[1], c[2], c[3]]).collect();
         let rational = points.iter().any(|q| q[3] != 1.0);
         let period = periodic.then(|| (breaks[0], breaks[breaks.len() - 1]));
-        Some(Segments { breaks, degree, points, rational, period })
+        Some(Segments { breaks, degree, points, rational, period, hint: Hint::default() })
     }
 
     /// The same segments with each control point `(w P, w)` mapped by `f`.
@@ -465,6 +495,7 @@ impl Segments {
             points: self.points.iter().map(|&q| f(q)).collect(),
             rational: self.rational,
             period: self.period,
+            hint: Hint::default(),
         }
     }
 
@@ -503,13 +534,17 @@ impl Segments {
     #[inline(always)]
     fn sums<const N: usize, const ORDER: usize, const EXACT: bool, const C: usize>(&self, t: f64) -> [[f64; 3]; 3] {
         let p = if EXACT { N - 1 } else { self.degree };
-        let (k, s, scale) = locate(&self.breaks, t);
+        let (k, s, scale) = locate(&self.breaks, t, &self.hint.0[0]);
         let b = bernstein::<N, ORDER>(p, s, scale);
         let segment = &self.points[k * (p + 1)..][..p + 1];
+        // (Loops over ranges known to the compiler, as in the patches' sums.)
         let mut h = [[0.0f64; 4]; 3];
-        for i in 0..=p {
+        for i in 0..N {
+            if i > p {
+                break;
+            }
             let q = segment[i];
-            for l in 0..=ORDER {
+            for l in 0..ORDER + 1 {
                 let f = b[l][i];
                 for c in 0..C {
                     h[l][c] += f * q[c];
@@ -584,9 +619,22 @@ fn project(a: &[[[f64; 4]; 3]; 3], order: usize) -> Derivatives {
 
 /// The patch of `t` among the breaks (the last whose start is at most `t`, an end one
 /// outside), `t`'s place in it (0 to 1 inside) and the derivative of that place in `t`.
-fn locate(breaks: &[f64], t: f64) -> (usize, f64, f64) {
+/// The patch `hint` holds is tried first, and the one found kept there.
+#[inline(always)]
+fn locate(breaks: &[f64], t: f64, hint: &AtomicUsize) -> (usize, f64, f64) {
     let last = breaks.len() - 2;
-    let k = breaks[1..=last].partition_point(|&b| b <= t);
+    // (The hinted patch where it is the one the search would find: breaks strictly increase,
+    // so that is the patch with breaks[k] <= t < breaks[k + 1], the end ones reaching out. A
+    // NaN fails both tests and is searched for, as before. Relaxed: a patch another thread
+    // found is as good a guess.)
+    let h = hint.load(Ordering::Relaxed);
+    let k = if h <= last && (h == 0 || breaks[h] <= t) && (h == last || t < breaks[h + 1]) {
+        h
+    } else {
+        let k = breaks[1..=last].partition_point(|&b| b <= t);
+        hint.store(k, Ordering::Relaxed);
+        k
+    };
     let (a, b) = (breaks[k], breaks[k + 1]);
     let scale = 1.0 / (b - a);
     (k, (t - a) * scale, scale)
@@ -599,10 +647,17 @@ fn bernstein<const N: usize, const ORDER: usize>(p: usize, s: f64, scale: f64) -
     let r = 1.0 - s;
     let mut out = [[0.0f64; N]; 3];
     // Degree k from degree k - 1, from the top down; the lower degrees the derivatives need
-    // kept in out[1] (p - 1) and out[2] (p - 2) on the way.
+    // kept in out[1] (p - 1) and out[2] (p - 2) on the way. (Over ranges known to the
+    // compiler, cut short at the degree, so that the small sizes unroll and keep the arrays
+    // in registers: the same operations in the same order. Not the largest, for degrees up
+    // to 25, where the masked steps would outnumber the others.)
+    let unrolled = N <= 9;
     let mut b = [0.0f64; N];
     b[0] = 1.0;
-    for k in 1..=p {
+    for k in 1..N {
+        if k > p {
+            break;
+        }
         if ORDER >= 2 && k + 1 == p {
             out[2] = b;
         }
@@ -610,8 +665,16 @@ fn bernstein<const N: usize, const ORDER: usize>(p: usize, s: f64, scale: f64) -
             out[1] = b;
         }
         b[k] = s * b[k - 1];
-        for i in (1..k).rev() {
-            b[i] = r * b[i] + s * b[i - 1];
+        if unrolled {
+            for i in (1..N).rev() {
+                if i < k {
+                    b[i] = r * b[i] + s * b[i - 1];
+                }
+            }
+        } else {
+            for i in (1..k).rev() {
+                b[i] = r * b[i] + s * b[i - 1];
+            }
         }
         b[0] *= r;
     }
@@ -619,7 +682,10 @@ fn bernstein<const N: usize, const ORDER: usize>(p: usize, s: f64, scale: f64) -
         // d²/ds² B_i^p = p (p - 1) (B_{i-2}^{p-2} - 2 B_{i-1}^{p-2} + B_i^{p-2}).
         let low = out[2];
         let f = if p >= 2 { (p * (p - 1)) as f64 * scale * scale } else { 0.0 };
-        for i in 0..=p {
+        for i in 0..N {
+            if i > p {
+                break;
+            }
             let at = |j: usize| if j + 2 <= p { low[j] } else { 0.0 };
             let (a, b) = (if i >= 2 { at(i - 2) } else { 0.0 }, if i >= 1 { at(i - 1) } else { 0.0 });
             out[2][i] = f * (a - 2.0 * b + at(i));
@@ -629,7 +695,10 @@ fn bernstein<const N: usize, const ORDER: usize>(p: usize, s: f64, scale: f64) -
         // d/ds B_i^p = p (B_{i-1}^{p-1} - B_i^{p-1}).
         let low = out[1];
         let f = p as f64 * scale;
-        for i in 0..=p {
+        for i in 0..N {
+            if i > p {
+                break;
+            }
             let left = if i >= 1 { low[i - 1] } else { 0.0 };
             let right = if i < p { low[i] } else { 0.0 };
             out[1][i] = f * (left - right);
