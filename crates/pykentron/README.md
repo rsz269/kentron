@@ -72,11 +72,11 @@ Shapes no Python object refers to any more are collected from time to time. How 
 freed, and which allocator kentron's memory comes from, is a profile, chosen by
 `PYKENTRON_PROFILE` before `pykentron` is imported:
 
-| profile | allocator | collection | a complex five-part CadQuery model, against no collection |
+| profile | allocator | collection | a complex five-part CadQuery model, against `balanced` |
 |---|---|---|---|
-| `low-memory` | the system's | also forgets cached values of removed shapes | 62% of the peak memory, ~5–10% slower |
-| `balanced` | the system's | removes unreachable shapes | 72% of the peak memory, ~3% slower |
-| `fast` (default) | mimalloc | as `balanced` | the same peak memory, ~17% faster |
+| `low-memory` | the system's | also forgets cached values of removed shapes | 88% of the peak memory, about as fast |
+| `balanced` | the system's | removes unreachable shapes | (360 MB at the peak, 3.9 s) |
+| `fast` (default) | mimalloc | as `balanced` | 132% of the peak memory, ~11% faster |
 
 `pykentron.profile()` gives the profile in use and `pykentron.set_profile(name)` switches
 between `low-memory` and `balanced` at any time; the allocator is chosen once, at startup,
