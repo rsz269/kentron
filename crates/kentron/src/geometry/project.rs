@@ -367,8 +367,17 @@ fn parameters_near_with(surface: &Surface, collapse: &Collapse, p: Point, near: 
 /// locally, as on a surface winding round many times), from a later sample's foot that is
 /// nearer, followed back along the curve.
 fn first_foot(curve: &Curve, surface: &Surface, first: f64, last: f64) -> Option<(f64, f64)> {
+    first_foot_from(curve, surface, first, last, None)
+}
+
+/// [`first_foot`], from the parameters of the curve's point at `first` where they were found
+/// already (as [`parameters_near`] finds them without a start).
+fn first_foot_from(curve: &Curve, surface: &Surface, first: f64, last: f64, found: Option<(f64, f64)>) -> Option<(f64, f64)> {
     let p = curve.point(first);
-    let start = parameters_near(surface, p, None)?;
+    let start = match found {
+        Some(uv) => uv,
+        None => parameters_near(surface, p, None)?,
+    };
     let gap = |(u, v): (f64, f64), q: Point| surface.point(u, v).distance(q);
     let off = gap(start, p);
     let size = p.distance(curve.point(0.5 * (first + last))) + curve.point(0.5 * (first + last)).distance(curve.point(last));
@@ -489,6 +498,12 @@ pub fn pcurve_on_range(curve: &Curve, surface: &Surface, first: f64, last: f64, 
 /// reached: what trying them in turn gives, with the curve sampled and its points inverted
 /// once for all of them.
 pub fn pcurve_on_range_within(curve: &Curve, surface: &Surface, first: f64, last: f64, tolerances: &[f64]) -> Option<BSplineCurve2> {
+    pcurve_on_range_from(curve, surface, first, last, tolerances, None)
+}
+
+/// [`pcurve_on_range_within`], from the parameters of the curve's point at `first` where they
+/// were found already (by [`super::extrema::nearest_on_surface`] without a start).
+pub(crate) fn pcurve_on_range_from(curve: &Curve, surface: &Surface, first: f64, last: f64, tolerances: &[f64], start: Option<(f64, f64)>) -> Option<BSplineCurve2> {
     use super::{ParametricCurve, ParametricSurface};
     let u_period = surface.u_period();
     let v_period = surface.v_period();
@@ -528,7 +543,7 @@ pub fn pcurve_on_range_within(curve: &Curve, surface: &Surface, first: f64, last
                     let p = if raw.is_empty() { curve.point(t) } else { middles[i / 2] };
                     let found = match (next.last(), next_gaps.last()) {
                         (Some(q), Some(&gap)) => parameters_near_with(surface, &collapse, p, Some(((q.x, q.y), gap))),
-                        _ => first_foot(curve, surface, first, last),
+                        _ => first_foot_from(curve, surface, first, last, start),
                     };
                     let Some((u, v)) = found else {
                         return first_reached(reached);

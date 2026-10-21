@@ -217,6 +217,8 @@ pub(crate) fn project(edge: &CurveSpan, surface: &Surface, has_pcurve: bool) -> 
     }
     // An edge well off the surface (bad data) fails at once, before costly fitting. (Each
     // point's foot from the one before, the whole surface searched only to confirm one off.)
+    // (The first point's foot, from the whole surface, starts the fitting too.)
+    let mut first_foot = None;
     if surface.parameters(edge.curve.point(edge.first)).is_none() {
         use crate::geometry::extrema::{nearest_on_surface, newton_on_surface};
         let mut start = None;
@@ -225,6 +227,9 @@ pub(crate) fn project(edge: &CurveSpan, surface: &Surface, has_pcurve: bool) -> 
             let near = start.map(|s| newton_on_surface(p, surface, s)).filter(|f| f.2 <= 1e-2);
             let (u, v, d) = near.unwrap_or_else(|| nearest_on_surface(p, surface, start));
             start = Some((u, v));
+            if i == 0 {
+                first_foot = start;
+            }
             if d > 1e-2 {
                 return Err(invalid("an edge that does not project onto its face".into()));
             }
@@ -244,7 +249,7 @@ pub(crate) fn project(edge: &CurveSpan, surface: &Surface, has_pcurve: bool) -> 
             surface.parameters(p).is_some_and(|(u, v)| surface.point(u, v).distance(p) > 1e-3)
         })
     };
-    pr::pcurve_on_range_within(edge.curve, surface, edge.first, edge.last, tiers)
+    pr::pcurve_on_range_from(edge.curve, surface, edge.first, edge.last, tiers, first_foot)
         .or_else(|| if freeform || (has_pcurve && off_surface()) { None } else { pr::polyline_pcurve_on_range(edge.curve, surface, edge.first, edge.last, 1e-6) })
         .map(Curve2::BSpline)
         .ok_or_else(|| invalid("an edge that does not project onto its face".into()))
