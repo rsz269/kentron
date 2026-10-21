@@ -19,7 +19,7 @@ use kentron::geometry::surface::Surface;
 use kentron::geometry::{ParametricCurve, ParametricSurface};
 use kentron::math::{Axis, Direction, Frame, Point, Transform, Vector};
 use kentron::hashing::FastMap;
-use kentron::topology::{CollectOptions, Model, NodeId, NodeKind, Orientation, Shape, WireId};
+use kentron::topology::{Model, NodeId, NodeKind, Orientation, Shape, WireId};
 use kentron::{blend, boolean, loft, make, modify, offset, primitives, properties, sweep, validity};
 
 mod cadquery;
@@ -43,8 +43,7 @@ fn handled() -> MutexGuard<'static, FastMap<NodeId, u32>> {
 const FIRST_COLLECTION: usize = 50_000;
 
 /// Collects what no handle reaches once the model has twice the nodes it kept at the last
-/// collection (so collecting costs a bounded share of the work that made the nodes), as the
-/// [profile](profile) says.
+/// collection (so collecting costs a bounded share of the work that made the nodes).
 fn collect_if_grown(model: &mut Model) {
     static NEXT: AtomicUsize = AtomicUsize::new(FIRST_COLLECTION);
     let nodes = |model: &Model| NodeKind::ALL.iter().map(|&k| model.count(k)).sum::<usize>();
@@ -52,7 +51,7 @@ fn collect_if_grown(model: &mut Model) {
         return;
     }
     let roots: Vec<NodeId> = handled().keys().copied().collect();
-    model.collect_garbage_with(roots, CollectOptions { forget_derived: profile::current().forgets_derived() });
+    model.collect_garbage(roots);
     NEXT.store((2 * nodes(model)).max(FIRST_COLLECTION), Ordering::Relaxed);
 }
 

@@ -56,8 +56,8 @@ it honest. Every change is checked against the test sources below before it is c
 and no change may make a passing test fail.
 
 <!-- effort -->
-So far (2026-09-25 to 2026-10-21): about 160 hours of the agent's active work, 11.1 million
-tokens written by it, and 6.2 billion tokens processed in all (nearly all of them its
+So far (2026-09-25 to 2026-10-21): about 161 hours of the agent's active work, 11.1 million
+tokens written by it, and 6.3 billion tokens processed in all (nearly all of them its
 conversation's context, read back from the cache).
 <!-- /effort -->
 
@@ -92,23 +92,20 @@ CadQuery 2.8 (OCCT), median of 5 runs:
 
 | | wall time | CPU time | peak memory |
 |---|---|---|---|
-| pykentron, `fast` profile (default) | 3.5 s | 4.4 s | 475 MB |
-| pykentron, `balanced` profile | 3.9 s | 4.7 s | 360 MB |
+| pykentron, `fast` profile (default) | 3.5 s | 4.4 s | 395 MB |
 | pykentron, `low-memory` profile | 4.0 s | 4.7 s | 316 MB |
 | CadQuery 2.8 / OCCT | 40.2 s | 126.0 s | 1,094 MB |
 
-With the default `fast` profile, that is 11× faster than CadQuery, with 29× less CPU time and 2.3×
+With the default `fast` profile, that is 11× faster than CadQuery, with 29× less CPU time and 2.8×
 less memory.
 
-pykentron frees shapes that Python no longer refers to. How much it frees, and which
-allocator it uses, is chosen with `PYKENTRON_PROFILE`:
+pykentron frees shapes that Python no longer refers to, with the data cached for them. Which
+allocator it uses is chosen with `PYKENTRON_PROFILE`:
 
-- `low-memory`: also drops cached data of removed shapes.
-- `balanced`: removes unreachable shapes.
-- `fast` (default): as `balanced`, with mimalloc as allocator.
+- `low-memory`: the system's.
+- `fast` (default): mimalloc.
 
-Rust programs using kentron directly make the same choice by declaring their allocator and
-passing `CollectOptions` to `Model::collect_garbage_with`.
+Rust programs using kentron directly make the same choice by declaring their allocator.
 
 ## Tracing sections of free-form surfaces
 

@@ -1,18 +1,17 @@
-//! Profiles trading memory for speed: which allocator kentron's memory comes from, and how
-//! much the model's garbage collection frees.
+//! Profiles trading memory for speed: which allocator kentron's memory comes from.
 //!
-//! | profile | allocator | collection |
-//! |---|---|---|
-//! | `low-memory` | the system's | also forgets values derived from removed nodes |
-//! | `balanced` | the system's | removes unreachable nodes, keeps derived values |
-//! | `fast` (default) | mimalloc | as `balanced` |
+//! | profile | allocator |
+//! |---|---|
+//! | `low-memory` | the system's |
+//! | `fast` (default) | mimalloc |
 //!
-//! (Built without the `mimalloc` feature, `balanced` is the default.)
+//! (Built without the `mimalloc` feature, `low-memory` is the default.) Both collect garbage
+//! alike. `balanced`, a profile once between them (the system's allocator, values derived
+//! from removed shapes kept), is read as `low-memory`.
 //!
 //! The allocator is chosen once, at the first allocation (memory must be freed by the
 //! allocator that gave it), from `PYKENTRON_PROFILE` in the environment: the profile is set
-//! before `pykentron` is imported, or later with [`set_profile`] between the two profiles that
-//! share the allocator in use.
+//! before `pykentron` is imported.
 
 use std::ffi::{c_char, CStr};
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -26,33 +25,29 @@ const VARIABLE: &CStr = c"PYKENTRON_PROFILE";
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Profile {
     LowMemory = 1,
-    Balanced = 2,
-    Fast = 3,
+    Fast = 2,
 }
 
 impl Profile {
-    const ALL: [Profile; 3] = [Profile::LowMemory, Profile::Balanced, Profile::Fast];
+    const ALL: [Profile; 2] = [Profile::LowMemory, Profile::Fast];
 
     fn name(self) -> &'static str {
         match self {
             Profile::LowMemory => "low-memory",
-            Profile::Balanced => "balanced",
             Profile::Fast => "fast",
         }
     }
 
     fn named(name: &[u8]) -> Option<Profile> {
+        if name == b"balanced" {
+            return Some(Profile::LowMemory);
+        }
         Profile::ALL.into_iter().find(|p| p.name().as_bytes() == name)
     }
 
     /// Whether the profile's memory comes from mimalloc.
     fn uses_mimalloc(self) -> bool {
         self == Profile::Fast
-    }
-
-    /// Whether garbage collection also forgets the values derived from removed nodes.
-    pub(crate) fn forgets_derived(self) -> bool {
-        self == Profile::LowMemory
     }
 }
 
@@ -76,7 +71,7 @@ fn from_environment() -> Option<Result<Profile, &'static [u8]>> {
 static CURRENT: AtomicU8 = AtomicU8::new(0);
 
 /// The profile used where the environment names none: `fast` where built with mimalloc.
-const DEFAULT: Profile = if cfg!(feature = "mimalloc") { Profile::Fast } else { Profile::Balanced };
+const DEFAULT: Profile = if cfg!(feature = "mimalloc") { Profile::Fast } else { Profile::LowMemory };
 
 /// The profile in use: the environment's at first ([`DEFAULT`] if it names none).
 pub(crate) fn current() -> Profile {
@@ -84,7 +79,7 @@ pub(crate) fn current() -> Profile {
         0 => {
             let profile = match from_environment() {
                 Some(Ok(p)) if !p.uses_mimalloc() || cfg!(feature = "mimalloc") => p,
-                Some(Ok(_)) => Profile::Balanced,
+                Some(Ok(_)) => Profile::LowMemory,
                 _ => DEFAULT,
             };
             CURRENT.store(profile as u8, Ordering::Relaxed);
@@ -98,7 +93,7 @@ pub(crate) fn current() -> Profile {
 pub(crate) fn check_environment() -> PyResult<()> {
     match from_environment() {
         Some(Err(value)) => Err(PyValueError::new_err(format!(
-            "PYKENTRON_PROFILE={}: not a profile (low-memory, balanced, fast)",
+            "PYKENTRON_PROFILE={}: not a profile (low-memory, fast)",
             String::from_utf8_lossy(value)
         ))),
         Some(Ok(p)) if p.uses_mimalloc() && !cfg!(feature = "mimalloc") => {
@@ -108,19 +103,20 @@ pub(crate) fn check_environment() -> PyResult<()> {
     }
 }
 
-/// The profile in use: "low-memory", "balanced" or "fast".
+/// The profile in use: "low-memory" or "fast".
 #[pyfunction]
 pub(crate) fn profile() -> &'static str {
     current().name()
 }
 
-/// Switches to the profile `name`: "low-memory" or "balanced" (which use the system's
-/// allocator), or "fast" (mimalloc). The allocator is chosen at startup, so a switch to a
-/// profile with another one fails: set `PYKENTRON_PROFILE` before importing pykentron instead.
+/// Switches to the profile `name`: "low-memory" (the system's allocator) or "fast"
+/// (mimalloc). The allocator is chosen at startup, so only the profile in use can be named
+/// ("balanced" naming "low-memory"); another fails: set `PYKENTRON_PROFILE` before importing
+/// pykentron instead.
 #[pyfunction]
 pub(crate) fn set_profile(name: &str) -> PyResult<()> {
     let profile = Profile::named(name.as_bytes())
-        .ok_or_else(|| PyValueError::new_err(format!("{name}: not a profile (low-memory, balanced, fast)")))?;
+        .ok_or_else(|| PyValueError::new_err(format!("{name}: not a profile (low-memory, fast)")))?;
     let current = current();
     if profile.uses_mimalloc() != current.uses_mimalloc() {
         return Err(PyValueError::new_err(format!(

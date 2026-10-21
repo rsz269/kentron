@@ -62,8 +62,7 @@ impl Model {
     /// records made later, so ids of removed nodes must not be kept. Ids of what is kept stay
     /// valid. Returns the number of nodes removed.
     ///
-    /// Values derived from removed nodes stay in the model's cache (bounded on its own; a
-    /// record made in a reused slot does not match them): see
+    /// Values derived from removed nodes are forgotten with them: see
     /// [`CollectOptions::forget_derived`].
     pub fn collect_garbage(&mut self, roots: impl IntoIterator<Item = NodeId>) -> usize {
         self.collect_garbage_with(roots, CollectOptions::default())
@@ -281,25 +280,30 @@ impl Model {
 
 /// Options for [`Model::collect_garbage_with`].
 ///
-/// pykentron's profiles (`PYKENTRON_PROFILE`) are an allocator and these options; a Rust
-/// program has the same choices, the allocator by declaring it:
+/// pykentron's profiles (`PYKENTRON_PROFILE`) collect with the defaults and differ in their
+/// allocator, which a Rust program chooses by declaring it:
 ///
-/// | profile | global allocator | collection |
-/// |---|---|---|
-/// | `low-memory` | the system's (none declared) | `forget_derived: true` |
-/// | `balanced` | the system's (none declared) | the defaults |
-/// | `fast` | `#[global_allocator] static A: mimalloc::MiMalloc = mimalloc::MiMalloc;` | the defaults |
+/// | profile | global allocator |
+/// |---|---|
+/// | `low-memory` | the system's (none declared) |
+/// | `fast` | `#[global_allocator] static A: mimalloc::MiMalloc = mimalloc::MiMalloc;` |
 ///
-/// On a complex five-part CadQuery model (pykentron), against no collection: `low-memory` peaked at
-/// 62% of the memory and took ~5–10% longer, `balanced` 72% and ~3% longer, `fast` the same
-/// memory and ~17% less time.
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+/// On a complex five-part CadQuery model (pykentron), `fast` took ~12% less time and peaked
+/// at ~25% more memory.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CollectOptions {
     /// Also forget the values derived from removed nodes (sampled boundaries, boxes, ...),
-    /// which otherwise stay until the cache is full. Frees more memory, but measured on
-    /// CadQuery scripts it makes later operations 5–10% slower: the freed memory, scattered
-    /// through the heap, is slower for the allocator to reuse.
+    /// which otherwise stay until the cache is full (and is then emptied, the values of kept
+    /// nodes too). On by default: a removed node's values are never asked for again, and
+    /// forgetting them, measured on CadQuery scripts, takes no time that shows and lowers
+    /// the peak memory (by 12% on the five-part model).
     pub forget_derived: bool,
+}
+
+impl Default for CollectOptions {
+    fn default() -> Self {
+        CollectOptions { forget_derived: true }
+    }
 }
 
 #[cfg(test)]

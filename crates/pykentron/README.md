@@ -68,21 +68,20 @@ for constraints), as CadQuery does: the `cadquery` extra.
 
 ## Memory and speed
 
-Shapes no Python object refers to any more are collected from time to time. How much is
-freed, and which allocator kentron's memory comes from, is a profile, chosen by
+Shapes no Python object refers to any more are collected from time to time, with the values
+cached for them. Which allocator kentron's memory comes from is a profile, chosen by
 `PYKENTRON_PROFILE` before `pykentron` is imported:
 
-| profile | allocator | collection | a complex five-part CadQuery model, against `balanced` |
-|---|---|---|---|
-| `low-memory` | the system's | also forgets cached values of removed shapes | 88% of the peak memory, about as fast |
-| `balanced` | the system's | removes unreachable shapes | (360 MB at the peak, 3.9 s) |
-| `fast` (default) | mimalloc | as `balanced` | 132% of the peak memory, ~11% faster |
+| profile | allocator | a complex five-part CadQuery model |
+|---|---|---|
+| `low-memory` | the system's | 316 MB at the peak, 4.0 s |
+| `fast` (default) | mimalloc | 125% of the peak memory, ~12% faster |
 
-`pykentron.profile()` gives the profile in use and `pykentron.set_profile(name)` switches
-between `low-memory` and `balanced` at any time; the allocator is chosen once, at startup,
-so `fast` is only had through the variable. Building without the `mimalloc` feature
-(`cargo build -p pykentron --no-default-features`) drops mimalloc and the `fast` profile
-(`balanced` is then the default).
+`pykentron.profile()` gives the profile in use. The allocator is chosen once, at startup, so
+the profile is only had through the variable (`pykentron.set_profile(name)` accepts only the
+profile in use). `balanced`, a profile once between the two, is read as `low-memory`.
+Building without the `mimalloc` feature (`cargo build -p pykentron --no-default-features`)
+drops mimalloc and the `fast` profile (`low-memory` is then the default).
 
 ## What is there
 
