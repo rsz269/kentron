@@ -154,14 +154,8 @@ pub(super) fn uv_within(surface: &Surface, p: Point, reach: f64) -> Option<Uv> {
 /// (the next turn of one winding round), from the nearest sample there too: the nearer foot.
 pub(super) fn foot_on(surface: &Surface, p: Point) -> crate::geometry::extrema::SurfaceFoot {
     let (best, start) = with_samples(surface, |grid| {
-        let mut best = (f64::INFINITY, 0);
-        for (k, &(_, _, q)) in grid.iter().enumerate() {
-            let d = (q - p).dot(q - p);
-            if d < best.0 {
-                best = (d, k);
-            }
-        }
-        (best, (grid[best.1].0, grid[best.1].1))
+        let best = grid.nearest(p, 0, grid.samples.len());
+        (best, (grid.samples[best.1].0, grid.samples[best.1].1))
     });
     let foot = crate::geometry::extrema::newton_foot_to_the_last(p, surface, start);
     let (u0, u1, v0, v1) = surface.bounds();
@@ -174,19 +168,25 @@ pub(super) fn foot_on(surface: &Surface, p: Point) -> crate::geometry::extrema::
     // (Away from the nearest sample by more than a cell either way.)
     let (_, nv) = grid_steps(surface);
     let other = with_samples(surface, |grid| {
-        let (bi, bj) = (best.1 / (nv + 1), best.1 % (nv + 1));
+        // (The stretches of the grid before, between and after the rows of the 3 × 3 cells
+        // around the nearest sample, in order.)
+        let row = nv + 1;
+        let (bi, bj) = (best.1 / row, best.1 % row);
+        let (first, last) = (bj.saturating_sub(1), (bj + 1).min(nv));
         let mut other = (f64::INFINITY, 0);
-        for (k, &(_, _, q)) in grid.iter().enumerate() {
-            let (i, j) = (k / (nv + 1), k % (nv + 1));
-            if i.abs_diff(bi) <= 1 && j.abs_diff(bj) <= 1 {
-                continue;
+        let mut from = 0;
+        for i in bi.saturating_sub(1)..=(bi + 1).min(grid.samples.len() / row - 1) {
+            let found = grid.nearest(p, from, i * row + first);
+            if found.0 < other.0 {
+                other = found;
             }
-            let d = (q - p).dot(q - p);
-            if d < other.0 {
-                other = (d, k);
-            }
+            from = i * row + last + 1;
         }
-        (other.0 < 4.0 * best.0).then(|| (grid[other.1].0, grid[other.1].1))
+        let found = grid.nearest(p, from, grid.samples.len());
+        if found.0 < other.0 {
+            other = found;
+        }
+        (other.0 < 4.0 * best.0).then(|| (grid.samples[other.1].0, grid.samples[other.1].1))
     });
     let Some(other) = other else { return foot };
     let second = crate::geometry::extrema::newton_foot_to_the_last(p, surface, other);
@@ -235,7 +235,60 @@ pub(super) fn freeform(surface: &Surface) -> bool {
 
 /// Grids of points of the free-form surfaces met lately, to start point inversions from
 /// (shared by the threads of an operation).
-static SAMPLES: std::sync::Mutex<Vec<(crate::geometry::extrema::SurfaceKey, std::sync::Arc<Vec<(f64, f64, Point)>>)>> = std::sync::Mutex::new(Vec::new());
+static SAMPLES: std::sync::Mutex<Vec<(crate::geometry::extrema::SurfaceKey, std::sync::Arc<SampleGrid>)>> = std::sync::Mutex::new(Vec::new());
+
+/// A surface's sample grid: its points `(u, v, p)`, row by row along u, and their
+/// coordinates again in arrays of their own, for scans of all of them.
+struct SampleGrid {
+    samples: Vec<(f64, f64, Point)>,
+    x: Vec<f64>,
+    y: Vec<f64>,
+    z: Vec<f64>,
+}
+
+impl SampleGrid {
+    fn new(samples: Vec<(f64, f64, Point)>) -> SampleGrid {
+        let x = samples.iter().map(|s| s.2.x).collect();
+        let y = samples.iter().map(|s| s.2.y).collect();
+        let z = samples.iter().map(|s| s.2.z).collect();
+        SampleGrid { samples, x, y, z }
+    }
+
+    /// The sample among `from..to` nearest to `p` (the first of equally near ones) and its
+    /// squared distance, `(INFINITY, 0)` if none is nearer than that. (Four at a time, each
+    /// lane keeping the first nearest of its own: four chains of compares the processor
+    /// runs side by side, where one running minimum makes every sample wait for the one
+    /// before. The squared distances are the same sums as `(q - p).dot(q - p)`.)
+    fn nearest(&self, p: Point, from: usize, to: usize) -> (f64, usize) {
+        let (x, y, z) = (&self.x[from..to], &self.y[from..to], &self.z[from..to]);
+        let mut best = [f64::INFINITY; 4];
+        let mut at = [0usize; 4];
+        let mut offer = |k: usize, lane: usize| {
+            let (dx, dy, dz) = (x[k] - p.x, y[k] - p.y, z[k] - p.z);
+            let d = dx * dx + dy * dy + dz * dz;
+            if d < best[lane] {
+                best[lane] = d;
+                at[lane] = k;
+            }
+        };
+        let whole = (to - from) / 4 * 4;
+        for k in (0..whole).step_by(4) {
+            for lane in 0..4 {
+                offer(k + lane, lane);
+            }
+        }
+        for k in whole..to - from {
+            offer(k, k % 4);
+        }
+        let mut out = (f64::INFINITY, 0);
+        for lane in 0..4 {
+            if best[lane] < out.0 || (best[lane] == out.0 && best[lane] < f64::INFINITY && from + at[lane] < out.1) {
+                out = (best[lane], from + at[lane]);
+            }
+        }
+        out
+    }
+}
 
 /// The steps of a surface's sample grid along u and v.
 fn grid_steps(surface: &Surface) -> (usize, usize) {
@@ -263,7 +316,7 @@ pub(super) fn winding_samples(surface: &Surface) -> usize {
 }
 
 /// Runs `f` on the surface's sample grid (points `(u, v, p)`, row by row along u), cached.
-fn with_samples<R>(surface: &Surface, f: impl FnOnce(&[(f64, f64, Point)]) -> R) -> R {
+fn with_samples<R>(surface: &Surface, f: impl FnOnce(&SampleGrid) -> R) -> R {
     let lock = || SAMPLES.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let key = crate::geometry::extrema::SurfaceKey::of(surface);
     let found = lock().iter().find(|(k, _)| *k == key).map(|(_, grid)| grid.clone());
@@ -271,7 +324,7 @@ fn with_samples<R>(surface: &Surface, f: impl FnOnce(&[(f64, f64, Point)]) -> R)
         Some(grid) => grid,
         None => {
             // (Made outside the lock; another thread may make it too.)
-            let grid = std::sync::Arc::new(sample_grid(surface));
+            let grid = std::sync::Arc::new(SampleGrid::new(sample_grid(surface)));
             let mut cache = lock();
             if !cache.iter().any(|(k, _)| *k == key) {
                 if cache.len() >= 64 {
@@ -421,7 +474,7 @@ fn patch_ray_hits(surface: &Surface, origin: Point, direction: Vector) -> Option
     let (nu, nv) = grid_steps(surface);
     let (u0, u1, v0, v1) = surface.bounds();
     let starts: Vec<(f64, f64, f64)> = with_samples(surface, |grid| {
-        let at = |i: usize, j: usize| grid[i * (nv + 1) + j];
+        let at = |i: usize, j: usize| grid.samples[i * (nv + 1) + j];
         let mut starts = Vec::new();
         for i in 0..nu {
             for j in 0..nv {
