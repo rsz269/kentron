@@ -56,7 +56,7 @@ it honest. Every change is checked against the test sources below before it is c
 and no change may make a passing test fail.
 
 <!-- effort -->
-So far (2026-09-25 to 2026-10-21): about 157 hours of the agent's active work, 10.9 million
+So far (2026-09-25 to 2026-10-21): about 158 hours of the agent's active work, 10.9 million
 tokens written by it, and 6.2 billion tokens processed in all (nearly all of them its
 conversation's context, read back from the cache).
 <!-- /effort -->
@@ -124,7 +124,8 @@ times faster on large free-form faces than the grid alone (a boolean from the OC
 - Rust: `cargo add kentron`.
 - Python 3.10 or later: `pip install pykentron`, or `pip install "pykentron[cadquery]"` to
   run CadQuery scripts (it adds what CadQuery's own Python layers need). Wheels are built
-  for Linux on x86-64; elsewhere pip builds from the source distribution, which needs Rust.
+  for Linux on x86-64-v2 (SSE4.2: Intel from 2008, AMD from 2011); elsewhere pip builds from
+  the source distribution, which needs Rust.
 
 ```python
 import pykentron as cq
@@ -136,7 +137,8 @@ An existing CadQuery script runs unchanged with `pykentron-run script.py`, or af
 
 ## Building and testing
 
-- Rust 1.88 or later.
+- Rust 1.88 or later. The workspace builds for x86-64-v2 (`.cargo/config.toml`); on an
+  older x86-64 CPU, build with an empty `RUSTFLAGS=`.
 - `cargo test` runs everything. Most of OCCT's converted tests read its test dataset, an
   external download: see `crates/occt-tests/README.md`. Without it those tests fail.
 - `tools/run_tests.py` runs the same tests with every test binary at once (about 20 s on 16

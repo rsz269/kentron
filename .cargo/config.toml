@@ -1,0 +1,8 @@
+# Builds in this workspace (the tests, pykentron and its wheels) target x86-64-v2: SSE4.2,
+# SSSE3 and POPCNT (Intel from Nehalem, 2008, AMD from Bulldozer, 2011). Rounding (floor,
+# ceil) and min/max become single instructions: a few percent faster, results bit-identical
+# (no fused multiply-adds). x86-64-v3 (AVX2) is slower: wider auto-vectorized loops slow the
+# B-spline kernels. On an older processor an empty RUSTFLAGS= builds for any x86-64. Crates
+# depending on kentron are not affected.
+[target.'cfg(target_arch = "x86_64")']
+rustflags = ["-C", "target-cpu=x86-64-v2"]

@@ -10,7 +10,7 @@ pip install pykentron              # the kernel and pykentron's own CadQuery-lik
 pip install "pykentron[cadquery]"  # also what CadQuery's own layers need, to run CadQuery scripts
 ```
 
-Python 3.10 or later. The wheels on PyPI are built for any x86-64 Linux machine.
+Python 3.10 or later. The wheels on PyPI are built for x86-64-v2 Linux machines (Intel from 2008, AMD from 2011; build from source with an empty `RUSTFLAGS=` for older ones).
 
 ## Using it
 

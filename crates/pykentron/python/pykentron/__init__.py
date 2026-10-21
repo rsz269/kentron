@@ -7,7 +7,27 @@ Memory against speed: `PYKENTRON_PROFILE` (`low-memory`, `balanced` or `fast`, t
 set before the import chooses a profile; `profile()` and `set_profile()` read and change it.
 """
 
-from . import _kentron
+import platform as _platform
+
+
+def _check_cpu() -> None:
+    """The native module is built for x86-64-v2 (SSE4.2, SSSE3, POPCNT): on a processor
+    without them (or an emulator hiding them), a clear error, not an illegal instruction."""
+    if _platform.machine().lower() not in ("x86_64", "amd64"):
+        return
+    try:
+        with open("/proc/cpuinfo") as f:
+            flags = next((line.split(":", 1)[1].split() for line in f if line.startswith("flags")), None)
+    except OSError:
+        return
+    missing = [n for n in ("sse4_2", "ssse3", "popcnt") if flags is not None and n not in flags]
+    if missing:
+        raise ImportError(f"pykentron needs an x86-64-v2 processor (this one lacks {', '.join(missing)}); build it from source with RUSTFLAGS= for any x86-64")
+
+
+_check_cpu()
+
+from . import _kentron  # noqa: E402
 from ._kentron import profile, set_profile
 from .geom import BoundBox, Color, Location, Plane, Vector
 from .shapes import Compound, CompSolid, Edge, Face, Mixin3D, Shape, Shell, Solid, Vertex, Wire
