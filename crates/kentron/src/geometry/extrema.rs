@@ -1202,22 +1202,29 @@ fn close_to(e: f64, small: f64, last: f64) -> bool {
 
 /// [`newton_on_surface`] with the point's derivatives (to spare evaluating them again).
 pub(crate) fn newton_foot(p: Point, surface: &Surface, start: (f64, f64)) -> SurfaceFoot {
-    newton_foot_to(p, surface, start, true)
+    newton_foot_to(p, surface, start, true, false)
 }
 
 /// [`newton_foot`] with every step taken to the rounding noise (none spared as converged):
 /// for distances whose signs decide where surfaces cross, as booleans' do.
 pub(crate) fn newton_foot_to_the_last(p: Point, surface: &Surface, start: (f64, f64)) -> SurfaceFoot {
-    newton_foot_to(p, surface, start, false)
+    newton_foot_to(p, surface, start, false, false)
 }
 
-fn newton_foot_to(p: Point, surface: &Surface, start: (f64, f64), spare_last: bool) -> SurfaceFoot {
+/// [`newton_foot_to_the_last`] from a sample of a grid over the surface (a fresh search, no
+/// earlier foot to stay near): where the steps circle the foot without closing in, they stop
+/// at the nearest point met.
+pub(crate) fn newton_foot_from_sample(p: Point, surface: &Surface, start: (f64, f64)) -> SurfaceFoot {
+    newton_foot_to(p, surface, start, false, true)
+}
+
+fn newton_foot_to(p: Point, surface: &Surface, start: (f64, f64), spare_last: bool, stall: bool) -> SurfaceFoot {
     use super::parametric::ParametricSurface;
     // An offset surface's normal lines are its basis's: a point's foot on it is where its
     // foot on the basis is, found with the basis's second derivatives (the offset's need the
     // basis's third).
     if let Surface::Offset(o) = surface {
-        let foot = newton_foot_to(p, o.basis(), start, spare_last);
+        let foot = newton_foot_to(p, o.basis(), start, spare_last, stall);
         let (point, du, dv) = surface.d1(foot.u, foot.v);
         return SurfaceFoot { u: foot.u, v: foot.v, point, du, dv };
     }
@@ -1230,13 +1237,31 @@ fn newton_foot_to(p: Point, surface: &Surface, start: (f64, f64), spare_last: bo
     let span = |a: f64, b: f64, t: f64| if (b - a).is_finite() { b - a } else { 1.0 + t.abs() };
     let (u_small, v_small) = (1e-12 * span(u0, u1, u), 1e-12 * span(v0, v1, v));
     let mut before = (f64::INFINITY, f64::INFINITY);
+    // (With `stall`: where the distance is not convex (a point far beyond the surface's
+    // centres of curvature), steepest-descent steps can circle the foot without closing in,
+    // to the step limit; the nearest point met is kept, and once STALLED such steps in a row
+    // bring the point no nearer, the steps stop there.)
+    const STALLED: usize = 4;
+    let (mut nearest, mut stalled) = ((f64::INFINITY, u, v), 0);
     for step in 0..50 {
         let d = surface.d2(u, v);
         let r = d.point - p;
+        let f = r.dot(r);
+        if f < nearest.0 {
+            nearest = (f, u, v);
+            stalled = 0;
+        }
         let (gu, gv) = (r.dot(d.du), r.dot(d.dv));
         let (huu, huv, hvv) = (d.du.dot(d.du) + r.dot(d.duu), d.du.dot(d.dv) + r.dot(d.duv), d.dv.dot(d.dv) + r.dot(d.dvv));
         let det = huu * hvv - huv * huv;
         let convex = det.abs() > 1e-300 && huu > 0.0 && det > 0.0;
+        if stall && !convex && f > nearest.0 {
+            stalled += 1;
+            if stalled >= STALLED {
+                (u, v) = (nearest.1, nearest.2);
+                break;
+            }
+        }
         let (du, dv) = if convex {
             ((-gu * hvv + gv * huv) / det, (-gv * huu + gu * huv) / det)
         } else {
