@@ -28,7 +28,7 @@ use super::geom;
 /// A range of a surface's parameters, with the periods of those that wrap round in it
 /// (`u_period`, `v_period`) and the surface's own periods (`u_wrap`, `v_wrap`: a parameter
 /// a whole number of them off is the same point).
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct Range {
     pub u: (f64, f64),
     pub v: (f64, f64),
@@ -105,7 +105,7 @@ pub(super) fn trace(base: &Surface, other: &Surface, range: Range, (nu, nv): (us
     };
     let bounds = Range { u, v, u_period: other.u_period(), v_period: other.v_period(), u_wrap: other.u_period(), v_wrap: other.v_period() };
     let own = (s0, s1, t0, t1);
-    let mut seeds = seeds(base, other, range, nu, nv);
+    let mut seeds = (*kept_seeds(base, other, range, nu, nv)).clone();
     // (And the points where edges of either face meet the other, which the sections pass:
     // a section shorter than the lattice's cells, across a narrow face, is found there.)
     let lattice = seeds.len();
@@ -417,6 +417,40 @@ fn near_polyline(points: &[Both], closed: bool, p: Point, reach: f64) -> bool {
     })
 }
 
+/// The seeds found lately, with what they were found for: the same in a boolean operation's
+/// pass at the looser tolerances as in its first (shared by the threads of operations).
+static SEEDS: std::sync::Mutex<Vec<(SeedsKey, std::sync::Arc<Vec<Both>>)>> = std::sync::Mutex::new(Vec::new());
+
+/// What [`seeds`] are found for: both surfaces (told apart quickly by their keys, then
+/// compared whole), the range and the lattice.
+struct SeedsKey {
+    keys: (crate::geometry::extrema::SurfaceKey, crate::geometry::extrema::SurfaceKey),
+    surfaces: (Surface, Surface),
+    range: Range,
+    lattice: (usize, usize),
+}
+
+/// [`seeds`], kept for the surfaces, range and lattice (they depend on nothing else).
+fn kept_seeds(base: &Surface, other: &Surface, range: Range, nu: usize, nv: usize) -> std::sync::Arc<Vec<Both>> {
+    use crate::geometry::extrema::SurfaceKey;
+    let lock = || SEEDS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let keys = (SurfaceKey::of(base), SurfaceKey::of(other));
+    let same = |k: &SeedsKey| k.keys == keys && k.range == range && k.lattice == (nu, nv) && k.surfaces.0 == *base && k.surfaces.1 == *other;
+    if let Some((_, found)) = lock().iter().find(|(k, _)| same(k)) {
+        return found.clone();
+    }
+    // (Found outside the lock; another thread may find them too.)
+    let found = std::sync::Arc::new(seeds(base, other, range, nu, nv));
+    let mut cache = lock();
+    if !cache.iter().any(|(k, _)| same(k)) {
+        if cache.len() >= 256 {
+            cache.remove(0);
+        }
+        cache.push((SeedsKey { keys, surfaces: (base.clone(), other.clone()), range, lattice: (nu, nv) }, found.clone()));
+    }
+    found
+}
+
 /// Seeds of the sections: points of the base (with a guess on the other surface) where the
 /// distance to the other changes sign along the sides of the cells of an `nu` by `nv`
 /// lattice over the range, sought only in blocks of cells that may hold a point of the
@@ -448,8 +482,9 @@ fn seeds(base: &Surface, other: &Surface, range: Range, nu: usize, nv: usize) ->
         let near = values.iter().map(|(d, _)| d.abs()).fold(dc.abs(), f64::min);
         let sign = values[0].0 >= 0.0;
         let changes = values.iter().any(|(d, _)| (*d >= 0.0) != sign) || (dc >= 0.0) != sign;
-        // (No point of the other within the block: farther from it than the block is wide.)
-        if !changes && near > 1.5 * radius + geom::on_tol() {
+        // (No point of the other within the block: farther from it than the block is wide.
+        // By the looser tolerance whichever is on: the seeds are the same in both passes.)
+        if !changes && near > 1.5 * radius + geom::LOOSE_ON_TOL {
             continue;
         }
         if ib - ia > 1 || jb - ja > 1 {
