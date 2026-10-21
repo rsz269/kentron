@@ -1653,6 +1653,17 @@ fn sliced(base: &Face, other: &Face, crossings: &[Point]) -> Vec<Section> {
         values.push(column);
     }
     let sign = |i: usize, j: usize| values[i % columns][j % rows] >= 0.0;
+    // Whether the distance crosses zero between two neighbouring nodes: of different signs,
+    // and near enough the other surface for that. (A distance moves by no more than the
+    // point does, here along the base between them, at most a few times their chord: where
+    // it is farther at both than that, the signs differ only as feet on the other's bounds
+    // give them, the point not square to it there.)
+    let near = 10.0 * (base.drift.max(other.drift) + on_tol());
+    let crosses = |a: (usize, usize), b: (usize, usize)| {
+        let (da, db) = (values[a.0 % columns][a.1 % rows], values[b.0 % columns][b.1 % rows]);
+        let chord = grid[a.1 % rows][a.0 % columns].distance(grid[b.1 % rows][b.0 % columns]);
+        (da >= 0.0) != (db >= 0.0) && da.abs() + db.abs() <= 2.0 * chord + near
+    };
     // A root of g on [a, b] (g(a) and g(b) of different signs, zero counting as positive).
     // (Done once a and b are neighbouring numbers, where the steps would not move them,
     // unless the other surface is free-form: each of its distances starts the next.)
@@ -1701,9 +1712,9 @@ fn sliced(base: &Face, other: &Face, crossings: &[Point]) -> Vec<Section> {
     };
     for i in 0..cells_u {
         for j in 0..nv {
-            let (s00, s10, s11, s01) = (sign(i, j), sign(i + 1, j), sign(i + 1, j + 1), sign(i, j + 1));
+            let s00 = sign(i, j);
             // Cell edges: bottom, right, top, left.
-            let edges = [((i, j, true), s00 != s10), ((i + 1, j, false), s10 != s11), ((i, j + 1, true), s01 != s11), ((i, j, false), s00 != s01)];
+            let edges = [((i, j, true), crosses((i, j), (i + 1, j))), ((i + 1, j, false), crosses((i + 1, j), (i + 1, j + 1))), ((i, j + 1, true), crosses((i, j + 1), (i + 1, j + 1))), ((i, j, false), crosses((i, j), (i, j + 1)))];
             let crossed: Vec<(usize, usize, bool)> = edges.iter().filter(|e| e.1).map(|e| e.0).collect();
             match crossed.len() {
                 2 => link(crossed[0], crossed[1]),
@@ -2354,6 +2365,56 @@ impl Graph {
         })
     }
 
+    /// Whether the piece of `section` from `t0` to `t1` runs along the boundary of either
+    /// face past its surface's bound: in that face's parameters on its boundary all the way
+    /// (a point past a patch's bound found on it), near the face in space, and somewhere off
+    /// the surface by more than the faces' tolerance (followed on past its bound). Where the
+    /// other surface grazes a face along an edge on its patch's bound, the section is that
+    /// edge: made of it, it would lie on the face's own boundary arcs without being one with
+    /// them (as a section along a boundary on the surface is), cutting a sliver of no area
+    /// off the face.
+    fn along_boundary(&self, fa: usize, fb: usize, section: &Section, (t0, v0): (f64, usize), (t1, v1): (f64, usize)) -> bool {
+        let tolerance = self.faces[fa].drift.max(self.faces[fb].drift) + 10.0 * on_tol();
+        [fa, fb].iter().any(|&f| {
+            let face = &self.faces[f];
+            // (Its ends on the face's boundary edges first.)
+            let on_boundary = |v: usize| {
+                face.boundary.iter().any(|u| {
+                    let edge = &self.edges[u.edge];
+                    edge.start == v || edge.end == v || edge.paves.iter().any(|&(_, w)| w == v)
+                })
+            };
+            if !(on_boundary(v0) && on_boundary(v1)) {
+                return false;
+            }
+            let (du, dv) = (face.u_range.1 - face.u_range.0, face.v_range.1 - face.v_range.0);
+            let near_uv = 1e-7 * (du.abs() + dv.abs()).max(1e-300);
+            let near = 1e-3 * face.bbox.0.distance(face.bbox.1);
+            let gap = |q: geom::Uv| {
+                face.polylines
+                    .iter()
+                    .flat_map(|uv| uv.windows(2))
+                    .map(|w| {
+                        let (a, b) = (w[0], w[1]);
+                        let d = [b[0] - a[0], b[1] - a[1]];
+                        let len2 = d[0] * d[0] + d[1] * d[1];
+                        let s = if len2 > 0.0 { (((q[0] - a[0]) * d[0] + (q[1] - a[1]) * d[1]) / len2).clamp(0.0, 1.0) } else { 0.0 };
+                        (q[0] - a[0] - d[0] * s).hypot(q[1] - a[1] - d[1] * s)
+                    })
+                    .fold(f64::INFINITY, f64::min)
+            };
+            let mut past = false;
+            // (The middle first.)
+            [4, 0, 1, 2, 3, 5, 6, 7, 8].iter().all(|&i| {
+                let p = section.point(t0 + (t1 - t0) * i as f64 / 8.0);
+                let uv = geom::uv_of(&face.surface, p);
+                let off = geom::surface_point(&face.surface, uv).distance(p);
+                past |= off > tolerance;
+                gap(uv) <= near_uv && off <= near
+            }) && past
+        })
+    }
+
     fn add_section(&mut self, fa: usize, fb: usize, section: &Section, mut on: Vec<(f64, usize)>) {
         let (lo, hi) = section.range();
         let period = hi - lo;
@@ -2402,6 +2463,9 @@ impl Graph {
             }
             let middle = section.point(0.5 * (t0 + t1));
             if off_surfaces(self, middle) || !inside_both(self, middle) {
+                continue;
+            }
+            if marched && self.along_boundary(fa, fb, section, (t0, v0), (t1, v1)) {
                 continue;
             }
             let (a, b) = (self.vertices.points[v0], self.vertices.points[v1]);
