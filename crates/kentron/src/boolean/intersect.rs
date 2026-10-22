@@ -1689,10 +1689,46 @@ fn sliced(base: &Face, other: &Face, crossings: &[Point]) -> Vec<Section> {
     // whose feet chain.)
     let lipschitz = !geom::freeform(q);
     let margin = 1e3 * on_tol();
+    // (Blocks of nodes all far from the other surface, by the distance at the block's middle
+    // less how far its points (and their neighbours beyond) reach from it, and farther than
+    // the block across: one sign, none of its nodes next to a node of the other.)
+    const BLOCK: usize = 8;
+    let filled: Vec<Vec<Option<f64>>> = if lipschitz && columns >= 2 * BLOCK && rows >= 2 * BLOCK {
+        let mut filled = vec![vec![None; rows]; columns];
+        for bi in (0..columns).step_by(BLOCK) {
+            for bj in (0..rows).step_by(BLOCK) {
+                let (ie, je) = ((bi + BLOCK).min(columns), (bj + BLOCK).min(rows));
+                let mut b = crate::math::BoundingBox::EMPTY;
+                for i in bi.saturating_sub(1)..(ie + 1).min(columns) {
+                    for j in bj.saturating_sub(1)..(je + 1).min(rows) {
+                        b.add_point(grid[j][i]);
+                    }
+                }
+                let c = grid[(bj + je) / 2][(bi + ie) / 2];
+                let (d, _) = geom::signed_distance_from(q, c, None);
+                let corner = |k: usize| Point::new(if k & 1 == 0 { b.min.x } else { b.max.x }, if k & 2 == 0 { b.min.y } else { b.max.y }, if k & 4 == 0 { b.min.z } else { b.max.z });
+                let reach = d.abs() - (0..8).map(|k| c.distance(corner(k))).fold(0.0, f64::max);
+                if reach > margin + (b.max - b.min).length() {
+                    for column in &mut filled[bi..ie] {
+                        for value in &mut column[bj..je] {
+                            *value = Some(reach.copysign(d));
+                        }
+                    }
+                }
+            }
+        }
+        filled
+    } else {
+        Vec::new()
+    };
     let mut values: Vec<Vec<f64>> = Vec::with_capacity(columns);
     for i in 0..columns {
         let mut column = Vec::with_capacity(rows);
         for j in 0..rows {
+            if let Some(value) = filled.get(i).and_then(|c| c[j]) {
+                column.push(value);
+                continue;
+            }
             let p = grid[j][i];
             if lipschitz {
                 let below = (j > 0).then(|| (column[j - 1], grid[j - 1][i]));
@@ -1718,8 +1754,7 @@ fn sliced(base: &Face, other: &Face, crossings: &[Point]) -> Vec<Section> {
     let near = 10.0 * (base.drift.max(other.drift) + on_tol());
     let crosses = |a: (usize, usize), b: (usize, usize)| {
         let (da, db) = (values[a.0 % columns][a.1 % rows], values[b.0 % columns][b.1 % rows]);
-        let chord = grid[a.1 % rows][a.0 % columns].distance(grid[b.1 % rows][b.0 % columns]);
-        (da >= 0.0) != (db >= 0.0) && da.abs() + db.abs() <= 2.0 * chord + near
+        (da >= 0.0) != (db >= 0.0) && da.abs() + db.abs() <= 2.0 * grid[a.1 % rows][a.0 % columns].distance(grid[b.1 % rows][b.0 % columns]) + near
     };
     // A root of g on [a, b] (g(a) and g(b) of different signs, zero counting as positive).
     // (Done once a and b are neighbouring numbers, where the steps would not move them,
@@ -1768,8 +1803,14 @@ fn sliced(base: &Face, other: &Face, crossings: &[Point]) -> Vec<Section> {
         links.entry(b).or_default().push(a);
     };
     for i in 0..cells_u {
+        let (here, next) = (&values[i], &values[(i + 1) % columns]);
         for j in 0..nv {
             let s00 = sign(i, j);
+            // (No edge crossed where the corners' signs are all the same.)
+            let up = if j + 1 == rows { 0 } else { j + 1 };
+            if (next[j] >= 0.0) == s00 && (here[up] >= 0.0) == s00 && (next[up] >= 0.0) == s00 {
+                continue;
+            }
             // Cell edges: bottom, right, top, left.
             let edges = [((i, j, true), crosses((i, j), (i + 1, j))), ((i + 1, j, false), crosses((i + 1, j), (i + 1, j + 1))), ((i, j + 1, true), crosses((i, j + 1), (i + 1, j + 1))), ((i, j, false), crosses((i, j), (i, j + 1)))];
             let crossed: Vec<(usize, usize, bool)> = edges.iter().filter(|e| e.1).map(|e| e.0).collect();
