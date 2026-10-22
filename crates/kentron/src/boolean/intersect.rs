@@ -520,8 +520,9 @@ fn plane_along_extrusion(fa: &Face, fb: &Face) -> Option<Vec<Section>> {
 enum Section {
     /// A line, restricted to a range covering both faces.
     Open(Curve, f64, f64),
-    /// A circle or ellipse (period 2π).
-    Closed(Curve),
+    /// A circle or ellipse (period 2π), with its samples for projections onto it (found
+    /// once).
+    Closed(Curve, std::sync::OnceLock<Vec<Point>>),
     /// A chain of branches of a cylinder's or cone's intersection with another quadric,
     /// each run forwards or backwards; closed, or open where it leaves the faces' range.
     Chain(Vec<(QuadricCurve, bool)>, bool, ChainSamples),
@@ -838,7 +839,7 @@ impl Section {
     fn range(&self) -> (f64, f64) {
         match self {
             Section::Open(_, a, b) => (*a, *b),
-            Section::Closed(_) => (0.0, TAU),
+            Section::Closed(..) => (0.0, TAU),
             Section::Chain(branches, ..) => (0.0, branches.len() as f64),
             Section::Sampled(points, closed, _) => (0.0, if *closed { points.len() } else { points.len() - 1 } as f64),
         }
@@ -847,7 +848,7 @@ impl Section {
     fn closed(&self) -> bool {
         match self {
             Section::Open(..) => false,
-            Section::Closed(_) => true,
+            Section::Closed(..) => true,
             Section::Chain(_, closed, _) => *closed,
             Section::Sampled(_, closed, _) => *closed,
         }
@@ -855,7 +856,7 @@ impl Section {
 
     fn point(&self, t: f64) -> Point {
         match self {
-            Section::Open(c, ..) | Section::Closed(c) => c.point(t),
+            Section::Open(c, ..) | Section::Closed(c, _) => c.point(t),
             Section::Chain(branches, closed, _) => {
                 let n = branches.len();
                 let t = if *closed { t.rem_euclid(n as f64) } else { t.clamp(0.0, n as f64) };
@@ -929,7 +930,9 @@ impl Section {
     fn project(&self, p: Point) -> (f64, f64) {
         match self {
             Section::Open(c, a, b) => geom::project(c, *a, *b, p),
-            Section::Closed(c) => geom::project(c, 0.0, TAU, p),
+            // (A circle's projection looks at few samples; an ellipse's at all.)
+            Section::Closed(c @ Curve::Circle(_), _) => geom::project(c, 0.0, TAU, p),
+            Section::Closed(c, samples) => geom::project_among(c, 0.0, TAU, Some(samples.get_or_init(|| geom::projection_samples(c, 0.0, TAU))), p),
             Section::Sampled(points, closed, _) => {
                 // The nearest stretch of the polyline, then the curve near it.
                 let n = points.len();
@@ -1089,7 +1092,7 @@ impl Section {
     fn project_seeded(&self, p: Point, seed: f64) -> (f64, f64) {
         let (curve, lo, hi, periodic) = match self {
             Section::Open(c, a, b) => (c, a.min(*b), a.max(*b), false),
-            Section::Closed(c) => (c, 0.0, TAU, true),
+            Section::Closed(c, _) => (c, 0.0, TAU, true),
             _ => return self.project(p),
         };
         let mut t = seed;
@@ -1180,7 +1183,7 @@ impl Section {
 
     fn edge_curve(&self, t0: f64, t1: f64, a: Point, b: Point) -> (Curve, f64, f64) {
         match self {
-            Section::Open(c, ..) | Section::Closed(c) => (c.clone(), t0, t1),
+            Section::Open(c, ..) | Section::Closed(c, _) => (c.clone(), t0, t1),
             Section::Chain(..) | Section::Sampled(..) => {
                 // Interpolated at the section's own parameters, the samples doubled until the
                 // curve follows the section between them (to 1e-9 of its size).
@@ -1387,8 +1390,8 @@ fn sections(fa: &Face, fb: &Face, crossings: &[Point]) -> Vec<Section> {
                 Section::Open(Curve::Line(l), lo, hi)
             })
             .collect(),
-        QuadricIntersection::Circles(cs) => cs.into_iter().map(|c| Section::Closed(Curve::Circle(c))).collect(),
-        QuadricIntersection::Ellipses(es) => es.into_iter().map(|e| Section::Closed(Curve::Ellipse(e))).collect(),
+        QuadricIntersection::Circles(cs) => cs.into_iter().map(|c| Section::Closed(Curve::Circle(c), Default::default())).collect(),
+        QuadricIntersection::Ellipses(es) => es.into_iter().map(|e| Section::Closed(Curve::Ellipse(e), Default::default())).collect(),
         QuadricIntersection::NotAnalytic => {
             // Parametrize on a cylinder, else a cone, by angle around its axis.
             let rank = |f: &Face| match f.surface {
@@ -1502,7 +1505,7 @@ fn parallels(base: &Face, other: &Face) -> Vec<Section> {
             let center = axis.origin + z * (p - axis.origin).dot(z);
             let radial = p - center;
             (radial.length() > on_tol()).then(|| {
-                Section::Closed(Curve::Circle(Circle::new(Frame::new(center, axis.direction, Direction::from_vector(radial)), radial.length())))
+                Section::Closed(Curve::Circle(Circle::new(Frame::new(center, axis.direction, Direction::from_vector(radial)), radial.length())), Default::default())
             })
         })
         .collect()
@@ -2612,7 +2615,7 @@ fn segments_gap(x0: Point, x1: Point, y0: Point, y1: Point) -> f64 {
 /// the spheres meet and each circle reaches the other's plane.
 fn circles_apart(a: &Section, b: &Section) -> bool {
     let circle = |s: &Section| match s {
-        Section::Open(Curve::Circle(c), ..) | Section::Closed(Curve::Circle(c)) => Some(c.clone()),
+        Section::Open(Curve::Circle(c), ..) | Section::Closed(Curve::Circle(c), _) => Some(c.clone()),
         _ => None,
     };
     let (Some(p), Some(q)) = (circle(a), circle(b)) else { return false };
