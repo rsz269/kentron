@@ -2238,11 +2238,6 @@
       "reason": "kentron's result splits its edges and faces otherwise than OCCT's, its length and area and volume as OCCT's and the shape valid: counts kentron's, wire 10 (OCCT 11)."
     },
     {
-      "from": "checknbshapes r_3 -solid 2 -shell 2 -face 7 -wire 8",
-      "to": "checknbshapes r_3 -solid 2 -shell 2 -face 8 -wire 9",
-      "reason": "kentron's result splits its edges and faces otherwise than OCCT's, its length and area and volume as OCCT's and the shape valid: counts kentron's, face 8 (OCCT 7), wire 9 (OCCT 8)."
-    },
-    {
       "from": "checknbshapes r_4 -vertex 8 -edge 8",
       "to": "checknbshapes r_4 -vertex 6 -edge 6",
       "reason": "kentron's result splits its edges and faces otherwise than OCCT's, its length and area and volume as OCCT's and the shape valid: counts kentron's, vertex 6 (OCCT 8), edge 6 (OCCT 8)."

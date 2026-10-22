@@ -1772,20 +1772,17 @@ fn m7() -> DrawResult<()> {
 
 /// `tests/feat/featprism/N1`
 #[test]
-#[should_panic]
-fn n1() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.restore(&[data_file("CFE900_id160gdu.rle").as_str(), "base"])?;
-        d.restore(&[data_file("id160074_face1.brep").as_str(), "cont"])?;
-        d.explode(&["base", "face"])?;
-        d.copy(&["base_8", "funtil"])?;
-        d.featprism(&["base", "cont", "cont", "1", "0", "0", "0", "1"])?;
-        d.featperform(&["prism", "result", "funtil"])?;
-        d.checkprops(&["result", "-s", "346145"])?;
-        d.checkshape(&["result"])?;
-        Ok(())
-    })
+fn n1() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.restore(&[data_file("CFE900_id160gdu.rle").as_str(), "base"])?;
+    d.restore(&[data_file("id160074_face1.brep").as_str(), "cont"])?;
+    d.explode(&["base", "face"])?;
+    d.copy(&["base_8", "funtil"])?;
+    d.featprism(&["base", "cont", "cont", "1", "0", "0", "0", "1"])?;
+    d.featperform(&["prism", "result", "funtil"])?;
+    d.checkprops(&["result", "-s", "346145"])?;
+    d.checkshape(&["result"])?;
+    Ok(())
 }
 
 /// `tests/feat/featprism/N2`

@@ -56,15 +56,12 @@ tests/blend/simple/X1
 tests/blend/simple/X4
 tests/blend/simple/Y6
 tests/blend/simple/Y7
-tests/blend/tolblend_simple/A2
 tests/blend/tolblend_simple/A3
 tests/blend/tolblend_simple/A4
 tests/blend/tolblend_simple/A5
 tests/blend/tolblend_simple/A6
 tests/blend/tolblend_simple/A7
 tests/blend/tolblend_simple/A8
-tests/blend/tolblend_simple/A9
-tests/blend/tolblend_simple/B2
 tests/blend/tolblend_simple/B6
 tests/blend/tolblend_simple/C3
 tests/blend/tolblend_simple/C5
@@ -77,7 +74,6 @@ tests/blend/tolblend_simple/E5
 tests/blend/tolblend_simple/E9
 tests/blend/tolblend_simple/F3
 tests/blend/tolblend_simple/F4
-tests/blend/tolblend_simple/F5
 tests/blend/tolblend_simple/F7
 tests/blend/tolblend_simple/F8
 tests/boolean/bcommon_2d/N2
@@ -952,7 +948,6 @@ tests/feat/featprism/L6
 tests/feat/featprism/M1
 tests/feat/featprism/M2
 tests/feat/featprism/M9
-tests/feat/featprism/N1
 tests/feat/featprism/N6
 tests/feat/featprism/O1
 tests/feat/featprism/O5

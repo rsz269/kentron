@@ -232,7 +232,6 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/complex/D2
-expect: not_done
 build:
   - a: {load: {brep: "CFI_pro10391.rle"}}
   - a_11: {select: {of: a, edge: [30.94688797, -240.038146973, 75.0], length: 50.0}}
@@ -314,7 +313,6 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/complex/E3
-expect: not_done
 build:
   - a: {load: {brep: "CFI_pro10356.rle"}}
   - a_1: {select: {of: a, edge: [-98.5, -90.8986536478, 122.978048275], length: 39.0617844534}}

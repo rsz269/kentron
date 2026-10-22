@@ -54,8 +54,7 @@ checkprops r_1 -s 1.96453e+06 -v 3.49563e+07
 checknbshapes r_2 -solid 1 -shell 1 -face 7 -wire 10
 checkprops r_2 -s 742474 -v 3.54041e+06
 
-# kentron deviation (draw_deviations.json): kentron's result splits its edges and faces otherwise than OCCT's, its length and area and volume as OCCT's and the shape valid: counts kentron's, face 8 (OCCT 7), wire 9 (OCCT 8).
-checknbshapes r_3 -solid 2 -shell 2 -face 8 -wire 9
+checknbshapes r_3 -solid 2 -shell 2 -face 7 -wire 8
 checkprops r_3 -s 1.41831e+06 -v 3.05581e+07
 
 # kentron deviation (draw_deviations.json): kentron's result splits its edges and faces otherwise than OCCT's, its length and area and volume as OCCT's and the shape valid: counts kentron's, vertex 6 (OCCT 8), edge 6 (OCCT 8).

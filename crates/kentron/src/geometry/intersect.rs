@@ -893,6 +893,9 @@ pub struct QuadricCurve {
     /// The other quadric in world coordinates: `A x² + B y² + C z² + 2D xy + 2E xz +
     /// 2F yz + 2G x + 2H y + 2I z + J = 0`.
     quadric: [f64; 10],
+    /// The other surface itself (its quadric's value found from its own frame where the
+    /// world coefficients' rounding matters).
+    other: Surface,
     first: f64,
     last: f64,
     upper: bool,
@@ -904,6 +907,33 @@ fn quadric_value(q: &[f64; 10], p: Point) -> f64 {
     q[0] * x * x + q[1] * y * y + q[2] * z * z + 2.0 * (q[3] * x * y + q[4] * x * z + q[5] * y * z)
         + 2.0 * (q[6] * x + q[7] * y + q[8] * z)
         + q[9]
+}
+
+/// The value of the quadric of `surface` (as [`quadric_of`] gives it) at `p`, from the
+/// surface's own frame: without the cancelling of large terms that the world coefficients
+/// have far from the origin. `None` for other surfaces.
+fn local_value(surface: &Surface, p: Point) -> Option<f64> {
+    // (A difference of squares as a product, both factors exact enough.)
+    let axial = |origin: Point, z: Vector, rho_on: &dyn Fn(f64) -> f64| {
+        let d = p - origin;
+        let h = d.dot(z);
+        let rho = (d - z * h).length();
+        let on = rho_on(h);
+        (rho - on) * (rho + on)
+    };
+    Some(match surface {
+        Surface::Plane(plane) => Vector::from(plane.normal()).dot(p - plane.origin()),
+        Surface::Sphere(s) => {
+            let d = (p - s.frame().origin()).length();
+            (d - s.radius()) * (d + s.radius())
+        }
+        Surface::Cylinder(c) => axial(c.frame().origin(), Vector::from(c.frame().z()), &|_| c.radius()),
+        Surface::Cone(c) => {
+            let (sin, cos) = c.semi_angle_sin_cos();
+            axial(c.apex(), Vector::from(c.frame().z()), &|h| h.abs() * sin / cos)
+        }
+        _ => return None,
+    })
 }
 
 /// The size of the terms [`quadric_value`] sums at `p`, which its rounding goes with.
@@ -985,14 +1015,33 @@ impl QuadricCurve {
         if a.abs() <= 1e-12 * scale {
             return (b.abs() > 1e-12 * scale).then(|| -c / b);
         }
-        // (Rounding in the discriminant goes with the size of its terms.)
         let disc = b * b - 4.0 * a * c;
-        if disc < -1e-12 * (b * b).max(4.0 * (a * c).abs()) {
+        // (Rounding in the discriminant goes with the size of its terms.)
+        let within = disc >= -1e-12 * (b * b).max(4.0 * (a * c).abs());
+        if let Some(square) = self.near_double_root(angle, a, b, disc) {
+            // (Off the quadric by more than the tolerance's square, and by the discriminant
+            // too: no root.)
+            return (within || square >= -1e-14).then(|| -b / (2.0 * a) + if self.upper { 1.0 } else { -1.0 } * square.max(0.0).sqrt());
+        }
+        within.then(|| self.root(a, b, disc))
+    }
+
+    /// Near a double root of `a v² + b v + c` (where the surfaces touch, or the branches
+    /// meet) the discriminant `disc` is mostly rounding: the square of the roots' distance
+    /// from the parabola's vertex, from the generator's depth into the quadric there, found
+    /// from the other surface's own frame. `None` elsewhere.
+    fn near_double_root(&self, angle: f64, a: f64, b: f64, disc: f64) -> Option<f64> {
+        if disc.abs() > 1e-4 * b * b {
             return None;
         }
-        let root = disc.max(0.0).sqrt();
+        let depth = local_value(&self.other, self.base.point(angle, -b / (2.0 * a)))?;
+        Some(-depth / a)
+    }
+
+    /// The branch's root of `a v² + b v + c`, of discriminant `disc`.
+    fn root(&self, a: f64, b: f64, disc: f64) -> f64 {
         let sign = if self.upper == (a > 0.0) { 1.0 } else { -1.0 };
-        Some((-b + sign * root) / (2.0 * a))
+        (-b + sign * disc.max(0.0).sqrt()) / (2.0 * a)
     }
 
     /// The point of the branch at `angle`, `None` outside its domain.
@@ -1010,9 +1059,11 @@ impl QuadricCurve {
         let v = if a.abs() <= 1e-12 * scale {
             -c / b
         } else {
-            let root = (b * b - 4.0 * a * c).max(0.0).sqrt();
-            let sign = if self.upper == (a > 0.0) { 1.0 } else { -1.0 };
-            (-b + sign * root) / (2.0 * a)
+            let disc = b * b - 4.0 * a * c;
+            match self.near_double_root(angle, a, b, disc) {
+                Some(square) => -b / (2.0 * a) + if self.upper { 1.0 } else { -1.0 } * square.max(0.0).sqrt(),
+                None => self.root(a, b, disc),
+            }
         };
         self.base.point(angle, v)
     }
@@ -1054,7 +1105,7 @@ pub fn ruled_quadric(base: &Surface, other: &Surface, tolerance: f64, v_range: O
     if let QuadricIntersection::Same = quadrics(base, other, tolerance) {
         return Some(QuadricCurves { curves: Vec::new(), next: Vec::new(), joins: Vec::new(), same: true });
     }
-    let branch = |first: f64, last: f64, upper: bool| QuadricCurve { base: base.clone(), quadric, first, last, upper };
+    let branch = |first: f64, last: f64, upper: bool| QuadricCurve { base: base.clone(), quadric, other: other.clone(), first, last, upper };
     let probe = branch(0.0, TAU, true);
     let linear = (0..8).all(|i| {
         let (a, b, c) = probe.height_equation(i as f64);
@@ -1808,6 +1859,37 @@ mod tests {
                 let p = c.point(a + (b - a) * i as f64 / 10.0).unwrap();
                 assert!(distance(&cone, p) < 1e-9 && distance(&pipe, p) < 1e-9, "{p:?}");
             }
+        }
+    }
+
+    #[test]
+    fn cylinders_touching_far_from_the_axis_origin() {
+        // Square cylinders tangent at one point (two fillets' bottoms on one plane), the
+        // base one's axis starting far off: both branches pass through that point exactly
+        // (the double root found from the other's own frame, not from the discriminant).
+        let base = cylinder(Point::new(-249.2, -2.0, 7.0), Direction::X, 8.0);
+        let other = cylinder(Point::new(74.9, 70.0, 9.0), -Direction::Y, 10.0);
+        let touch = Point::new(74.9, -2.0, -1.0);
+        let curves = ruled_quadric(&base, &other, 1e-7, None).unwrap();
+        assert_eq!(curves.curves.len(), 2);
+        for c in &curves.curves {
+            let (a, b) = c.domain();
+            let gap = |t: f64| c.point(t).map_or(f64::INFINITY, |p| p.distance(touch));
+            let n = 4096;
+            let step = (b - a) / n as f64;
+            let i = (0..=n).min_by(|&i, &j| gap(a + step * i as f64).total_cmp(&gap(a + step * j as f64))).unwrap();
+            // (Golden sections about the nearest sample.)
+            let (mut lo, mut hi) = (a + step * (i as f64 - 1.0), a + step * (i as f64 + 1.0));
+            for _ in 0..80 {
+                let (x1, x2) = (hi - 0.618 * (hi - lo), lo + 0.618 * (hi - lo));
+                if gap(x1) < gap(x2) {
+                    hi = x2;
+                } else {
+                    lo = x1;
+                }
+            }
+            let nearest = gap(0.5 * (lo + hi));
+            assert!(nearest < 1e-7, "{nearest}");
         }
     }
 
