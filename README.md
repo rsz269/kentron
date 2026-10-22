@@ -56,8 +56,8 @@ it honest. Every change is checked against the test sources below before it is c
 and no change may make a passing test fail.
 
 <!-- effort -->
-So far (2026-09-25 to 2026-10-21): about 169 hours of the agent's active work, 11.6 million
-tokens written by it, and 6.5 billion tokens processed in all (nearly all of them its
+So far (2026-09-25 to 2026-10-22): about 170 hours of the agent's active work, 11.7 million
+tokens written by it, and 6.6 billion tokens processed in all (nearly all of them its
 conversation's context, read back from the cache).
 <!-- /effort -->
 
@@ -77,7 +77,7 @@ conversation's context, read back from the cache).
 - **44 CadQuery models from a private project** build on pykentron; for the 42 that return
   their parts, every part is valid and within 0.1% of CadQuery's volume.
 - **358 CadQuery scripts from 87 public projects**: pykentron builds 270 of them as
-  CadQuery does. On those 270 it takes 98 s in all, against CadQuery's 440 s, and is faster
+  CadQuery does. On those 270 it takes 95 s in all, against CadQuery's 445 s, and is faster
   on 257. The cases still to fix are in `crates/pykentron/tests/found/`.
 
 About 12,700 tests run (with OCCT's dataset). About 1,500 of them are known gaps, marked as
@@ -92,13 +92,13 @@ CadQuery 2.8 (OCCT), median of 5 runs:
 
 | | wall time | CPU time | peak memory |
 |---|---|---|---|
-| pykentron, `fast` profile (default) | 3.3 s | 4.0 s | 419 MB |
-| pykentron, `low-memory` profile | 3.9 s | 4.7 s | 317 MB |
-| CadQuery 2.8 / OCCT | 40.3 s | 127.6 s | 1,087 MB |
+| pykentron, `fast` profile (default) | 3.2 s | 3.9 s | 418 MB |
+| pykentron, `low-memory` profile | 3.8 s | 4.5 s | 314 MB |
+| CadQuery 2.8 / OCCT | 41.2 s | 129.4 s | 1,097 MB |
 
-With the default `fast` profile, that is 12× faster than CadQuery, with 32× less CPU time and 2.6×
-less memory. A second complex model from the same project builds in 3.4 s (4.2 s of CPU time,
-473 MB) on pykentron's `fast` profile, against 41.2 s (129.1 s, 1,112 MB) on CadQuery.
+With the default `fast` profile, that is 13× faster than CadQuery, with 33× less CPU time and 2.6×
+less memory. A second complex model from the same project builds in 3.3 s (4.1 s of CPU time,
+486 MB) on pykentron's `fast` profile, against 41.0 s (130.3 s, 1,112 MB) on CadQuery.
 
 pykentron frees shapes that Python no longer refers to, with the data cached for them. Which
 allocator it uses is chosen with `PYKENTRON_PROFILE`:
@@ -115,7 +115,7 @@ extrusion, the curves where the faces meet are traced numerically: by marching a
 surfaces at once from seeds found on a coarse grid, falling back to the grid (where the other
 surface's signed distance changes sign) where a branch cannot be followed. Marching is several
 times faster on large free-form faces than the grid alone (a boolean from the OCCT suite,
-`bugs/modalg_7/bug29038`: 4.0 s instead of 16.6 s when marching came in; 0.15 s now).
+`bugs/modalg_7/bug29038`: 4.0 s instead of 16.6 s when marching came in; 0.14 s now).
 
 ## Installing
 
@@ -139,10 +139,10 @@ An existing CadQuery script runs unchanged with `pykentron-run script.py`, or af
   older x86-64 CPU, build with an empty `RUSTFLAGS=`.
 - `cargo test` runs everything. Most of OCCT's converted tests read its test dataset, an
   external download: see `crates/occt-tests/README.md`. Without it those tests fail.
-- `tools/run_tests.py` runs the same tests with every test binary at once (about 36 s on 16
-  threads, against about 46 s for `cargo test --release`, which runs them one after
+- `tools/run_tests.py` runs the same tests with every test binary at once (about 34 s on 16
+  threads, against about 44 s for `cargo test --release`, which runs them one after
   another; the slowest tests expected to fail take most of it). `--quick` leaves out the
-  tests expected to fail (about 11 s); a fix that makes one pass
+  tests expected to fail (about 10 s); a fix that makes one pass
   then goes unnoticed.
 - pykentron from source: `python3 crates/pykentron/build.py` (see
   `crates/pykentron/README.md`).
