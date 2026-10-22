@@ -154,7 +154,15 @@ impl Graph {
             uv[i] = face.unwrap(uv[i], uv[i - 1]);
         }
         let mid = uv[uv.len() / 2];
-        let shift = [face.shift_u(mid[0]) - mid[0], face.shift_v(mid[1]) - mid[1]];
+        let mut shift = [face.shift_u(mid[0]) - mid[0], face.shift_v(mid[1]) - mid[1]];
+        // (A face spanning more than a period, as a band winding round a cylinder, holds
+        // copies of a point in several: the arc goes where its middle is inside the face.)
+        let wider = |period: Option<f64>, (lo, hi): (f64, f64)| period.is_some_and(|p| hi - lo > p * (1.0 + 1e-9));
+        if wider(face.u_period, face.u_range) || wider(face.v_period, face.v_range) {
+            if let Some(q) = face.representatives(mid).find(|&q| face.inside_polylines(q)) {
+                shift = [q[0] - mid[0], q[1] - mid[1]];
+            }
+        }
         for p in &mut uv {
             p[0] += shift[0];
             p[1] += shift[1];

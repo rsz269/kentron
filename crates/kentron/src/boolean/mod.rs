@@ -1125,6 +1125,34 @@ mod tests {
         }
     }
 
+    /// A ring with a thread fused into its bore (the bore one face, a band winding twice
+    /// round, its parameters spanning two periods), cut by a disc with a chamfered top at
+    /// the bottom of the bore and six screw holes from the top: the circle where the disc's
+    /// top meets the bore goes in the period the bore is there, splitting it, and rays from
+    /// the holes' bottoms meet the bore in whichever period (else the bore's bottom stays,
+    /// or a hole's bottom goes, the shell open).
+    #[test]
+    fn a_band_winding_round_a_cylinder_cut_across() {
+        let mut model = Model::new();
+        let mut read = |text: &str| crate::io::brep::read(&mut model, &mut text.as_bytes()).unwrap();
+        let ring = read(include_str!("tests/threaded_ring_a.brep"));
+        let tools = read(include_str!("tests/threaded_ring_b.brep"));
+        // (The disc takes the ring from r 75 to its side, r 76.5 at its foot (0.0015 high)
+        // narrowing to 75.0015 at its top, z 1.5: π ∫ (R² - 75²) dz; the holes are r 1.55,
+        // 15 deep.)
+        let cone = 75.0 * (1.5f64.powi(2) - 0.0015f64.powi(2)) + (1.5f64.powi(3) - 0.0015f64.powi(3)) / 3.0;
+        let expected = std::f64::consts::PI * (cone + (76.5f64.powi(2) - 75.0f64.powi(2)) * 0.0015 + 6.0 * 1.55f64.powi(2) * 15.0);
+        let common = intersection(&mut model, ring, tools).unwrap();
+        let v = properties::volume(&model, common).mass;
+        assert!((v - expected).abs() < 1e-9 * expected, "{v} vs {expected}");
+        let volume = properties::volume(&model, ring).mass;
+        let result = difference(&mut model, ring, tools).unwrap();
+        assert!(validity::check(&model, result).is_valid(), "{:?}", validity::check(&model, result));
+        // (The thread's twisted faces integrated to a few parts in 10⁵.)
+        let removed = volume - properties::volume(&model, result).mass;
+        assert!((removed - expected).abs() < 1e-4 * volume, "{removed} vs {expected}");
+    }
+
     /// A cylinder and a strip winding twenty times round it (a B-spline ruled between two
     /// helices in 63 spans, as a thread's flank, from inside it to outside): they meet along
     /// a curve winding with it, found all along (the strip's points found on the turn they

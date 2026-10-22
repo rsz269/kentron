@@ -400,22 +400,24 @@ impl Face {
     }
 }
 
-/// The copies of `(u, v)` by whole periods that fall within a face's parameter ranges.
-/// (At most three each way, in a fixed array: asked for every point located.)
+/// The copies of `(u, v)` by whole periods that fall within a face's parameter ranges
+/// (a face winding round more than once, as a band round a cylinder, holds several).
+/// (At most four each way, in a fixed array: asked for every point located.)
 pub(super) fn representatives([u, v]: Uv, periods: [Option<f64>; 2], u_range: (f64, f64), v_range: (f64, f64)) -> impl Iterator<Item = Uv> {
-    let copies = |x: f64, period: Option<f64>, (lo, hi): (f64, f64)| -> ([f64; 3], usize) {
+    let copies = |x: f64, period: Option<f64>, (lo, hi): (f64, f64)| -> ([f64; 4], usize) {
         match period {
             Some(p) => {
-                let mut out = ([0.0; 3], 0);
-                for y in [x - p, x, x + p] {
-                    if y >= lo - 1e-9 && y <= hi + 1e-9 {
-                        out.0[out.1] = y;
-                        out.1 += 1;
-                    }
+                let mut out = ([0.0; 4], 0);
+                // (From the lowest copy in the range up.)
+                let mut y = x + ((lo - 1e-9 - x) / p).ceil() * p;
+                while y <= hi + 1e-9 && out.1 < 4 {
+                    out.0[out.1] = y;
+                    out.1 += 1;
+                    y += p;
                 }
                 out
             }
-            None => ([x, 0.0, 0.0], 1),
+            None => ([x, 0.0, 0.0, 0.0], 1),
         }
     };
     let (us, nu) = copies(u, periods[0], u_range);
