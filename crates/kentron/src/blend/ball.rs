@@ -710,20 +710,21 @@ pub(super) fn rolling_tool(model: &mut Model, shape: Shape, edge: Shape, radius:
     // closing the sections.)
     let loft = |model: &mut Model, wires: &[Shape]| if clear { crate::loft::loft_exact_arcs(model, wires, &options) } else { crate::loft::loft(model, wires, &options) };
     let tool = if closed {
-        // Along a closed edge: two halves of the loop of sections, overlapping by a quarter
-        // of it, lofted each and fused (each one's ends inside the other).
-        // (The last section repeats the first. The halves' arcs sampled: exact, their union
-        // comes out with faces turned the wrong way.)
+        // Along a closed edge: one loft round the loop of sections, closing on itself through
+        // the first (periodic across), made a solid.
+        // (The last section repeats the first. Its arcs sampled.)
         let n = wires.len().saturating_sub(1);
         if n < 8 {
             return Err(Error::InvalidInput("a rolling-ball tool along a closed edge with too few sections".into()));
         }
-        let (half, overlap) = (n / 2, n / 8);
-        let first: Vec<Shape> = wires[..=half + overlap].to_vec();
-        let second: Vec<Shape> = wires[half - overlap..n].iter().chain(&wires[..=overlap]).copied().collect();
-        let a = crate::loft::loft(model, &first, &options)?.shape;
-        let b = crate::loft::loft(model, &second, &options)?.shape;
-        crate::boolean::union(model, a, b)?
+        let mut ring: Vec<Shape> = wires[..n].to_vec();
+        ring.push(wires[0]);
+        let lofted = crate::loft::loft_periodic(model, &ring, &crate::loft::LoftOptions { solid: false, ..options })?.shape;
+        let shells = model.unique_subshapes(lofted, crate::topology::NodeKind::Shell);
+        let [shell] = shells[..] else {
+            return Err(Error::Failed(format!("a rolling-ball tool round a closed edge of {} shells", shells.len())));
+        };
+        super::runover::solid_of(model, shell)?
     } else {
         loft(model, &wires)?.shape
     };

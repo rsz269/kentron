@@ -696,7 +696,7 @@ fn copied(model: &mut Model, shape: Shape, edge: Shape) -> Result<(Shape, Shape)
 }
 
 /// The solid bounded by the closed `shell` (its faces turned out).
-fn solid_of(model: &mut Model, shell: Shape) -> Result<Shape> {
+pub(super) fn solid_of(model: &mut Model, shell: Shape) -> Result<Shape> {
     let solid = model.new_empty(NodeKind::Solid);
     model.add(solid, shell)?;
     if super::volume_of(model, solid) >= 0.0 {

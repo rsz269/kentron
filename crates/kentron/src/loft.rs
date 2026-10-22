@@ -106,7 +106,14 @@ impl Loft {
 #[doc(alias = "BRepOffsetAPI_ThruSections")]
 #[doc(alias = "thrusections")]
 pub fn loft(model: &mut Model, sections: &[Shape], options: &LoftOptions) -> Result<Loft> {
-    loft_traced(model, sections, options, &[], false)
+    loft_traced(model, sections, options, &[], false, false)
+}
+
+/// [`loft`] of sections closing on themselves (the last the first again), periodic across
+/// them: smooth where it closes, as a tool round a closed path is. (A loft closing on itself
+/// otherwise passes through the first section again as through any other, as OCCT's does.)
+pub(crate) fn loft_periodic(model: &mut Model, sections: &[Shape], options: &LoftOptions) -> Result<Loft> {
+    loft_traced(model, sections, options, &[], false, true)
 }
 
 /// [`loft`], its faces through circle arcs that all sections have at the same place exact:
@@ -114,13 +121,13 @@ pub fn loft(model: &mut Model, sections: &[Shape], options: &LoftOptions) -> Res
 /// section edges as they are (where the arcs' B-spline forms match; else as [`loft`] has
 /// them, sampled).
 pub(crate) fn loft_exact_arcs(model: &mut Model, sections: &[Shape], options: &LoftOptions) -> Result<Loft> {
-    loft_traced(model, sections, options, &[], true)
+    loft_traced(model, sections, options, &[], true, false)
 }
 
 /// [`loft`], a smooth one smooth only between the sections at `breaks` (their indices): a face
 /// per edge and stretch between breaks, meeting the next at the break's edges.
 pub(crate) fn loft_breaking(model: &mut Model, sections: &[Shape], options: &LoftOptions, breaks: &[usize]) -> Result<Shape> {
-    loft_traced(model, sections, options, breaks, false).map(|l| l.shape)
+    loft_traced(model, sections, options, breaks, false, false).map(|l| l.shape)
 }
 
 /// `sections` (wires, or vertices first and last) made to match as a loft matches them:
@@ -151,7 +158,7 @@ pub(crate) fn compatible_sections(model: &mut Model, sections: &[Shape], matchin
     Ok(out)
 }
 
-fn loft_traced(model: &mut Model, sections: &[Shape], options: &LoftOptions, breaks: &[usize], exact_arcs: bool) -> Result<Loft> {
+fn loft_traced(model: &mut Model, sections: &[Shape], options: &LoftOptions, breaks: &[usize], exact_arcs: bool, periodic: bool) -> Result<Loft> {
     if sections.len() < 2 {
         return Err(Error::InvalidInput("a loft needs two sections or more".into()));
     }
@@ -181,7 +188,7 @@ fn loft_traced(model: &mut Model, sections: &[Shape], options: &LoftOptions, bre
     }
     make_compatible(&mut parsed, closed, looped, options.matching, &mut marks);
     let grid = Grid::sample(&parsed, options.spacing, exact_arcs);
-    let built = build(model, &parsed, &grid, closed, looped, options, breaks)?;
+    let built = build(model, &parsed, &grid, closed, looped, periodic && looped, options, breaks)?;
     // What each section's edges and vertices generated: the faces of their pieces' columns
     // and the edges across at their boundaries.
     let mut generated: Vec<(NodeId, Vec<Shape>)> = Vec::new();
@@ -881,10 +888,28 @@ impl Grid {
 
     /// The surface of edge `i` over sections `from..=to`: its poles interpolated across the
     /// sections, with the curves across them.
-    fn surface(&self, i: usize, from: usize, to: usize) -> (Surface, Vec<BSplineCurve>) {
+    /// With `periodic` (the rows closing on themselves, the last the first again): periodic
+    /// across, through the rows but the last, smooth where it closes.
+    fn surface(&self, i: usize, from: usize, to: usize, periodic: bool) -> (Surface, Vec<BSplineCurve>) {
         let rows = &self.curves[i][from..=to];
         let across: Vec<f64> = self.across[from..=to].to_vec();
         let count = rows[0].poles().len();
+        let through = |points: &[Point]| -> BSplineCurve {
+            if periodic {
+                let m = points.len() - 1;
+                if let Ok(c) = fit::interpolate_periodic_with_parameters(&points[..m], &across[..m], across[m] - across[0]) {
+                    return c;
+                }
+            }
+            polynomial_through(points, &across)
+        };
+        let knots_across = |c: &BSplineCurve| {
+            if c.is_periodic() {
+                KnotVector::periodic(c.knots().to_vec(), c.multiplicities().to_vec(), c.degree())
+            } else {
+                KnotVector::new(c.knots().to_vec(), c.multiplicities().to_vec(), c.degree())
+            }
+        };
         if rows.iter().any(|r| r.is_rational()) {
             // Rational rows: their homogeneous poles (w P, and w) interpolated alike.
             let weight = |r: &BSplineCurve, j: usize| r.weights().map_or(1.0, |w| w[j]);
@@ -892,7 +917,7 @@ impl Grid {
                 .map(|j| {
                     let points: Vec<Point> = rows.iter().map(|r| Point::ORIGIN + (r.poles()[j] - Point::ORIGIN) * weight(r, j)).collect();
                     let weights: Vec<Point> = rows.iter().map(|r| Point::new(weight(r, j), 0.0, 0.0)).collect();
-                    (polynomial_through(&points, &across), polynomial_through(&weights, &across))
+                    (through(&points), through(&weights))
                 })
                 .collect();
             let projected = |(h, w): &(BSplineCurve, BSplineCurve)| -> (Vec<Point>, Vec<f64>) {
@@ -902,12 +927,16 @@ impl Grid {
             let (poles, weights): (Vec<Vec<Point>>, Vec<Vec<f64>>) = columns.iter().map(projected).unzip();
             let u = KnotVector::new(rows[0].knots().to_vec(), rows[0].multiplicities().to_vec(), rows[0].degree());
             let (h0, _) = &columns[0];
-            let v = KnotVector::new(h0.knots().to_vec(), h0.multiplicities().to_vec(), h0.degree());
+            let v = knots_across(h0);
             let surface = Surface::BSpline(BSplineSurface::new(poles, u, v).with_weights(weights));
             // The curves across at u = 0 and u = 1 (rational where their weights vary).
             let ends = [0, count - 1].map(|j| {
                 let (p, w) = projected(&columns[j]);
-                let curve = BSplineCurve::new(p, h0.knots().to_vec(), h0.multiplicities().to_vec(), h0.degree());
+                let curve = if h0.is_periodic() {
+                    BSplineCurve::new_periodic(p, h0.knots().to_vec(), h0.multiplicities().to_vec(), h0.degree())
+                } else {
+                    BSplineCurve::new(p, h0.knots().to_vec(), h0.multiplicities().to_vec(), h0.degree())
+                };
                 if w.iter().all(|&x| x == 1.0) { curve } else { curve.with_weights(w) }
             });
             return (surface, ends.to_vec());
@@ -915,12 +944,12 @@ impl Grid {
         let columns: Vec<BSplineCurve> = (0..count)
             .map(|j| {
                 let points: Vec<Point> = rows.iter().map(|r| r.poles()[j]).collect();
-                polynomial_through(&points, &across)
+                through(&points)
             })
             .collect();
         let poles: Vec<Vec<Point>> = columns.iter().map(|c| c.poles().to_vec()).collect();
         let u = KnotVector::new(rows[0].knots().to_vec(), rows[0].multiplicities().to_vec(), rows[0].degree());
-        let v = KnotVector::new(columns[0].knots().to_vec(), columns[0].multiplicities().to_vec(), columns[0].degree());
+        let v = knots_across(&columns[0]);
         let surface = Surface::BSpline(BSplineSurface::new(poles, u, v));
         // The curves across at u = 0 and u = 1 interpolate the end points of the rows.
         let ends = [0, count - 1].map(|j| columns[j].clone());
@@ -1032,7 +1061,7 @@ struct Built {
     across: Vec<Vec<Shape>>,
 }
 
-fn build(model: &mut Model, sections: &[Section], grid: &Grid, closed: bool, looped: bool, options: &LoftOptions, breaks: &[usize]) -> Result<Built> {
+fn build(model: &mut Model, sections: &[Section], grid: &Grid, closed: bool, looped: bool, periodic: bool, options: &LoftOptions, breaks: &[usize]) -> Result<Built> {
     let edges = grid.curves.len();
     let n = sections.len();
     // The section whose vertices and edges stand for section `k` (the first for the last
@@ -1112,7 +1141,8 @@ fn build(model: &mut Model, sections: &[Section], grid: &Grid, closed: bool, loo
         let mut across_edges: Vec<Option<EdgeId>> = vec![None; boundaries];
         let mut surfaces = Vec::with_capacity(edges);
         for i in 0..edges {
-            let (surface, ends) = grid.surface(i, from, to);
+            // (Periodic across where asked, a loft closing on itself in one span.)
+            let (surface, ends) = grid.surface(i, from, to, periodic && from == 0 && to == n - 1);
             for (b, curve) in [(i, &ends[0]), (i + 1, &ends[1])] {
                 let slot = b % boundaries;
                 if across_edges[slot].is_none() {
