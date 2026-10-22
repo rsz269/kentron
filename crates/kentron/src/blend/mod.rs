@@ -355,7 +355,7 @@ fn fillet_solid_edges_as(model: &mut Model, shape: Shape, edges: &[(Shape, f64)]
         // rolling on its own faces fails or leaves them crossing themselves: rolling on
         // further is the slower way, and fails where the ball only grazes the faces beyond.)
         let roll = |model: &mut Model, shape: Shape, edges: &[(Shape, &dyn Fn(f64) -> f64)]| {
-            ball::fillet_network(model, shape, edges).or_else(|_| fillet_in_turn(model, shape, edges))
+            ball::fillet_network(model, shape, edges).or_else(|e| if not_in_turn(&e) { Err(e) } else { fillet_in_turn(model, shape, edges) })
         };
         let rounded = roll(model, local, &edges).or_else(|e| match &members[..] {
             // One edge whose ball rolls off its faces: on onto the faces beyond.
@@ -442,6 +442,29 @@ fn fillet_solid_edges_as(model: &mut Model, shape: Shape, edges: &[(Shape, f64)]
         result = keep(model, result)?;
     }
     Ok(result)
+}
+
+/// Failures of fillets rolled all at once after which rolling them one after another does
+/// not succeed either (on OCCT's tests and the public CadQuery scripts, never once), only
+/// slowly: the tools are tried next instead.
+const NOT_IN_TURN: &[&str] = &[
+    "a fillet's end passing from face to face away from the edge between them",
+    "two fillets joining at a vertex whose far contacts miss the edge between their far faces",
+    "the fillet turns too sharply",
+    "a fillet ending across several faces where a contact misses its edge",
+    "a fillet edge must bound two faces",
+    "two fillets of opposite kinds meeting at a vertex",
+    "a fillet's contact curve does not reach the free edge",
+    "no fillet section here (no convergence)",
+    ball::NOT_REACHED,
+    "a fillet's end not found passing from face to face round its vertex",
+    "rolling-ball fillets ending at vertices with more than three faces",
+    "a degenerate edge has no fillet",
+];
+
+/// Whether fillets rolled all at once failed as [`NOT_IN_TURN`] has it.
+fn not_in_turn(e: &Error) -> bool {
+    matches!(e, Error::InvalidInput(m) if NOT_IN_TURN.iter().any(|known| m.starts_with(known)))
 }
 
 /// Whether `corner`'s fillet of `radius` (along a straight edge, convex) would touch its

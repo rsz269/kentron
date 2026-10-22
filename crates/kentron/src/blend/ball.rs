@@ -237,7 +237,7 @@ fn rolling(model: &Model, shape: Shape, edge: Shape, radius: &dyn Fn(f64) -> f64
 
 /// The fillet doesn't reach the face at an end of its edge within the usual reach past it
 /// (an end face oblique to the edge).
-const NOT_REACHED: &str = "the fillet does not reach the face at the end of its edge";
+pub(super) const NOT_REACHED: &str = "the fillet does not reach the face at the end of its edge";
 
 /// [`rolling`] with the sections carried `far` times as far past the edge's ends.
 fn rolling_past(model: &Model, shape: Shape, edge: Shape, radius: &dyn Fn(f64) -> f64, far: usize) -> Result<Rolling> {
