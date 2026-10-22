@@ -897,17 +897,34 @@ fn chamfer_solid_edges(model: &mut Model, shape: Shape, edges: &[ChamferedEdge])
 fn with_tools(model: &mut Model, shape: Shape, tools: &[(Shape, bool)]) -> Result<Shape> {
     let mut result = shape;
     for run in tools.chunk_by(|a, b| a.1 == b.1) {
-        let tool = match run {
-            [(one, _)] => *one,
-            many => {
-                let compound = model.new_empty(NodeKind::Compound);
-                for (t, _) in many {
-                    model.add(compound, *t)?;
+        // (Tools cut away in layers of tools whose boxes are apart: those meeting one another
+        // would be split by one another first, all at once.)
+        let layers: Vec<Vec<Shape>> = if run[0].1 {
+            let boxes: Vec<crate::math::BoundingBox> = run.iter().map(|&(t, _)| crate::properties::bounding_box(model, t).enlarged(1e-4)).collect();
+            let mut layers: Vec<Vec<usize>> = Vec::new();
+            for i in 0..run.len() {
+                match layers.iter_mut().find(|layer| layer.iter().all(|&j| !boxes[i].overlaps(&boxes[j]))) {
+                    Some(layer) => layer.push(i),
+                    None => layers.push(vec![i]),
                 }
-                compound
             }
+            layers.into_iter().map(|l| l.into_iter().map(|i| run[i].0).collect()).collect()
+        } else {
+            vec![run.iter().map(|&(t, _)| t).collect()]
         };
-        result = if run[0].1 { boolean::difference(model, result, tool)? } else { boolean::union(model, result, tool)? };
+        for layer in layers {
+            let tool = match layer.as_slice() {
+                [one] => *one,
+                many => {
+                    let compound = model.new_empty(NodeKind::Compound);
+                    for t in many {
+                        model.add(compound, *t)?;
+                    }
+                    compound
+                }
+            };
+            result = if run[0].1 { boolean::difference(model, result, tool)? } else { boolean::union(model, result, tool)? };
+        }
     }
     Ok(result)
 }
