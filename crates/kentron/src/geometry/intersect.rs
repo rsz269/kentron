@@ -965,7 +965,7 @@ impl QuadricCurve {
     /// The coefficients `(a, b, c)` of `a v² + b v + c = 0` for the generator parameter at
     /// `angle` (the quadric along the generator is quadratic in `v`).
     fn height_equation(&self, angle: f64) -> (f64, f64, f64) {
-        let points = [-1.0, 0.0, 1.0].map(|v| self.base.point(angle, v));
+        let points = self.base.points_along_v(angle, [-1.0, 0.0, 1.0]);
         let [minus, zero, plus] = points.map(|p| quadric_value(&self.quadric, p));
         // A plane is met along a generator linearly: the rounding left in `a` is noise (where
         // the generator runs nearly along the plane it can outweigh `b`).

@@ -775,6 +775,24 @@ impl RevolutionSurface {
     }
 }
 
+impl Surface {
+    /// The points at `u` and each of `vs`, as [`ParametricSurface::point`] gives them (with
+    /// one sine and cosine of `u` for a cylinder or cone).
+    pub(crate) fn points_along_v<const N: usize>(&self, u: f64, vs: [f64; N]) -> [Point; N] {
+        match self {
+            Surface::Cylinder(c) => {
+                let su = u.sin_cos();
+                vs.map(|v| c.point_of(su, v))
+            }
+            Surface::Cone(c) => {
+                let su = u.sin_cos();
+                vs.map(|v| c.point_of(su, v))
+            }
+            _ => vs.map(|v| self.point(u, v)),
+        }
+    }
+}
+
 impl Cylinder {
     /// The point at `u` (given as `u.sin_cos()`) and `v`.
     fn point_of(&self, (sin, cos): (f64, f64), v: f64) -> Point {
