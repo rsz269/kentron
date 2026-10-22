@@ -63,8 +63,8 @@ impl Surface {
     }
 
     /// The points at `(u, v)` for each `v` of `vs` (a row each) and each `u` of `us`, as
-    /// [`Self::points_along_u`] gives them row by row; an extrusion's basis points found once
-    /// for all rows.
+    /// [`Self::points_along_u`] gives them row by row; an extrusion's basis points, or a
+    /// revolution's rotations, found once for all rows.
     pub fn points_on_grid(&self, us: &[f64], vs: &[f64]) -> Vec<Vec<Point>> {
         use super::ParametricCurve;
         match self {
@@ -72,6 +72,16 @@ impl Surface {
                 let at: Vec<Point> = us.iter().map(|&u| e.basis().point(u)).collect();
                 let direction = Vector::from(e.direction());
                 vs.iter().map(|&v| at.iter().map(|&p| p + direction * v).collect()).collect()
+            }
+            // (The rotation to each u built once for all rows.)
+            Surface::Revolution(r) => {
+                let turns: Vec<Transform> = us.iter().map(|&u| Transform::rotation(r.axis(), u)).collect();
+                vs.iter()
+                    .map(|&v| {
+                        let at = r.basis().point(v);
+                        turns.iter().map(|t| at.transformed(t)).collect()
+                    })
+                    .collect()
             }
             _ => vs.iter().map(|&v| self.points_along_u(us, v)).collect(),
         }
