@@ -1502,7 +1502,16 @@ class Face(Shape):
                     g.append(w)
                     break
             else:
-                groups.append([w])
+                # (A wire around groups' outer wires, given after them, is the outer one: those
+                # become its holes, their own holes islands bounding faces of their own.)
+                around = [g for g in groups if within(w, g[0])]
+                if around:
+                    first = groups.index(around[0])
+                    groups = [g for g in groups if g not in around]
+                    groups.insert(first, [w] + [g[0] for g in around])
+                    groups.extend([h] for g in around for h in g[1:])
+                else:
+                    groups.append([w])
         faces = [Shape.cast(native.make_face(g[0].wrapped, [w.wrapped for w in g[1:]])) for g in groups]
         return faces[0] if len(faces) == 1 else Compound.makeCompound(faces)
 
