@@ -900,7 +900,15 @@ fn with_tools(model: &mut Model, shape: Shape, tools: &[(Shape, bool)]) -> Resul
         // (Tools cut away in layers of tools whose boxes are apart: those meeting one another
         // would be split by one another first, all at once.)
         let layers: Vec<Vec<Shape>> = if run[0].1 {
-            let boxes: Vec<crate::math::BoundingBox> = run.iter().map(|&(t, _)| crate::properties::bounding_box(model, t).enlarged(1e-4)).collect();
+            // (Grown by a twentieth of their size: tools nearly touching, cut at once, can leave
+            // the solid invalid where one after the other would not.)
+            let boxes: Vec<crate::math::BoundingBox> = run
+                .iter()
+                .map(|&(t, _)| {
+                    let b = crate::properties::bounding_box(model, t);
+                    b.enlarged(1e-4 + 0.05 * (b.max - b.min).length())
+                })
+                .collect();
             let mut layers: Vec<Vec<usize>> = Vec::new();
             for i in 0..run.len() {
                 match layers.iter_mut().find(|layer| layer.iter().all(|&j| !boxes[i].overlaps(&boxes[j]))) {
