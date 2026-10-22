@@ -1280,6 +1280,12 @@ def _lines_joined(wire: "Wire") -> "Wire":
     return Wire.makePolygon(keep, close=True)
 
 
+def _box_within(inner, outer, tol: float = 1e-6) -> bool:
+    """Whether box `inner` lies within box `outer` (up to `tol`)."""
+    return (inner.xmin >= outer.xmin - tol and inner.ymin >= outer.ymin - tol and inner.zmin >= outer.zmin - tol
+            and inner.xmax <= outer.xmax + tol and inner.ymax <= outer.ymax + tol and inner.zmax <= outer.zmax + tol)
+
+
 def _has_corners(wire: "Wire") -> bool:
     """Whether the wire's edges meet at an angle somewhere (at its start too, if closed)."""
     edges = wire.Edges()
@@ -1794,8 +1800,14 @@ class Solid(Shape, Mixin3D):
         # (Only where the spine has corners: elsewhere every transition is the same sweep.)
         corner = transition if transition in ("right", "round") and _has_corners(spine) else "transformed"
         if makeSolid:
-            profile = Face.makeFromWires(outer, inners)
-            return Shape.cast(native.pipe(profile.wrapped, spine.wrapped, corner=corner, frenet=isFrenet))
+            # (Holes of one face swept at once where the inner wires lie within the outer one;
+            # otherwise as CadQuery: each wire swept, the inner ones cut from the outer.)
+            box = outer.BoundingBox()
+            if all(_box_within(w.BoundingBox(), box) for w in inners):
+                profile = Face.makeFromWires(outer, inners)
+                return Shape.cast(native.pipe(profile.wrapped, spine.wrapped, corner=corner, frenet=isFrenet))
+            solids = [Shape.cast(native.pipe(Face.makeFromWires(w).wrapped, spine.wrapped, corner=corner, frenet=isFrenet)) for w in [outer] + inners]
+            return solids[0].cut(*solids[1:])
         shapes = [Shape.cast(native.pipe(w.wrapped, spine.wrapped, corner=corner, frenet=isFrenet)) for w in [outer] + inners]
         return shapes[0] if len(shapes) == 1 else Compound.makeCompound(shapes)
 
