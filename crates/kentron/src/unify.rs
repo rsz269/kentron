@@ -407,8 +407,49 @@ fn merge_group(model: &Model, specs: &[Spec], group: &[usize], internal: &HashSe
             }
         }
     }
+    gather(&mut loops, &surface);
     let tolerance = group.iter().map(|&i| specs[i].tolerance).fold(0.0, f64::max);
     Some(Spec { original: None, orientation, surface, tolerance, loops })
+}
+
+/// Shifts loops by whole periods into the span of the largest one (each aligned from its own
+/// first pcurve, a hole may come out a period away from the loop around it).
+fn gather(loops: &mut [Vec<Use>], surface: &Surface) {
+    let periods = [surface.u_period(), surface.v_period()];
+    if loops.len() < 2 || periods.iter().all(Option::is_none) {
+        return;
+    }
+    let span = |uses: &[Use]| -> ([f64; 2], [f64; 2]) {
+        let mut lo = [f64::INFINITY; 2];
+        let mut hi = [f64::NEG_INFINITY; 2];
+        for (a, b) in uses.iter().filter_map(uv_ends) {
+            for p in [a, b] {
+                lo = [lo[0].min(p.x), lo[1].min(p.y)];
+                hi = [hi[0].max(p.x), hi[1].max(p.y)];
+            }
+        }
+        (lo, hi)
+    };
+    let largest = (0..loops.len()).max_by(|&a, &b| loop_area(&loops[a]).abs().total_cmp(&loop_area(&loops[b]).abs())).expect("loops");
+    let (lo, hi) = span(&loops[largest]);
+    for (k, uses) in loops.iter_mut().enumerate() {
+        if k == largest {
+            continue;
+        }
+        let (a, b) = span(uses);
+        let mut shift = [0.0; 2];
+        for d in 0..2 {
+            let Some(p) = periods[d] else { continue };
+            // (The middle of the loop brought nearest the middle of the largest.)
+            shift[d] = ((0.5 * (lo[d] + hi[d]) - 0.5 * (a[d] + b[d])) / p).round() * p;
+        }
+        if shift != [0.0; 2] {
+            let t = Transform2::translation(Vector2::new(shift[0], shift[1]));
+            for u in uses.iter_mut() {
+                u.pcurve = u.pcurve.as_ref().map(|p| p.transformed(&t));
+            }
+        }
+    }
 }
 
 /// Shifts the pcurves of a loop by whole periods so that each starts where the one before
@@ -852,6 +893,37 @@ mod tests {
         assert!(validity::check(&model, clean).is_valid(), "{:?}", validity::check(&model, clean));
         assert_eq!(counts(&model, clean), (6, 12));
         assert!((properties::volume(&model, clean).mass - 2.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn holes_kept_within_the_period_of_their_outer_loop() {
+        // A cylinder with its bottom edge rounded and a hole in its side, and a cylinder on
+        // top of it: their sides join, the hole's loop in the period of the side's outer one
+        // (or a cut through the top then goes wrong).
+        let mut model = Model::new();
+        // (Each an extruded disc, as CadQuery's are.)
+        let disc = |model: &mut Model, centre: (f64, f64, f64), normal: Direction, x: Direction, radius: f64, length: f64| {
+            let frame = Frame::new(Point::new(centre.0, centre.1, centre.2), normal, x);
+            let circle = crate::make::edge_from_curve(model, crate::geometry::curve::Curve::Circle(crate::geometry::curve::Circle::new(frame, radius))).unwrap();
+            let wire = crate::make::wire(model, &[circle]).unwrap();
+            let face = crate::make::planar_face(model, wire).unwrap();
+            crate::sweep::extrude(model, face, Vector::from(normal) * length).unwrap().shape
+        };
+        let mut base = disc(&mut model, (0.0, 0.0, 0.0), Direction::Z, Direction::X, 12.5, 16.0);
+        let bottom: Vec<Shape> = model.explore(base, NodeKind::Edge).filter(|&e| crate::properties::bounding_box(&model, e).max.z < 1.0).collect();
+        base = crate::blend::fillet(&mut model, base, &bottom, 1.25).unwrap();
+        let hole = disc(&mut model, (-20.0, -5.0, 8.0), Direction::X, Direction::Y, 2.0, 10.0);
+        base = boolean::difference(&mut model, base, hole).unwrap();
+        let top = disc(&mut model, (0.0, 0.0, 16.0), Direction::Z, Direction::X, 12.5, 4.75);
+        let fused = boolean::union(&mut model, base, top).unwrap();
+        let clean = unify_same_domain(&mut model, fused).unwrap();
+        assert!(validity::check(&model, clean).is_valid(), "{:?}", validity::check(&model, clean));
+        let volume = properties::volume(&model, clean).mass;
+        let pocket = cuboid(&mut model, (-3.0, -3.0, 16.0), (6.0, 6.0, 4.75));
+        let cut = boolean::difference(&mut model, clean, pocket).unwrap();
+        assert!(validity::check(&model, cut).is_valid(), "{:?}", validity::check(&model, cut));
+        let removed = volume - properties::volume(&model, cut).mass;
+        assert!((removed - 36.0 * 4.75).abs() < 1e-6, "{removed}");
     }
 
     #[test]
