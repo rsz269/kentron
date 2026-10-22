@@ -2316,14 +2316,15 @@ impl Graph {
                 candidates.extend(e.paves.iter().map(|&(_, v)| v));
             }
         }
-        candidates.sort_unstable();
-        candidates.dedup();
-        // Only points in both faces' boxes can be on the section.
+        // Only points in both faces' boxes can be on the section. (Kept before sorting: a
+        // face with many edges has many.)
         let (ba, bb) = (&self.faces[fa].bbox, &self.faces[fb].bbox);
         candidates.retain(|&v| {
             let p = self.vertices.points[v];
             geom::box_contains(ba, p) && geom::box_contains(bb, p)
         });
+        candidates.sort_unstable();
+        candidates.dedup();
         let (lo, hi) = section.range();
         let period = hi - lo;
         // Only points near the curve can be on it: within its samples' box, widened by the
