@@ -1368,7 +1368,16 @@ fn turning(surface: &Surface) -> ((f64, bool), (f64, bool)) {
         let turn = points.windows(3).map(|w| angle(w[1] - w[0], w[2] - w[1])).sum::<f64>();
         let n = points.len();
         let chord = points.windows(2).map(|w| w[0].distance(w[1])).sum::<f64>() / (n - 1) as f64;
-        let returns = (0..n).filter(|&i| (0..n).any(|j| i.abs_diff(j) >= n / 6 && points[i].distance(points[j]) <= 4.0 * chord)).count();
+        // (Counted only until the half is reached, or can no longer be.)
+        let mut returns = 0;
+        for i in 0..n {
+            if 2 * returns >= n || 2 * (returns + n - i) < n {
+                break;
+            }
+            if (0..n).any(|j| i.abs_diff(j) >= n / 6 && points[i].distance(points[j]) <= 4.0 * chord) {
+                returns += 1;
+            }
+        }
         let close = 2 * returns >= n;
         (turn, close)
     };
