@@ -19,7 +19,7 @@ import warnings
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from . import _kentron as native
-from .geom import BoundBox, Location, Matrix, Plane, Vector, _compose, _default_x, _invert, _rotation_rows, _rows_identity
+from .geom import BoundBox, Location, Matrix, Plane, Vector, _compose, _default_x, _invert, _new, _rotation_rows, _rows_identity, _vector
 
 
 def _rows_translation(v) -> list:
@@ -68,7 +68,8 @@ def _selector(selector):
 
 
 def _tuple(v) -> Tuple[float, float, float]:
-    return Vector(v).toTuple()
+    v = _vector(v)
+    return (v.x, v.y, v.z)
 
 
 class Shape:
@@ -81,11 +82,7 @@ class Shape:
 
     @staticmethod
     def cast(obj, forConstruction: bool = False) -> "Shape":
-        cls = _KINDS.get(obj.kind(), Shape)
-        s = cls.__new__(cls)
-        Shape.__init__(s, obj)
-        s.forConstruction = forConstruction
-        return s
+        return _cast_as(_KINDS.get(obj.kind(), Shape), obj, forConstruction)
 
     def _new(self, handle) -> "Shape":
         return Shape.cast(handle)
@@ -342,9 +339,9 @@ class Shape:
     def centerOfMass(obj: "Shape") -> Vector:
         kind = obj.wrapped.kind()
         if kind == "Vertex":
-            return Vector(native.vertex_point(obj.wrapped))
+            return _new(*native.vertex_point(obj.wrapped))
         d = Shape._dimension(obj)
-        return Vector((native.length, native.area, native.volume)[max(d, 1) - 1](obj.wrapped)[1])
+        return _new(*(native.length, native.area, native.volume)[max(d, 1) - 1](obj.wrapped)[1])
 
     @staticmethod
     def matrixOfInertia(obj: "Shape") -> List[List[float]]:
@@ -424,7 +421,8 @@ class Shape:
     # --- sub-shapes -----------------------------------------------------------------------
 
     def _sub(self, kind: str) -> list:
-        return [Shape.cast(h) for h in native.subshapes(self.wrapped, kind, kind == "Edge")]
+        cls = _KINDS[kind]
+        return [_cast_as(cls, h) for h in native.subshapes(self.wrapped, kind, kind == "Edge")]
 
     def Vertices(self) -> List["Vertex"]:
         return self._sub("Vertex")
@@ -820,9 +818,9 @@ class Mixin1D:
         """The first and last points along the edge (as oriented) or wire."""
         if self.ShapeType() == "Edge":
             a, b = native.edge_points(self.wrapped, [0.0, 1.0])
-            return Vector(a), Vector(b)
+            return _new(*a), _new(*b)
         edges = native.ordered_edges(self.wrapped)
-        return Vector(native.edge_points(edges[0], [0.0])[0]), Vector(native.edge_points(edges[-1], [1.0])[0])
+        return _new(*native.edge_points(edges[0], [0.0])[0]), _new(*native.edge_points(edges[-1], [1.0])[0])
 
     def paramAt(self, d) -> float:
         """The parameter at fraction `d` of the length (or of the point nearest `d`, a
@@ -1885,6 +1883,15 @@ class Compound(Shape, Mixin3D):
     def siblings(self, ctx: Shape, kind: str, level=1) -> "Compound":
         return Compound.makeCompound(_siblings(list(self), ctx, kind, level))
 
+
+def _cast_as(cls, handle, forConstruction: bool = False) -> Shape:
+    """A shape of class `cls` for `handle` (as `Shape.cast`, its kind known)."""
+    s = _object_new(cls)
+    s.wrapped, s.label, s.forConstruction = handle, "", forConstruction
+    return s
+
+
+_object_new = object.__new__
 
 _KINDS = {
     "Vertex": Vertex,

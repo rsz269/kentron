@@ -84,48 +84,42 @@ class Vector:
         return (self.x, self.y, self.z)[i]
 
     def add(self, v) -> "Vector":
-        v = Vector(v)
-        return Vector(self.x + v.x, self.y + v.y, self.z + v.z)
+        v = _vector(v)
+        return _new(self.x + v.x, self.y + v.y, self.z + v.z)
 
     def sub(self, v) -> "Vector":
-        v = Vector(v)
-        return Vector(self.x - v.x, self.y - v.y, self.z - v.z)
+        v = _vector(v)
+        return _new(self.x - v.x, self.y - v.y, self.z - v.z)
 
     def multiply(self, s: float) -> "Vector":
-        return Vector(self.x * s, self.y * s, self.z * s)
+        s = float(s)
+        return _new(self.x * s, self.y * s, self.z * s)
 
-    def __add__(self, v):
-        return self.add(v)
-
-    __radd__ = __add__
-
-    def __sub__(self, v):
-        return self.sub(v)
+    __add__ = __radd__ = add
+    __sub__ = sub
 
     def __rsub__(self, v):
         return Vector(v).sub(self)
 
-    def __mul__(self, s):
-        return self.multiply(s)
-
-    __rmul__ = __mul__
+    __mul__ = __rmul__ = multiply
 
     def __truediv__(self, s):
-        return Vector(self.x / s, self.y / s, self.z / s)
+        s = float(s)
+        return _new(self.x / s, self.y / s, self.z / s)
 
     def __neg__(self):
-        return Vector(-self.x, -self.y, -self.z)
+        return _new(-self.x, -self.y, -self.z)
 
     def __abs__(self):
         return self.Length
 
     def dot(self, v) -> float:
-        v = Vector(v)
+        v = _vector(v)
         return self.x * v.x + self.y * v.y + self.z * v.z
 
     def cross(self, v) -> "Vector":
-        v = Vector(v)
-        return Vector(self.y * v.z - self.z * v.y, self.z * v.x - self.x * v.z, self.x * v.y - self.y * v.x)
+        v = _vector(v)
+        return _new(self.y * v.z - self.z * v.y, self.z * v.x - self.x * v.z, self.x * v.y - self.y * v.x)
 
     def normalized(self) -> "Vector":
         length = self.Length
@@ -179,7 +173,9 @@ class Vector:
 
     def transform(self, t) -> "Vector":
         """The point moved by `t` (a `Matrix` or `Location`)."""
-        return Vector(*_apply(t.rows, self))
+        (a, b, c, d), (e, f, g, h), (i, j, k, l) = t.rows
+        x, y, z = self.x, self.y, self.z
+        return _new(a * x + b * y + c * z + d, e * x + f * y + g * z + h, i * x + j * y + k * z + l)
 
     def __eq__(self, other) -> bool:
         # As gp_Vec::IsEqual: lengths within 1e-5 and, unless one is that short, directions.
@@ -206,6 +202,21 @@ class Vector:
 
 
 VectorLike = Union[Vector, Tuple3, Tuple[float, float]]
+
+
+def _new(x: float, y: float, z: float) -> Vector:
+    """A vector of three floats, without `Vector`'s checks of its arguments."""
+    v = _object_new(Vector)
+    v.x, v.y, v.z = x, y, z
+    return v
+
+
+_object_new = object.__new__
+
+
+def _vector(v) -> Vector:
+    """`v` as a vector: itself if it is one."""
+    return v if type(v) is Vector else Vector(v)
 
 
 def _rows_identity():
@@ -301,13 +312,13 @@ class Matrix:
         self.rows = _compose(self.rows, _rotation_rows((0, 0, 1), angle))
 
     def inverse(self) -> "Matrix":
-        return Matrix(_invert(self.rows))
+        return _matrix(_invert(self.rows))
 
     def multiply(self, other):
         """`other` (a `Vector`) transformed, or the transformation `self * other`."""
         if isinstance(other, Vector):
             return other.transform(self)
-        return Matrix(_compose(self.rows, other.rows))
+        return _matrix(_compose(self.rows, other.rows))
 
     def transposed_list(self) -> Sequence[float]:
         data = [r[:] for r in self.rows] + [[0.0, 0.0, 0.0, 1.0]]
@@ -331,6 +342,13 @@ class Matrix:
 
     def __setstate__(self, state):
         self.rows = [list(r) for r in state]
+
+
+def _matrix(rows) -> Matrix:
+    """A matrix of `rows` (three lists of four floats), without `Matrix`'s checks."""
+    m = _object_new(Matrix)
+    m.rows = rows
+    return m
 
 
 class Location:
@@ -448,7 +466,7 @@ def _euler_rows(rx, ry, rz):
 
 
 def _plane_rows(origin, x, y, z):
-    o, x, y, z = Vector(origin), Vector(x), Vector(y), Vector(z)
+    o, x, y, z = _vector(origin), _vector(x), _vector(y), _vector(z)
     return [[x.x, y.x, z.x, o.x], [x.y, y.y, z.y, o.y], [x.z, y.z, z.z, o.z]]
 
 
@@ -560,7 +578,7 @@ class Plane:
     @property
     def rG(self) -> Matrix:
         """Local to global coordinates."""
-        return Matrix(_plane_rows(self.origin, self.xDir, self.yDir, self.zDir))
+        return _matrix(_plane_rows(self.origin, self.xDir, self.yDir, self.zDir))
 
     @property
     def fG(self) -> Matrix:
@@ -568,7 +586,13 @@ class Plane:
         return self.rG.inverse()
 
     def toWorldCoords(self, tuplePoint) -> Vector:
-        return Vector(tuplePoint).transform(self.rG)
+        p, o, x, y, z = _vector(tuplePoint), self.origin, self.xDir, self.yDir, self.zDir
+        # (As `transform` by `rG`, term for term.)
+        return _new(
+            x.x * p.x + y.x * p.y + z.x * p.z + o.x,
+            x.y * p.x + y.y * p.y + z.y * p.z + o.y,
+            x.z * p.x + y.z * p.y + z.z * p.z + o.z,
+        )
 
     def toLocalCoords(self, obj):
         """A point, or a shape, in this plane's coordinates."""
