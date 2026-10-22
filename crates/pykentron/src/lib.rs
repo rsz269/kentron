@@ -605,10 +605,12 @@ fn revolve(profile: Handle, origin: Xyz, axis: Xyz, angle: f64) -> PyResult<Hand
 
 /// The loft through `sections` (wires, or vertices at the ends), passing through them
 /// spaced as `spacing` says: "chordal" (by their distances apart), "centripetal" (by those
-/// distances' square roots) or "uniform" (evenly), CadQuery's names.
+/// distances' square roots) or "uniform" (evenly), CadQuery's names. Their edges are
+/// matched as `matching` says: "rays" (as OCCT), "length", or "as_given" (in order, none
+/// turned or restarted: sections known to correspond, as turned copies of one).
 #[pyfunction]
-#[pyo3(signature = (sections, solid=true, ruled=false, spacing="chordal"))]
-fn make_loft(sections: Vec<Handle>, solid: bool, ruled: bool, spacing: &str) -> PyResult<Handle> {
+#[pyo3(signature = (sections, solid=true, ruled=false, spacing="chordal", matching="rays"))]
+fn make_loft(sections: Vec<Handle>, solid: bool, ruled: bool, spacing: &str, matching: &str) -> PyResult<Handle> {
     let sections: Vec<Shape> = sections.iter().map(|h| h.shape).collect();
     let spacing = match spacing.to_ascii_lowercase().as_str() {
         "chordal" | "chordlength" => loft::Spacing::ByDistance,
@@ -616,7 +618,13 @@ fn make_loft(sections: Vec<Handle>, solid: bool, ruled: bool, spacing: &str) -> 
         "uniform" => loft::Spacing::Even,
         other => return Err(PyValueError::new_err(format!("unknown loft parametrization {other}"))),
     };
-    with_model(|m| loft::loft(m, &sections, &loft::LoftOptions { solid, ruled, matching: loft::Matching::ByRays, spacing }).map(|l| l.shape)).map(handle)
+    let matching = match matching {
+        "rays" => loft::Matching::ByRays,
+        "length" => loft::Matching::ByLength,
+        "as_given" => loft::Matching::AsGiven,
+        other => return Err(PyValueError::new_err(format!("unknown loft matching {other}"))),
+    };
+    with_model(|m| loft::loft(m, &sections, &loft::LoftOptions { solid, ruled, matching, spacing }).map(|l| l.shape)).map(handle)
 }
 
 /// A planar wire offset in its plane ("arc" or "intersection" joins).

@@ -1767,7 +1767,9 @@ class Solid(Shape, Mixin3D):
 
         def twisted(w: Wire) -> "Shape":
             sections = [w.rotate(center, center + normal, angle * i / steps).translate(normal * (i / steps)) for i in range(steps + 1)]
-            return cls.makeLoft(sections)
+            # (Each vertex to its own turned copy: a loft matching starts by nearness would
+            # skip round a small profile far from the axis, its copies moved more than its size.)
+            return Shape.cast(native.make_loft([s.wrapped for s in sections], True, False, "chordal", "as_given"))
 
         result = twisted(outer)
         for w in inners:
