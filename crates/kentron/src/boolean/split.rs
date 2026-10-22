@@ -215,6 +215,52 @@ impl Graph {
         arcs
     }
 
+    /// The interior point of a region of face `fi` too thin for its arcs' polylines (a strip
+    /// narrower than their sag, as between two near-parallel cuts), taken again from the arcs
+    /// sampled `DENSER` times as densely from their exact geometry; none where an arc's
+    /// samples do not end where its polyline does (at a pole, say).
+    pub fn thin_interior(&self, fi: usize, arcs: &[ArcOnFace], pieces: &[Piece], region: &Region) -> Option<Uv> {
+        const DENSER: usize = 16;
+        let face = &self.faces[fi];
+        let mut polygons = Vec::with_capacity(region.loops.len());
+        for lp in &region.loops {
+            let mut points: Vec<Uv> = Vec::new();
+            for &(a, forward) in lp {
+                let arc = &arcs[a];
+                let piece = &pieces[arc.piece];
+                let (start, end) = (arc.uv[0], *arc.uv.last()?);
+                let at = |t: f64| -> Uv {
+                    match &arc.pcurve {
+                        Some(c) => {
+                            let q = c.point(t);
+                            [q.x, q.y]
+                        }
+                        None => geom::uv_of(&face.surface, self.edges[piece.edge].point(t, &self.vertices)),
+                    }
+                };
+                let n = (arc.uv.len() - 1).max(1) * DENSER;
+                let mut uv: Vec<Uv> = Vec::with_capacity(n + 1);
+                for i in 0..=n {
+                    let p = at(piece.first + (piece.last - piece.first) * i as f64 / n as f64);
+                    uv.push(face.unwrap(p, uv.last().copied().unwrap_or(start)));
+                }
+                let reach = 1e-6 * (end[0] - start[0]).hypot(end[1] - start[1]).max(1.0);
+                let gap = |p: Uv, q: Uv| (p[0] - q[0]).hypot(p[1] - q[1]);
+                if gap(uv[0], start) > reach || gap(uv[n], end) > reach {
+                    return None;
+                }
+                (uv[0], uv[n]) = (start, end);
+                if !forward {
+                    uv.reverse();
+                }
+                points.extend(&uv[..n]);
+            }
+            points.push(*points.first()?);
+            polygons.push(points);
+        }
+        Some(geom::interior_point(&polygons))
+    }
+
     /// An arc of the boundary use `b` of face `fi` from `first` to `last`.
     fn boundary_arc(&self, fi: usize, b: &super::graph::BoundaryUse, piece: usize, first: f64, last: f64) -> ArcOnFace {
         let uv = geom::sample_pcurve(&b.pcurve, first, last);

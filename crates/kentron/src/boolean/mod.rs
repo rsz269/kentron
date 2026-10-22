@@ -451,6 +451,12 @@ fn classified(model: &Model, graph: &mut Graph) -> (Vec<split::Piece>, Vec<Vec<s
     // Each face's regions and where they lie, found for all faces at once.
     let faces: Vec<usize> = (0..arcs_of.len()).collect();
     let graph: &Graph = graph;
+    // (Narrower, as twice its area over its perimeter, than a thousandth of its size.)
+    let thin = |polygon: &[geom::Uv]| {
+        let (lo, hi) = geom::polyline_box(polygon);
+        let perimeter: f64 = polygon.windows(2).map(|w| (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1])).sum();
+        2.0 * geom::signed_area(polygon).abs() < 1e-3 * (hi[0] - lo[0]).hypot(hi[1] - lo[1]) * perimeter
+    };
     let found = crate::parallel::map(&faces, |&fi| {
         let arcs = &arcs_of[fi];
         let face = &graph.faces[fi];
@@ -469,7 +475,19 @@ fn classified(model: &Model, graph: &mut Graph) -> (Vec<split::Piece>, Vec<Vec<s
                 let fingerprint = model.face_fingerprint(id);
                 (*model.derived(id.into(), fingerprint, || FaceRegions(split::split_face(arcs, &pieces, &face.polylines, scale, false)))).0.clone()
             }
-            None => split::split_face(arcs, &pieces, &face.polylines, scale, false),
+            None => {
+                let mut regions = split::split_face(arcs, &pieces, &face.polylines, scale, false);
+                // (Regions thinner than their polylines' sampling: their interior points from
+                // denser ones, the coarse ones' possibly off the region.)
+                for r in &mut regions {
+                    if thin(&r.polygons[0]) {
+                        if let Some(p) = graph.thin_interior(fi, arcs, &pieces, r) {
+                            r.interior = p;
+                        }
+                    }
+                }
+                regions
+            }
         };
         regions_of_face.into_iter().map(|region| (fi, region, State::Outside)).collect::<Vec<_>>()
     });
@@ -1085,6 +1103,26 @@ mod tests {
         assert!((v - 187.5).abs() <= 1e-4 * 187.5, "volume {v}");
         let top = model.explore(result, NodeKind::Face).filter(|&f| (properties::area(&model, f).center_of_mass.y - 1.0).abs() < 1e-9).count();
         assert_eq!(top, 2);
+    }
+
+    /// A cylinder (an extruded circle) cut through by a slab 0.001 thick tilted 20°: the strip
+    /// of its side within the slab is narrower than the sag of its boundaries' polylines, its
+    /// interior point taken from denser ones; it goes, leaving two valid solids (OCCT's
+    /// volumes).
+    #[test]
+    fn a_cylinder_cut_by_a_thin_tilted_slab() {
+        let mut model = Model::new();
+        let mut read = |text: &str| crate::io::brep::read(&mut model, &mut text.as_bytes()).unwrap();
+        let cylinder = read(include_str!("tests/cylinder_cut_by_thin_slab_a.brep"));
+        let slab = read(include_str!("tests/cylinder_cut_by_thin_slab_b.brep"));
+        let result = difference(&mut model, cylinder, slab).unwrap();
+        assert!(validity::check(&model, result).is_valid(), "{:?}", validity::check(&model, result));
+        let mut volumes: Vec<f64> = model.explore(result, NodeKind::Solid).map(|s| properties::volume(&model, s).mass).collect();
+        volumes.sort_by(f64::total_cmp);
+        assert_eq!(volumes.len(), 2, "{volumes:?}");
+        for (v, occt) in volumes.iter().zip([45363.99, 55230.79]) {
+            assert!((v - occt).abs() <= 1e-5 * occt, "{volumes:?}");
+        }
     }
 
     /// A cylinder and a strip winding twenty times round it (a B-spline ruled between two
