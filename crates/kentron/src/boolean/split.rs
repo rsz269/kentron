@@ -508,7 +508,11 @@ pub(super) fn split_face(arcs: &[ArcOnFace], pieces: &[Piece], face_polylines: &
         let perimeter: f64 = polygon.windows(2).map(|w| ((w[1][0] - w[0][0]).powi(2) + (w[1][1] - w[0][1]).powi(2)).sqrt()).sum();
         2.0 * geom::signed_area(polygon).abs() <= 1e-5 * uv_scale.max(1.0) * perimeter
     };
-    regions.retain(|r| geom::inside_polylines(face_polylines, r.interior) || sliver(r) && r.loops.iter().flatten().any(|&(a, forward)| arcs[a].along == Some(forward)));
+    // (The face's boundary indexed where many regions are tested against a long one.)
+    let segments: usize = face_polylines.iter().map(Vec::len).sum();
+    let index = (regions.len() > 2 && segments >= 64).then(|| geom::InsidePolylines::new(face_polylines));
+    let inside = |p: Uv| index.as_ref().map_or_else(|| geom::inside_polylines(face_polylines, p), |index| index.contains(p));
+    regions.retain(|r| inside(r.interior) || sliver(r) && r.loops.iter().flatten().any(|&(a, forward)| arcs[a].along == Some(forward)));
     regions
 }
 
