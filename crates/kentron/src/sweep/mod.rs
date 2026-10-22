@@ -1018,6 +1018,25 @@ mod tests {
     }
 
     #[test]
+    fn sections_turned_or_started_apart_are_matched() {
+        // Equal circles across a straight spine, the middle one started a quarter turn on
+        // and the last one running the other way round: still a cylinder.
+        let mut model = Model::new();
+        let spine = make::edge_between(&mut model, Point::ORIGIN, Point::new(10.0, 0.0, 0.0)).unwrap();
+        let mut sections = Vec::new();
+        for (x, normal, start) in [(0.0, Direction::X, Direction::Y), (5.0, Direction::X, Direction::Z), (10.0, -Direction::X, Direction::Y)] {
+            let circle = Curve::Circle(Circle::new(Frame::new(Point::new(x, 0.0, 0.0), normal, start), 1.0));
+            let edge = make::edge_from_curve(&mut model, circle).unwrap();
+            sections.push((make::wire(&mut model, &[edge]).unwrap(), PipeOptions::default()));
+        }
+        let solid = pipe_through(&mut model, &sections, spine, true).unwrap();
+        let report = validity::check(&model, solid);
+        assert!(report.is_valid(), "{report:?}");
+        let volume = properties::volume(&model, solid).mass;
+        assert!((volume - 10.0 * PI).abs() < 1e-6 * volume, "{volume}");
+    }
+
+    #[test]
     fn extruded_polygon_is_a_prism() {
         // An L-shaped profile (area 3) in the XZ plane, extruded straight and slanted:
         // volume = area x height.

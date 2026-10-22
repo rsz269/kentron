@@ -95,9 +95,13 @@ pub(super) fn pipe_shell(model: &mut Model, sections: &[(Shape, PipeOptions)], p
         placed.push((k as f64 + s, section, at_anchor[0].transforms[0]));
     }
     placed.sort_by(|a, b| a.0.total_cmp(&b.0));
-    // (Wires of different numbers of edges: split to match, as a loft through them.)
-    let counts: Vec<usize> = placed.iter().filter(|(_, s, _)| s.kind() == NodeKind::Wire).map(|(_, s, _)| model.explore(*s, NodeKind::Edge).count()).collect();
-    if counts.iter().any(|&c| c != counts[0]) {
+    // The sections seen from the spine's start (all in one plane there), then made alike as a
+    // loft's: turned the same way, started at matching vertices, split to match.
+    for p in placed.iter_mut() {
+        p.1 = crate::modify::transform(model, p.1, &p.2, crate::modify::TransformOptions::default())?;
+        p.2 = Transform::IDENTITY;
+    }
+    if placed.iter().filter(|(_, s, _)| s.kind() == NodeKind::Wire).count() > 1 {
         let shapes: Vec<Shape> = placed.iter().map(|(_, s, _)| *s).collect();
         let matched = crate::loft::compatible_sections(model, &shapes, crate::loft::Matching::ByRays)?;
         for (p, m) in placed.iter_mut().zip(matched) {
