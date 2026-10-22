@@ -140,7 +140,7 @@ fn blend_network_past(model: &mut Model, shape: Shape, edges: &[(Shape, Profile)
                     ends[i][k] = Some(end);
                     continue;
                 }
-                let cut = end_cut(model, shape, s.rolling.id, if k == 0 { s.rolling.va } else { s.rolling.vb }, &s.rolling.sides, &s.surface, &s.ts, k == 1, s.rolling.target)?;
+                let cut = end_cut(model, shape, s.rolling.id, if k == 0 { s.rolling.va } else { s.rolling.vb }, &s.rolling.sides, &s.surface, &s.rolling.scan, k == 1, s.rolling.target)?;
                 ends[i][k] = Some(End::Face(cut));
             }
             [a, b] => {
@@ -1127,7 +1127,10 @@ fn build(model: &mut Model, shape: Shape, stripes: &[Stripe], ends: &[[End; 2]],
         uses.push((contact_edges[i][0], Orientation::Reversed, line((0.0, 0.0), (0.0, 1.0)), a.v[0], b.v[0]));
         let fillet = new_face(model, s.surface.clone(), vec![(uses, Orientation::Forward)], tolerance)?;
         // Outward: away from the ball's centre for a convex edge (the ball is in the solid).
-        let mid = &s.rolling.sections[s.rolling.sections.len() / 2];
+        // (At the section nearest the middle of the edge: not one past its ends, where the
+        // ball may lie the other way.)
+        let middle = 0.5 * (s.rolling.t0 + s.rolling.t1);
+        let mid = s.rolling.sections.iter().min_by(|a, b| (a.t - middle).abs().total_cmp(&(b.t - middle).abs())).expect("sections");
         let (p, du, dv) = s.surface.d1(0.5, mid.t);
         let away = (p - mid.center).dot(du.cross(dv)) > 0.0;
         added.push(if away == s.rolling.convex { fillet } else { fillet.reversed() });

@@ -412,12 +412,24 @@ fn rolling_on(model: &Model, shape: Shape, edge: Shape, profile: &Profile, far: 
     // sections midway.
     let size = curve.point(t0).distance(curve.point(0.5 * (t0 + t1))) + curve.point(t1).distance(curve.point(0.5 * (t0 + t1))) + reach;
     let target = 1e-9 * size.max(1.0);
-    let sweep = || -> Result<(Vec<Section>, [BSplineCurve; 2])> {
+    // (`uniform`: a section midway in every stretch with each doubling, as sweeps did before
+    // they refined only where missed.)
+    let sweep_with = |uniform: bool| -> Result<(Vec<Section>, [BSplineCurve; 2], Vec<f64>, bool)> {
         let mut n = SECTIONS;
+        // (The sections along the edge at positions `k` of `n` steps: all of them at first;
+        // with each doubling of `n`, a section more only midway between two whose middle the
+        // contact curves missed. Past the ends, all of them each time.)
+        let mut positions: Vec<usize> = (0..=n).collect();
         let mut previous_worst = f64::INFINITY;
         let mut previous_poor = false;
         loop {
-            let past_n = if closed { 0 } else { far * (PAST_END * n / SECTIONS).max(PAST_END) };
+            // (Past each end, as many steps as the stretch along the edge at that end makes of
+            // it: as a sweep at every step's where the stretch is one.)
+            let end_len = |end: usize| -> usize {
+                let m = positions.len();
+                if m < 2 { 1 } else if end == 0 { positions[1] - positions[0] } else { positions[m - 1] - positions[m - 2] }
+            };
+            let past_steps = |end: usize| if closed { 0 } else { far * (PAST_END * (n / end_len(end).max(1)) / SECTIONS).max(PAST_END) };
             // Past each end, outwards as far as the ball still fits between the faces (their
             // surfaces may end or degenerate further on).
             // (Not where the spine runs off: a curve carried on past its range, onto the faces'
@@ -425,7 +437,7 @@ fn rolling_on(model: &Model, shape: Shape, edge: Shape, profile: &Profile, far: 
             // (Nor past where the faces turn tangent and the ball's arc, shrunk to nothing,
             // would open the other way round: a ball there is on the faces' other side.)
             let turn = |s: &Section| (s.contacts[0] - s.center).cross(s.contacts[1] - s.center).dot(curve.d1(s.t).1);
-            let past = |end: f64, far: f64| -> Vec<Section> {
+            let past = |end: f64, far: f64, past_n: usize| -> Vec<Section> {
                 let at = curve.point(end);
                 // (The way the first section's arc turns and its width, and the narrowest yet.)
                 let mut way: Option<(f64, f64)> = None;
@@ -459,15 +471,20 @@ fn rolling_on(model: &Model, shape: Shape, edge: Shape, profile: &Profile, far: 
                 last_contacts.set(spine.map(|(s, o)| [s.contacts[0] - o, s.contacts[1] - o]));
             };
             restart(None);
-            let before = if vanishing[0] { Vec::new() } else { past(t0, t_min) };
+            let before = if vanishing[0] { Vec::new() } else { past(t0, t_min, past_steps(0)) };
             restart(before.first());
             // (On from the section past the start nearest it.)
             let mut sections: Vec<Section> = before.into_iter().rev().collect();
+            // (Each section's position along the edge, none past its ends.)
+            let mut at: Vec<Option<usize>> = vec![None; sections.len()];
             // (Where no ball fits near an end of an open edge (a face's surface singular there,
             // as at a cone's apex), the sections stop short of it: the fillet must end on the
             // face there before.)
             let mut short = [false; 2];
-            for k in 0..=n {
+            // (Where a section is not found near an end, every step there is tried, as a sweep
+            // at every step would: the fillet then ends where that one's does.)
+            let mut ending = [false; 2];
+            for &k in &positions {
                 let t = t0 + (t1 - t0) * k as f64 / n as f64;
                 let found = match (k, vanishing) {
                     (0, [true, _]) => vanished(t0),
@@ -475,24 +492,40 @@ fn rolling_on(model: &Model, shape: Shape, edge: Shape, profile: &Profile, far: 
                     _ => section_at(t),
                 };
                 match found {
-                    Ok(s) => sections.push(s),
+                    Ok(s) => {
+                        sections.push(s);
+                        at.push(Some(k));
+                    }
                     // (Next to a vanishing end, where the faces are all but tangent, a section
                     // may not be found: left out.)
-                    Err(_) if (vanishing[0] && 8 * k < n) || (vanishing[1] && 8 * k > 7 * n) => {}
+                    Err(_) if (vanishing[0] && 8 * k < n) || (vanishing[1] && 8 * k > 7 * n) => {
+                        ending[usize::from(8 * k > 7 * n)] = true;
+                    }
                     Err(_) if !closed && 4 * k < n && (short[0] || k == 0) => {
                         short[0] = true;
+                        ending[0] = true;
                         sections.clear();
+                        at.clear();
                     }
                     Err(_) if !closed && 4 * k > 3 * n => {
                         short[1] = true;
+                        ending[1] = true;
                         break;
                     }
                     Err(e) => return Err(e),
                 }
             }
-            if !short[1] && !vanishing[1] {
-                sections.extend(past(t1, t_max));
+            let zone = |k: usize, end: usize| if end == 0 { 4 * k <= n } else { 4 * k >= 3 * n };
+            let missing: Vec<usize> = (0..2).filter(|&e| ending[e]).flat_map(|e| (0..=n).filter(move |&k| zone(k, e))).filter(|k| positions.binary_search(k).is_err()).collect();
+            if !missing.is_empty() {
+                positions.extend(missing);
+                positions.sort_unstable();
+                continue;
             }
+            if !short[1] && !vanishing[1] {
+                sections.extend(past(t1, t_max, past_steps(1)));
+            }
+            at.resize(sections.len(), None);
             // (Along a closed edge the last section is the first again: found apart, the two
             // may differ a little where a face's normal turns across its own seam there. Its
             // parameters on the faces stay its own, on its side of such a seam.)
@@ -537,8 +570,10 @@ fn rolling_on(model: &Model, shape: Shape, edge: Shape, profile: &Profile, far: 
             };
             let contacts = [contact(0)?, contact(1)?];
             let mut worst: f64 = 0.0;
+            // (The positions of the ends of those along the edge whose middle was missed.)
+            let mut missed: Vec<usize> = Vec::new();
             restart(sections.first());
-            for w in ts.windows(2) {
+            for (j, w) in ts.windows(2).enumerate() {
                 // (Past the edge's ends, where the faces' surfaces may end between two sections
                 // found, a section not found midway is left out of the measure.)
                 let mid = match section_at(0.5 * (w[0] + w[1])) {
@@ -547,8 +582,12 @@ fn rolling_on(model: &Model, shape: Shape, edge: Shape, profile: &Profile, far: 
                     Err(_) if (vanishing[0] && w[0] == t0) || (vanishing[1] && w[1] == t1) => continue,
                     Err(e) => return Err(e),
                 };
-                for i in 0..2 {
-                    worst = worst.max(contacts[i].point(mid.t).distance(mid.contacts[i]));
+                let gap = (0..2).map(|i| contacts[i].point(mid.t).distance(mid.contacts[i])).fold(0.0, f64::max);
+                worst = worst.max(gap);
+                if gap > target {
+                    if let (Some(a), Some(_)) = (at[j], at[j + 1]) {
+                        missed.push(a);
+                    }
                 }
             }
             // (Not further where doubling the sections has twice running hardly helped, and the
@@ -559,11 +598,36 @@ fn rolling_on(model: &Model, shape: Shape, edge: Shape, profile: &Profile, far: 
             let poor = (0.25..4.0).contains(&ratio);
             let stalled = n >= 4 * SECTIONS && worst > 100.0 * target && poor && previous_poor;
             if worst <= target || stalled || n >= 32 * SECTIONS {
-                return Ok((sections, contacts));
+                // (The parameters a sweep at every step would have found its sections at: along
+                // the edge the steps between those found filled in. What crosses the fillet is
+                // looked for at them, not where the sections happen to lie.)
+                let mut scan = Vec::with_capacity(sections.len());
+                let mut previous: Option<usize> = None;
+                for (s, k) in sections.iter().zip(&at) {
+                    if let (Some(k), Some(p)) = (*k, previous) {
+                        scan.extend((p + 1..k).map(|j| t0 + (t1 - t0) * j as f64 / n as f64));
+                    }
+                    scan.push(s.t);
+                    if k.is_some() {
+                        previous = *k;
+                    }
+                }
+                return Ok((sections, contacts, scan, !stalled || worst <= target));
             }
             previous_worst = worst;
             previous_poor = poor;
             n *= 2;
+            // (Twice as many steps: a section midway in each stretch missed.)
+            let mut next = Vec::with_capacity(2 * positions.len());
+            for (i, &k) in positions.iter().enumerate() {
+                next.push(2 * k);
+                if let Some(&after) = positions.get(i + 1) {
+                    if uniform || missed.binary_search(&k).is_ok() {
+                        next.push(k + after);
+                    }
+                }
+            }
+            positions = next;
         }
     };
 
@@ -578,7 +642,20 @@ fn rolling_on(model: &Model, shape: Shape, edge: Shape, profile: &Profile, far: 
             inside(w[0].t) && inside(w[1].t) && (w[1].center - w[0].center).dot(curve.d1(w[0].t).1) * (w[1].t - w[0].t) < -1e-9 * size * (w[1].t - w[0].t).abs()
         })
     };
-    let (sections, contacts) = match sweep() {
+    // (Refined where missed; where that stops short of the target (the contact curves not
+    // smooth somewhere), the sweep again from where it started, at every step: stretches
+    // left long beside a rough place leave the sections there to find other balls.)
+    let sweep = || -> Result<(Vec<Section>, [BSplineCurve; 2], Vec<f64>)> {
+        let (offset, contacts_before) = (last_offset.get(), last_contacts.get());
+        let (sections, contacts, scan, reached) = sweep_with(false)?;
+        if reached {
+            return Ok((sections, contacts, scan));
+        }
+        last_offset.set(offset);
+        last_contacts.set(contacts_before);
+        sweep_with(true).map(|(s, c, k, _)| (s, c, k))
+    };
+    let (sections, contacts, scan) = match sweep() {
         Ok(swept) if chamfer.is_some() || !folds(&swept.0) => swept,
         Err(e) if chamfer.is_some() => return Err(e),
         first => {
@@ -592,7 +669,7 @@ fn rolling_on(model: &Model, shape: Shape, edge: Shape, profile: &Profile, far: 
             }
         }
     };
-    Ok(Rolling { id, va, vb, closed, sides, sections, contacts, convex, target, t0, t1, vanishing })
+    Ok(Rolling { id, va, vb, closed, sides, sections, contacts, convex, target, t0, t1, vanishing, scan })
 }
 
 /// What a rolling-ball fillet is made from (see [`rolling`]).
@@ -610,6 +687,9 @@ struct Rolling {
     t1: f64,
     /// Whether the fillet narrows to nothing at each end, the faces tangent there.
     vanishing: [bool; 2],
+    /// The parameters along the edge at which what crosses the fillet is looked for: the
+    /// sections' and the steps between them a sweep at every step would have.
+    scan: Vec<f64>,
 }
 
 /// `shape` with `edge` rounded by a ball of radius `radius(s)`, `s` the fraction of the
@@ -623,7 +703,7 @@ pub(super) fn rolling_ball(model: &mut Model, shape: Shape, edge: Shape, radius:
 }
 
 fn rolling_ball_past(model: &mut Model, shape: Shape, edge: Shape, radius: &dyn Fn(f64) -> f64, far: usize) -> Result<Shape> {
-    let Rolling { id, va, vb, closed, sides, sections, contacts, convex, target, .. } = rolling_past(model, shape, edge, radius, far)?;
+    let Rolling { id, va, vb, closed, sides, sections, contacts, convex, target, scan, .. } = rolling_past(model, shape, edge, radius, far)?;
     let surface = fillet_surface(&sections)?;
     let ts: Vec<f64> = sections.iter().map(|s| s.t).collect();
 
@@ -631,7 +711,7 @@ fn rolling_ball_past(model: &mut Model, shape: Shape, edge: Shape, radius: &dyn 
     let mut ends = Vec::new();
     if !closed {
         for (vertex, at_end) in [(va, false), (vb, true)] {
-            ends.push(end_cut(model, shape, id, vertex, &sides, &surface, &ts, at_end, target)?);
+            ends.push(end_cut(model, shape, id, vertex, &sides, &surface, &scan, at_end, target)?);
         }
     }
     let mut builder = Rebuild { model, id, sides: &sides, surface: &surface, contacts: &contacts, ends: &ends, ts: &ts };
@@ -642,13 +722,13 @@ fn rolling_ball_past(model: &mut Model, shape: Shape, edge: Shape, radius: &dyn 
 /// along it cut back and the chamfer ending on the faces at the edge's ends.
 pub(super) fn rolling_chamfer(model: &mut Model, shape: Shape, edge: Shape, profile: &Profile) -> Result<Shape> {
     let attempt = |model: &mut Model, far: usize| -> Result<Shape> {
-        let Rolling { id, va, vb, closed, sides, sections, contacts, convex, target, .. } = rolling_with(model, shape, edge, profile, far)?;
+        let Rolling { id, va, vb, closed, sides, sections, contacts, convex, target, scan, .. } = rolling_with(model, shape, edge, profile, far)?;
         let surface = fillet_surface(&sections)?;
         let ts: Vec<f64> = sections.iter().map(|s| s.t).collect();
         let mut ends = Vec::new();
         if !closed {
             for (vertex, at_end) in [(va, false), (vb, true)] {
-                ends.push(end_cut(model, shape, id, vertex, &sides, &surface, &ts, at_end, target)?);
+                ends.push(end_cut(model, shape, id, vertex, &sides, &surface, &scan, at_end, target)?);
             }
         }
         let mut builder = Rebuild { model, id, sides: &sides, surface: &surface, contacts: &contacts, ends: &ends, ts: &ts };
@@ -2321,7 +2401,10 @@ impl Rebuild<'_> {
         }
         let fillet = new_face(self.model, self.surface.clone(), vec![(uses, Orientation::Forward)], tolerance)?;
         // Outward: away from the ball's centre for a convex edge (the ball is in the solid).
-        let mid = &sections[sections.len() / 2];
+        // (At the section nearest the middle of the edge: not one past its ends, where the
+        // ball may lie the other way.)
+        let middle = 0.5 * (self.ts[0] + self.ts[self.ts.len() - 1]);
+        let mid = sections.iter().min_by(|a, b| (a.t - middle).abs().total_cmp(&(b.t - middle).abs())).expect("sections");
         let (p, du, dv) = self.surface.d1(0.5, mid.t);
         let away = (p - mid.center).dot(du.cross(dv)) > 0.0;
         let fillet = if away == convex { fillet } else { fillet.reversed() };
