@@ -76,9 +76,9 @@ conversation's context, read back from the cache).
   lacks (glTF, VRML, VTK), or OCCT-specific behaviour.
 - **44 CadQuery models from a private project** build on pykentron; for the 42 that return
   their parts, every part is valid and within 0.1% of CadQuery's volume.
-- **358 CadQuery scripts from 87 public projects**: pykentron builds 270 of them as
-  CadQuery does. On those 270 it takes 80 s in all, against CadQuery's 440 s, and is faster
-  on 262. The cases still to fix are in `crates/pykentron/tests/found/`.
+- **500 CadQuery scripts from 113 public projects**: of the 495 CadQuery builds, pykentron
+  builds 389 as CadQuery does. On those 389 it takes 136 s in all, against CadQuery's 666 s,
+  and is faster on 371. The cases still to fix are in `crates/pykentron/tests/found/`.
 
 About 12,700 tests run (with OCCT's dataset). About 1,500 of them are known gaps, marked as
 expected failures (`crates/occt-tests/expected_failures.txt` for OCCT's scripts): they pass
