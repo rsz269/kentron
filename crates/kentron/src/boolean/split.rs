@@ -266,8 +266,80 @@ impl Graph {
                 }
             }
         }
+        self.close_open_ends(fi, &mut arcs, pieces, &mut reps);
         self.split_degenerate_arcs(&mut arcs, pieces);
         arcs
+    }
+
+    /// Adds to the arcs of face `fi` the pieces of the other operand's edges from an end
+    /// left open (that of a section stopping inside the face, met by no other arc) to a vertex of its other arcs,
+    /// lying on its surface: where an edge crosses the band in which a surface the face meets
+    /// nearly tangent is within tolerance of it (as a rim crossing the line where a fillet
+    /// meets the face it rolls on), the sections of both stop where the band begins, and the
+    /// stretch of the edge across it, found on neither, is where they meet.
+    fn close_open_ends(&self, fi: usize, arcs: &mut Vec<ArcOnFace>, pieces: &[Piece], reps: &mut HashSet<usize>) {
+        let face = &self.faces[fi];
+        let mut ends: HashMap<usize, usize> = HashMap::default();
+        for a in arcs.iter() {
+            let p = &pieces[a.piece];
+            *ends.entry(p.start).or_default() += 1;
+            *ends.entry(p.end).or_default() += 1;
+        }
+        // Ends of sections met by no other arc, and the vertices of the face's boundary.
+        let open: HashSet<usize> = arcs
+            .iter()
+            .map(|a| &pieces[a.piece])
+            .filter(|p| self.edges[p.edge].operand.is_none())
+            .flat_map(|p| [p.start, p.end])
+            .filter(|v| ends[v] == 1 && face.vertices_on.contains(v))
+            .collect();
+        if open.is_empty() {
+            return;
+        }
+        let bounding: HashSet<usize> = arcs
+            .iter()
+            .map(|a| &pieces[a.piece])
+            .filter(|p| self.edges[p.edge].operand == Some(face.operand))
+            .flat_map(|p| [p.start, p.end])
+            .collect();
+        let mut found = Vec::new();
+        for (pi, p) in pieces.iter().enumerate() {
+            let e = &self.edges[p.edge];
+            if e.operand != Some(1 - face.operand) || e.curve.is_none() || p.start == p.end || reps.contains(&p.rep) {
+                continue;
+            }
+            if !(open.contains(&p.start) && bounding.contains(&p.end) || open.contains(&p.end) && bounding.contains(&p.start)) {
+                continue;
+            }
+            // (Not a piece a few tolerances long: points the merging of vertices missed, not a
+            // stretch across such a band, as wide as the root of the tolerance times the
+            // surface's radius.)
+            if self.vertices.points[p.start].distance(self.vertices.points[p.end]) < 100.0 * on_tol() {
+                continue;
+            }
+            let on = (1..4).all(|k| {
+                let q = e.point(p.first + (p.last - p.first) * k as f64 / 4.0, &self.vertices);
+                geom::signed_distance(&face.surface, q).abs() <= on_tol() && face.locate(q, &self.edges, &self.vertices) != Location::Outside
+            });
+            if on {
+                found.push(pi);
+            }
+        }
+        // (Only where one such piece goes on from an end: of two, neither is known to be it.)
+        let mut from: HashMap<usize, usize> = HashMap::default();
+        for &pi in &found {
+            let p = &pieces[pi];
+            *from.entry(if open.contains(&p.start) { p.start } else { p.end }).or_default() += 1;
+        }
+        found.retain(|&pi| {
+            let p = &pieces[pi];
+            from[&if open.contains(&p.start) { p.start } else { p.end }] == 1
+        });
+        for pi in found {
+            if reps.insert(pieces[pi].rep) {
+                arcs.push(self.arc_from_3d(fi, &pieces[pi], pi));
+            }
+        }
     }
 
     /// The interior point of a region of face `fi` too thin for its arcs' polylines (a strip
@@ -455,8 +527,9 @@ pub(super) fn split_face(arcs: &[ArcOnFace], pieces: &[Piece], face_polylines: &
         let end = node(p.end, *a.uv.last().expect("polyline"), &mut nodes);
         ends.push((start, end));
     }
-    // (The same vertex at two nodes, each ending one arc: the arcs' ends a little apart in
-    // (u, v), as edges meeting within their tolerances may be: one node.)
+    // (The same vertex at two nodes, one of them ending one arc: the arcs' ends a little
+    // apart in (u, v), as edges meeting within their tolerances may be (or a section's end
+    // and the boundary's pcurves, straying past the surface's bounds): one node.)
     let mut degree = vec![0usize; nodes.len()];
     for &(s, e) in &ends {
         degree[s] += 1;
@@ -465,11 +538,15 @@ pub(super) fn split_face(arcs: &[ArcOnFace], pieces: &[Piece], face_polylines: &
     let near = 1e-3 * uv_scale.max(1.0);
     let mut merged: Vec<usize> = (0..nodes.len()).collect();
     for i in 0..nodes.len() {
-        let partners: Vec<usize> = (0..nodes.len()).filter(|&j| j != i && degree[i] == 1 && degree[j] == 1 && nodes[j].0 == nodes[i].0).collect();
+        if degree[i] != 1 {
+            continue;
+        }
+        let partners: Vec<usize> = (0..nodes.len()).filter(|&j| j != i && nodes[j].0 == nodes[i].0).collect();
         if let [j] = partners[..] {
             let (p, q) = (nodes[i].1, nodes[j].1);
-            if j > i && ((p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2)).sqrt() <= near {
-                merged[j] = i;
+            // (Of two such ends, the later into the earlier.)
+            if (degree[j] > 1 || j < i) && ((p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2)).sqrt() <= near {
+                merged[i] = j;
             }
         }
     }
@@ -495,6 +572,22 @@ pub(super) fn split_face(arcs: &[ArcOnFace], pieces: &[Piece], face_polylines: &
                 degree[s] += 1;
                 degree[e] += 1;
             }
+        }
+        // (A node left ending one arc, by others dropped from it, is the other node of its
+        // vertex near it, as above.)
+        let lone = (0..nodes.len()).find_map(|i| {
+            if degree[i] != 1 {
+                return None;
+            }
+            let partners: Vec<usize> = (0..nodes.len()).filter(|&j| j != i && degree[j] > 0 && nodes[j].0 == nodes[i].0).collect();
+            let (p, q) = (nodes[i].1, nodes[*partners.first()?].1);
+            (partners.len() == 1 && ((p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2)).sqrt() <= near).then(|| (i, partners[0]))
+        });
+        if let Some((i, j)) = lone {
+            for e in &mut ends {
+                *e = (if e.0 == i { j } else { e.0 }, if e.1 == i { j } else { e.1 });
+            }
+            continue;
         }
         let mut changed = false;
         for (i, &(s, e)) in ends.iter().enumerate() {
@@ -648,6 +741,7 @@ fn trace(arcs: &[ArcOnFace], ends: &[(usize, usize)], alive: &[bool], nodes: &[(
     }
     for list in &mut around {
         list.sort_by(|a, b| a.0.total_cmp(&b.0));
+        untangle_tangent(list, arcs);
     }
     let end_of = |(a, forward): (usize, bool)| if forward { ends[a].1 } else { ends[a].0 };
     let mut visited: HashSet<(usize, bool)> = HashSet::default();
@@ -679,6 +773,69 @@ fn trace(arcs: &[ArcOnFace], ends: &[(usize, usize)], alive: &[bool], nodes: &[(
         }
     }
     cycles
+}
+
+/// Orders again the half-arcs leaving a node (sorted by their departures' angles) whose
+/// departures are nearly the same, by their directions farther along: arcs leaving nearly
+/// tangent to one another (as a section meeting a boundary where its surfaces are tangent
+/// along it) curve apart by less, a step from the node, than the noise in their points.
+fn untangle_tangent(list: &mut [(f64, usize, bool)], arcs: &[ArcOnFace]) {
+    use std::f64::consts::{PI, TAU};
+    const TANGENT: f64 = 1e-3;
+    let n = list.len();
+    // (Two half-arcs are in the one order round a node either way.)
+    if n < 3 {
+        return;
+    }
+    let gap = |k: usize| if k + 1 < n { list[k + 1].0 - list[k].0 } else { list[0].0 + TAU - list[n - 1].0 };
+    let Some(wide) = (0..n).find(|&k| gap(k) >= TANGENT) else { return };
+    if (0..n).all(|k| gap(k) >= TANGENT) {
+        return;
+    }
+    // From past a wide gap round, the angles increasing.
+    list.rotate_left((wide + 1) % n);
+    let mut unwrapped: Vec<f64> = list.iter().map(|h| h.0).collect();
+    for k in 1..n {
+        while unwrapped[k] < unwrapped[k - 1] {
+            unwrapped[k] += TAU;
+        }
+    }
+    let polyline = |&(_, i, forward): &(f64, usize, bool)| -> Vec<Uv> {
+        let mut uv = arcs[i].uv.clone();
+        if !forward {
+            uv.reverse();
+        }
+        uv
+    };
+    let extent = |uv: &[Uv]| uv.iter().map(|p| (p[0] - uv[0][0]).hypot(p[1] - uv[0][1])).fold(0.0, f64::max);
+    let mut k = 0;
+    while k < n {
+        let mut end = k + 1;
+        while end < n && unwrapped[end] - unwrapped[end - 1] < TANGENT {
+            end += 1;
+        }
+        if end - k >= 2 {
+            let base = unwrapped[k];
+            let lines: Vec<Vec<Uv>> = list[k..end].iter().map(polyline).collect();
+            let reach = 0.25 * lines.iter().map(|uv| extent(uv)).fold(f64::INFINITY, f64::min);
+            // Each one's turn from the first's departure, at the first of its points that far
+            // from the node.
+            let turn = |uv: &[Uv]| -> f64 {
+                let o = uv[0];
+                let p = uv.iter().find(|p| (p[0] - o[0]).hypot(p[1] - o[1]) >= reach).unwrap_or(&uv[uv.len() - 1]);
+                let a = (p[1] - o[1]).atan2(p[0] - o[0]) - base;
+                a - TAU * ((a + PI) / TAU).floor()
+            };
+            if reach > 0.0 {
+                let turns: Vec<f64> = lines.iter().map(|uv| turn(uv)).collect();
+                let mut order: Vec<usize> = (0..end - k).collect();
+                order.sort_by(|&a, &b| turns[a].total_cmp(&turns[b]));
+                let group: Vec<(f64, usize, bool)> = order.iter().map(|&j| list[k + j]).collect();
+                list[k..end].copy_from_slice(&group);
+            }
+        }
+        k = end;
+    }
 }
 
 #[cfg(test)]
@@ -727,5 +884,64 @@ mod tests {
         let regions = split_face(&arcs, &pieces, &[outer, inner], 10.0, false);
         assert_eq!(regions.len(), 1);
         assert_eq!(regions[0].loops.len(), 2);
+    }
+
+
+    /// The boundary of the unit square, its left and right sides split at mid-height
+    /// (vertices 4 and 5), as paths for [`arcs`].
+    fn square_split_at_mid_height() -> (Vec<(usize, usize, Vec<Uv>)>, Vec<Vec<Uv>>) {
+        let paths = vec![
+            (0, 1, vec![[0.0, 0.0], [1.0, 0.0]]),
+            (1, 4, vec![[1.0, 0.0], [1.0, 0.5]]),
+            (4, 2, vec![[1.0, 0.5], [1.0, 1.0]]),
+            (2, 3, vec![[1.0, 1.0], [0.0, 1.0]]),
+            (3, 5, vec![[0.0, 1.0], [0.0, 0.5]]),
+            (5, 0, vec![[0.0, 0.5], [0.0, 0.0]]),
+        ];
+        (paths, vec![vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0], [0.0, 0.0]]])
+    }
+
+    /// A cut across a face ending a little off the boundary's vertices in (u, v) (a
+    /// section's ends on the surface's bounds, the boundary's pcurves straying past them):
+    /// its ends are those vertices, and it splits the face in two.
+    #[test]
+    fn a_cut_ending_a_little_off_the_boundary() {
+        let (mut paths, boundary) = square_split_at_mid_height();
+        paths.push((4, 5, vec![[1.0 - 3e-6, 0.5], [0.5, 0.52], [3e-6, 0.5]]));
+        let (arcs, pieces) = arcs(&paths);
+        assert_eq!(split_face(&arcs, &pieces, &boundary, 1.0, false).len(), 2);
+    }
+
+    /// The same, the cut going on from one end along a stretch that ends nowhere (dropped,
+    /// it leaves that end the cut's alone): still two regions.
+    #[test]
+    fn a_cut_ending_off_the_boundary_where_a_stray_piece_goes_on() {
+        let (mut paths, boundary) = square_split_at_mid_height();
+        paths.push((4, 5, vec![[1.0 - 3e-6, 0.5], [0.5, 0.52], [3e-6, 0.5]]));
+        paths.push((5, 6, vec![[3e-6, 0.5], [3e-3, 0.4]]));
+        let (arcs, pieces) = arcs(&paths);
+        assert_eq!(split_face(&arcs, &pieces, &boundary, 1.0, false).len(), 2);
+    }
+
+    /// A cut leaving a vertex of the boundary tangent to it (a section where the surfaces
+    /// are tangent along the boundary), its departure a hair the wrong side of it (by less
+    /// than the noise in its points): ordered round the vertex by where it goes, it splits
+    /// the face in two.
+    #[test]
+    fn a_cut_leaving_the_boundary_tangent() {
+        let paths = vec![
+            (0, 4, vec![[0.0, 0.0], [2.0, 0.0]]),
+            (4, 1, vec![[2.0, 0.0], [4.0, 0.0]]),
+            (1, 2, vec![[4.0, 0.0], [4.0, 1.0]]),
+            (2, 3, vec![[4.0, 1.0], [0.0, 1.0]]),
+            (3, 5, vec![[0.0, 1.0], [0.0, 0.5]]),
+            (5, 0, vec![[0.0, 0.5], [0.0, 0.0]]),
+            (4, 5, vec![[2.0, 0.0], [1.5, 0.03], [1.0, 0.12], [0.5, 0.28], [0.0, 0.5]]),
+        ];
+        let (mut arcs, pieces) = arcs(&paths);
+        arcs[6].leave_start = [-1.0, -1e-5];
+        let boundary = vec![vec![[0.0, 0.0], [4.0, 0.0], [4.0, 1.0], [0.0, 1.0], [0.0, 0.0]]];
+        let regions = split_face(&arcs, &pieces, &boundary, 4.0, false);
+        assert_eq!(regions.len(), 2);
     }
 }

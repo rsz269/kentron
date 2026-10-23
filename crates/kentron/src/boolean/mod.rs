@@ -1170,6 +1170,51 @@ mod tests {
         crate::sweep::pipe_through(model, &circles, spine, true).unwrap()
     }
 
+    /// A shelled lid, its top's edges rounded, cut by two countersunk holes where the rounds
+    /// begin: the countersinks' rims cross the lines where the rounds meet the top tangent
+    /// (one on a straight round, one where they turn a corner), and the sections of the
+    /// rounds with them meet those lines tangent or stop short of them. The result is closed,
+    /// with OCCT's volume (0.169687).
+    #[test]
+    fn countersunk_holes_over_rounded_edges() {
+        use crate::offset::Join;
+        let mut model = Model::new();
+        let at = |x: f64, y: f64| Point::new(x, y, 0.25);
+        let corners = [at(1.1, 0.75), at(1.65, -0.75), at(-1.65, -0.75)];
+        let edges: Vec<Shape> = (0..3).map(|k| crate::make::edge_between(&mut model, corners[k], corners[(k + 1) % 3]).unwrap()).collect();
+        let wire = crate::make::wire(&mut model, &edges).unwrap();
+        let profile = crate::make::planar_face(&mut model, wire).unwrap();
+        let prism = crate::sweep::extrude(&mut model, profile, Vector::new(0.0, 0.0, 0.5)).unwrap().shape;
+        // Edges whose vertices all satisfy `test`.
+        let edges_where = |model: &Model, shape: Shape, test: &dyn Fn(&[Point]) -> bool| -> Vec<Shape> {
+            model
+                .unique_subshapes(shape, NodeKind::Edge)
+                .into_iter()
+                .filter(|&e| test(&model.unique_subshapes(e, NodeKind::Vertex).into_iter().map(|v| model.point(v)).collect::<Vec<_>>()))
+                .collect()
+        };
+        let upright = edges_where(&model, prism, &|p| p.len() == 2 && (p[0].x - p[1].x).abs() < 1e-9 && (p[0].y - p[1].y).abs() < 1e-9);
+        let rounded = crate::blend::fillet(&mut model, prism, &upright, 0.5).unwrap();
+        let top = edges_where(&model, rounded, &|p| p.iter().all(|p| (p.z - 0.75).abs() < 1e-9));
+        let rounded = crate::blend::fillet(&mut model, rounded, &top, 0.25).unwrap();
+        let underside = model
+            .unique_subshapes(rounded, NodeKind::Face)
+            .into_iter()
+            .find(|&f| matches!(model.surface(f), Some(crate::geometry::surface::Surface::Plane(p)) if (p.origin().z - 0.25).abs() < 1e-9))
+            .unwrap();
+        let mut lid = crate::offset::thick_solid(&mut model, rounded, &[underside], -0.06, Join::Arc).unwrap();
+        for y in [-0.666854, 0.333146] {
+            let bore = cylinder(&mut model, (0.655871, y, -1.378836), Direction::Z, 0.15, 1.378836 + 0.687068);
+            let sink = cone(&mut model, (0.655871, y, 0.687068), Direction::Z, 0.15, 0.225, 0.75 - 0.687068);
+            let tool = union(&mut model, bore, sink).unwrap();
+            lid = difference(&mut model, lid, tool).unwrap();
+        }
+        let report = validity::check(&model, lid);
+        assert!(report.problems.is_empty(), "{report:?}");
+        let v = properties::volume(&model, lid).mass;
+        assert!((v - 0.169687).abs() < 1e-5, "volume {v}");
+    }
+
     /// Struts meeting end to end at a point of a lattice (an octagon's and a square's of a
     /// truncated cuboctahedron), their sides touching at the points their ends' circles
     /// share and crossing each other's seams: the sections end on those points and go on

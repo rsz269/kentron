@@ -11,7 +11,6 @@ tests/blend/buildevol/J9
 tests/blend/buildevol/K2
 tests/blend/buildevol/K5
 tests/blend/buildevol/K6
-tests/blend/buildevol/K7
 tests/blend/buildevol/K8
 tests/blend/complex/A1
 tests/blend/complex/A3
@@ -24,10 +23,8 @@ tests/blend/complex/B4
 tests/blend/complex/C1
 tests/blend/complex/C2
 tests/blend/complex/C5
-tests/blend/complex/D2
 tests/blend/complex/D8
 tests/blend/complex/E1
-tests/blend/complex/E3
 tests/blend/complex/E7
 tests/blend/complex/F1
 tests/blend/complex/F2
@@ -41,7 +38,6 @@ tests/blend/encoderegularity/A5
 tests/blend/encoderegularity/A6
 tests/blend/encoderegularity/A7
 tests/blend/simple/D1
-tests/blend/simple/D9
 tests/blend/simple/Q3
 tests/blend/simple/S9
 tests/blend/simple/U1
@@ -101,7 +97,6 @@ tests/boolean/bopcut_complex/K9
 tests/boolean/bopcut_complex/L6
 tests/boolean/bopfuse_complex/D4
 tests/boolean/bopfuse_complex/D5
-tests/boolean/bopfuse_complex/F1
 tests/boolean/bopfuse_complex/H1
 tests/boolean/bopfuse_complex/J6
 tests/boolean/bopfuse_complex/K9
@@ -347,7 +342,6 @@ tests/bugs/modalg_2/bug446_3
 tests/bugs/modalg_2/bug465
 tests/bugs/modalg_2/bug474
 tests/bugs/modalg_2/bug487
-tests/bugs/modalg_2/bug490
 tests/bugs/modalg_2/bug497_3
 tests/bugs/modalg_2/bug497_5
 tests/bugs/modalg_2/bug500
@@ -623,8 +617,6 @@ tests/bugs/modalg_7/bug21264
 tests/bugs/modalg_7/bug22750
 tests/bugs/modalg_7/bug22886
 tests/bugs/modalg_7/bug23187
-tests/bugs/modalg_7/bug23378_1
-tests/bugs/modalg_7/bug23378_2
 tests/bugs/modalg_7/bug23386
 tests/bugs/modalg_7/bug23667
 tests/bugs/modalg_7/bug23838
@@ -909,7 +901,6 @@ tests/chamfer/dist_dist_complex/C3
 tests/chamfer/dist_dist_sequence/C1
 tests/chamfer/dist_dist_sequence/C3
 tests/chamfer/equal_dist/E9
-tests/chamfer/equal_dist_complex/A5
 tests/chamfer/equal_dist_complex/B4
 tests/chamfer/equal_dist_sequence/C1
 tests/cr/bugs/bug33170

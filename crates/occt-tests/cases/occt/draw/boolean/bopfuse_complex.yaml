@@ -145,7 +145,6 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/boolean/bopfuse_complex/F1
-expect: not_done
 build:
   - a: {load: {brep: "a102"}}
   - b: {load: {brep: "b60"}}
