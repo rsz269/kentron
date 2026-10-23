@@ -273,3 +273,88 @@ vibe-cading	examples/screw_cutter.py	fa-mc/vibe-cading@a78645b	not copied (AGPL-
 vibe-cading	examples/snap_fit_hook.py	fa-mc/vibe-cading@a78645b	not copied (AGPL-3.0)	0.026	0.022	0.038	0.052	6
 Kresling_CadQuery	Kresling_array.py	yanis-hub/Kresling_CadQuery@c4289b9	MIT	0.291	0.295	2.360	20.559	5
 Kresling_CadQuery	Kresling_unit.py	yanis-hub/Kresling_CadQuery@c4289b9	MIT	0.331	0.331	2.433	20.691	15
+CadQueryCreations	CadQueryProjects/day1.py	ashdriod/CadQueryCreations@6fea1c5	not copied (MPL-2.0)	0.001	0.001	0.006	0.006	2
+3dprint-pipeline	rectangular_tube.py	tommasobbianchi/3dprint-pipeline@91d9a19	not copied (none)	0.013	0.013	0.041	0.056	3
+gym	robots/lerobot_humanoid/parts/tibias2_rod_long.py	yotown/gym@e50fa99	Apache-2.0	0.007	0.007	0.063	0.103	3
+Wheelly	mechanics/wheelly-cad/src/solids_sensor.py	teoteo/Wheelly@0ae1656	MIT	0.721	0.729	6.319	9.154	5
+solid-hyperobjects	arca-l-bracket/main.py	madfam-org/solid-hyperobjects@9d818bd	not copied (CERN-OHL-W-2.0)	0.004	0.004	0.036	0.050	1
+sphinxcontrib-cadquery	examples/simple-rectangular-plate.py	sethfischer/sphinxcontrib-cadquery@861d91f	BSD-3-Clause	0.001	0.001	0.004	0.004	1
+Hephaestus-CCX	benchmark/kits/multi/242_a2_irec_copv_nitrogen_tank/build.py	guijinSON/Hephaestus-CCX@bbe8b0f	MIT	0.003	0.003	0.025	0.034	1
+cadquery-skills	core/references/examples/01_parametric_flange.py	Mr-Though/cadquery-skills@fe9be2f	not copied (none)	0.005	0.005	0.027	0.056	2
+objects	ltt_backpack_skeleton.py	Gigahawk/objects@5cbc0cd	not copied (none)	0.044	0.072	0.038	0.038	1
+pyconshizu2024-cadquery	ex1_modelsample.py	hrsano645/pyconshizu2024-cadquery@d854124	MIT	0.002	0.002	0.020	0.020	6
+solid-hyperobjects	ab-front-idler/main.py	madfam-org/solid-hyperobjects@9d818bd	not copied (CERN-OHL-W-2.0)	0.008	0.008	0.103	0.180	1
+CADabra	backend/sample_data/deepcad_selected/deepcadimg_089073.py	snowcodeer/CADabra@a5417a2	not copied (none)	0.003	0.003	0.025	0.030	9
+cad-coworker	examples/simple_box.py	karaage0703/cad-coworker@3c48185	MIT	0.001	0.001	0.004	0.004	2
+cqfantasy	example/fence/basic_bar_decoration.py	medicationforall/cqfantasy@704d0e9	Apache-2.0	0.021	0.027	0.083	0.150	3
+cad-skill	examples/gridfinity_d110_bin.py	flowful-ai/cad-skill@fe42159	not copied (PolyForm-Noncommercial-1.0.0)	0.081	0.126	0.350	1.396	2
+TPU-Cable-Strap-Reusable-Cable-Organizer	modelo/organizador_cables.py	FaureGalliard/TPU-Cable-Strap-Reusable-Cable-Organizer@c0efda7	not copied (CC-BY-NC-SA-4.0)	0.040	0.058	0.209	0.507	3
+solid-hyperobjects	bag-clip/main.py	madfam-org/solid-hyperobjects@9d818bd	not copied (CERN-OHL-W-2.0)	0.010	0.010	0.084	0.139	1
+gear-shaper-simulator	herringbone_gear.py	jschoch/gear-shaper-simulator@142e196	MIT	0.172	0.176	1.423	2.347	3
+air	create_Structure.py	fpv-jp/air@d6c946f	not copied (none)	0.039	0.039	0.396	0.642	4
+cadqueryeval	tools/build_task6_alt_reference.py	danwahl/cadqueryeval@6985f35	MIT	0.003	0.003	0.021	0.039	2
+CADabra	backend/sample_data/deepcad_selected/deepcadimg_004397.py	snowcodeer/CADabra@a5417a2	not copied (none)	0.003	0.003	0.015	0.015	6
+CADabra	backend/sample_data/deepcad_selected/deepcadimg_030107.py	snowcodeer/CADabra@a5417a2	not copied (none)	0.003	0.003	0.034	0.042	9
+Nales-cadquery	examples/Lego Brick.py	Jojain/Nales-cadquery@dc10739	MIT	0.012	0.014	0.062	0.192	1
+zhangwen	services/structure-cad/templates/photo-stand.py	yusen/zhangwen@2e75546	Apache-2.0	0.125	0.128	1.440	2.770	3
+mars	mobility/walking-cargo-rover/assets/model.py	yotown/mars@2121edc	MIT	0.321	0.472	3.213	6.097	1
+cqfantasy	example/house/body.py	medicationforall/cqfantasy@704d0e9	Apache-2.0	0.048	0.046	0.071	0.079	2
+3dprint-pipeline	mounting_plate.py	tommasobbianchi/3dprint-pipeline@91d9a19	not copied (none)	0.017	0.038	0.056	0.115	3
+CADTestBench	baselines/CADTests/Claude-4.6-Sonnet/Abstract/generated_models/00006892/gpt_generated.py	dimitrismallis/CADTestBench@e29283c	MIT	0.004	0.004	0.027	0.041	2
+cqfantasy	example/door/v_door.py	medicationforall/cqfantasy@704d0e9	Apache-2.0	0.018	0.018	0.149	0.258	2
+CADabra	backend/sample_data/deepcad_selected/deepcadimg_014849.py	snowcodeer/CADabra@a5417a2	not copied (none)	0.001	0.001	0.006	0.006	4
+tech_europe	out/val_circle/part.py	D4V1ND/tech_europe@9d7026d	MIT	0.002	0.002	0.015	0.017	1
+coordproof-openbim-mep	cadquery/wall_sleeve.py	Taz33m/coordproof-openbim-mep@918ebda	Apache-2.0	0.015	0.022	0.047	0.079	2
+Nales-cadquery	examples/Parametric Bearing Pillow Block.py	Jojain/Nales-cadquery@dc10739	MIT	0.005	0.005	0.031	0.063	1
+solid-hyperobjects	bayonet-clasp-shell/main.py	madfam-org/solid-hyperobjects@9d818bd	not copied (CERN-OHL-W-2.0)	0.008	0.008	0.111	0.198	4
+cadquery-llm-skill	examples/fillet_and_chamfer_challenges.py	jmwright/cadquery-llm-skill@270c94b	Apache-2.0	0.005	0.004	0.017	0.017	1
+Hephaestus-CCX	benchmark/kits/multi/325_i_me5_teknofest_auv_pressure_hull/build.py	guijinSON/Hephaestus-CCX@bbe8b0f	MIT	0.003	0.003	0.025	0.034	1
+coordproof-openbim-mep	cadquery/equipment_base.py	Taz33m/coordproof-openbim-mep@918ebda	Apache-2.0	0.010	0.007	0.036	0.047	2
+CADabra	backend/sample_data/deepcad_selected/deepcadimg_097805.py	snowcodeer/CADabra@a5417a2	not copied (none)	0.002	0.002	0.020	0.030	7
+python-ai-course	drone-3d-printing-design/src/phase3_cad/cadquery_basics.py	smaruf/python-ai-course@d1b9418	not copied (GPL-3.0)	0.017	0.026	0.067	0.170	7
+cqfantasy	example/arch/basic_arch.py	medicationforall/cqfantasy@704d0e9	Apache-2.0	0.014	0.014	0.103	0.220	2
+solid-hyperobjects	anklet-bell-shell/main.py	madfam-org/solid-hyperobjects@9d818bd	not copied (CERN-OHL-W-2.0)	0.003	0.003	0.024	0.030	2
+BenchCAD-main	contributions/example_plate/part.py	BenchCAD/BenchCAD-main@77fd16a	MIT	0.001	0.001	0.004	0.004	1
+gear-shaper-simulator	virtualshaper_beta1.py	jschoch/gear-shaper-simulator@142e196	MIT	0.316	0.316	2.767	5.547	2
+gym	robots/lerobot_humanoid/parts/femur_v2_knee_rod12.py	yotown/gym@e50fa99	Apache-2.0	0.023	0.023	0.220	0.377	2
+Hephaestus-CCX	benchmark/kits/multi/095_ng10_cawst_ferrocement_tank/build.py	guijinSON/Hephaestus-CCX@bbe8b0f	MIT	0.004	0.004	0.041	0.046	1
+AeroTower	src/plant_cup_lid.py	urban-smart-grow/AeroTower@e9ae128	not copied (none)	0.107	0.155	0.369	2.170	2
+OpenCADHarness	design_chair.py	Ericcsr/OpenCADHarness@4547884	not copied (none)	0.018	0.018	0.203	0.311	1
+Hephaestus-CCX	benchmark/kits/multi/222_df6_aiaa_uas/build.py	guijinSON/Hephaestus-CCX@bbe8b0f	MIT	0.005	0.005	0.024	0.034	1
+Hephaestus-CCX	benchmark/kits/multi/049_s18_easa_csvla_glider_spar/build.py	guijinSON/Hephaestus-CCX@bbe8b0f	MIT	0.003	0.003	0.024	0.033	1
+CADTestBench	baselines/CADTests/Claude-4.6-Sonnet/Abstract/generated_models/00003219/gpt_generated.py	dimitrismallis/CADTestBench@e29283c	MIT	0.002	0.002	0.013	0.017	2
+CadQuery_Scripts	keyboard_cap_kailh_light_passthrough.py	lewisaronmilne/CadQuery_Scripts@4dfd6e4	not copied (none)	1.685	2.873	6.777	41.386	1
+Hephaestus-CCX	benchmark/kits/multi/224_df8_vfs_dbvf/build.py	guijinSON/Hephaestus-CCX@bbe8b0f	MIT	0.004	0.004	0.028	0.038	1
+solid-hyperobjects	arca-plate/main.py	madfam-org/solid-hyperobjects@9d818bd	not copied (CERN-OHL-W-2.0)	0.004	0.004	0.021	0.029	1
+CADTestBench	baselines/CADTests/Claude-4.6-Sonnet/Abstract/generated_models/00001411/gpt_generated.py	dimitrismallis/CADTestBench@e29283c	MIT	0.002	0.002	0.014	0.017	2
+cqfantasy	example/fireplace/hearth_tiled_two.py	medicationforall/cqfantasy@704d0e9	Apache-2.0	0.037	0.037	0.443	0.973	2
+synthetic_cadquery	docs_examples/example27.py	anniedoris/synthetic_cadquery@f874cca	not copied (none)	0.004	0.004	0.040	0.045	1
+cad-agent-sandbox	cases/cupboard/scripts/generate_cadquery.py	Sunwood-ai-labs/cad-agent-sandbox@7da0c12	MIT	0.057	0.097	0.097	0.113	2
+CADabra	backend/sample_data/boss_ground_truth.py	snowcodeer/CADabra@a5417a2	not copied (none)	0.003	0.003	0.021	0.036	1
+gym	robots/lerobot_humanoid/parts/shoulder2_part.py	yotown/gym@e50fa99	Apache-2.0	0.107	0.107	0.850	1.553	4
+cqfantasy	example/corner/ashlar_corner.py	medicationforall/cqfantasy@704d0e9	Apache-2.0	0.079	0.088	0.538	1.056	5
+OF1Heavy-CadQuery	OF1_Heavy (reduced pcb supports).py	nicotapiero/OF1Heavy-CadQuery@918cbe3	not copied (none)	0.131	0.131	1.318	2.654	21
+CadQueryCreations	CadQueryProjects/circleusingpoint.py	ashdriod/CadQueryCreations@6fea1c5	not copied (MPL-2.0)	0.001	0.001	0.008	0.008	3
+cad-image-to-3d	examples/cases/z2c_94/final.py	skykim/cad-image-to-3d@09a9b9f	Apache-2.0	0.126	0.245	0.391	0.882	3
+ai-cad	frontend/src/lib/parsers/__fixtures__/impeller_assembly_test_fixture/assembly/impeller/part.py	ai-cad-labs/ai-cad@578aed9	Apache-2.0	0.133	0.232	0.706	1.924	4
+CADTestBench	baselines/CADTests/Claude-4.6-Sonnet/Abstract/generated_models/00003763/gpt_generated.py	dimitrismallis/CADTestBench@e29283c	MIT	0.009	0.015	0.044	0.078	2
+open-miyota-9075-gmt-case	xometry_variant.py	Kelsus/open-miyota-9075-gmt-case@062b048	MIT	0.022	0.027	0.156	0.226	1
+cqfantasy	example/fireplace/fireplace_tiled.py	medicationforall/cqfantasy@704d0e9	Apache-2.0	0.243	0.262	3.558	7.613	2
+3d-modeling	acrylic_marker_palette2/acrylic_marker_palette2.py	mono0926/3d-modeling@7724258	not copied (none)	0.330	0.308	20.255	41.141	3
+CADabra	backend/sample_data/deepcad_selected/deepcadimg_000028.py	snowcodeer/CADabra@a5417a2	not copied (none)	0.004	0.004	0.023	0.028	9
+3D-prints	nRF9151DK.py	MaikBrand/3D-prints@0e1cee8	Apache-2.0	0.166	0.291	0.788	1.832	14
+cadquery-variant-generator	plate.py	ogzyaman/cadquery-variant-generator@4cc3148	not copied (none)	0.019	0.033	0.049	0.060	4
+Hephaestus-CCX	benchmark/kits/multi/147_hv23_ghc_iitm_hyperloop_pod_frame/build.py	guijinSON/Hephaestus-CCX@bbe8b0f	MIT	0.005	0.005	0.034	0.043	1
+zhangwen	services/structure-cad/templates/mpython-shell.py	yusen/zhangwen@2e75546	Apache-2.0	0.024	0.024	0.348	0.637	25
+CADCLAW	examples/relative_placement/make_parts.py	sunnyday-technologies/CADCLAW@d6d371b	MIT	0.002	0.002	0.012	0.012	3
+synthetic_cadquery	docs_examples/example33.py	anniedoris/synthetic_cadquery@f874cca	not copied (none)	0.024	0.023	0.055	0.057	2
+cqfantasy	example/door/arch_door.py	medicationforall/cqfantasy@704d0e9	Apache-2.0	0.029	0.029	0.338	0.661	2
+synthetic_cadquery	docs_examples/example16.py	anniedoris/synthetic_cadquery@f874cca	not copied (none)	0.006	0.006	0.038	0.170	1
+cq-annotate	examples/add_assembly_lines_example.py	jmwright/cq-annotate@b46fbe2	Apache-2.0	0.009	0.008	0.038	0.038	3
+coordproof-openbim-mep	cadquery/pipe_clamp.py	Taz33m/coordproof-openbim-mep@918ebda	Apache-2.0	0.014	0.012	0.081	0.119	2
+cqfantasy	example/fence/basic_pillar.py	medicationforall/cqfantasy@704d0e9	Apache-2.0	0.013	0.013	0.049	0.053	2
+mars	habitats/habitat-delivery-pod/assets/model.py	yotown/mars@2121edc	MIT	0.040	0.038	0.295	0.458	7
+cqfantasy	example/house/body_types.py	medicationforall/cqfantasy@704d0e9	Apache-2.0	1.007	1.038	12.296	24.257	5
+objects	sb210_button_cover.py	Gigahawk/objects@5cbc0cd	not copied (none)	0.017	0.017	0.050	0.060	1
+zhangwen	resources/hardware-skills/dfr0026-ambient-light-sensor/models/cadquery.py	yusen/zhangwen@2e75546	Apache-2.0	0.008	0.008	0.051	0.065	4
+cadquery-server	examples/box.py	lypwig/cadquery-server@302cd6f	MIT	0.002	0.002	0.006	0.006	6
