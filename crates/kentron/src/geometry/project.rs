@@ -775,6 +775,13 @@ pub(crate) fn pcurve_on_range_from(curve: &Curve, surface: &Surface, first: f64,
 /// (where the curve's parameters change fast, e.g. passing close to a pole), each chord
 /// within `tolerance` in 3D: a last resort where smooth fits fail.
 pub fn polyline_pcurve_on_range(curve: &Curve, surface: &Surface, first: f64, last: f64, tolerance: f64) -> Option<BSplineCurve2> {
+    polyline_pcurve_on_range_from(curve, surface, first, last, tolerance, None)
+}
+
+/// [`polyline_pcurve_on_range`] from the foot `start` of the curve's first point, where one is
+/// known (found otherwise, where the foot found here would be on another part of the surface
+/// passing nearly as near, as the next turn of one winding round).
+pub(crate) fn polyline_pcurve_on_range_from(curve: &Curve, surface: &Surface, first: f64, last: f64, tolerance: f64, start: Option<(f64, f64)>) -> Option<BSplineCurve2> {
     use super::{ParametricCurve, ParametricSurface};
     let singular = |v: f64| match surface {
         Surface::Sphere(_) => (v.abs() - std::f64::consts::FRAC_PI_2).abs() <= 1e-9,
@@ -782,7 +789,10 @@ pub fn polyline_pcurve_on_range(curve: &Curve, surface: &Surface, first: f64, la
         _ => false,
     };
     let u_period = surface.u_period();
-    let start = first_foot(curve, surface, first, last)?;
+    let start = match start {
+        Some(start) => start,
+        None => first_foot(curve, surface, first, last)?,
+    };
     let previous = std::cell::Cell::new(Some((start, surface.point(start.0, start.1).distance(curve.point(first)))));
     // (None where the curve itself lies off the surface by more than the tolerance: no
     // chords through its feet come within it.)

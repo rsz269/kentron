@@ -425,13 +425,21 @@ fn aligned_pcurve(curve: &Curve, surface: &crate::geometry::surface::Surface, fi
             let loose = vec![1e-3 * size.max(1e-3), 1e-2 * size.max(1e-3)];
             // (Then a polyline a little looser, where the curve turns too sharply in (u, v) for
             // a smooth fit, as where a face narrows to nothing, and strays a little.)
-            project::pcurve_on_range_within(curve, surface, first, last, &[1e-8, 1e-6, 1e-4])
-                .or_else(|| project::polyline_pcurve_on_range(curve, surface, first, last, 1e-7))
-                .or_else(|| project::polyline_pcurve_on_range(curve, surface, first, last, 1e-5))
-                .or_else(|| project::pcurve_on_range_within(curve, surface, first, last, &loose))
+            // (From the curve's first point's foot as the operation finds it, where that is on
+            // it: the projection's own may be on another part of the surface passing nearly as
+            // near, as the next turn of one winding round.)
+            let start = {
+                let p = curve.point(first);
+                let uv = geom::uv_of(surface, p);
+                (surface.point(uv[0], uv[1]).distance(p) <= 1e3 * TOL).then_some((uv[0], uv[1]))
+            };
+            project::pcurve_on_range_from(curve, surface, first, last, &[1e-8, 1e-6, 1e-4], start)
+                .or_else(|| project::polyline_pcurve_on_range_from(curve, surface, first, last, 1e-7, start))
+                .or_else(|| project::polyline_pcurve_on_range_from(curve, surface, first, last, 1e-5, start))
+                .or_else(|| project::pcurve_on_range_from(curve, surface, first, last, &loose, start))
                 // (A section in the tolerance of the face's edges, as where faces meet within
                 // it past the surface's domain: as far off as those edges may be.)
-                .or_else(|| (drift > TOL).then(|| project::polyline_pcurve_on_range(curve, surface, first, last, drift)).flatten())
+                .or_else(|| (drift > TOL).then(|| project::polyline_pcurve_on_range_from(curve, surface, first, last, drift, start)).flatten())
                 .map(Curve2::BSpline)
                 .ok_or_else(|| Error::InvalidInput("no pcurve for a section edge".into()))?
         }
