@@ -1257,6 +1257,40 @@ mod tests {
         cylinder_and_winding_strip(5.0, 2.499);
     }
 
+    /// A cylinder and a strip winding twelve times round it, from the side away from the
+    /// cylinder's seam: points a whole turn apart along the strip are alike, so its box is
+    /// found from points in each of its spans (from twelve along it it would be a sliver
+    /// on that side, clear of the seam, whose crossings would then be missed). The curve
+    /// where they meet is split at each crossing of the seam and follows the strip.
+    #[test]
+    fn a_cylinder_and_a_strip_winding_round_it_whole_turns_from_its_far_side() {
+        use crate::geometry::surface::{BSplineSurface, KnotVector, Surface};
+        use crate::geometry::ParametricCurve as _;
+        let (turns, n, r) = (12.0, 241, 2.5);
+        let params: Vec<f64> = (0..n).map(|i| i as f64 / (n - 1) as f64).collect();
+        let helix = |radius: f64| {
+            let at = |t: f64| 2.0 * PI * turns * t + PI;
+            let points: Vec<Point> = params.iter().map(|&t| Point::new(radius * at(t).cos(), radius * at(t).sin(), turns * t)).collect();
+            crate::geometry::fit::interpolate_with_parameters(&points, &params).unwrap()
+        };
+        let (inner, outer) = (helix(2.2), helix(3.0));
+        let poles: Vec<Vec<Point>> = inner.poles().iter().zip(outer.poles()).map(|(&a, &b)| vec![a, b]).collect();
+        let u = KnotVector::new(inner.knots().to_vec(), inner.multiplicities().to_vec(), inner.degree());
+        let v = KnotVector::new(vec![0.0, 1.0], vec![2, 2], 1);
+        let mut model = Model::new();
+        let strip = crate::make::face_on_surface(&mut model, Surface::BSpline(BSplineSurface::new(poles, u, v))).unwrap();
+        let bar = cylinder(&mut model, (0.0, 0.0, -1.0), Direction::Z, r, turns + 2.0);
+        let cut = section(&mut model, bar, strip).unwrap();
+        let edges = model.unique_subshapes(cut, NodeKind::Edge);
+        assert!(edges.len() > turns as usize && edges.len() <= 2 * turns as usize + 2, "{} edges", edges.len());
+        // (On the cylinder all along, between the points fitted through as well.)
+        for e in edges {
+            let (curve, first, last) = model.edge_curve(e).unwrap();
+            let far = (0..=400).map(|k| { let p = curve.point(first + (last - first) * k as f64 / 400.0); (p.x.hypot(p.y) - r).abs() }).fold(0.0, f64::max);
+            assert!(far <= 1e-4, "a section edge {far:.2e} off the cylinder");
+        }
+    }
+
     /// A cylinder of radius 2.5 and a strip winding `turns` times round it from radius `inner`
     /// to 3.
     fn cylinder_and_winding_strip(turns: f64, inner: f64) {

@@ -1102,13 +1102,28 @@ pub(super) fn sample_face(surface: &Surface, boundary: &[(&Curve2, f64, f64)]) -
         }
         // The box of a grid over the face's parameter rectangle (a curved face may bulge
         // beyond its boundary).
-        let n = 12;
-        let grid = (0..=n).flat_map(|i| (0..=n).map(move |j| (i, j))).map(|(i, j)| {
-            let u = u_range.0 + (u_range.1 - u_range.0) * i as f64 / n as f64;
-            let v = v_range.0 + (v_range.1 - v_range.0) * j as f64 / n as f64;
-            surface.point(u, v)
-        });
-        let points: Vec<Point> = grid.collect();
+        let grid = |n: (usize, usize)| -> Vec<Point> {
+            let us: Vec<f64> = (0..=n.0).map(|i| u_range.0 + (u_range.1 - u_range.0) * i as f64 / n.0 as f64).collect();
+            let vs: Vec<f64> = (0..=n.1).map(|j| v_range.0 + (v_range.1 - v_range.0) * j as f64 / n.1 as f64).collect();
+            // (Evaluated row by row along u, as a B-spline batches them; kept u-major.)
+            let rows = surface.points_on_grid(&us, &vs);
+            (0..=n.0).flat_map(|i| (0..=n.1).map(move |j| (i, j))).map(|(i, j)| rows[j][i]).collect()
+        };
+        let mut n = (12, 12);
+        let mut points = grid(n);
+        // (On a B-spline turning far between those points, as a thread's flank winding many
+        // times round, whose points a turn apart are alike: the box missing much of its
+        // poles' box, which holds it. A few points in each of its spans across the face then.)
+        if let Surface::BSpline(b) = surface {
+            let (lo, hi) = geom::bounding_box(points.iter().copied(), 0.0);
+            let (plo, phi) = geom::bounding_box(b.poles().iter().flatten().copied(), 0.0);
+            let reach = 0.25 * plo.distance(phi);
+            if plo.x < lo.x - reach || plo.y < lo.y - reach || plo.z < lo.z - reach || phi.x > hi.x + reach || phi.y > hi.y + reach || phi.z > hi.z + reach {
+                let spans = |knots: &[f64], (lo, hi): (f64, f64)| (2 * knots.iter().filter(|&&k| k > lo && k < hi).count()).clamp(12, 512);
+                n = (spans(b.u_knots(), u_range), spans(b.v_knots(), v_range));
+                points = grid(n);
+            }
+        }
         let diagonal = geom::bounding_box(points.iter().copied(), 0.0);
         // (Kept in the model: wide enough for the looser tolerances too.)
         let margin = 0.05 * diagonal.0.distance(diagonal.1) + geom::LOOSE_ON_TOL;
@@ -1118,8 +1133,8 @@ pub(super) fn sample_face(surface: &Surface, boundary: &[(&Curve2, f64, f64)]) -
         let bulge = if matches!(surface, Surface::Plane(_)) {
             0.0
         } else {
-            let at = |i: usize, j: usize| points[i * (n + 1) + j];
-            (0..n).flat_map(|i| (0..n).map(move |j| (i, j))).map(|(i, j)| at(i, j).distance(at(i + 1, j)).max(at(i, j).distance(at(i, j + 1)))).fold(0.0, f64::max) * 0.25
+            let at = |i: usize, j: usize| points[i * (n.1 + 1) + j];
+            (0..n.0).flat_map(|i| (0..n.1).map(move |j| (i, j))).map(|(i, j)| at(i, j).distance(at(i + 1, j)).max(at(i, j).distance(at(i, j + 1)))).fold(0.0, f64::max) * 0.25
         };
         let extent = geom::bounding_box(points.iter().copied(), bulge + geom::LOOSE_ON_TOL);
         let bbox = geom::bounding_box(points, margin);
