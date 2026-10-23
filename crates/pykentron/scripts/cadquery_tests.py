@@ -32,7 +32,7 @@ REPOSITORY = "https://github.com/CadQuery/cadquery.git"
 RELEASE = "v2.8.0"
 PYTHON = "3.12"
 PACKAGES = [
-    "pytest", "pytest-timeout", "numpy", "scipy", "docutils", "ezdxf", "path",
+    "pytest", "pytest-timeout", "pytest-xdist", "numpy", "scipy", "docutils", "ezdxf", "path",
     # (Those of the CadQuery layers the shim runs.)
     "pyparsing", "multimethod", "runtype", "typing_extensions", "nlopt", "casadi",
 ]
@@ -84,6 +84,7 @@ def main() -> int:
     ap.add_argument("--cache", default=str(ROOT / "target" / "cadquery-tests"), help="where sources and the environment are kept")
     ap.add_argument("--update-baseline", action="store_true", help="record this run's failures as the baseline")
     ap.add_argument("--timeout", type=int, default=120, help="seconds per test")
+    ap.add_argument("--jobs", type=int, default=max(1, (os.cpu_count() or 2) // 2), help="tests run at once (pytest-xdist workers; 1 runs them in turn)")
     args, pytest_args = ap.parse_known_args()
 
     cache = Path(args.cache)
@@ -104,7 +105,7 @@ def main() -> int:
     junit.unlink(missing_ok=True)
     env = dict(os.environ)
     env["PYTHONPATH"] = os.pathsep.join([str(PYKENTRON / "python" / "pykentron" / "cadquery_shim"), str(PYKENTRON / "python")])
-    cmd = [str(python), "-m", "pytest", "tests", "-q", "-p", "no:cacheprovider", "--continue-on-collection-errors", f"--timeout={args.timeout}", f"--junitxml={junit}", "-o", "junit_family=xunit1", *pytest_args]
+    cmd = [str(python), "-m", "pytest", "tests", "-q", "-p", "no:cacheprovider", "--continue-on-collection-errors", f"--timeout={args.timeout}", f"--junitxml={junit}", "-o", "junit_family=xunit1", *(["-n", str(args.jobs)] if args.jobs > 1 else []), *pytest_args]
     print("+", " ".join(cmd), file=sys.stderr)
     subprocess.run(cmd, cwd=suite, env=env)
     if not junit.exists():
