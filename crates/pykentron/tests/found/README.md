@@ -31,9 +31,9 @@ A case is flagged if any of these holds:
 - the result is invalid where CadQuery's is valid;
 - pykentron is more than 2× and 0.5 s slower.
 
-Scripts using unseeded randomness are left out, since no two runs of them agree.
+Scripts using unseeded randomness are left out, since no two runs of them agree. So are scripts that call OCCT's Python bindings (OCP) for more than the shapes CadQuery hands them: cadquery-massembly's examples (`OCP.Geom` curves, 5 scripts) and Cadquery_Experiments' BarbFitting (`OCP.gp.gp_Quaternion` between two vectors), dropped 2026-10-23. They test OCCT's API, not CadQuery's.
 
-Many scripts import their project's own library: cq_warehouse, cqterrain, cadqueryhelper, cqindustry, cq_gears, cqMore and cq-electronics, and from the second round LatticeQuery, cadquery-massembly and gridfinity-cadquery's package. To run those, install the library without its dependencies (`--no-deps`), so that it can't replace CadQuery.
+Many scripts import their project's own library: cq_warehouse, cqterrain, cadqueryhelper, cqindustry, cq_gears, cqMore and cq-electronics, and from the second round LatticeQuery and gridfinity-cadquery's package. To run those, install the library without its dependencies (`--no-deps`), so that it can't replace CadQuery.
 
 A second round (2026-10-19) took 57 more projects from GitHub's repository search (`cadquery`, `topic:cadquery`, and `cadquery` with gridfinity, keyboard, enclosure, printable, parametric and the like), leaving out lists, AI pipelines and datasets: 382 scripts, of which CadQuery built 187. pykentron built 129 of those as CadQuery does. Of the other 58, the 53 cases at the end of `cases.tsv`; left out are two scripts writing to a directory that does not exist, one reading a file on its author's disk, one using unseeded randomness and one showing nothing to compare.
 

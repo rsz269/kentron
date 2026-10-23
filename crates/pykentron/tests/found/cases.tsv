@@ -107,11 +107,6 @@ LatticeQuery	lattice_scripts/schwartz-d.py	jalovisko/LatticeQuery@4d3d608	Apache
 LatticeQuery	lattice_scripts/tco.py	jalovisko/LatticeQuery@4d3d608	Apache-2.0	fails	other errors	2.89	10.73	ValueError: invalid input: no pcurve for a section edge
 LatticeQuery	lattice_scripts/tpms_test.py	jalovisko/LatticeQuery@4d3d608	Apache-2.0	fails	other errors	1.79	80.96	ValueError: invalid input: no pcurve for a section edge
 LatticeQuery	lattice_scripts/unit_cell.py	jalovisko/LatticeQuery@4d3d608	Apache-2.0	slower	performance: fillets and chamfers	1.52	0.32	1.52s vs 0.32s
-cadquery-massembly	examples/cq-editor/1-disk_arm.py	bernhard-42/cadquery-massembly@c9b0458	BSD-3-Clause	fails	other errors	0.01	0.14	ModuleNotFoundError: No module named 'pykentron.Geom'
-cadquery-massembly	examples/cq-editor/2-hexapod.py	bernhard-42/cadquery-massembly@c9b0458	BSD-3-Clause	fails	other errors	0.00	0.33	ModuleNotFoundError: No module named 'pykentron.Geom'
-cadquery-massembly	examples/cq-editor/3-jansen-linkage.py	bernhard-42/cadquery-massembly@c9b0458	BSD-3-Clause	fails	other errors	0.00	0.25	ModuleNotFoundError: No module named 'pykentron.Geom'
-cadquery-massembly	examples/cq-editor/4-bearing.py	bernhard-42/cadquery-massembly@c9b0458	BSD-3-Clause	fails	other errors	0.00	0.20	ModuleNotFoundError: No module named 'pykentron.Geom'
-cadquery-massembly	examples/cq-editor/6-nested-assemblies.py	bernhard-42/cadquery-massembly@c9b0458	BSD-3-Clause	fails	other errors	0.00	0.11	ModuleNotFoundError: No module named 'pykentron.Geom'
 Grumpy	case/grumpy_case_cadquery.py	weteor/Grumpy@0a1ea6c	not copied (CERN-OHL-P-2.0)	diverges	fillets and chamfers	110.53	2.60	shown0: volume 99928.8 vs 99774; shown0: area 48815.7 vs 48516.5; bottom: area 4812.61 vs 4787.81; bottom: solids 2 vs 1; full: volume 99928.8 vs 99774; full: area 48815.7 vs 48516.5
 cosyKong	case/cos_y_case.py	weteor/cosyKong@7cbfcdc	not copied (CERN-OHL-P-2.0)	slower	performance: fillets and chamfers	77.03	1.38	77.03s vs 1.38s
 jigs	special/cohere-detector/r1/cohere-detector.cq.py	shapoco/jigs@50cb46e	not copied (none)	diverges	fillets and chamfers	0.33	0.39	arm: volume 2239.83 vs 2262; arm: area 2651.82 vs 2673.22; motor_holder: area 831.902 vs 827.377; export:arm_d20_l45.step: volume 2239.83 vs 2262; export:arm_d20_l45.step: area 2651.82 vs 2673.22; export:motor_holder_d20_d20.step: area 831.902 vs 827.377; export:arm_d20_l45.stl: volume 2239.83 vs 22
@@ -134,7 +129,6 @@ gartenhaus	gartenhaus.py	SlashGordon/gartenhaus@02f239c	MIT	diverges	booleans	0.
 cad-models	raptor-jaw-teeth/raptor_teeth.py	jpurzner/cad-models@30231f6	not copied (none)	fails	fillets and chamfers	0.30	2.55	ValueError: invalid input: rolling-ball tools along closed edges are not supported yet
 enclozure	render_check.py	morganelectronics/enclozure@8d936f2	not copied (GPL-3.0)	fails	API coverage (OCP / missing methods)	0.43	4.63	AttributeError: 'Compound' object has no attribute 'toVtkPolyData'
 enclozure	render_readme.py	morganelectronics/enclozure@8d936f2	not copied (GPL-3.0)	fails	API coverage (OCP / missing methods)	0.43	5.64	AttributeError: 'Compound' object has no attribute 'toVtkPolyData'
-Cadquery_Experiments	BarbFitting.py	volkswagenfeature/Cadquery_Experiments@7d7832d	not copied (GPL-3.0)	fails	other errors	0.00	0.01	TypeError: float() argument must be a string or a real number, not 'Vector'
 dactyl_manuform_keyboard_generator_python	dactcreate.py	GeorgesPaul/dactyl_manuform_keyboard_generator_python@0a85f99	not copied (AGPL-3.0)	fails	sweeps and lofts	0.53	4.82	ValueError: invalid input: a loft closing on itself has no end sections to make a solid
 gridfinity-cadquery	examples/etc_foot_holder.py	kmeisthax/gridfinity-cadquery@637a5c4	MIT	fails	fillets and chamfers	1.76	0.90	ValueError: invalid input: the faces at a fillet edge are tangent
 CQCAD	aircon/hot_intake_plate.py	Wren6991/CQCAD@7c47152	CC0-1.0	fails	performance	120.00	53.17	kentron timeout
