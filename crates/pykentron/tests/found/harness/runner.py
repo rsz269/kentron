@@ -18,8 +18,14 @@ for d in [os.path.dirname(os.path.abspath(script)), project, os.path.join(projec
 import cadquery as cq
 
 shown = []
+# (Unnamed objects numbered among themselves: exports, recorded here too, are not counted, as
+# a kernel may record one export twice through the methods it calls.)
+unnamed = [0]
 def show_object(obj, name=None, options=None, **kw):
-    shown.append((name or f'shown{len(shown)}', obj))
+    if name is None:
+        name = f'shown{unnamed[0]}'
+        unnamed[0] += 1
+    shown.append((name, obj))
 builtins.show_object = show_object
 # (What viewers and CQ-editor provide: `show` collects as `show_object`, the rest nothing.)
 builtins.show = lambda *objs, **kw: [show_object(o) for o in objs]
@@ -66,10 +72,22 @@ def describe(obj):
         shape = obj
     else:
         return None
-    bb = shape.BoundingBox()
-    d = {'type': shape.ShapeType(), 'solids': len(shape.Solids()), 'faces': len(shape.Faces()),
-         'bbox': [bb.xmin, bb.ymin, bb.zmin, bb.xmax, bb.ymax, bb.zmax]}
-    for k, f in (('volume', shape.Volume), ('area', shape.Area), ('valid', shape.isValid)):
+    # (The tight box: OCCT's default one is grown by the shapes' tolerances and its curves'
+    # control polygons.)
+    if mode == 'kentron':
+        bb = shape.BoundingBox()
+        box = [bb.xmin, bb.ymin, bb.zmin, bb.xmax, bb.ymax, bb.zmax]
+    else:
+        from OCP.Bnd import Bnd_Box
+        from OCP.BRepBndLib import BRepBndLib
+        b = Bnd_Box()
+        BRepBndLib.AddOptimal_s(shape.wrapped, b, False, False)
+        box = list(b.Get())
+    d = {'type': shape.ShapeType(), 'solids': len(shape.Solids()), 'faces': len(shape.Faces()), 'bbox': box}
+    # (The volume of the solids only: OCCT gives wires and faces in a compound volumes of
+    # their own.)
+    volume = lambda: sum(s.Volume() for s in shape.Solids())
+    for k, f in (('volume', volume), ('area', shape.Area), ('valid', shape.isValid)):
         try:
             d[k] = f()
         except Exception as e:

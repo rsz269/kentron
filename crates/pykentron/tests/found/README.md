@@ -19,7 +19,7 @@ The source of every case and what went wrong is in `cases.tsv`:
 
 `harness/` holds the tools.
 
-- `runner.py` runs a script as `__main__` in a fresh, isolated process, on pykentron's shim or on CadQuery. It records what the script shows (`show_object`, `show`), exports, or leaves at module level: volume, area, bounding box, validity, and solid and face counts.
+- `runner.py` runs a script as `__main__` in a fresh, isolated process, on pykentron's shim or on CadQuery. It records what the script shows (`show_object`, `show`), exports, or leaves at module level: volume, area, bounding box, validity, and solid and face counts. The volume is its solids' (OCCT gives wires and faces in a compound volumes of their own); CadQuery's bounding box is OCCT's tight one (its default is grown by tolerances and control polygons); objects shown unnamed are numbered among themselves, exports not counted (CadQuery records some exports twice). Since 2026-10-23.
 - `hunt.py` runs up to 30 scripts per project on both kernels, with a 120 s limit, and compares the results.
 - `analyze.py` takes the first 20 projects in which CadQuery itself built anything, and gives each flagged case a suspected area.
 
@@ -31,7 +31,7 @@ A case is flagged if any of these holds:
 - the result is invalid where CadQuery's is valid;
 - pykentron is more than 2× and 0.5 s slower.
 
-Scripts using unseeded randomness are left out, since no two runs of them agree. So are scripts that call OCCT's Python bindings (OCP) for more than the shapes CadQuery hands them: cadquery-massembly's examples (`OCP.Geom` curves, 5 scripts) and Cadquery_Experiments' BarbFitting (`OCP.gp.gp_Quaternion` between two vectors), dropped 2026-10-23. They test OCCT's API, not CadQuery's.
+Scripts using unseeded randomness are left out, since no two runs of them agree. So are scripts that call OCCT's Python bindings (OCP) for more than the shapes CadQuery hands them: cadquery-massembly's examples (`OCP.Geom` curves, 5 scripts) and Cadquery_Experiments' BarbFitting (`OCP.gp.gp_Quaternion` between two vectors), dropped 2026-10-23. They test OCCT's API, not CadQuery's. LatticeQuery's varying_Ls draws its sizes from `random()` and is left out too.
 
 Many scripts import their project's own library: cq_warehouse, cqterrain, cadqueryhelper, cqindustry, cq_gears, cqMore and cq-electronics, and from the second round LatticeQuery and gridfinity-cadquery's package. To run those, install the library without its dependencies (`--no-deps`), so that it can't replace CadQuery.
 
