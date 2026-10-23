@@ -1153,6 +1153,49 @@ mod tests {
         assert!((removed - expected).abs() < 1e-4 * volume, "{removed} vs {expected}");
     }
 
+    /// A tube from `a` to `b` of radius `r`, as a lattice's strut: two circles square to the
+    /// line swept through along it (its side a B-spline closed round without a period).
+    fn strut(model: &mut Model, a: crate::math::Point, b: crate::math::Point, r: f64) -> Shape {
+        use crate::geometry::curve::{Circle, Curve};
+        use crate::math::{Direction, Frame};
+        let axis = Direction::from_vector(b - a);
+        let spine = crate::make::edge_between(model, a, b).unwrap();
+        let circles: Vec<(Shape, crate::sweep::PipeOptions)> = [a, b]
+            .iter()
+            .map(|&c| {
+                let edge = crate::make::edge_from_curve(model, Curve::Circle(Circle::new(Frame::from_z(c, axis), r))).unwrap();
+                (crate::make::wire(model, &[edge]).unwrap(), Default::default())
+            })
+            .collect();
+        crate::sweep::pipe_through(model, &circles, spine, true).unwrap()
+    }
+
+    /// Struts meeting end to end at a point of a lattice (an octagon's and a square's of a
+    /// truncated cuboctahedron), their sides touching at the points their ends' circles
+    /// share and crossing each other's seams: the sections end on those points and go on
+    /// across the seams, and the overlap is as OCCT's (a common of 69.04, 166.67, 96.22).
+    #[test]
+    fn struts_meeting_at_a_lattice_node() {
+        use crate::math::Point;
+        let t = 0.5 * 100.0 * 2f64.sqrt() / (1.0 + 2.0 * 2f64.sqrt());
+        let s = 100.0 / (1.0 + 2.0 * 2f64.sqrt());
+        let node = Point::new(2.0 * t, 0.0, t);
+        let cases = [
+            ((Point::new(t, 0.0, 2.0 * t), Point::new(t, 0.0, 2.0 * t + s)), (Point::new(t, 0.0, 2.0 * t + s), Point::new(2.0 * t, 0.0, 100.0 - t)), 69.0356),
+            ((Point::new(2.0 * t + s, 0.0, t), node), (Point::new(2.0 * t, t, 0.0), node), 166.6667),
+            ((node, Point::new(t, 0.0, 2.0 * t)), (Point::new(2.0 * t, t, 0.0), node), 96.2250),
+        ];
+        for ((a0, a1), (b0, b1), occt) in cases {
+            let mut model = Model::new();
+            let a = strut(&mut model, a0, a1, 5.0);
+            let b = strut(&mut model, b0, b1, 5.0);
+            let common = intersection(&mut model, a, b).unwrap();
+            assert!(validity::check(&model, common).is_valid(), "{:?}", validity::check(&model, common));
+            let v = properties::volume(&model, common).mass;
+            assert!((v - occt).abs() <= 1e-3 * occt, "{v} vs {occt}");
+        }
+    }
+
     /// A cylinder and a strip winding twenty times round it (a B-spline ruled between two
     /// helices in 63 spans, as a thread's flank, from inside it to outside): they meet along
     /// a curve winding with it, found all along (the strip's points found on the turn they

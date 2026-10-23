@@ -224,6 +224,9 @@ pub(super) struct Face {
     pub v_period: Option<f64>,
     pub u_range: (f64, f64),
     pub v_range: (f64, f64),
+    /// The surface's bounds in u and in v where it closes round across them without a
+    /// period (a clamped B-spline swept round a tube): a point on that seam has either.
+    pub closed_bounds: [Option<(f64, f64)>; 2],
     pub bbox: (Point, Point),
     /// A box holding the face, nearly tight: its grid's points, widened on a curved surface
     /// by more than the surface bulges between them.
@@ -279,11 +282,19 @@ impl Face {
         shift(v, self.v_period, self.v_range)
     }
 
-    /// `uv` moved by whole periods to be nearest `near`.
+    /// `uv` moved by whole periods to be nearest `near` (or, on a seam of a surface closed
+    /// without a period, to the bound nearer `near`).
     pub fn unwrap(&self, mut uv: Uv, near: Uv) -> Uv {
         for (k, period) in [(0, self.u_period), (1, self.v_period)] {
             if let Some(period) = period {
                 uv[k] += ((near[k] - uv[k]) / period).round() * period;
+            } else if let Some((lo, hi)) = self.closed_bounds[k] {
+                let eps = 1e-9 * (hi - lo).abs();
+                if (uv[k] - lo).abs() <= eps && (near[k] - hi).abs() < (near[k] - lo).abs() {
+                    uv[k] = hi;
+                } else if (uv[k] - hi).abs() <= eps && (near[k] - lo).abs() < (near[k] - hi).abs() {
+                    uv[k] = lo;
+                }
             }
         }
         uv
@@ -1029,6 +1040,15 @@ impl Graph {
         };
         let FaceSample { polylines, u_range, v_range, bbox, extent } = sample;
         let (u_period, v_period) = (surface.u_period(), surface.v_period());
+        let closed_bounds = {
+            use crate::geometry::ParametricSurface;
+            let (u0, u1, v0, v1) = surface.bounds();
+            let finite = |a: f64, b: f64| a.is_finite() && b.is_finite();
+            [
+                (u_period.is_none() && finite(u0, u1) && surface.is_u_closed()).then_some((u0, u1)),
+                (v_period.is_none() && finite(v0, v1) && surface.is_v_closed()).then_some((v0, v1)),
+            ]
+        };
         self.faces.push(Face {
             operand,
             solid: true,
@@ -1042,6 +1062,7 @@ impl Graph {
             v_period,
             u_range,
             v_range,
+            closed_bounds,
             bbox,
             extent,
             vertices_on: Vec::new(),

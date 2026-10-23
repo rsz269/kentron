@@ -37,6 +37,30 @@ pub(super) struct ArcOnFace {
     pub along: Option<bool>,
 }
 
+/// The parameters of the point of `surface` nearest `p` by Gauss-Newton steps from `guess`
+/// (within the surface's bounds).
+fn foot_from(surface: &crate::geometry::surface::Surface, p: crate::math::Point, guess: Uv) -> Uv {
+    use crate::geometry::ParametricSurface;
+    let (u0, u1, v0, v1) = surface.bounds();
+    let [mut u, mut v] = guess;
+    for _ in 0..30 {
+        let (q, su, sv) = surface.d1(u, v);
+        let d = p - q;
+        let (a, b, c) = (su.dot(su), su.dot(sv), sv.dot(sv));
+        let det = a * c - b * b;
+        if !(det.abs() > 1e-300) {
+            break;
+        }
+        let (ru, rv) = (d.dot(su), d.dot(sv));
+        let (du, dv) = ((ru * c - rv * b) / det, (rv * a - ru * b) / det);
+        (u, v) = ((u + du).clamp(u0.min(u1), u0.max(u1)), (v + dv).clamp(v0.min(v1), v0.max(v1)));
+        if du.abs() + dv.abs() <= 1e-15 * (1.0 + u.abs() + v.abs()) {
+            break;
+        }
+    }
+    [u, v]
+}
+
 /// A boundary arc of a face over its whole edge, kept with the face (see
 /// [`Graph::whole_boundary_arcs`]).
 pub(super) struct WholeArc {
@@ -152,6 +176,29 @@ impl Graph {
         }
         for i in 1..n {
             uv[i] = face.unwrap(uv[i], uv[i - 1]);
+        }
+        // (The first point too, on a seam of a surface closed without a period: by the next.)
+        if n >= 2 {
+            uv[0] = face.unwrap(uv[0], uv[1]);
+        }
+        // (Near such a seam a point's foot may be found on the wrong side of it, on the bound
+        // there: found again from its neighbour's parameters, where they are well away from it.)
+        if n >= 2 && face.closed_bounds.iter().any(Option::is_some) {
+            for pass in 0..2 {
+                let order: Vec<usize> = if pass == 0 { (1..n).collect() } else { (0..n - 1).rev().collect() };
+                for i in order {
+                    let j = if pass == 0 { i - 1 } else { i + 1 };
+                    let stuck = face.closed_bounds.iter().enumerate().any(|(k, b)| {
+                        b.is_some_and(|(lo, hi)| {
+                            let at = |x: f64| (uv[i][k] - x).abs() <= 1e-9 * (hi - lo).abs();
+                            (at(lo) || at(hi)) && (uv[j][k] - uv[i][k]).abs() > 0.25 * (hi - lo).abs()
+                        })
+                    });
+                    if stuck {
+                        uv[i] = foot_from(&face.surface, points[i], uv[j]);
+                    }
+                }
+            }
         }
         let mid = uv[uv.len() / 2];
         let mut shift = [face.shift_u(mid[0]) - mid[0], face.shift_v(mid[1]) - mid[1]];
@@ -314,7 +361,12 @@ impl Graph {
         let e = &self.edges[piece.edge];
         let near = |reference: Uv| {
             move |t: f64| {
-                face.unwrap(geom::uv_of(&face.surface, e.point(t, &self.vertices)), reference)
+                let p = e.point(t, &self.vertices);
+                let uv = face.unwrap(geom::uv_of(&face.surface, p), reference);
+                // (On a seam of a surface closed without a period, maybe the foot's other side:
+                // found again from the reference.)
+                let on_seam = face.closed_bounds.iter().enumerate().any(|(k, b)| b.is_some_and(|(lo, hi)| (uv[k] - lo).abs().min((uv[k] - hi).abs()) <= 1e-9 * (hi - lo).abs()));
+                if on_seam { foot_from(&face.surface, p, reference) } else { uv }
             }
         };
         let step = self.departure_step(fi);

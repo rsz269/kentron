@@ -103,6 +103,14 @@ pub(super) fn trace(base: &Surface, other: &Surface, range: Range, (nu, nv): (us
     let (Some(u), Some(v)) = (along(s0, s1, other_range.0), along(t0, t1, other_range.1)) else {
         return None;
     };
+    // (Not past the bounds where the other surface closes round across them without a
+    // period, as a clamped B-spline swept round a tube: past its seam is the surface
+    // carried on beyond its end, not its other side. The branches end on the seam.)
+    let (u, v) = {
+        use crate::geometry::ParametricSurface;
+        let seam = |closed: bool, periodic: bool, (lo, hi): (f64, f64), past: (f64, f64)| if closed && !periodic && !infinite(lo) && !infinite(hi) { (lo, hi) } else { past };
+        (seam(other.is_u_closed(), other.u_period().is_some(), (s0, s1), u), seam(other.is_v_closed(), other.v_period().is_some(), (t0, t1), v))
+    };
     let bounds = Range { u, v, u_period: other.u_period(), v_period: other.v_period(), u_wrap: other.u_period(), v_wrap: other.v_period() };
     let own = (s0, s1, t0, t1);
     let mut seeds = (*kept_seeds(base, other, range, nu, nv)).clone();
@@ -138,8 +146,11 @@ pub(super) fn trace(base: &Surface, other: &Surface, range: Range, (nu, nv): (us
             let at = |x: f64, b: f64| (x - b).abs() <= 1e-12 * (b1 - b0).abs().max(1.0);
             (if at(lo, b0) { lo - margin(lo) } else { lo }, if at(hi, b1) { hi + margin(hi) } else { hi })
         };
-        let u = widened(range.u, (bu0, bu1), range.u_period.is_some(), &|u| base.d1(u, vm).1.length());
-        let v = widened(range.v, (bv0, bv1), range.v_period.is_some(), &|v| base.d1(um, v).2.length());
+        // (Nor past a seam, where the base closes round without a period: past it is the
+        // surface carried on beyond its end, not its other side.)
+        use crate::geometry::ParametricSurface;
+        let u = widened(range.u, (bu0, bu1), range.u_period.is_some() || base.is_u_closed(), &|u| base.d1(u, vm).1.length());
+        let v = widened(range.v, (bv0, bv1), range.v_period.is_some() || base.is_v_closed(), &|v| base.d1(um, v).2.length());
         Range { u, v, ..range }
     };
     let tracer = Tracer { base, other, range, bounds, own, step: leaf, stopped: std::cell::Cell::new(false) };
@@ -288,9 +299,85 @@ pub(super) fn trace(base: &Surface, other: &Surface, range: Range, (nu, nv): (us
         }
         chains.push(chain);
     }
+    // A branch ending on the seam of a surface closed round without a period (where the
+    // tracing stops, past it being the surface carried on beyond its end) goes on from the
+    // same point on the seam's other side: followed from there, the seam's other bound held,
+    // until no branch ends on a seam not followed across already.
+    {
+        use crate::geometry::ParametricSurface;
+        let (bu0, bu1, bv0, bv1) = base.bounds();
+        let whole = |(lo, hi): (f64, f64), (a, b): (f64, f64)| lo <= a + 1e-9 * (b - a) && hi >= b - 1e-9 * (b - a);
+        let closed = |is: bool, periodic: bool, a: f64, b: f64| (is && !periodic && !infinite(a) && !infinite(b)).then_some((a, b));
+        let seams = [
+            closed(base.is_u_closed(), base.u_period().is_some(), bu0, bu1).filter(|&b| whole(range.u, b)),
+            closed(base.is_v_closed(), base.v_period().is_some(), bv0, bv1).filter(|&b| whole(range.v, b)),
+            closed(other.is_u_closed(), other.u_period().is_some(), s0, s1),
+            closed(other.is_v_closed(), other.v_period().is_some(), t0, t1),
+        ];
+        // (The same point with each parameter on a seam moved to the seam's other bound.)
+        let across = |b: &Both| -> Option<Both> {
+            let mut x = [b.u, b.v, b.s, b.t];
+            let mut moved = false;
+            for (k, seam) in seams.iter().enumerate() {
+                let Some((lo, hi)) = *seam else { continue };
+                let eps = 1e-7 * (hi - lo).abs();
+                if (x[k] - lo).abs() <= eps {
+                    x[k] = hi;
+                    moved = true;
+                } else if (x[k] - hi).abs() <= eps {
+                    x[k] = lo;
+                    moved = true;
+                }
+            }
+            moved.then_some(Both { u: x[0], v: x[1], s: x[2], t: x[3], p: b.p })
+        };
+        let mut done: Vec<Point> = Vec::new();
+        let mut pending: Vec<Both> = Vec::new();
+        let ends_of = |chains: &[(Vec<Both>, bool)]| -> Vec<Both> { chains.iter().filter(|(p, c)| !c && p.len() >= 2).flat_map(|(p, _)| [p[0], p[p.len() - 1]]).collect() };
+        // (Not where two branches end at the point already, one from each side.)
+        let queue_ends = |ends: Vec<Both>, pending: &mut Vec<Both>, done: &mut Vec<Point>| {
+            let near = |a: Point, b: Point| a.distance(b) <= slack.max(1e-9);
+            for (i, end) in ends.iter().enumerate() {
+                if done.iter().any(|&q| near(q, end.p)) || ends.iter().enumerate().any(|(j, other)| j != i && near(other.p, end.p)) {
+                    continue;
+                }
+                if let Some(start) = across(end) {
+                    done.push(end.p);
+                    pending.push(start);
+                }
+            }
+        };
+        queue_ends(ends_of(&chains), &mut pending, &mut done);
+        let mut rounds = 0;
+        while let Some(start) = pending.pop() {
+            rounds += 1;
+            if rounds > 64 {
+                break;
+            }
+            let (ahead, _) = tracer.march(start, 1.0);
+            let (behind, _) = tracer.march(start, -1.0);
+            let mut points: Vec<Both> = behind.into_iter().rev().collect();
+            points.push(start);
+            points.extend(ahead);
+            let points = thinned(points, 0.05 * leaf);
+            if tracer.stopped.get() {
+                return None;
+            }
+            // (Its stretch over a branch traced already, as back across the seam: left out.)
+            let length: f64 = points.windows(2).map(|w| w[0].p.distance(w[1].p)).sum();
+            if points.len() < 2 || length <= 0.05 * leaf {
+                continue;
+            }
+            chains.push((points, false));
+            queue_ends(ends_of(&chains), &mut pending, &mut done);
+        }
+    }
     // An open branch ending just short of a point where an edge of either face meets the
     // other, going on towards it (a section across a face far narrower than a step, whose
-    // ends steps find only roughly): carried on to that point, unless it ends at one.
+    // ends steps find only roughly): carried on to that point, unless it ends at one. Or
+    // ending just past one, where the surfaces touch there (two tubes' sides meeting at
+    // their ends, tangent: steps find the end only to about the square root of the
+    // precision): cut back to it.
     for (points, closed) in chains.iter_mut() {
         if *closed || points.len() < 2 {
             continue;
@@ -302,9 +389,11 @@ pub(super) fn trace(base: &Surface, other: &Surface, range: Range, (nu, nv): (us
                 continue;
             }
             let on = end.p - before.p;
-            let next = meetings.iter().filter(|m| (m.p - end.p).dot(on) > 0.0 && m.p.distance(end.p) <= 0.1 * leaf).min_by(|a, b| a.p.distance(end.p).total_cmp(&b.p.distance(end.p)));
-            if let Some(&m) = next {
+            let nearest = |ahead: bool| meetings.iter().filter(|m| ((m.p - end.p).dot(on) > 0.0) == ahead && m.p.distance(end.p) <= 0.1 * leaf).min_by(|a, b| a.p.distance(end.p).total_cmp(&b.p.distance(end.p)));
+            if let Some(&m) = nearest(true) {
                 if at_end { points.push(m) } else { points.insert(0, m) }
+            } else if let Some(&m) = nearest(false).filter(|m| tracer.sine(m) < TANGENT && (m.p - before.p).dot(on) > 0.0) {
+                if at_end { points[n - 1] = m } else { points[0] = m }
             }
         }
     }
