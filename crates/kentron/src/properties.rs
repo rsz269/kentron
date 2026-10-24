@@ -399,6 +399,11 @@ fn integrate_face(model: &Model, face: Shape, mut sample: impl FnMut(Point, Vect
             let (s0, s1) = (a + (b - a) * i as f64 / n as f64, a + (b - a) * (i + 1) as f64 / n as f64);
             let (f0, f1) = (f(s0), f(s1));
             for &k in values {
+                // (Exactly at a step's end, inside the range: there.)
+                if i + 1 < n && (f1 - k).abs() <= 1e-14 * (1.0 + k.abs()) {
+                    out.push(s1);
+                    continue;
+                }
                 if (f0 - k) * (f1 - k) < 0.0 {
                     let (mut lo, mut hi) = (s0, s1);
                     // (f(lo) kept from where lo was found: the same value.)
@@ -458,6 +463,32 @@ fn integrate_face(model: &Model, face: Shape, mut sample: impl FnMut(Point, Vect
     }
     let turns: Option<[crate::math::Transform; 7]> =
         revolution_axis(surface).map(|axis| std::array::from_fn(|j| crate::math::Transform::rotation(axis, std::f64::consts::TAU * j as f64 / 7.0)));
+    // On a face straight across v (an extrusion; a B-spline of one linear span across v,
+    // ruled between two curves along u, as a thread's flanks), the inner integral runs across
+    // v instead (∬ f = -∮ G du, G the integral of f across v from a fixed v): one short rule
+    // there, not pieces along u across all the turns the face makes. (On an extrusion the
+    // integrands have degree 2 at most in v, the area's none: the 2-point rule is exact.)
+    // (Not where a pcurve sweeps back across much of the surface's range of u, as one going
+    // round a closed surface past its seam does, back the other way: its travel along u
+    // cancels out, where across v it does not count.)
+    let sweeps_back = || {
+        let (u_lo, u_hi, _, _) = surface.bounds();
+        let width = u_hi - u_lo;
+        width.is_finite()
+            && record.wires.iter().flat_map(|&w| model.get(model.get(w).expect("wire use").wire).expect("wire").coedges.iter()).any(|&c| {
+                let Some((pcurve, first, last)) = model.effective_pcurve(c) else { return false };
+                let us: Vec<f64> = (0..=32).map(|k| pcurve.point(first + (last - first) * k as f64 / 32.0).x).collect();
+                us.windows(2).any(|w| (w[1] - w[0]).abs() > 0.25 * width)
+            })
+    };
+    let rule: Option<&[(f64, f64)]> = match surface {
+        _ if turns.is_some() => None,
+        Surface::Extrusion(_) => Some(&GAUSS_LEGENDRE_2),
+        Surface::BSpline(b) if b.v_degree() == 1 && b.v_knots().len() == 2 => Some(&GAUSS_LEGENDRE),
+        _ => None,
+    };
+    let ruled_v = rule.filter(|_| !sweeps_back());
+    let mut v_from = None;
     let mut u0 = None;
     // (Buffers reused from node to node.)
     let (mut ends, mut nodes, mut us, mut graded): (Vec<f64>, Vec<(f64, f64, f64)>, Vec<f64>, Vec<f64>) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
@@ -549,6 +580,20 @@ fn integrate_face(model: &Model, face: Shape, mut sample: impl FnMut(Point, Vect
                 for &(node, w) in outer_rule {
                     let t = start + step * (node + 1.0) / 2.0;
                     let (uv, duv) = pcurve.d1(t);
+                    if let Some(rule) = ruled_v {
+                        let outer_weight = -sign * w * step / 2.0 * duv.x;
+                        let v_start = *v_from.get_or_insert(uv.y);
+                        let span = uv.y - v_start;
+                        if outer_weight == 0.0 || span == 0.0 {
+                            continue;
+                        }
+                        for &(inner_node, inner_w) in rule {
+                            let (p, su, sv) = surface.d1(uv.x, v_start + span * (inner_node + 1.0) / 2.0);
+                            let (p, n) = place(p, su, sv);
+                            sample(p, n, outer_weight * inner_w * span / 2.0);
+                        }
+                        continue;
+                    }
                     let outer_weight = sign * w * step / 2.0 * duv.y;
                     if outer_weight == 0.0 {
                         continue;
@@ -1597,6 +1642,39 @@ mod tests {
                 assert!(got >= near - 1e-9 && got - near <= 1e-3, "{got} against {near}");
             }
         }
+    }
+
+    /// Solids whose sides are straight across their surfaces' v: lofts ruled between circles
+    /// interpolated by B-splines (a frustum, a cylinder; their sides B-splines of one linear
+    /// span across v) and a B-spline circle extruded: their volumes as the formulas give
+    /// (up to the interpolation's error), the inner integral run across v.
+    #[test]
+    fn volumes_of_faces_straight_across_v() {
+        use crate::loft::{loft, LoftOptions};
+        use std::f64::consts::PI;
+        let circle = |model: &mut Model, r: f64, z: f64| {
+            let points: Vec<Point> = (0..=64).map(|i| {
+                let a = 2.0 * PI * i as f64 / 64.0;
+                Point::new(r * a.cos(), r * a.sin(), z)
+            }).collect();
+            let curve = crate::geometry::fit::interpolate(&points[..64], true, 1e-9).unwrap();
+            let edge = crate::make::edge_from_curve(model, crate::geometry::curve::Curve::BSpline(curve)).unwrap();
+            crate::make::wire(model, &[edge]).unwrap()
+        };
+        for (r1, r2, h) in [(3.0, 2.0, 5.0), (2.0, 2.0, 4.0)] {
+            let mut model = Model::new();
+            let (a, b) = (circle(&mut model, r1, 0.0), circle(&mut model, r2, h));
+            let solid = loft(&mut model, &[a, b], &LoftOptions { solid: true, ruled: true, ..Default::default() }).unwrap().shape;
+            let v = volume(&model, solid).mass;
+            let expected = PI * h / 3.0 * (r1 * r1 + r1 * r2 + r2 * r2);
+            assert!((v - expected).abs() <= 1e-5 * expected, "{v} != {expected}");
+        }
+        let mut model = Model::new();
+        let base = circle(&mut model, 2.0, 0.0);
+        let face = crate::make::planar_face(&mut model, base).unwrap();
+        let prism = crate::sweep::extrude(&mut model, face, Vector::new(0.0, 0.0, 3.0)).unwrap().shape;
+        let v = volume(&model, prism).mass;
+        assert!((v - PI * 12.0).abs() <= 1e-5 * PI * 12.0, "{v}");
     }
 
     #[test]

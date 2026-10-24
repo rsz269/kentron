@@ -710,6 +710,7 @@ tests/bugs/modalg_7/bug30679
 tests/bugs/modalg_7/bug30760
 tests/bugs/modalg_7/bug30788
 tests/bugs/modalg_7/bug30940_2
+tests/bugs/modalg_7/bug30940_3
 tests/bugs/modalg_7/bug30940_4
 tests/bugs/modalg_7/bug30940_5
 tests/bugs/modalg_7/bug30940_6
