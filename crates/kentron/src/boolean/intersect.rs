@@ -27,8 +27,30 @@ enum Contact {
 /// (grown by its length and `tolerance`) meets a box of the face's grid (each grown by the
 /// grid's spacing).
 fn clear_of_face(face: &super::graph::Face, curve: &Curve, first: f64, last: f64, tolerance: f64) -> bool {
+    use crate::math::BoundingBox;
+    let cells = face_cells(face);
+    const M: usize = 32;
+    let points: Vec<Point> = (0..=M).map(|k| curve.point(first + (last - first) * k as f64 / M as f64)).collect();
+    points.windows(2).all(|w| {
+        let mut b = BoundingBox::EMPTY;
+        b.add_point(w[0]);
+        b.add_point(w[1]);
+        cells.overlapping(&b.enlarged(w[0].distance(w[1]) + tolerance + on_tol())).is_empty()
+    })
+}
+
+/// Whether two faces keep clear of each other: no box of one's grid (see [`face_cells`])
+/// meets a box of the other's.
+fn faces_clear(a: &Face, b: &Face) -> bool {
+    face_cells(a).overlapping_pairs(face_cells(b)).is_empty()
+}
+
+/// The boxes of the cells of a grid over `face`'s range, each grown by the largest cell's
+/// size (the surface between a cell's corners stays within that of them) and the face's
+/// tolerance, indexed (made on first use).
+fn face_cells(face: &Face) -> &crate::math::Bvh {
     use crate::math::{BoundingBox, Bvh};
-    let cells = face.cells.get_or_init(|| {
+    face.cells.get_or_init(|| {
         const N: usize = 32;
         let ((u0, u1), (v0, v1)) = (face.u_range, face.v_range);
         let us: Vec<f64> = (0..=N).map(|i| u0 + (u1 - u0) * i as f64 / N as f64).collect();
@@ -50,14 +72,6 @@ fn clear_of_face(face: &super::graph::Face, curve: &Curve, first: f64, last: f64
         let margin = spacing + face.drift + on_tol();
         let boxes: Vec<BoundingBox> = boxes.into_iter().map(|b| b.enlarged(margin)).collect();
         Bvh::new(&boxes)
-    });
-    const M: usize = 32;
-    let points: Vec<Point> = (0..=M).map(|k| curve.point(first + (last - first) * k as f64 / M as f64)).collect();
-    points.windows(2).all(|w| {
-        let mut b = BoundingBox::EMPTY;
-        b.add_point(w[0]);
-        b.add_point(w[1]);
-        cells.overlapping(&b.enlarged(w[0].distance(w[1]) + tolerance + on_tol())).is_empty()
     })
 }
 
@@ -2239,6 +2253,11 @@ impl Graph {
             // (Where edges of either meet the other, in both boxes: points the sections pass.)
             let (x, y) = (&self.faces[fa], &self.faces[fb]);
             let crossings: Vec<Point> = x.vertices_on.iter().chain(&y.vertices_on).map(|&v| self.vertices.points[v]).filter(|&p| geom::box_contains(&x.bbox, p) && geom::box_contains(&y.bbox, p)).collect();
+            // (Free-form faces near each other by their boxes, clear of each other by their
+            // grids': no section, without the search.)
+            if (geom::freeform(&x.surface) || geom::freeform(&y.surface)) && faces_clear(x, y) {
+                return (Vec::new(), Vec::new());
+            }
             let curves = sections(x, y, &crossings);
             // Each curve's box (from samples, grown by their spacing): curves whose boxes are
             // apart do not cross (nearly tangent surfaces can give many short curves).
