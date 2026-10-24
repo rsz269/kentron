@@ -664,9 +664,9 @@ fn classify_point(shape: Handle, point: Xyz) -> PyResult<&'static str> {
 
 /// The shape's faces as one triangle mesh: points and index triples.
 #[pyfunction]
-#[pyo3(signature = (shape, tolerance, angular=0.5))]
-fn triangulate(shape: Handle, tolerance: f64, angular: f64) -> PyResult<(Vec<Xyz>, Vec<(u32, u32, u32)>)> {
-    let options = kentron::meshing::MeshOptions { deflection: tolerance, angle: angular };
+#[pyo3(signature = (shape, tolerance, angular=0.5, relative=false))]
+fn triangulate(shape: Handle, tolerance: f64, angular: f64, relative: bool) -> PyResult<(Vec<Xyz>, Vec<(u32, u32, u32)>)> {
+    let options = kentron::meshing::MeshOptions { deflection: tolerance, angle: angular, relative };
     let (nodes, triangles) = with_model(|m| kentron::meshing::triangulate(m, shape.shape, options))?;
     Ok((nodes.iter().map(|p| (p.x, p.y, p.z)).collect(), triangles.iter().map(|t| (t[0], t[1], t[2])).collect()))
 }
@@ -697,8 +697,9 @@ impl Mesh {
 
 /// The shape's mesh, as `triangulate` makes it, kept on the Rust side.
 #[pyfunction]
-fn mesh(shape: Handle, tolerance: f64, angular: f64) -> PyResult<Mesh> {
-    let options = kentron::meshing::MeshOptions { deflection: tolerance, angle: angular };
+#[pyo3(signature = (shape, tolerance, angular, relative=false))]
+fn mesh(shape: Handle, tolerance: f64, angular: f64, relative: bool) -> PyResult<Mesh> {
+    let options = kentron::meshing::MeshOptions { deflection: tolerance, angle: angular, relative };
     let (nodes, triangles) = with_model(|m| kentron::meshing::triangulate(m, shape.shape, options))?;
     Ok(Mesh { nodes, triangles })
 }
@@ -752,11 +753,12 @@ fn components(cells: &[u8], dims: [usize; 3]) -> PyResult<(Vec<usize>, Vec<Xyz>)
     Ok(found.into_iter().map(|(n, c)| (n, (c[0], c[1], c[2]))).unzip())
 }
 
-/// Writes the shape's mesh to an STL file.
+/// Writes the shape's mesh to an STL file (`tolerance` relative to each edge's size where
+/// `relative`, as OCCT's).
 #[pyfunction]
-#[pyo3(signature = (shape, path, tolerance, angular=0.5, ascii=false))]
-fn write_stl(shape: Handle, path: &str, tolerance: f64, angular: f64, ascii: bool) -> PyResult<()> {
-    let options = kentron::meshing::MeshOptions { deflection: tolerance, angle: angular };
+#[pyo3(signature = (shape, path, tolerance, angular=0.5, ascii=false, relative=false))]
+fn write_stl(shape: Handle, path: &str, tolerance: f64, angular: f64, ascii: bool, relative: bool) -> PyResult<()> {
+    let options = kentron::meshing::MeshOptions { deflection: tolerance, angle: angular, relative };
     let (nodes, triangles) = with_model(|m| kentron::meshing::triangulate(m, shape.shape, options))?;
     let mut f = std::fs::File::create(path).map_err(|e| PyValueError::new_err(format!("{path}: {e}")))?;
     kentron::io::stl::write(&nodes, &triangles, &mut f, ascii).map_err(|e| PyValueError::new_err(e.to_string()))

@@ -69,7 +69,7 @@ pub fn distance_within(model: &mut Model, a: Shape, b: Shape, limit: f64) -> Res
     // Each shape is meshed finely for its own size (a point has none).
     let (size_a, size_b) = (size(a, model), size(b, model));
     let scale = size_a.max(size_b).max(1e-9);
-    let options = |size: f64| MeshOptions { deflection: 1e-3 * if size > 0.0 { size } else { scale }, angle: 0.3 };
+    let options = |size: f64| MeshOptions { deflection: 1e-3 * if size > 0.0 { size } else { scale }, angle: 0.3, relative: false };
     let (options_a, options_b) = (options(size_a), options(size_b));
     let kept_a = Triangles::kept(model, a, options_a, print_a)?;
     let kept_b = Triangles::kept(model, b, options_b, print_b)?;

@@ -28,11 +28,16 @@ pub struct MeshOptions {
     /// The largest turn, in radians, between neighbouring segments along a curve.
     #[doc(alias = "Angle")]
     pub angle: f64,
+    /// Whether `deflection` is relative to each edge's size, as OCCT's: an edge's deflection
+    /// the largest side of its box times `deflection` (times between a half and two, by how
+    /// small the edge is next to the shape), a face's the average of its edges'.
+    #[doc(alias = "Relative")]
+    pub relative: bool,
 }
 
 impl Default for MeshOptions {
     fn default() -> Self {
-        Self { deflection: 1e-3, angle: 0.5 }
+        Self { deflection: 1e-3, angle: 0.5, relative: false }
     }
 }
 
@@ -52,17 +57,27 @@ pub fn mesh_with(model: &mut Model, shape: Shape, options: MeshOptions) -> Resul
     }
     let local = Shape { orientation: Orientation::Forward, placement: Transform::IDENTITY, ..shape };
     let unplaced = |s: Shape| Shape { orientation: Orientation::Forward, placement: Transform::IDENTITY, ..s };
+    // Each edge's and face's deflection: the same for all, or relative to each one's size.
+    let deflections = options.relative.then(|| relative_deflections(model, local, options.deflection));
+    let edge_options = |edge: Shape| match &deflections {
+        Some((by_edge, _)) => MeshOptions { deflection: by_edge.get(&edge.node).copied().unwrap_or(options.deflection), ..options },
+        None => options,
+    };
+    let face_options = |face: Shape| match &deflections {
+        Some((_, by_face)) => MeshOptions { deflection: by_face.get(&face.node).copied().unwrap_or(options.deflection), ..options },
+        None => options,
+    };
     // The edges' polylines, then the faces' meshes (on them), each found for all at once and
     // then stored in order.
     let edges: Vec<Shape> = model
         .unique_subshapes(local, NodeKind::Edge)
         .into_iter()
         .map(unplaced)
-        .filter(|&edge| !model.edge_polyline(edge).is_some_and(|p| p.deflection() > 0.0 && p.deflection() <= options.deflection))
+        .filter(|&edge| !model.edge_polyline(edge).is_some_and(|p| p.deflection() > 0.0 && p.deflection() <= edge_options(edge).deflection))
         .collect();
     let edges = once_each(edges);
     let model_now: &Model = model;
-    let polylines = crate::parallel::map(&edges, |&edge| edge_polyline(model_now, edge, options));
+    let polylines = crate::parallel::map(&edges, |&edge| edge_polyline(model_now, edge, edge_options(edge)));
     for (&edge, polyline) in edges.iter().zip(polylines) {
         if let Some(polyline) = polyline {
             model.set_edge_polyline(edge, Some(polyline))?;
@@ -75,20 +90,55 @@ pub fn mesh_with(model: &mut Model, shape: Shape, options: MeshOptions) -> Resul
         .unique_subshapes(local, NodeKind::Face)
         .into_iter()
         .map(unplaced)
-        .filter(|&face| !model.face_mesh(face).is_some_and(|m| m.deflection() <= options.deflection || m.requested().is_some_and(|r| r <= options.deflection)))
+        .filter(|&face| {
+            let d = face_options(face).deflection;
+            !model.face_mesh(face).is_some_and(|m| m.deflection() <= d || m.requested().is_some_and(|r| r <= d))
+        })
         .collect();
     let faces = once_each(faces);
     let model_now: &Model = model;
-    let meshes = crate::parallel::map(&faces, |&face| face_mesh(model_now, face, options));
+    let meshes = crate::parallel::map(&faces, |&face| face_mesh(model_now, face, face_options(face)));
     for (&face, found) in faces.iter().zip(meshes) {
         if let Some((mesh, chains)) = found? {
-            model.set_face_mesh(face, Some(mesh.with_requested(options.deflection)))?;
+            let d = face_options(face).deflection;
+            model.set_face_mesh(face, Some(mesh.with_requested(d)))?;
             for (coedge, nodes) in chains {
-                model.set_coedge_mesh_polyline(coedge, Some(MeshPolyline::new(nodes).with_deflection(options.deflection)))?;
+                model.set_coedge_mesh_polyline(coedge, Some(MeshPolyline::new(nodes).with_deflection(d)))?;
             }
         }
     }
     Ok(())
+}
+
+/// Each edge's and face's deflection relative to its size, as OCCT's
+/// (`BRepMesh_ShapeTool::RelativeEdgeDeflection`): an edge's the largest side of its box
+/// times `relative`, adjusted by half the shape's largest side over the edge's (within a
+/// half and two); a face's the average of its edges'.
+fn relative_deflections(model: &Model, shape: Shape, relative: f64) -> (HashMap<crate::topology::NodeId, f64>, HashMap<crate::topology::NodeId, f64>) {
+    let largest_side = |b: &crate::math::BoundingBox| {
+        let d = b.max - b.min;
+        d.x.max(d.y).max(d.z)
+    };
+    let whole = largest_side(&crate::properties::tight_bounding_box(model, shape));
+    let mut by_edge: HashMap<crate::topology::NodeId, f64> = HashMap::default();
+    for edge in model.unique_subshapes(shape, NodeKind::Edge) {
+        let size = largest_side(&crate::properties::tight_bounding_box(model, edge));
+        let d = if size > 0.0 {
+            let adjustment = (whole / (2.0 * size)).clamp(0.5, 2.0);
+            adjustment * size * relative
+        } else {
+            relative
+        };
+        by_edge.insert(edge.node, d);
+    }
+    let mut by_face: HashMap<crate::topology::NodeId, f64> = HashMap::default();
+    for face in model.unique_subshapes(shape, NodeKind::Face) {
+        let ds: Vec<f64> = model.unique_subshapes(face, NodeKind::Edge).iter().filter_map(|e| by_edge.get(&e.node).copied()).collect();
+        if !ds.is_empty() {
+            by_face.insert(face.node, ds.iter().sum::<f64>() / ds.len() as f64);
+        }
+    }
+    (by_edge, by_face)
 }
 
 /// The shapes in order, each node once (unplaced, a shape placed several times is one).
@@ -980,7 +1030,7 @@ mod tests {
             (Cylinder::new(2.0, 3.0).build(&mut model).unwrap(), 1e-3),
             (Sphere::new(1.5).build(&mut model).unwrap(), 1e-3),
         ] {
-            let (nodes, triangles) = triangulate(&mut model, shape, MeshOptions { deflection, angle: 0.3 }).unwrap();
+            let (nodes, triangles) = triangulate(&mut model, shape, MeshOptions { deflection, angle: 0.3, relative: false }).unwrap();
             assert!(closed(&triangles), "not closed");
             let (_, volume) = area_and_volume(&nodes, &triangles);
             let exact = properties::volume(&model, shape).mass;
@@ -993,7 +1043,7 @@ mod tests {
     fn a_tall_cylinder_keeps_within_the_deflection_and_records_it() {
         let mut model = Model::new();
         let cylinder = Cylinder::new(4.0, 6.0).build(&mut model).unwrap();
-        mesh_with(&mut model, cylinder, MeshOptions { deflection: 0.02, angle: 0.2 }).unwrap();
+        mesh_with(&mut model, cylinder, MeshOptions { deflection: 0.02, angle: 0.2, relative: false }).unwrap();
         for face in model.explore(cylinder, NodeKind::Face).collect::<Vec<_>>() {
             let mesh = model.face_mesh(face).unwrap();
             let Some(Surface::Cylinder(_)) = model.surface(face) else {
@@ -1011,6 +1061,21 @@ mod tests {
             }
             assert!(worst <= 0.02, "sags by {worst}");
             assert!(mesh.deflection() > 0.0 && mesh.deflection() <= 0.02 && mesh.deflection() >= worst - 1e-12);
+        }
+    }
+
+    /// A flat cylinder (radius 10, height 1) meshed with a relative deflection of 1e-3, as
+    /// OCCT's: its circles (20 across, as large as the shape) to 0.01, its seam (1 long) to
+    /// 0.002, the side to their average and the caps to their circle's.
+    #[test]
+    fn deflections_relative_to_each_edges_size() {
+        let mut model = Model::new();
+        let cylinder = Cylinder::new(10.0, 1.0).build(&mut model).unwrap();
+        mesh_with(&mut model, cylinder, MeshOptions { deflection: 1e-3, angle: 0.5, relative: true }).unwrap();
+        for face in model.explore(cylinder, NodeKind::Face).collect::<Vec<_>>() {
+            let requested = model.face_mesh(face).unwrap().requested().unwrap();
+            let expected = if matches!(model.surface(face), Some(Surface::Cylinder(_))) { (0.01 + 0.01 + 0.002) / 3.0 } else { 0.01 };
+            assert!((requested - expected).abs() <= 1e-9, "{requested} != {expected}");
         }
     }
 }

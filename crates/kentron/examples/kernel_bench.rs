@@ -405,7 +405,7 @@ fn mesh() -> f64 {
     let lofted = blob(&mut model, Point::new(0.0, 0.0, 0.0), 10.0, 0.0);
     let mut sum = 0.0;
     for shape in [torus, sphere, lofted] {
-        let (points, triangles) = meshing::triangulate(&mut model, shape, meshing::MeshOptions { deflection: 2e-3, angle: 0.3 }).unwrap();
+        let (points, triangles) = meshing::triangulate(&mut model, shape, meshing::MeshOptions { deflection: 2e-3, angle: 0.3, relative: false }).unwrap();
         sum += triangles.len() as f64;
         for p in points.iter().step_by(7) {
             mix(&mut sum, *p);

@@ -610,12 +610,12 @@ class Shape:
 
         exporters.export(self, fileName, "STEP", unit=unit, outputUnit=outputUnit)
 
-    def exportStl(self, fileName: str, tolerance: float = 1e-3, angularTolerance: float = 0.1, ascii: bool = False, **kwargs):
+    def exportStl(self, fileName: str, tolerance: float = 1e-3, angularTolerance: float = 0.1, ascii: bool = False, relative: bool = True, **kwargs):
         from . import exporters
 
         if not exporters._in_a_directory(str(fileName)):
             return False
-        exporters.export(self, fileName, "STL", tolerance=tolerance, angularTolerance=angularTolerance, opt={"ascii": ascii})
+        exporters.export(self, fileName, "STL", tolerance=tolerance, angularTolerance=angularTolerance, opt={"ascii": ascii}, relative=relative)
         return True
 
     def export(self, fname: str, tolerance: float = 0.1, angularTolerance: float = 0.1, unit: str = "MM", outputUnit=None, opt=None) -> None:

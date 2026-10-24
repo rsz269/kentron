@@ -88,7 +88,10 @@ def export(w, fname, exportType: Optional[str] = None, tolerance: float = 0.1, a
         native.write_step(written.wrapped, fname, Path(fname).stem, unit=out)
     elif kind == "STL":
         ascii = bool(opt.get("ascii", False) or opt.get("ASCII", False) or kwargs.get("ascii", False))
-        native.write_stl(shape.wrapped, fname, tolerance, angularTolerance, ascii)
+        # (The tolerance relative to each edge's size, as CadQuery's exportStl has it by
+        # default.)
+        relative = bool(kwargs.get("relative", True))
+        native.write_stl(shape.wrapped, fname, tolerance, angularTolerance, ascii, relative)
     elif kind == "SVG":
         from .occ_impl.exporters.svg import getSVG
 

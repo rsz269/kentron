@@ -3286,7 +3286,7 @@ impl Draw {
         }
         let deflection = deflection.ok_or_else(|| DrawError::Failed("incmesh: no deflection".into()))?;
         for shape in shapes {
-            kentron::meshing::mesh_with(&mut self.model, shape, kentron::meshing::MeshOptions { deflection, angle })?;
+            kentron::meshing::mesh_with(&mut self.model, shape, kentron::meshing::MeshOptions { deflection, angle, relative: false })?;
         }
         Ok(String::new())
     }
@@ -5526,7 +5526,7 @@ impl Draw {
         let size = b.max - b.min;
         let deflection = 0.001 * size.x.max(size.y).max(size.z);
         if deflection > 0.0 {
-            kentron::meshing::mesh_with(&mut self.model, shape, kentron::meshing::MeshOptions { deflection, angle: 20f64.to_radians() })?;
+            kentron::meshing::mesh_with(&mut self.model, shape, kentron::meshing::MeshOptions { deflection, angle: 20f64.to_radians(), relative: false })?;
         }
         Ok(String::new())
     }
