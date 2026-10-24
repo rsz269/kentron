@@ -460,7 +460,16 @@ fn aligned_pcurve(curve: &Curve, surface: &crate::geometry::surface::Surface, fi
 /// its normal out of the result.
 fn into_face(surface: &crate::geometry::surface::Surface, p: Point, tangent: Vector, sign: f64, length: f64) -> (Vector, Vector) {
     let normal = geom::normal_at_point(surface, p);
-    let into = normal.cross(tangent).normalized();
+    // (Where the edge has no direction, or the normal runs along it, as at a face's degenerate
+    // point, the way into the face is unknown: some way square to the normal, the shells'
+    // checks judging after.)
+    let across = normal.cross(tangent);
+    if !(across.length() > 1e-12 * tangent.length()) || !(across.length() > 0.0) {
+        let basis = [normal, tangent].into_iter().find(|v| v.length() > 0.0).unwrap_or(Vector::new(0.0, 0.0, 1.0)).normalized();
+        let other = if basis.x.abs() < 0.9 { Vector::new(1.0, 0.0, 0.0) } else { Vector::new(0.0, 1.0, 0.0) };
+        return (basis.cross(other).normalized(), normal * sign);
+    }
+    let into = across.normalized();
     if matches!(surface, crate::geometry::surface::Surface::Plane(_)) {
         return (into, normal * sign);
     }
@@ -504,10 +513,17 @@ fn group_shells(uses: &HashMap<EdgeId, Vec<EdgeUse>>, count: usize, vectors: imp
             }
             continue;
         }
-        // The edge's direction: across the first use's normal and into-direction.
+        // The edge's direction: across a use's normal and into-direction (the first whose
+        // are not degenerate; where none is, the faces joined in turn).
         let found: Vec<(Vector, Vector)> = around.iter().map(|u| vectors(key, u)).collect();
-        let d = found[0].0.cross(found[0].1).normalized();
-        let (a, b) = (found[0].0, d.cross(found[0].0));
+        let Some(first) = found.iter().position(|(into, outward)| into.cross(*outward).length() > 0.0) else {
+            for w in around.windows(2) {
+                join(&mut group, w[0].face, w[1].face);
+            }
+            continue;
+        };
+        let d = found[first].0.cross(found[first].1).normalized();
+        let (a, b) = (found[first].0, d.cross(found[first].0));
         let mut sorted: Vec<(f64, usize, bool)> = around
             .iter()
             .zip(&found)

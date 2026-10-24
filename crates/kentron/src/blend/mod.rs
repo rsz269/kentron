@@ -1233,11 +1233,12 @@ fn normal_at(model: &Model, shape: Shape, face: NodeId, p: Point) -> Option<Vect
 fn tangent_chains(model: &Model, shape: Shape, edges: &[(Shape, f64)], kink: f64) -> Vec<(Shape, f64)> {
     use crate::geometry::ParametricCurve;
     let all: Vec<Shape> = model.explore(shape, NodeKind::Edge).collect();
-    // Each edge's end vertices with its direction there, and its faces.
+    // Each edge's end vertices with its direction there, out of the edge (away from the
+    // vertex along it), and its faces.
     let ends = |edge: Shape| -> Vec<(NodeId, Vector)> {
         let Some((curve, first, last)) = model.edge_curve(Shape { orientation: Orientation::Forward, ..edge }) else { return Vec::new() };
         let (a, b) = model.edge_vertices(Shape { orientation: Orientation::Forward, ..edge });
-        [(a.node, first), (b.node, last)].into_iter().map(|(v, t)| (v, curve.d1(t).1.normalized())).collect()
+        [(a.node, first, 1.0), (b.node, last, -1.0)].into_iter().map(|(v, t, out)| (v, curve.d1(t).1.normalized() * out)).collect()
     };
     // (Each edge's faces, and each of the shape's edges' ends, found once.)
     let mut faces_by_edge: crate::hashing::FastMap<NodeId, Vec<NodeId>> = Default::default();
@@ -1274,8 +1275,10 @@ fn tangent_chains(model: &Model, shape: Shape, edges: &[(Shape, f64)], kink: f64
             // (Elsewhere within about 1/2000 rad: edges of models made elsewhere meet that nearly
             // tangent, as continuous as the faces either side.)
             let tangent = if same_faces { tolerance::ANGULAR.sqrt() } else { 1e5 * tolerance::ANGULAR }.max(kink);
+            // (Carried on, not turned back: out of this edge one way, out of the other the
+            // opposite way, as OCCT's contours.)
             let Some(at) = mine.iter().find_map(|(v, d)| {
-                theirs.iter().any(|(w, e)| w == v && d.dot(*e).abs() >= 1.0 - tangent).then_some(*v)
+                theirs.iter().any(|(w, e)| w == v && -d.dot(*e) >= 1.0 - tangent).then_some(*v)
             }) else {
                 continue;
             };
@@ -2424,6 +2427,44 @@ mod tests {
             let volume = properties::volume(&model, result).mass;
             assert!((volume - expected).abs() < 1e-3, "{volume} not {expected}");
         }
+    }
+
+    /// The same block and pocket, its rim's short edges rounded first (R 1), then one long
+    /// edge: past its end the edge goes on into the round's arc on the pocket's wall, tangent
+    /// but turning back (and on down the pocket's corner): the fillet stays on its own edge,
+    /// as OCCT's: no torus, the pocket's corners not rounded.
+    #[test]
+    fn a_fillet_does_not_carry_on_where_the_next_edge_turns_back() {
+        let mut model = Model::new();
+        let block = Cuboid::new(20.0, 20.0, 6.0).build(&mut model).unwrap();
+        let pocket = Cuboid::new(10.0, 8.0, 4.0).with_frame(Frame::from_z(Point::new(5.0, 6.0, 3.0), Direction::Z)).build(&mut model).unwrap();
+        let mut shape = boolean::difference(&mut model, block, pocket).unwrap();
+        // Rim edges at the top, by where they run: along y at x = 5 and 15, then along x at y = 6.
+        let rim = |model: &Model, shape: Shape, along_x: bool, at: f64| -> Shape {
+            model.unique_subshapes(shape, NodeKind::Edge).into_iter().find(|&e| {
+                let (a, b) = model.edge_vertices(e);
+                let (p, q) = (model.point(a), model.point(b));
+                let line = matches!(model.edge_curve(e), Some((Curve::Line(_), ..)));
+                line && (p.z - 6.0).abs() < 1e-9 && (q.z - 6.0).abs() < 1e-9 && if along_x { (p.y - at).abs() < 1e-9 && (q.y - at).abs() < 1e-9 } else { (p.x - at).abs() < 1e-9 && (q.x - at).abs() < 1e-9 }
+            }).unwrap()
+        };
+        for x in [5.0, 15.0] {
+            let edge = rim(&model, shape, false, x);
+            shape = fillet(&mut model, shape, &[edge], 1.0).unwrap();
+        }
+        // (No torus, and no cylinder round an upright axis: the pocket's corners not rounded.)
+        let carried_on = |model: &Model, shape: Shape| {
+            model.unique_subshapes(shape, NodeKind::Face).iter().any(|&f| match model.surface(f) {
+                Some(Surface::Torus(_)) => true,
+                Some(Surface::Cylinder(c)) => Vector::from(c.frame().z()).cross(Vector::new(0.0, 0.0, 1.0)).length() < 1e-9,
+                _ => false,
+            })
+        };
+        assert!(!carried_on(&model, shape));
+        let edge = rim(&model, shape, true, 6.0);
+        let result = fillet(&mut model, shape, &[edge], 1.0).unwrap();
+        assert!(validity::check(&model, result).is_valid());
+        assert!(!carried_on(&model, result));
     }
 
     /// A 10 x 10 x 10 box with two of its top edges rounded (R 3): the mitre where those
