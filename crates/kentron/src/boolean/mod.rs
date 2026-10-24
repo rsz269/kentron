@@ -840,6 +840,26 @@ mod tests {
         check(&model, result, 8.0, 2.0 * 8.0 + 12.0 + 4.0, 1);
     }
 
+    /// A rod cut back to a torus's side and fused to it again: the rod's end face lies on
+    /// the torus, bounded by traced sections that stray from it between their fit points by
+    /// more than their tolerance; they lie on the torus's face as far as they stray from
+    /// their own (the same surface), which they are split along (else the rod is lost, or
+    /// the shell left open).
+    #[test]
+    fn a_piece_cut_to_a_surface_fuses_back_onto_it() {
+        let mut model = Model::new();
+        let torus = crate::primitives::Torus::new(10.0, 4.0).build(&mut model).unwrap();
+        let frame = Frame::new(Point::new(-8.0, 0.0, 0.0), -Direction::X, Direction::Y);
+        let rod = Cylinder::new(2.0, 10.0).with_frame(frame).build(&mut model).unwrap();
+        let piece = difference(&mut model, rod, torus).unwrap();
+        let fused = union(&mut model, torus, piece).unwrap();
+        let report = validity::check(&model, fused);
+        assert!(report.is_valid(), "{report:?}");
+        let expected = properties::volume(&model, torus).mass + properties::volume(&model, piece).mass;
+        let v = properties::volume(&model, fused).mass;
+        assert!((v - expected).abs() < 1e-6 * expected, "{v} vs {expected}");
+    }
+
     #[test]
     fn faces_far_from_the_other_operand_pass_through() {
         let mut model = Model::new();

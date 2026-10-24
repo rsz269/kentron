@@ -1525,6 +1525,28 @@ fn parallels(base: &Face, other: &Face) -> Vec<Section> {
         .collect()
 }
 
+/// Whether `a`'s surface lies on `b`'s over `a`'s range (the same surface, or one made from
+/// it): a grid of its points all on `b`'s surface, to far within the tolerance (not merely
+/// near it, as planes a hair apart).
+fn coincide(a: &Face, b: &Face) -> bool {
+    use crate::geometry::ParametricSurface;
+    if a.operand == b.operand {
+        return false;
+    }
+    (0..=4).all(|i| {
+        (0..=4).all(|j| {
+            let u = a.u_range.0 + (a.u_range.1 - a.u_range.0) * (0.1 + 0.2 * i as f64);
+            let v = a.v_range.0 + (a.v_range.1 - a.v_range.0) * (0.1 + 0.2 * j as f64);
+            geom::signed_distance(&b.surface, a.surface.point(u, v)).abs() <= 1e-3 * on_tol()
+        })
+    })
+}
+
+/// How far the curve over `[first, last]` strays from `surface` (sampled).
+fn farthest(curve: &Curve, first: f64, last: f64, surface: &Surface) -> f64 {
+    (0..=32).map(|i| geom::signed_distance(surface, curve.point(first + (last - first) * i as f64 / 32.0)).abs()).fold(0.0, f64::max)
+}
+
 /// The curves where a face's surface without a closed-form intersection (`base`, swept by
 /// its parameters) meets an elementary one: the zero contour of the other surface's signed
 /// distance over a grid in the base's `(u, v)` (marching squares, wrapping round in a
@@ -2020,6 +2042,15 @@ impl Graph {
         // operands' own edges and vertices, which this does not change); then recorded in
         // order.
         let edges: Vec<usize> = (0..self.edges.len()).filter(|&ei| self.edges[ei].operand.is_some()).collect();
+        // Each edge's own faces (of its operand).
+        let mut own_faces: Vec<Vec<usize>> = vec![Vec::new(); self.edges.len()];
+        for (fi, face) in self.faces.iter().enumerate() {
+            for u in &face.boundary {
+                if !own_faces[u.edge].contains(&fi) {
+                    own_faces[u.edge].push(fi);
+                }
+            }
+        }
         let found = crate::parallel::map(&edges, |&ei| {
             let edge = &self.edges[ei];
             let operand = edge.operand.expect("an operand's edge");
@@ -2039,6 +2070,19 @@ impl Graph {
                 }
                 match surface_contact(curve, edge.first, edge.last, &face.surface, edge.tolerance) {
                     Contact::On => meetings.push((fi, Meeting::On)),
+                    // (An edge of a face on the very surface of this one lies on it as far as
+                    // it strays from its own face's: a fitted section bounding a face cut to
+                    // a surface strays from it between its fit points by more than its
+                    // tolerance says.)
+                    Contact::At(_)
+                        if own_faces[ei].iter().any(|&own| {
+                            let own = &self.faces[own];
+                            let strays = farthest(curve, edge.first, edge.last, &own.surface);
+                            strays <= 1e3 * on_tol() && coincide(own, face) && farthest(curve, edge.first, edge.last, &face.surface) <= strays + on_tol()
+                        }) =>
+                    {
+                        meetings.push((fi, Meeting::On))
+                    }
                     Contact::At(ts) => {
                         let ts = if edge.free { stretch_ends(curve, edge.first, edge.last, &face.surface, ts) } else { ts };
                         // (An edge may meet a face just past its boundary, by as far as the
