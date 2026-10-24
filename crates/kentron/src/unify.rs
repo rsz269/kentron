@@ -63,7 +63,7 @@ fn rebuild(model: &mut Model, shape: Shape, options: UnifyOptions) -> Result<Sha
             let mut children: Vec<Shape> = model.children_local(shape).collect();
             // A compound's own faces are unified together, as if in one shell.
             let faces: Vec<Shape> = children.iter().copied().filter(|c| c.kind() == NodeKind::Face && c.placement == Transform::IDENTITY).collect();
-            if shape.kind() == NodeKind::Compound && faces.len() > 1 {
+            if shape.kind() == NodeKind::Compound && !faces.is_empty() {
                 let together = model.new_empty(NodeKind::Shell);
                 for &f in &faces {
                     model.add(together, f)?;
@@ -94,6 +94,16 @@ fn rebuild(model: &mut Model, shape: Shape, options: UnifyOptions) -> Result<Sha
                 model.add(out, Shape { orientation: c.orientation, placement: c.placement, ..r })?;
             }
             Ok(out)
+        }
+        // A face alone: its edges merged, as in a shell of it alone.
+        NodeKind::Face => {
+            let alone = model.new_empty(NodeKind::Shell);
+            model.add(alone, shape)?;
+            let unified = unify_shell(model, alone, options)?;
+            match model.children_local(unified).collect::<Vec<_>>()[..] {
+                [face] if unified.node != alone.node => Ok(face),
+                _ => Ok(shape),
+            }
         }
         _ => Ok(shape),
     }
@@ -893,6 +903,25 @@ mod tests {
         assert!(validity::check(&model, clean).is_valid(), "{:?}", validity::check(&model, clean));
         assert_eq!(counts(&model, clean), (6, 12));
         assert!((properties::volume(&model, clean).mass - 2.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn a_face_alone_has_its_edges_in_line_merged() {
+        // A square with a vertex partway along a side, alone and in a compound of it alone.
+        let mut model = Model::new();
+        let corners = [(0.0, 5.0), (0.0, 10.0), (10.0, 10.0), (10.0, 0.0), (0.0, 0.0)];
+        let vertices: Vec<Shape> = corners.iter().map(|&(x, y)| crate::make::vertex(&mut model, Point::new(x, y, 0.0))).collect();
+        let edges: Vec<Shape> = (0..5).map(|i| crate::make::edge(&mut model, vertices[i], vertices[(i + 1) % 5]).unwrap()).collect();
+        let wire = crate::make::wire(&mut model, &edges).unwrap();
+        let face = crate::make::planar_face(&mut model, wire).unwrap();
+        let clean = unify_same_domain(&mut model, face).unwrap();
+        assert_eq!(clean.kind(), NodeKind::Face);
+        assert_eq!(counts(&model, clean), (1, 4));
+        assert!((properties::area(&model, clean).mass - 100.0).abs() < 1e-12);
+        let compound = model.new_empty(NodeKind::Compound);
+        model.add(compound, face).unwrap();
+        let clean = unify_same_domain(&mut model, compound).unwrap();
+        assert_eq!(counts(&model, clean), (1, 4));
     }
 
     #[test]

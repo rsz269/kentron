@@ -1296,6 +1296,33 @@ def _lines_joined(wire: "Wire") -> "Wire":
     return Wire.assembleEdges(joined)
 
 
+def _spikes_trimmed(wire: "Wire") -> "Wire":
+    """A closed wire without the spikes where a straight edge goes back along the one before
+    it (as OCCT's wire fixing trims them, which CadQuery's faces get): each such pair one edge
+    from the first's start to the second's end, or none where those meet."""
+    if not wire.IsClosed():
+        return wire
+    edges = [Shape.cast(e) for e in native.ordered_edges(wire.wrapped)]
+
+    def back(a, b) -> bool:
+        if a.geomType() != "LINE" or b.geomType() != "LINE":
+            return False
+        da, db = a.endPoint() - a.startPoint(), b.endPoint() - b.startPoint()
+        return da.cross(db).Length <= 1e-9 * da.Length * db.Length and da.dot(db) < 0
+
+    changed = False
+    while len(edges) > 2:
+        n = len(edges)
+        i = next((i for i in range(n) if back(edges[i], edges[(i + 1) % n])), None)
+        if i is None:
+            break
+        edges = edges[i:] + edges[:i]
+        a, c = edges[0].startPoint(), edges[1].endPoint()
+        edges = ([Edge.makeLine(a, c)] if (c - a).Length > 1e-7 else []) + edges[2:]
+        changed = True
+    return Wire.assembleEdges(edges) if changed and len(edges) > 2 else wire
+
+
 def _box_within(inner, outer, tol: float = 1e-6) -> bool:
     """Whether box `inner` lies within box `outer` (up to `tol`)."""
     return (inner.xmin >= outer.xmin - tol and inner.ymin >= outer.ymin - tol and inner.zmin >= outer.zmin - tol
@@ -1487,6 +1514,7 @@ class Face(Shape):
         for w in innerWires:
             if not w.IsClosed():
                 raise ValueError("Cannot build face(s): inner wire is not closed")
+        outerWire = _spikes_trimmed(outerWire)
 
         # A wire is a hole of a group when it lies within the group's outer wire: a point on
         # it at no distance from the face the outer wire bounds (bounding boxes overlap for
