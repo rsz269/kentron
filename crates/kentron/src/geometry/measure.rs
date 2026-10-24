@@ -159,6 +159,51 @@ pub fn parameter_at_length(curve: &Curve, from: f64, distance: f64) -> f64 {
     parameter_at(&speed, &curve.breaks(), curve.period().filter(|_| curve.is_periodic()), bounds, from, distance)
 }
 
+/// Lengths along a curve from the start of a range up to each of the curve's breaks in it
+/// (and its end), for points at given lengths found without measuring from the start each
+/// time.
+#[derive(Debug, Clone)]
+pub struct LengthTable {
+    /// The parameters: the range's ends and the breaks between.
+    pub parameters: Vec<f64>,
+    /// The length from the range's start to each.
+    pub lengths: Vec<f64>,
+}
+
+impl LengthTable {
+    /// The table of `curve` over `[first, last]`.
+    pub fn new(curve: &Curve, first: f64, last: f64) -> LengthTable {
+        let mut parameters = vec![first];
+        parameters.extend(curve.breaks().into_iter().filter(|&t| t > first && t < last));
+        parameters.push(last);
+        let mut lengths = vec![0.0];
+        for w in parameters.windows(2) {
+            let l = lengths.last().expect("a length") + length_between(curve, w[0], w[1]);
+            lengths.push(l);
+        }
+        LengthTable { parameters, lengths }
+    }
+
+    /// The whole length.
+    pub fn total(&self) -> f64 {
+        *self.lengths.last().expect("a length")
+    }
+
+    /// The parameter of `curve` (the table's) at `distance` along from the start: from the
+    /// break before it.
+    pub fn parameter_at(&self, curve: &Curve, distance: f64) -> f64 {
+        let n = self.parameters.len();
+        if distance <= 0.0 {
+            return if distance == 0.0 { self.parameters[0] } else { parameter_at_length(curve, self.parameters[0], distance) };
+        }
+        if distance >= self.total() * (1.0 - 1e-14) {
+            return if distance <= self.total() { self.parameters[n - 1] } else { parameter_at_length(curve, self.parameters[n - 1], distance - self.total()) };
+        }
+        let i = self.lengths.partition_point(|&l| l <= distance).clamp(1, n - 1) - 1;
+        parameter_at_length(curve, self.parameters[i], distance - self.lengths[i])
+    }
+}
+
 /// [`length`] for a 2D curve.
 pub fn length2(curve: &Curve2) -> f64 {
     length_between2(curve, curve.first_parameter(), curve.last_parameter())
@@ -284,6 +329,25 @@ mod tests {
             let along = length_between(&curve, from, t);
             assert!((along - distance).abs() < 1e-9 * whole, "{along} not {distance}");
             assert!(calls.get() < 400_000, "{} evaluations", calls.get());
+        }
+    }
+
+    #[test]
+    fn a_table_of_lengths_finds_points_from_the_break_before() {
+        // Five turns of a helix as a B-spline of many spans: the parameter a length along,
+        // from the table, is where that length from the start ends.
+        let points: Vec<Point> = (0..=200).map(|i| {
+            let a = 10.0 * PI * i as f64 / 200.0;
+            Point::new(2.0 * a.cos(), 2.0 * a.sin(), a / (2.0 * PI))
+        }).collect();
+        let curve = Curve::BSpline(crate::geometry::fit::interpolate(&points, false, 1e-9).unwrap());
+        let (first, last) = (curve.first_parameter(), curve.last_parameter());
+        let table = LengthTable::new(&curve, first, last);
+        assert!((table.total() - length(&curve)).abs() < 1e-9 * table.total());
+        for f in [0.0, 1e-6, 0.137, 0.5, 0.731, 0.999999, 1.0] {
+            let distance = f * table.total();
+            let t = table.parameter_at(&curve, distance);
+            assert!((length_between(&curve, first, t) - distance).abs() < 1e-9 * table.total(), "at {f}");
         }
     }
 }

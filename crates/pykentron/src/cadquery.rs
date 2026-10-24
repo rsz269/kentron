@@ -26,6 +26,9 @@ struct Piece {
     last: f64,
     reversed: bool,
     start: f64,
+    /// Lengths along the curve over its range (kept with the edge), and the factor the
+    /// edge's placement scales them by.
+    lengths: Option<(std::sync::Arc<kentron::geometry::measure::LengthTable>, f64)>,
 }
 
 impl Piece {
@@ -58,14 +61,14 @@ fn path(m: &Model, s: Shape) -> kentron::Result<Path> {
     match s.kind() {
         NodeKind::Edge => {
             let (curve, first, last) = m.edge_curve(s).ok_or_else(|| invalid("a degenerate edge"))?;
-            Ok(Path { pieces: vec![Piece { curve, first, last, reversed: false, start: first }], first, last })
+            Ok(Path { pieces: vec![Piece { curve, first, last, reversed: false, start: first, lengths: lengths(m, s) }], first, last })
         }
         NodeKind::Wire => {
             let mut pieces = Vec::new();
             let mut at = 0.0;
             for e in m.ordered_edges(s) {
                 let Some((curve, first, last)) = m.edge_curve(e) else { continue };
-                let piece = Piece { curve, first, last, reversed: e.orientation == Orientation::Reversed, start: at };
+                let piece = Piece { curve, first, last, reversed: e.orientation == Orientation::Reversed, start: at, lengths: lengths(m, e) };
                 at += piece.span();
                 pieces.push(piece);
             }
@@ -75,6 +78,33 @@ fn path(m: &Model, s: Shape) -> kentron::Result<Path> {
             Ok(Path { pieces, first: 0.0, last: at })
         }
         _ => Err(invalid("an edge or wire is needed")),
+    }
+}
+
+/// An edge's table of lengths (see [`Piece::lengths`]).
+fn lengths(m: &Model, edge: Shape) -> Option<(std::sync::Arc<kentron::geometry::measure::LengthTable>, f64)> {
+    Some((kentron::properties::edge_length_table(m, edge)?, edge.placement.scale_factor().abs()))
+}
+
+impl Piece {
+    /// The piece's whole length.
+    fn length(&self) -> f64 {
+        match &self.lengths {
+            Some((table, scale)) => table.total() * scale,
+            None => measure::length_between(&self.curve, self.first, self.last),
+        }
+    }
+
+    /// The curve parameter `distance` along the piece from its start (as the path runs it).
+    fn parameter_at_length(&self, distance: f64) -> f64 {
+        match &self.lengths {
+            Some((table, scale)) => {
+                let along = if self.reversed { self.length() - distance } else { distance };
+                table.parameter_at(&self.curve, along / scale)
+            }
+            None if self.reversed => measure::parameter_at_length(&self.curve, self.last, -distance),
+            None => measure::parameter_at_length(&self.curve, self.first, distance),
+        }
     }
 }
 
@@ -91,33 +121,21 @@ impl Path {
         if piece.reversed { (p, -d1, d2) } else { (p, d1, d2) }
     }
 
-    fn length_between(&self, a: f64, b: f64) -> f64 {
-        self.pieces
-            .iter()
-            .map(|p| {
-                let (lo, hi) = (a.max(p.start), b.min(p.start + p.span()));
-                if hi <= lo { 0.0 } else { measure::length_between(&p.curve, p.local(lo).min(p.local(hi)), p.local(lo).max(p.local(hi))) }
-            })
-            .sum()
-    }
-
     fn length(&self) -> f64 {
-        self.length_between(self.first, self.last)
+        self.pieces.iter().map(Piece::length).sum()
     }
 
     /// The parameter `distance` along from the start.
     fn parameter_at_length(&self, distance: f64) -> f64 {
         let mut left = distance;
         for (i, p) in self.pieces.iter().enumerate() {
-            let length = measure::length_between(&p.curve, p.first, p.last);
+            let length = p.length();
             if left <= length || i + 1 == self.pieces.len() {
                 // (At the piece's end, or past it: its end, not searched for.)
                 let t = if left >= length * (1.0 - 1e-14) {
                     if p.reversed { p.first } else { p.last }
-                } else if p.reversed {
-                    measure::parameter_at_length(&p.curve, p.last, -left)
                 } else {
-                    measure::parameter_at_length(&p.curve, p.first, left)
+                    p.parameter_at_length(left)
                 };
                 return p.global(t);
             }

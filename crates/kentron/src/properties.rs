@@ -1061,6 +1061,14 @@ pub fn bounding_box_using_meshes(model: &Model, shape: Shape) -> BoundingBox {
     b
 }
 
+/// The table of lengths along `edge`'s curve over its range (kept with the edge while it
+/// is unchanged); `None` for an edge without a curve.
+pub fn edge_length_table(model: &Model, edge: Shape) -> Option<std::sync::Arc<crate::geometry::measure::LengthTable>> {
+    let id = crate::topology::EdgeId::try_from(edge.node).ok()?;
+    let (curve, first, last) = model.edge_curve(Shape { orientation: crate::topology::Orientation::Forward, placement: crate::math::Transform::IDENTITY, ..edge })?;
+    Some(model.derived(edge.node, model.edge_fingerprint(id), || crate::geometry::measure::LengthTable::new(&curve, first, last)))
+}
+
 /// The tightest box around `shape`'s geometry (without tolerances): its vertices, the extremes
 /// of its edges' curves and of its curved faces' surfaces within their boundaries.
 #[doc(alias = "BRepBndLib::AddOptimal")]
