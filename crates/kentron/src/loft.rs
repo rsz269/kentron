@@ -466,18 +466,29 @@ fn make_compatible(sections: &mut Vec<Section>, closed: bool, looped: bool, matc
     // A closed wire starts at the vertex nearest to the previous wire's start; or, where the
     // two lie in planes near square to each other, where its vertices in order lie nearest
     // the previous wire's in all (of an outline turned aside, the vertex nearest the previous
-    // start may be its far end).
+    // start may be its far end). As OCCT (matching by rays), always where its vertices in
+    // order lie nearest the previous wire's in all, moved across to it (its centre over the
+    // previous one's, along the first wire's normal), and points along the edges too where
+    // the wires have only one or two.
     if closed {
+        let first_normal = Direction::try_from_vector(normal(wire(&sections[wires[0]])));
         for pair in wires.windows(2) {
             let prev = wire(&sections[pair[0]]).clone();
             let aside = {
                 let (a, b) = (normal(&prev), normal(wire(&sections[pair[1]])));
                 a.dot(b).abs() < 0.5 * a.length() * b.length()
             };
+            let offset = {
+                let d = centre(&prev) - centre(wire(&sections[pair[1]]));
+                first_normal.map_or(d, |z| d - Vector::from(z) * d.dot(Vector::from(z)))
+            };
             let w = wire_mut(&mut sections[pair[1]]);
             let n = w.pieces.len();
             let gap = |i: usize| -> f64 {
-                if aside && prev.pieces.len() == n {
+                if matching == Matching::ByRays && prev.pieces.len() == n {
+                    let along: &[f64] = if n <= 2 { &[0.0, 0.25, 0.5, 0.75] } else { &[0.0] };
+                    (0..n).map(|k| along.iter().map(|&t| prev.pieces[k].at(t).distance(w.pieces[(k + i) % n].at(t) + offset)).sum::<f64>()).sum()
+                } else if aside && prev.pieces.len() == n {
                     (0..n).map(|k| prev.pieces[k].at(0.0).distance(w.pieces[(k + i) % n].at(0.0))).sum()
                 } else {
                     w.pieces[i].at(0.0).distance(prev.pieces[0].at(0.0))
@@ -1502,6 +1513,28 @@ mod tests {
         let volume = properties::volume(&model, solid).mass;
         let cone = std::f64::consts::PI * 100.0 * 40.0 / 3.0;
         assert!((volume - cone).abs() < 1e-4 * cone, "volume {volume}");
+    }
+
+    /// A C-shaped outline lofted to a larger one, each vertex 3 out from its own: as OCCT
+    /// (matching by rays), each starts where the vertices in order lie nearest in all, not at
+    /// the vertex nearest the previous start (an inner corner of the larger outline, 1.4 from
+    /// the smaller one's first): the loft is not twisted, its faces planes.
+    #[test]
+    fn outlines_matched_by_rays_start_where_all_their_vertices_lie_nearest() {
+        let mut model = Model::new();
+        let c = |grow: f64, z: f64| -> Vec<[f64; 3]> {
+            let (x, y, wall) = (2.75 + grow, 3.075 + grow, 2.0);
+            vec![[-x, -y, z], [-x, y, z], [2.75, y, z], [2.75, y - wall, z], [-x + wall, y - wall, z], [-x + wall, -y + wall, z], [2.75, -y + wall, z], [2.75, -y, z]]
+        };
+        let (low, high) = (c(0.0, 0.0), c(3.0, 4.0));
+        let sections = [polygon(&mut model, &low), polygon(&mut model, &high)];
+        let options = LoftOptions { solid: true, matching: Matching::ByRays, ..Default::default() };
+        let solid = loft(&mut model, &sections, &options).unwrap().shape;
+        let report = crate::validity::check(&model, solid);
+        assert!(report.is_valid(), "{report:?}");
+        for f in model.unique_subshapes(solid, NodeKind::Face) {
+            assert!(matches!(model.surface(f), Some(Surface::Plane(_))), "{:?}", model.surface(f));
+        }
     }
 
     #[test]

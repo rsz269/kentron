@@ -307,12 +307,6 @@ tests/bugs/modalg_2/bug22818_1
 tests/bugs/modalg_2/bug22818_2
 tests/bugs/modalg_2/bug22864_3
 tests/bugs/modalg_2/bug22968
-tests/bugs/modalg_2/bug23162_1
-tests/bugs/modalg_2/bug23162_2
-tests/bugs/modalg_2/bug23162_3
-tests/bugs/modalg_2/bug23162_4
-tests/bugs/modalg_2/bug23162_5
-tests/bugs/modalg_2/bug23162_6
 tests/bugs/modalg_2/bug23170
 tests/bugs/modalg_2/bug23174
 tests/bugs/modalg_2/bug23214
