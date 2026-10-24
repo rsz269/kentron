@@ -3,6 +3,8 @@
 //! The dimension goes up by one: a vertex sweeps an edge, an edge a face, a face a solid.
 
 mod corner;
+mod draft;
+pub use draft::extrude_drafted;
 mod middle;
 mod pipe;
 pub use middle::middle_path;

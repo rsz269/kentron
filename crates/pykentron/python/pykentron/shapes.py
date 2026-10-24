@@ -1263,21 +1263,37 @@ def _slits_closed(chain: List[Edge], tol: float) -> List[Edge]:
 
 
 def _lines_joined(wire: "Wire") -> "Wire":
-    """A closed wire of straight edges with those in line joined (the wire as it is if any
-    edge is curved)."""
-    edges = wire.Edges()
-    if not wire.IsClosed() or any(e.geomType() != "LINE" for e in edges):
+    """A closed wire with its straight edges in line joined (across its start too), its
+    curved edges kept as they are."""
+    if not wire.IsClosed():
         return wire
-    points = [e.startPoint() for e in edges]
-    n = len(points)
-    keep = []
-    for i in range(n):
-        a, b, c = points[i - 1], points[i], points[(i + 1) % n]
-        if (b - a).cross(c - b).Length > 1e-9 * (b - a).Length * (c - b).Length or (b - a).dot(c - b) < 0:
-            keep.append(b)
-    if len(keep) < 3 or len(keep) == n:
+    edges = [Shape.cast(e) for e in native.ordered_edges(wire.wrapped)]
+    n = len(edges)
+    if n < 2:
         return wire
-    return Wire.makePolygon(keep, close=True)
+
+    def continues(a, b) -> bool:
+        # (Two lines, the second going on straight from the first.)
+        if a.geomType() != "LINE" or b.geomType() != "LINE":
+            return False
+        da, db = a.endPoint() - a.startPoint(), b.endPoint() - b.startPoint()
+        return da.cross(db).Length <= 1e-9 * da.Length * db.Length and da.dot(db) > 0
+
+    # From an edge the one before does not go on into, runs of lines in line as one each.
+    start = next((i for i in range(n) if not continues(edges[i - 1], edges[i])), None)
+    if start is None:
+        return wire
+    order = edges[start:] + edges[:start]
+    joined, i = [], 0
+    while i < n:
+        j = i
+        while j + 1 < n and continues(order[j], order[j + 1]):
+            j += 1
+        joined.append(order[i] if j == i else Edge.makeLine(order[i].startPoint(), order[j].endPoint()))
+        i = j + 1
+    if len(joined) == n:
+        return wire
+    return Wire.assembleEdges(joined)
 
 
 def _box_within(inner, outer, tol: float = 1e-6) -> bool:
@@ -1747,7 +1763,10 @@ class Solid(Shape, Mixin3D):
                 # (The offset joins straight edges in line: the outline's joined too.)
                 outer = _lines_joined(outer)
             if len(tops) != 1 or len(tops[0].Edges()) != len(outer.Edges()):
-                raise NotImplementedError("tapered extrusions whose profile changes shape")
+                # The draft closes some of the outline's arcs: as OCCT's drafted prism.
+                if face is None:
+                    face = Face.makeFromWires(outer, inners)
+                return Shape.cast(native.extrude_drafted(face.wrapped, _tuple(v), math.radians(taper)))
             return cls.makeLoft([outer, tops[0].translate(v)], ruled=True)
         if face is None:
             face = Face.makeFromWires(outer, inners)

@@ -560,6 +560,13 @@ fn extrude(profile: Handle, v: Xyz) -> PyResult<Handle> {
     .map(handle)
 }
 
+/// The planar face `profile` swept along `v` with its sides leaning in by `angle` radians
+/// (out for a negative one), arcs the draft closes narrowing to points.
+#[pyfunction]
+fn extrude_drafted(profile: Handle, v: Xyz, angle: f64) -> PyResult<Handle> {
+    with_model(|m| Ok(sweep::extrude_drafted(m, profile.shape, vector(v), angle)?)).map(handle)
+}
+
 /// The solid `swept` from `profile` with its shell's faces swept from the profile's edges
 /// (in their order) before the others; as it is if it is not one solid of one shell.
 fn sides_first(m: &mut Model, swept: &sweep::Sweep, profile: Shape) -> kentron::Result<Shape> {
@@ -1274,6 +1281,7 @@ fn _kentron(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(make_polygon, m)?)?;
     m.add_function(wrap_pyfunction!(make_face, m)?)?;
     m.add_function(wrap_pyfunction!(extrude, m)?)?;
+    m.add_function(wrap_pyfunction!(extrude_drafted, m)?)?;
     m.add_function(wrap_pyfunction!(revolve, m)?)?;
     m.add_function(wrap_pyfunction!(make_loft, m)?)?;
     m.add_function(wrap_pyfunction!(offset_wire, m)?)?;
