@@ -1966,10 +1966,10 @@ class Compound(Shape, Mixin3D):
         """Text set in the font (`fontPath`, else the system's font best matching `font` and
         `kind`) at em height `size`, aligned as OCCT aligns it, extruded by `height` (flat
         faces if 0), placed on `position`."""
-        from .fonts import font_file
+        from .fonts import fallback_fonts, font_file
 
         path = font_file(font, fontPath, kind)
-        flat = Shape.cast(native.text(text, float(size), path, halign, valign))
+        flat = Shape.cast(native.text(text, float(size), path, halign, valign, fallback_fonts(text, path, kind)))
         if height != 0 and flat.Faces():
             normal = flat.Faces()[0].normalAt() * height
             rv = cls(native.extrude(flat.wrapped, normal.toTuple())).transformShape(position.rG)

@@ -1172,11 +1172,27 @@ fn project_along(shape: Handle, target: Handle, direction: Xyz) -> PyResult<Hand
 
 /// The faces of `text` set in the font file at `font_path`, `size` high (its em), aligned
 /// across (`left`, `center`, `right`) and up and down (`top`, `center`, `bottom`) as OCCT's
-/// text builder aligns: a compound of faces in the XY plane.
+/// text builder aligns: a compound of faces in the XY plane. Characters the font lacks are
+/// set in the `fallbacks` (script: `western`, `cjk`, `korean` or `arabic`; font file; face
+/// index) for their script.
 #[pyfunction]
-fn text(text: &str, size: f64, font_path: &str, halign: &str, valign: &str) -> PyResult<Handle> {
-    use kentron::text::{HorizontalAlignment as H, VerticalAlignment as V};
-    let font = std::fs::read(font_path).map_err(|e| PyValueError::new_err(format!("{font_path}: {e}")))?;
+#[pyo3(signature = (text, size, font_path, halign, valign, fallbacks=Vec::new()))]
+fn text(text: &str, size: f64, font_path: &str, halign: &str, valign: &str, fallbacks: Vec<(String, String, u32)>) -> PyResult<Handle> {
+    use kentron::text::{Fallback, HorizontalAlignment as H, Script, VerticalAlignment as V};
+    let read = |path: &str| std::fs::read(path).map_err(|e| PyValueError::new_err(format!("{path}: {e}")));
+    let font = read(font_path)?;
+    let mut fallback_fonts = Vec::new();
+    for (script, path, index) in &fallbacks {
+        let script = match script.as_str() {
+            "western" => Script::Western,
+            "cjk" => Script::Cjk,
+            "korean" => Script::Korean,
+            "arabic" => Script::Arabic,
+            other => return Err(PyValueError::new_err(format!("unknown script {other}"))),
+        };
+        fallback_fonts.push((script, read(path)?, *index));
+    }
+    let fallbacks: Vec<Fallback> = fallback_fonts.iter().map(|(script, font, index)| Fallback { script: *script, font, index: *index }).collect();
     let h = match halign {
         "left" => H::Left,
         "center" => H::Center,
@@ -1189,7 +1205,7 @@ fn text(text: &str, size: f64, font_path: &str, halign: &str, valign: &str) -> P
         "bottom" => V::Bottom,
         other => return Err(PyValueError::new_err(format!("unknown vertical alignment {other}"))),
     };
-    with_model(|m| kentron::text::text(m, &font, text, size, h, v)).map(handle)
+    with_model(|m| kentron::text::text_with_fallbacks(m, &font, &fallbacks, text, size, h, v)).map(handle)
 }
 
 #[pyfunction]

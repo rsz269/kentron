@@ -1,6 +1,7 @@
 """Finding font files, for text: by path, or by family name and style among the system's
 fonts (fontconfig's `fc-match` where there is one, else the usual font directories), as
-OCCT's font manager finds them for CadQuery: a family not installed set in a generic one."""
+OCCT's font manager finds them for CadQuery: a family not installed set in a generic one,
+and characters a font lacks in a fallback font for their script."""
 
 from __future__ import annotations
 
@@ -46,22 +47,74 @@ _GENERIC = {
 }
 
 
-def _fc_match(fc: str, font: str, kind: str) -> List[tuple]:
+def _fc_match(fc: str, font: str, kind: str, indices: bool = False) -> List[tuple]:
     """fontconfig's matches for a family in a kind of style, best first: each one's family
-    names (lower case) and file."""
+    names (lower case) and file (and the face's index in the file, with `indices`)."""
     try:
         out = subprocess.run(
-            [fc, "-s", "--format=%{family}|%{file}\\n", f"{font}:{_PATTERNS[kind]}"],
+            [fc, "-s", "--format=%{family}|%{index}|%{file}\\n", f"{font}:{_PATTERNS[kind]}"],
             capture_output=True, text=True, timeout=10,
         ).stdout
     except (OSError, subprocess.SubprocessError):
         return []
     found = []
     for line in out.splitlines():
-        families, _, path = line.rpartition("|")
+        families, _, rest = line.partition("|")
+        index, _, path = rest.partition("|")
         if path.lower().endswith(_EXTENSIONS) and os.path.isfile(path):
-            found.append(({f.strip().lower() for f in families.split(",")}, path))
+            names = {f.strip().lower() for f in families.split(",")}
+            found.append((names, path, int(index or 0)) if indices else (names, path))
     return found
+
+
+# The fallback fonts for the characters of each script a font lacks, as OCCT's font manager
+# has them on this platform: the first of these families installed (the Western one a
+# generic sans serif).
+_WINDOWS, _MAC = sys.platform == "win32", sys.platform == "darwin"
+_FALLBACKS = {
+    "cjk": ("simsun", "droid sans fallback", "noto sans sc", "noto sans cjk jp"),
+    "korean": (("malgun gothic", "gulim") if _WINDOWS else ("applegothic", "stfangsong") if _MAC else ())
+    + ("nanumgothic", "noto sans kr", "nanummyeongjo", "noto serif cjk jp", "noto sans cjk jp", "droid sans fallback"),
+    "arabic": ("times new roman",) if _WINDOWS else ("decotype naskh",) if _MAC else (),
+}
+
+
+def _script(c: str) -> str:
+    """The script OCCT sets a character in (as kentron's `text::Script::of`)."""
+    u = ord(c)
+    if 0x3400 <= u <= 0x9FFF or 0xF900 <= u <= 0xFAFF or 0x20000 <= u <= 0x2A6DF or 0x2F800 <= u <= 0x2FA1F or 0x3040 <= u <= 0x30FF:
+        return "cjk"
+    if 0x1100 <= u <= 0x11FF or 0x3130 <= u <= 0x318F or 0xAC00 <= u <= 0xD7A3:
+        return "korean"
+    if 0x600 <= u <= 0x6FF:
+        return "arabic"
+    return "western"
+
+
+def fallback_fonts(text: str, primary: str, kind: str = "regular") -> List[tuple]:
+    """The fallback fonts for the scripts of `text`'s characters, for glyphs the font file
+    `primary` lacks: (script, font file, face index) each, as `native.text` takes them."""
+    found = []
+    for script in sorted({_script(c) for c in text if not c.isspace()}):
+        fallback = _fallback(script, kind)
+        if fallback and fallback[0] != primary:
+            found.append((script, *fallback))
+    return found
+
+
+@functools.lru_cache(maxsize=None)
+def _fallback(script: str, kind: str) -> Optional[tuple]:
+    if script == "western":
+        path = _by_name("Arial", kind)
+        return (path, 0) if path else None
+    fc = shutil.which("fc-match")
+    if not fc:
+        return None
+    for family in _FALLBACKS[script]:
+        matches = _fc_match(fc, family, kind, indices=True)
+        if matches and family in matches[0][0]:
+            return matches[0][1:]
+    return None
 
 
 @functools.lru_cache(maxsize=None)

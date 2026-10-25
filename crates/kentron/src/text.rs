@@ -6,7 +6,9 @@
 //! the next of every 8 spaces. Each contour of a glyph is a closed wire of an edge per
 //! segment of the outline (lines, and quadratic or cubic Bézier curves); contours inside an
 //! even number of others bound faces, those inside an odd number are their holes. The faces
-//! lie in the XY plane, facing +Z, the em `size` high.
+//! lie in the XY plane, facing +Z, the em `size` high. Characters the font has no glyph for
+//! are set in a fallback font for their script where one is given, else as the font's
+//! missing-glyph glyph.
 
 use crate::error::{Error, Result};
 use crate::geometry::curve::BezierCurve;
@@ -35,17 +37,86 @@ pub enum VerticalAlignment {
     Bottom,
 }
 
+/// The scripts text set in a font can take glyphs the font lacks from a fallback font for,
+/// as OCCT's `Font_UnicodeSubset` divides characters.
+#[doc(alias = "Font_UnicodeSubset")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Script {
+    Western,
+    /// Chinese, Japanese and Korean ideographs, with Japanese kana.
+    Cjk,
+    /// Korean Hangul.
+    Korean,
+    Arabic,
+}
+
+impl Script {
+    /// The script `c` is set in.
+    pub fn of(c: char) -> Script {
+        let u = u32::from(c);
+        let within = |ranges: &[(u32, u32)]| ranges.iter().any(|&(a, b)| (a..=b).contains(&u));
+        if within(&[(0x3400, 0x4DFF), (0x4E00, 0x9FFF), (0xF900, 0xFAFF), (0x20000, 0x2A6DF), (0x2F800, 0x2FA1F), (0x3040, 0x309F), (0x30A0, 0x30FF)]) {
+            Script::Cjk
+        } else if within(&[(0x1100, 0x11FF), (0x3130, 0x318F), (0xAC00, 0xD7A3)]) {
+            Script::Korean
+        } else if within(&[(0x600, 0x6FF)]) {
+            Script::Arabic
+        } else {
+            Script::Western
+        }
+    }
+}
+
+/// A font for the characters of a script that the text's own font has no glyph for.
+#[derive(Debug, Clone, Copy)]
+pub struct Fallback<'a> {
+    pub script: Script,
+    /// The bytes of a TrueType or OpenType file (or collection).
+    pub font: &'a [u8],
+    /// Which face of the file.
+    pub index: u32,
+}
+
 /// The faces of `text` set in the font `font` (the bytes of a TrueType or OpenType file,
 /// its first face) at em height `size`, aligned as given: a compound of faces in the XY
 /// plane facing +Z (empty for text with no glyph outlines, as spaces).
 #[doc(alias = "Font_BRepTextBuilder")]
 #[doc(alias = "StdPrs_BRepFont")]
 pub fn text(model: &mut Model, font: &[u8], text: &str, size: f64, horizontal: HorizontalAlignment, vertical: VerticalAlignment) -> Result<Shape> {
+    text_with_fallbacks(model, font, &[], text, size, horizontal, vertical)
+}
+
+/// [`text`], with the glyphs `font` lacks taken from the fallback for their characters'
+/// script where it has them (at the same em height), and the font's missing-glyph glyph
+/// (`.notdef`) for the others, as OCCT sets them. The lines stand by `font`'s metrics.
+pub fn text_with_fallbacks(model: &mut Model, font: &[u8], fallbacks: &[Fallback], text: &str, size: f64, horizontal: HorizontalAlignment, vertical: VerticalAlignment) -> Result<Shape> {
     if !(size > 0.0 && size.is_finite()) {
         return Err(Error::InvalidInput(format!("text size must be positive, got {size}")));
     }
     let face = ttf_parser::Face::parse(font, 0).map_err(|e| Error::InvalidInput(format!("not a font: {e}")))?;
-    let scale = size / f64::from(face.units_per_em());
+    let mut faces = vec![(face, Script::Western)];
+    for f in fallbacks {
+        let face = ttf_parser::Face::parse(f.font, f.index).map_err(|e| Error::InvalidInput(format!("not a font: {e}")))?;
+        faces.push((face, f.script));
+    }
+    let scales: Vec<f64> = faces.iter().map(|(f, _)| size / f64::from(f.units_per_em())).collect();
+    // Each character's face (an index into `faces`) and glyph.
+    let glyph = |c: char| -> (usize, ttf_parser::GlyphId) {
+        if let Some(id) = faces[0].0.glyph_index(c) {
+            return (0, id);
+        }
+        let script = Script::of(c);
+        for (k, (f, s)) in faces.iter().enumerate().skip(1) {
+            if *s == script {
+                if let Some(id) = f.glyph_index(c) {
+                    return (k, id);
+                }
+            }
+        }
+        (0, ttf_parser::GlyphId(0))
+    };
+    let face = &faces[0].0;
+    let scale = scales[0];
     // (A font with CFF outlines stands as high and low as its glyphs' bounding box, with no
     // gap between lines, as OCCT sets it; one with TrueType outlines by its own metrics.)
     let tables = face.tables();
@@ -57,7 +128,12 @@ pub fn text(model: &mut Model, font: &[u8], text: &str, size: f64, horizontal: H
     };
     let line_spacing = (ascender - descender + gap) * scale;
     let ascender = ascender * scale;
-    let space = |next: Option<char>| advance(&face, ' ', next) * scale;
+    let advance_of = |c: char, next: Option<char>| {
+        let (k, id) = glyph(c);
+        // (Kerning only between glyphs of one face.)
+        let next = next.map(glyph).filter(|&(n, _)| n == k).map(|(_, id)| id);
+        advance(&faces[k].0, id, next) * scales[k]
+    };
     // The glyphs' pen positions, line by line.
     let chars: Vec<char> = text.chars().collect();
     let mut lines: Vec<(Vec<(char, f64)>, f64)> = vec![(Vec::new(), 0.0)];
@@ -72,13 +148,13 @@ pub fn text(model: &mut Model, font: &[u8], text: &str, size: f64, horizontal: H
             }
             '\t' => {
                 let spaces = 8 - column % 8;
-                *pen += space(next) * spaces as f64;
+                *pen += advance_of(' ', next) * spaces as f64;
                 column += spaces;
             }
             c if c.is_control() => {}
             c => {
                 glyphs.push((c, *pen));
-                *pen += advance(&face, c, next) * scale;
+                *pen += advance_of(c, next);
                 column += 1;
             }
         }
@@ -99,12 +175,13 @@ pub fn text(model: &mut Model, font: &[u8], text: &str, size: f64, horizontal: H
         };
         let baseline = -ascender - row as f64 * line_spacing + shift_y;
         for &(c, pen) in glyphs {
-            let Some(id) = face.glyph_index(c) else { continue };
+            let (k, id) = glyph(c);
             let mut outline = Outline::default();
-            if face.outline_glyph(id, &mut outline).is_none() {
+            if faces[k].0.outline_glyph(id, &mut outline).is_none() {
                 continue;
             }
             let origin = Vector::new(pen + shift_x, baseline, 0.0);
+            let scale = scales[k];
             let at = |(x, y): (f32, f32)| Point::new(f64::from(x) * scale, f64::from(y) * scale, 0.0) + origin;
             let contours: Vec<Vec<Segment<Point>>> = outline.contours.iter().map(|c| c.iter().map(|s| s.map(at)).collect()).collect();
             for f in glyph_faces(model, &contours, tolerance)? {
@@ -115,11 +192,10 @@ pub fn text(model: &mut Model, font: &[u8], text: &str, size: f64, horizontal: H
     Ok(compound)
 }
 
-/// A character's advance in font units, with the font's kerning before `next`.
-fn advance(face: &ttf_parser::Face, c: char, next: Option<char>) -> f64 {
-    let Some(id) = face.glyph_index(c) else { return 0.0 };
+/// A glyph's advance in font units, with the font's kerning before the glyph `next`.
+fn advance(face: &ttf_parser::Face, id: ttf_parser::GlyphId, next: Option<ttf_parser::GlyphId>) -> f64 {
     let mut a = f64::from(face.glyph_hor_advance(id).unwrap_or(0));
-    if let (Some(next), Some(kern)) = (next.and_then(|n| face.glyph_index(n)), face.tables().kern) {
+    if let (Some(next), Some(kern)) = (next, face.tables().kern) {
         for table in kern.subtables {
             if table.horizontal && !table.variable {
                 if let Some(k) = table.glyphs_kerning(id, next) {
@@ -368,6 +444,32 @@ mod tests {
         // Facing +Z, on the baseline (bottom), starting past the pen (left).
         let b = crate::properties::bounding_box(&model, t);
         assert!(b.min.y > -0.5 && b.min.x >= 0.0 && b.max.y < 10.0);
+    }
+
+    /// A character the font lacks is set in the fallback for its script, as the fallback
+    /// sets it; one no font has as the font's missing-glyph glyph, which a fallback for
+    /// another script does not stand in for.
+    #[test]
+    fn characters_a_font_lacks_come_from_the_fallback_for_their_script() {
+        let ideograph = '\u{590F}';
+        let Some(font) = system_font("ttf", |f| f.glyph_index(ideograph).is_none()) else { return };
+        let Some(cjk) = system_font("ttf", |f| f.glyph_index(ideograph).is_some()) else { return };
+        let mut model = Model::new();
+        let area = |model: &mut Model, font: &[u8], fallbacks: &[Fallback], s: &str| {
+            let t = text_with_fallbacks(model, font, fallbacks, s, 10.0, HorizontalAlignment::Left, VerticalAlignment::Bottom).unwrap();
+            crate::properties::area(model, t).mass
+        };
+        let fallback = [Fallback { script: Script::Cjk, font: &cjk, index: 0 }];
+        let own = area(&mut model, &cjk, &[], &ideograph.to_string());
+        assert!(own > 0.0);
+        let borrowed = area(&mut model, &font, &fallback, &ideograph.to_string());
+        assert!((borrowed - own).abs() < 1e-9 * own, "{borrowed} {own}");
+        // Without a fallback (or with one for another script only), the font's .notdef.
+        let notdef = area(&mut model, &font, &[], &ideograph.to_string());
+        let other = [Fallback { script: Script::Korean, font: &cjk, index: 0 }];
+        assert_eq!(area(&mut model, &font, &other, &ideograph.to_string()), notdef);
+        assert_eq!(Script::of(ideograph), Script::Cjk);
+        assert_eq!(Script::of('\u{3010}'), Script::Western);
     }
 
     /// A font with CFF outlines stands as high and low as its glyphs' bounding box: aligned
