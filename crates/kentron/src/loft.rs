@@ -181,14 +181,27 @@ fn loft_traced(model: &mut Model, sections: &[Shape], options: &LoftOptions, bre
     if options.solid && !closed {
         return Err(Error::InvalidInput("a solid loft needs closed sections".into()));
     }
-    // The same wire first and last: the loft closes on itself, like a ring.
+    // The same wire first and last: the loft closes on itself, like a ring (a solid one
+    // bounded by its shell alone, as OCCT's).
     let looped = sections.len() > 2 && sections[0] == sections[sections.len() - 1];
-    if looped && options.solid {
-        return Err(Error::InvalidInput("a loft closing on itself has no end sections to make a solid".into()));
-    }
+    let ring = looped && options.solid;
+    let shell_options = LoftOptions { solid: options.solid && !ring, ..*options };
     make_compatible(&mut parsed, closed, looped, options.matching, &mut marks);
     let grid = Grid::sample(&parsed, options.spacing, exact_arcs);
-    let built = build(model, &parsed, &grid, closed, looped, periodic && looped, options, breaks)?;
+    let mut built = build(model, &parsed, &grid, closed, looped, periodic && looped, &shell_options, breaks)?;
+    if ring {
+        let shells = model.unique_subshapes(built.shape, NodeKind::Shell);
+        let [shell] = shells[..] else {
+            return Err(Error::Failed(format!("a loft closing on itself made {} shells, not one", shells.len())));
+        };
+        let mut solid = model.new_empty(NodeKind::Solid);
+        model.add(solid, shell)?;
+        if crate::properties::volume(model, solid).mass < 0.0 {
+            solid = model.new_empty(NodeKind::Solid);
+            model.add(solid, shell.reversed())?;
+        }
+        built.shape = solid;
+    }
     // What each section's edges and vertices generated: the faces of their pieces' columns
     // and the edges across at their boundaries.
     let mut generated: Vec<(NodeId, Vec<Shape>)> = Vec::new();
@@ -1370,6 +1383,19 @@ fn loop_area(parts: &[(EdgeId, Orientation, Curve2, (f64, f64))]) -> f64 {
 /// The plane of a closed planar wire, normal along its Newell normal times `sign`. Fails if
 /// the wire is not planar.
 fn plane_of(w: &WireSection, sign: f64) -> Result<Plane> {
+    // (A lone circle or ellipse in its own plane, its normal the way it runs round: however
+    // small, as an arrow's tip, whose sampled normal is mostly rounding.)
+    if let [piece] = &w.pieces[..] {
+        let frame = match &piece.curve {
+            Curve::Circle(c) => Some(*c.frame()),
+            Curve::Ellipse(e) => Some(*e.frame()),
+            _ => None,
+        };
+        if let Some(frame) = frame {
+            let z = Vector::from(frame.z()) * (piece.last - piece.first).signum() * sign;
+            return Ok(Plane::new(frame.origin(), Direction::from_vector(z)));
+        }
+    }
     let n = normal(w) * sign;
     let direction = Direction::try_from_vector(n).ok_or_else(|| Error::InvalidInput("a loft's end section encloses no area".into()))?;
     let points: Vec<Point> = w.pieces.iter().flat_map(|p| (0..8).map(move |i| p.at(i as f64 / 8.0))).collect();
@@ -1519,6 +1545,29 @@ mod tests {
     /// (matching by rays), each starts where the vertices in order lie nearest in all, not at
     /// the vertex nearest the previous start (an inner corner of the larger outline, 1.4 from
     /// the smaller one's first): the loft is not twisted, its faces planes.
+    /// A loft from a circle all but a point (an arrow's tip, as cq_warehouse draws one) out
+    /// through wider ones along a slanted axis: capped in the tiny circle's own plane, whose
+    /// sampled normal is mostly rounding.
+    #[test]
+    fn a_loft_from_a_circle_all_but_a_point() {
+        let mut model = Model::new();
+        let axis = Vector::new(1.0, 3.0, -1.0).normalized();
+        let tip = Point::new(42.6578125, 83.1, 10.0);
+        let ring = |model: &mut Model, back: f64, radius: f64| {
+            let frame = Frame::from_z(tip - axis * back, Direction::from_vector(axis));
+            let edge = make::edge_from_curve(model, Curve::Circle(Circle::new(frame, radius))).unwrap();
+            make::wire(model, &[edge]).unwrap()
+        };
+        let sections = [ring(&mut model, 0.0, 1e-4), ring(&mut model, 1.5, 0.2), ring(&mut model, 3.0, 0.5)];
+        let solid = loft(&mut model, &sections, &LoftOptions { solid: true, ..Default::default() }).unwrap().shape;
+        let report = crate::validity::check(&model, solid);
+        assert!(report.is_valid(), "{report:?}");
+        // (A smooth loft through the three: near the two cones through them.)
+        let cones = std::f64::consts::PI * 1.5 / 3.0 * ((1e-8 + 1e-4 * 0.2 + 0.04) + (0.04 + 0.1 + 0.25));
+        let volume = properties::volume(&model, solid).mass;
+        assert!((volume - cones).abs() < 0.2 * cones, "{volume} vs {cones}");
+    }
+
     #[test]
     fn outlines_matched_by_rays_start_where_all_their_vertices_lie_nearest() {
         let mut model = Model::new();
