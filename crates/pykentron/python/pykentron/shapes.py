@@ -413,6 +413,51 @@ class Shape:
         self._meshed = True
         return vertices, triangles
 
+    def toVtkPolyData(self, tolerance: Optional[float] = None, angularTolerance: Optional[float] = None, normals: bool = False):
+        """The shape's faces as triangles and its edges as polylines in a vtkPolyData, as
+        CadQuery's (`tolerance` its deviation coefficient: relative to each edge's size,
+        OCCT's default 0.001; `angularTolerance` in radians, default 0.5)."""
+        from vtkmodules.vtkCommonCore import vtkPoints
+        from vtkmodules.vtkCommonDataModel import vtkCellArray, vtkPolyData
+        from vtkmodules.vtkFiltersCore import vtkPolyDataNormals, vtkTriangleFilter
+
+        deflection, angle = tolerance or 1e-3, angularTolerance or 0.5
+        points, polys, lines = vtkPoints(), vtkCellArray(), vtkCellArray()
+        for face in self.Faces():
+            vertices, tris = native.triangulate(face.wrapped, deflection, angle, relative=True)
+            offset = points.GetNumberOfPoints()
+            for p in vertices:
+                points.InsertNextPoint(*p)
+            for t in tris:
+                polys.InsertNextCell(3)
+                for i in t:
+                    polys.InsertCellPoint(i + offset)
+        for edge in self.Edges():
+            n = 2 if edge.geomType() == "LINE" else 32
+            offset = points.GetNumberOfPoints()
+            for k in range(n + 1):
+                points.InsertNextPoint(*edge.positionAt(k / n).toTuple())
+            lines.InsertNextCell(n + 1)
+            for k in range(n + 1):
+                lines.InsertCellPoint(offset + k)
+        data = vtkPolyData()
+        data.SetPoints(points)
+        data.SetPolys(polys)
+        data.SetLines(lines)
+        triangles = vtkTriangleFilter()
+        triangles.SetInputData(data)
+        triangles.Update()
+        data = triangles.GetOutput()
+        if normals:
+            with_normals = vtkPolyDataNormals()
+            with_normals.SetComputePointNormals(True)
+            with_normals.SetComputeCellNormals(True)
+            with_normals.SetFeatureAngle(360)
+            with_normals.SetInputData(data)
+            with_normals.Update()
+            data = with_normals.GetOutput()
+        return data
+
     def mesh(self, tolerance: float, angularTolerance: float = 0.1) -> None:
         """Meshes the shape's faces (where they are not yet)."""
         native.triangulate(self.wrapped, tolerance, angularTolerance)
