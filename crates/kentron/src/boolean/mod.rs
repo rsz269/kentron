@@ -1775,6 +1775,41 @@ mod tests {
         assert!((volume - 182.3066).abs() < 1e-3, "{volume}");
     }
 
+    /// A cylinder with a window through its side, the window's pcurves kept a period off the
+    /// rest of the face (as a model may keep them): its window is still a hole in the face,
+    /// not a face of its own, when the solid meets another (the same volume as without the
+    /// shift).
+    #[test]
+    fn a_hole_kept_a_period_off_its_face() {
+        use crate::geometry::curve2::Curve2;
+        use crate::math::{Transform2, Transformable2, Vector2};
+        use crate::topology::CoEdgeId;
+        let mut model = Model::new();
+        let tube = cylinder(&mut model, (0.0, 0.0, 0.0), Direction::Z, 10.0, 20.0);
+        let window = cuboid(&mut model, (-12.0, -2.0, 5.0), (4.0, 4.0, 6.0));
+        let windowed = difference(&mut model, tube, window).unwrap();
+        let cut = cuboid(&mut model, (-20.0, -20.0, -1.0), (40.0, 40.0, 16.0));
+        let expected = {
+            let copy = crate::modify::copy(&mut model, windowed, false).unwrap();
+            let r = intersection(&mut model, copy, cut).unwrap();
+            properties::volume(&model, r).mass
+        };
+        // The side face's second wire (the window), a period on.
+        let side = model.unique_subshapes(windowed, NodeKind::Face).into_iter().find(|&f| matches!(model.surface(f), Some(crate::geometry::surface::Surface::Cylinder(_))) && model.children(f).count() == 2).unwrap();
+        let hole = model.children(side).nth(1).unwrap();
+        let coedges: Vec<CoEdgeId> = model.children(hole).map(|c| CoEdgeId::try_from(c.node).unwrap()).collect();
+        for c in coedges {
+            let (p, _, _) = model.effective_pcurve(c).unwrap();
+            let shifted: Curve2 = p.transformed(&Transform2::translation(Vector2::new(2.0 * PI, 0.0)));
+            model.set_pcurve(c, shifted).unwrap();
+        }
+        let r = intersection(&mut model, windowed, cut).unwrap();
+        let report = validity::check(&model, r);
+        assert!(report.is_valid(), "{report:?}");
+        let volume = properties::volume(&model, r).mass;
+        assert!((volume - expected).abs() < 1e-6 * expected, "{volume} {expected}");
+    }
+
     #[test]
     fn rotated_box() {
         // A cube turned 45° about Z, centred on a face of another: the difference removes a prism

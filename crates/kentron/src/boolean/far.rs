@@ -129,7 +129,9 @@ fn compute(model: &Model, face: Shape, output: Surface) -> Option<Arc<FaceData>>
     };
     let mut pcurves: Vec<(Curve2, f64, f64)> = Vec::new();
     let mut edges = Vec::new();
+    let mut wires = Vec::new();
     for wire in model.children(face) {
+        let wire_start = pcurves.len();
         for coedge in model.children(wire) {
             let coedge_id = CoEdgeId::try_from(coedge.node).ok()?;
             let edge: EdgeId = model[coedge_id].edge;
@@ -145,6 +147,15 @@ fn compute(model: &Model, face: Shape, output: Surface) -> Option<Arc<FaceData>>
             let along = model[coedge_id].orientation.compose(wire.orientation) == Orientation::Forward;
             pcurves.push((pcurve, first, last));
             edges.push(BoundaryEdge { edge, curve, first, last, start, bbox, along });
+        }
+        wires.push(wire_start..pcurves.len());
+    }
+    // (Aligned by periods as the graph aligns a face's pcurves.)
+    let mut aligned: Vec<Vec<(Curve2, f64, f64, bool)>> = wires.iter().map(|r| r.clone().map(|i| (pcurves[i].0.clone(), pcurves[i].1, pcurves[i].2, edges[i].along)).collect()).collect();
+    graph::align_wires(&mut aligned, [surface.u_period(), surface.v_period()]);
+    for (r, wire) in wires.iter().zip(aligned) {
+        for (i, (pcurve, _, _, _)) in r.clone().zip(wire) {
+            pcurves[i].0 = pcurve;
         }
     }
     let ranged: Vec<(&Curve2, f64, f64)> = pcurves.iter().map(|(p, a, b)| (p, *a, *b)).collect();

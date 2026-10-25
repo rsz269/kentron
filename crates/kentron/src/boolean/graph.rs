@@ -848,7 +848,9 @@ impl Graph {
             let outward = if face.orientation == Orientation::Reversed { -1.0 } else { 1.0 };
             let mut boundary = Vec::new();
             let mut drift: f64 = 0.0;
+            let mut wires = Vec::new();
             for wire in model.children(Shape { orientation: Orientation::Forward, ..face }) {
+                let wire_start = boundary.len();
                 for coedge in model.children(wire) {
                     let coedge_id = CoEdgeId::try_from(coedge.node).expect("a wire holds coedges");
                     let edge_id: EdgeId = model[coedge_id].edge;
@@ -887,6 +889,16 @@ impl Graph {
                     let along = model[coedge_id].orientation.compose(wire.orientation) == Orientation::Forward;
                     boundary.push(BoundaryUse { edge: index, pcurve, bounds, along });
                     drift = drift.max(model.tolerance(Shape::from(edge_id)));
+                }
+                wires.push(wire_start..boundary.len());
+            }
+            // (The wires' pcurves aligned by periods, as the model's faces may keep them a
+            // period apart.)
+            let mut aligned: Vec<Vec<(Curve2, f64, f64, bool)>> = wires.iter().map(|r| boundary[r.clone()].iter().map(|b| (b.pcurve.clone(), self.edges[b.edge].first, self.edges[b.edge].last, b.along)).collect()).collect();
+            align_wires(&mut aligned, [surface.u_period(), surface.v_period()]);
+            for (r, wire) in wires.iter().zip(aligned) {
+                for (b, (pcurve, _, _, _)) in boundary[r.clone()].iter_mut().zip(wire) {
+                    b.pcurve = pcurve;
                 }
             }
             let origin = FaceId::try_from(face.node).ok().filter(|_| recognized.is_none() && face.placement == Transform::IDENTITY);
@@ -1083,6 +1095,67 @@ impl Graph {
     fn sample_face(&self, surface: &Surface, boundary: &[BoundaryUse]) -> FaceSample {
         let ranged: Vec<(&Curve2, f64, f64)> = boundary.iter().filter(|b| b.bounds).map(|b| (&b.pcurve, self.edges[b.edge].first, self.edges[b.edge].last)).collect();
         sample_face(surface, &ranged)
+    }
+}
+
+/// A face's wires (each its uses in order: pcurve, range, whether run forward) with their
+/// pcurves shifted by whole periods: each on from where the one before it in its wire ends,
+/// and each wire after the first by the periods taking a point of it inside the first's
+/// loop (which may run over more than a period, as along a helix), where some do.
+/// A model may keep a face's pcurves, a hole's or a stretch of its boundary, a period apart.
+pub(super) fn align_wires(wires: &mut [Vec<(Curve2, f64, f64, bool)>], periods: [Option<f64>; 2]) {
+    use crate::geometry::ParametricCurve;
+    use crate::math::{Transform2, Transformable2, Vector2};
+    if periods.iter().all(Option::is_none) {
+        return;
+    }
+    let shift_by = |c: &Curve2, d: [f64; 2]| c.transformed(&Transform2::translation(Vector2::new(d[0], d[1])));
+    // (Only where a use starts a whole number of periods from where the one before ends,
+    // within the parameters' rounding, and at it otherwise: the uses follow each other there.)
+    let jump = |k: usize, x: f64| -> Option<f64> {
+        let tiny = 1e-6 * (1.0 + x.abs());
+        match periods[k] {
+            Some(p) => {
+                let w = (x / p).round() * p;
+                ((x - w).abs() <= tiny).then_some(w)
+            }
+            None => (x.abs() <= tiny).then_some(0.0),
+        }
+    };
+    for wire in wires.iter_mut() {
+        for i in 1..wire.len() {
+            let end = |(c, a, z, along): &(Curve2, f64, f64, bool), at_start: bool| c.point(if at_start == *along { *a } else { *z });
+            let (prev, start) = (end(&wire[i - 1], false), end(&wire[i], true));
+            if let (Some(du), Some(dv)) = (jump(0, prev.x - start.x), jump(1, prev.y - start.y)) {
+                if du != 0.0 || dv != 0.0 {
+                    wire[i].0 = shift_by(&wire[i].0, [du, dv]);
+                }
+            }
+        }
+    }
+    let Some((first, rest)) = wires.split_first_mut() else { return };
+    let middle = |(c, a, z, _): &(Curve2, f64, f64, bool)| c.point(0.5 * (a + z));
+    let mut outer: Vec<Uv> = Vec::new();
+    for (c, a, z, along) in first.iter() {
+        let mut p = geom::sample_pcurve_closely(c, *a, *z);
+        if !along {
+            p.reverse();
+        }
+        outer.extend(p);
+    }
+    for wire in rest.iter_mut().filter(|w| !w.is_empty()) {
+        let probe = middle(&wire[0]);
+        let mut shifts: Vec<[f64; 2]> = vec![[0.0, 0.0]];
+        for k in [-1.0, 1.0, -2.0, 2.0] {
+            shifts.extend(periods[0].map(|p| [k * p, 0.0]));
+            shifts.extend(periods[1].map(|p| [0.0, k * p]));
+        }
+        let d = shifts.into_iter().find(|d| geom::inside_polylines(std::slice::from_ref(&outer), [probe.x + d[0], probe.y + d[1]])).unwrap_or([0.0, 0.0]);
+        if d != [0.0, 0.0] {
+            for u in wire.iter_mut() {
+                u.0 = shift_by(&u.0, d);
+            }
+        }
     }
 }
 
