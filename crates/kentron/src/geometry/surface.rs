@@ -930,7 +930,11 @@ impl RevolutionSurface {
 
 impl Transformable for RevolutionSurface {
     fn transformed(&self, t: &Transform) -> Self {
-        RevolutionSurface::new(self.basis.transformed(t), self.axis.transformed(t))
+        // A reflection turns the sense of turning round the axis over: reversing the axis
+        // keeps each parameter pair on the image of its point.
+        let axis = self.axis.transformed(t);
+        let axis = if t.is_negative() { Axis::new(axis.origin, -axis.direction) } else { axis };
+        RevolutionSurface::new(self.basis.transformed(t), axis)
     }
 }
 
@@ -1376,6 +1380,19 @@ impl Transformable for OffsetSurface {
 mod tests {
     use super::*;
     use crate::geometry::ParametricSurface;
+
+    #[test]
+    fn a_mirrored_revolution_keeps_its_parameters_on_the_mirrored_points() {
+        use crate::geometry::curve::{Curve, Line};
+        let basis = Curve::Line(Line::new(Point::new(2.0, 0.0, 0.0), Direction::new(-2.0, 0.0, -1.0)));
+        let revolution = RevolutionSurface::new(basis, crate::math::Axis::new(Point::ORIGIN, Direction::Z));
+        for t in [Transform::mirror_plane(Point::new(0.0, 0.0, 1.0), Direction::Z), Transform::mirror_plane(Point::ORIGIN, Direction::Y)] {
+            let mirrored = revolution.transformed(&t);
+            for (u, v) in [(0.3, 0.5), (2.0, 1.0), (4.5, 0.2)] {
+                assert!(mirrored.point(u, v).distance(revolution.point(u, v).transformed(&t)) < 1e-12);
+            }
+        }
+    }
 
     #[test]
     fn revolution_parameters_round_trip_where_the_arc_lies_across_the_axis_from_its_centre() {
