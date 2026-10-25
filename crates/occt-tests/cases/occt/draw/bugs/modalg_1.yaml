@@ -689,7 +689,7 @@ ported_from:
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/bugs/modalg_1/bug10606_1
 notes:
-  - "kentron deviation: kentron's result splits its edges and faces otherwise than OCCT's, its area as OCCT's and the shape valid: counts kentron's, vertex 6 (OCCT 5), edge 8 (OCCT 7), shape 21 (OCCT 19)."
+  - "kentron deviation: kentron's result splits its edges and faces otherwise than OCCT's, its area as OCCT's and the shape valid: counts kentron's, vertex 4 (OCCT 5), edge 6 (OCCT 7), shape 17 (OCCT 19)."
 build:
   - b1: {load: {brep: "OCC10604-1.brep"}}
   - b2: {load: {brep: "OCC10606-2.brep"}}
@@ -697,7 +697,7 @@ build:
 checks:
   - {area: result, eq: 66.672, rel: 0.01}
   - {valid: result}
-  - {count: result, eq: {vertices: 6, edges: 8, wires: 2, faces: 2, shells: 1, solids: 1, compsolids: 0, compounds: 1, shapes: 21}}
+  - {count: result, eq: {vertices: 4, edges: 6, wires: 2, faces: 2, shells: 1, solids: 1, compsolids: 0, compounds: 1, shapes: 17}}
 ---
 case: bug10606_2
 ported_from:
@@ -706,7 +706,7 @@ ported_from:
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/bugs/modalg_1/bug10606_2
 notes:
-  - "kentron deviation: kentron's result splits its edges and faces otherwise than OCCT's, its area as OCCT's and the shape valid: counts kentron's, vertex 6 (OCCT 5), edge 8 (OCCT 7), shape 25 (OCCT 23)."
+  - "kentron deviation: kentron's result splits its edges and faces otherwise than OCCT's, its area as OCCT's and the shape valid: counts kentron's, vertex 4 (OCCT 5), edge 6 (OCCT 7), shape 21 (OCCT 23)."
 build:
   - b1: {load: {brep: "OCC10604-1.brep"}}
   - b2: {load: {brep: "OCC10606-2.brep"}}
@@ -714,7 +714,7 @@ build:
 checks:
   - {area: result, eq: 1450.22, rel: 0.01}
   - {valid: result}
-  - {count: result, eq: {vertices: 6, edges: 8, wires: 4, faces: 4, shells: 1, solids: 1, compsolids: 0, compounds: 1, shapes: 25}}
+  - {count: result, eq: {vertices: 4, edges: 6, wires: 4, faces: 4, shells: 1, solids: 1, compsolids: 0, compounds: 1, shapes: 21}}
 ---
 case: bug10606_3
 ported_from:
@@ -723,7 +723,7 @@ ported_from:
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/bugs/modalg_1/bug10606_3
 notes:
-  - "kentron deviation: kentron's result splits its edges and faces otherwise than OCCT's, its area as OCCT's and the shape valid: counts kentron's, vertex 6 (OCCT 5), edge 8 (OCCT 7), shape 23 (OCCT 21)."
+  - "kentron deviation: kentron's result splits its edges and faces otherwise than OCCT's, its area as OCCT's and the shape valid: counts kentron's, vertex 4 (OCCT 5), edge 6 (OCCT 7), shape 19 (OCCT 21)."
 build:
   - b1: {load: {brep: "OCC10604-1.brep"}}
   - b2: {load: {brep: "OCC10606-2.brep"}}
@@ -731,7 +731,7 @@ build:
 checks:
   - {area: result, eq: 761.355, rel: 0.01}
   - {valid: result}
-  - {count: result, eq: {vertices: 6, edges: 8, wires: 3, faces: 3, shells: 1, solids: 1, compsolids: 0, compounds: 1, shapes: 23}}
+  - {count: result, eq: {vertices: 4, edges: 6, wires: 3, faces: 3, shells: 1, solids: 1, compsolids: 0, compounds: 1, shapes: 19}}
 ---
 case: bug10606_4
 ported_from:
@@ -740,7 +740,7 @@ ported_from:
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/bugs/modalg_1/bug10606_4
 notes:
-  - "kentron deviation: kentron's result splits its edges and faces otherwise than OCCT's, its area as OCCT's and the shape valid: counts kentron's, vertex 6 (OCCT 5), edge 8 (OCCT 7), shape 23 (OCCT 21)."
+  - "kentron deviation: kentron's result splits its edges and faces otherwise than OCCT's, its area as OCCT's and the shape valid: counts kentron's, vertex 4 (OCCT 5), edge 6 (OCCT 7), shape 19 (OCCT 21)."
 build:
   - b1: {load: {brep: "OCC10604-1.brep"}}
   - b2: {load: {brep: "OCC10606-2.brep"}}
@@ -748,7 +748,7 @@ build:
 checks:
   - {area: result, eq: 755.54, rel: 0.01}
   - {valid: result}
-  - {count: result, eq: {vertices: 6, edges: 8, wires: 3, faces: 3, shells: 1, solids: 1, compsolids: 0, compounds: 1, shapes: 23}}
+  - {count: result, eq: {vertices: 4, edges: 6, wires: 3, faces: 3, shells: 1, solids: 1, compsolids: 0, compounds: 1, shapes: 19}}
 ---
 case: bug10606_5
 ported_from:
@@ -757,7 +757,7 @@ ported_from:
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/bugs/modalg_1/bug10606_5
 notes:
-  - "kentron deviation: kentron's result splits its edges and faces otherwise than OCCT's, its length as OCCT's and the shape valid: counts kentron's, vertex 4 (OCCT 3), edge 4 (OCCT 3), shape 9 (OCCT 7)."
+  - "kentron deviation: kentron's result splits its edges and faces otherwise than OCCT's, its length as OCCT's and the shape valid: counts kentron's, vertex 2 (OCCT 3), edge 2 (OCCT 3), shape 5 (OCCT 7)."
 build:
   - b1: {load: {brep: "OCC10604-1.brep"}}
   - b2: {load: {brep: "OCC10606-2.brep"}}
@@ -766,7 +766,7 @@ checks:
   - {length: result, eq: 18.3861, rel: 0.01}
   - {valid: result}
   - {exists: result}
-  - {count: result, eq: {vertices: 4, edges: 4, wires: 0, faces: 0, shells: 0, solids: 0, compsolids: 0, compounds: 1, shapes: 9}}
+  - {count: result, eq: {vertices: 2, edges: 2, wires: 0, faces: 0, shells: 0, solids: 0, compsolids: 0, compounds: 1, shapes: 5}}
 ---
 case: bug10842_1
 ported_from:

@@ -1031,10 +1031,13 @@ impl QuadricCurve {
     /// from the parabola's vertex, from the generator's depth into the quadric there, found
     /// from the other surface's own frame. `None` elsewhere.
     fn near_double_root(&self, angle: f64, a: f64, b: f64, disc: f64) -> Option<f64> {
-        if disc.abs() > 1e-4 * b * b {
+        // (Small against `b`, or within the rounding of `c`'s terms where `b` is small too.)
+        let vertex = self.base.point(angle, -b / (2.0 * a));
+        let noise = 4.0 * a.abs() * 1e3 * f64::EPSILON * quadric_size(&self.quadric, vertex);
+        if disc.abs() > (1e-4 * b * b).max(noise) {
             return None;
         }
-        let depth = local_value(&self.other, self.base.point(angle, -b / (2.0 * a)))?;
+        let depth = local_value(&self.other, vertex)?;
         Some(-depth / a)
     }
 
@@ -1115,9 +1118,16 @@ pub fn ruled_quadric(base: &Surface, other: &Surface, tolerance: f64, v_range: O
     // Where a branch exists, and why it ends: the discriminant vanishing (the branches
     // join) or `v` leaving its range.
     let exists = |upper: bool, angle: f64| branch(0.0, TAU, upper).height(angle).filter(|v| *v >= v_lo && *v <= v_hi).is_some();
-    let joins_here = |angle: f64| {
+    // (Or, where `v` is still well within its range there, the branch ended for its roots
+    // meeting: the discriminant only nears zero as the square root of the angle's distance
+    // from the join, too slowly to vanish against the terms of `c` alone where `b` is zero.)
+    let joins_here = |upper: bool, angle: f64| {
         let (a, b, c) = probe.height_equation(angle);
-        !linear && b * b - 4.0 * a * c <= 1e-6 * (b * b).max(4.0 * (a * c).abs())
+        let within = |v: f64| {
+            let margin = 1e-6 * (1.0 + v.abs()) + if v_hi > v_lo && v_hi.is_finite() && v_lo.is_finite() { 1e-6 * (v_hi - v_lo) } else { 0.0 };
+            v > v_lo + margin && v < v_hi - margin
+        };
+        !linear && (b * b - 4.0 * a * c <= 1e-6 * (b * b).max(4.0 * (a * c).abs()) || branch(0.0, TAU, upper).height(angle).is_some_and(within))
     };
     const SAMPLES: usize = 1440;
     let angles: Vec<f64> = (0..SAMPLES).map(|i| TAU * i as f64 / SAMPLES as f64).collect();
@@ -1185,7 +1195,7 @@ pub fn ruled_quadric(base: &Surface, other: &Surface, tolerance: f64, v_range: O
                 }
                 let end_angle = angles[start] + step * j as f64;
                 let b = refine(upper, end_angle - step, end_angle);
-                domains.push((upper, a, b, joins_here(a), joins_here(b)));
+                domains.push((upper, a, b, joins_here(upper, a), joins_here(upper, b)));
                 i = j;
             } else if let Some(domain) = crossing(upper, angles[start] + step * i as f64, step) {
                 // A domain narrower than the samples: `v` running across its whole range

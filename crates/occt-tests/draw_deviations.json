@@ -2026,36 +2026,36 @@
   "tests/bugs/modalg_1/bug10606_1": [
     {
       "from": "d.checknbshapes(&[\"result\", \"-vertex\", \"5\", \"-edge\", \"7\", \"-wire\", \"2\", \"-face\", \"2\", \"-shell\", \"1\", \"-solid\", \"1\", \"-compsolid\", \"0\", \"-compound\", \"1\", \"-shape\", \"19\"])?;",
-      "to": "d.checknbshapes(&[\"result\", \"-vertex\", \"6\", \"-edge\", \"8\", \"-wire\", \"2\", \"-face\", \"2\", \"-shell\", \"1\", \"-solid\", \"1\", \"-compsolid\", \"0\", \"-compound\", \"1\", \"-shape\", \"21\"])?;",
-      "reason": "kentron's result splits its edges and faces otherwise than OCCT's, its area as OCCT's and the shape valid: counts kentron's, vertex 6 (OCCT 5), edge 8 (OCCT 7), shape 21 (OCCT 19)."
+      "to": "d.checknbshapes(&[\"result\", \"-vertex\", \"4\", \"-edge\", \"6\", \"-wire\", \"2\", \"-face\", \"2\", \"-shell\", \"1\", \"-solid\", \"1\", \"-compsolid\", \"0\", \"-compound\", \"1\", \"-shape\", \"17\"])?;",
+      "reason": "kentron's result splits its edges and faces otherwise than OCCT's, its area as OCCT's and the shape valid: counts kentron's, vertex 4 (OCCT 5), edge 6 (OCCT 7), shape 17 (OCCT 19)."
     }
   ],
   "tests/bugs/modalg_1/bug10606_2": [
     {
       "from": "d.checknbshapes(&[\"result\", \"-vertex\", \"5\", \"-edge\", \"7\", \"-wire\", \"4\", \"-face\", \"4\", \"-shell\", \"1\", \"-solid\", \"1\", \"-compsolid\", \"0\", \"-compound\", \"1\", \"-shape\", \"23\"])?;",
-      "to": "d.checknbshapes(&[\"result\", \"-vertex\", \"6\", \"-edge\", \"8\", \"-wire\", \"4\", \"-face\", \"4\", \"-shell\", \"1\", \"-solid\", \"1\", \"-compsolid\", \"0\", \"-compound\", \"1\", \"-shape\", \"25\"])?;",
-      "reason": "kentron's result splits its edges and faces otherwise than OCCT's, its area as OCCT's and the shape valid: counts kentron's, vertex 6 (OCCT 5), edge 8 (OCCT 7), shape 25 (OCCT 23)."
+      "to": "d.checknbshapes(&[\"result\", \"-vertex\", \"4\", \"-edge\", \"6\", \"-wire\", \"4\", \"-face\", \"4\", \"-shell\", \"1\", \"-solid\", \"1\", \"-compsolid\", \"0\", \"-compound\", \"1\", \"-shape\", \"21\"])?;",
+      "reason": "kentron's result splits its edges and faces otherwise than OCCT's, its area as OCCT's and the shape valid: counts kentron's, vertex 4 (OCCT 5), edge 6 (OCCT 7), shape 21 (OCCT 23)."
     }
   ],
   "tests/bugs/modalg_1/bug10606_3": [
     {
       "from": "d.checknbshapes(&[\"result\", \"-vertex\", \"5\", \"-edge\", \"7\", \"-wire\", \"3\", \"-face\", \"3\", \"-shell\", \"1\", \"-solid\", \"1\", \"-compsolid\", \"0\", \"-compound\", \"1\", \"-shape\", \"21\"])?;",
-      "to": "d.checknbshapes(&[\"result\", \"-vertex\", \"6\", \"-edge\", \"8\", \"-wire\", \"3\", \"-face\", \"3\", \"-shell\", \"1\", \"-solid\", \"1\", \"-compsolid\", \"0\", \"-compound\", \"1\", \"-shape\", \"23\"])?;",
-      "reason": "kentron's result splits its edges and faces otherwise than OCCT's, its area as OCCT's and the shape valid: counts kentron's, vertex 6 (OCCT 5), edge 8 (OCCT 7), shape 23 (OCCT 21)."
+      "to": "d.checknbshapes(&[\"result\", \"-vertex\", \"4\", \"-edge\", \"6\", \"-wire\", \"3\", \"-face\", \"3\", \"-shell\", \"1\", \"-solid\", \"1\", \"-compsolid\", \"0\", \"-compound\", \"1\", \"-shape\", \"19\"])?;",
+      "reason": "kentron's result splits its edges and faces otherwise than OCCT's, its area as OCCT's and the shape valid: counts kentron's, vertex 4 (OCCT 5), edge 6 (OCCT 7), shape 19 (OCCT 21)."
     }
   ],
   "tests/bugs/modalg_1/bug10606_4": [
     {
       "from": "d.checknbshapes(&[\"result\", \"-vertex\", \"5\", \"-edge\", \"7\", \"-wire\", \"3\", \"-face\", \"3\", \"-shell\", \"1\", \"-solid\", \"1\", \"-compsolid\", \"0\", \"-compound\", \"1\", \"-shape\", \"21\"])?;",
-      "to": "d.checknbshapes(&[\"result\", \"-vertex\", \"6\", \"-edge\", \"8\", \"-wire\", \"3\", \"-face\", \"3\", \"-shell\", \"1\", \"-solid\", \"1\", \"-compsolid\", \"0\", \"-compound\", \"1\", \"-shape\", \"23\"])?;",
-      "reason": "kentron's result splits its edges and faces otherwise than OCCT's, its area as OCCT's and the shape valid: counts kentron's, vertex 6 (OCCT 5), edge 8 (OCCT 7), shape 23 (OCCT 21)."
+      "to": "d.checknbshapes(&[\"result\", \"-vertex\", \"4\", \"-edge\", \"6\", \"-wire\", \"3\", \"-face\", \"3\", \"-shell\", \"1\", \"-solid\", \"1\", \"-compsolid\", \"0\", \"-compound\", \"1\", \"-shape\", \"19\"])?;",
+      "reason": "kentron's result splits its edges and faces otherwise than OCCT's, its area as OCCT's and the shape valid: counts kentron's, vertex 4 (OCCT 5), edge 6 (OCCT 7), shape 19 (OCCT 21)."
     }
   ],
   "tests/bugs/modalg_1/bug10606_5": [
     {
       "from": "d.checknbshapes(&[\"result\", \"-vertex\", \"3\", \"-edge\", \"3\", \"-wire\", \"0\", \"-face\", \"0\", \"-shell\", \"0\", \"-solid\", \"0\", \"-compsolid\", \"0\", \"-compound\", \"1\", \"-shape\", \"7\"])?;",
-      "to": "d.checknbshapes(&[\"result\", \"-vertex\", \"4\", \"-edge\", \"4\", \"-wire\", \"0\", \"-face\", \"0\", \"-shell\", \"0\", \"-solid\", \"0\", \"-compsolid\", \"0\", \"-compound\", \"1\", \"-shape\", \"9\"])?;",
-      "reason": "kentron's result splits its edges and faces otherwise than OCCT's, its length as OCCT's and the shape valid: counts kentron's, vertex 4 (OCCT 3), edge 4 (OCCT 3), shape 9 (OCCT 7)."
+      "to": "d.checknbshapes(&[\"result\", \"-vertex\", \"2\", \"-edge\", \"2\", \"-wire\", \"0\", \"-face\", \"0\", \"-shell\", \"0\", \"-solid\", \"0\", \"-compsolid\", \"0\", \"-compound\", \"1\", \"-shape\", \"5\"])?;",
+      "reason": "kentron's result splits its edges and faces otherwise than OCCT's, its length as OCCT's and the shape valid: counts kentron's, vertex 2 (OCCT 3), edge 2 (OCCT 3), shape 5 (OCCT 7)."
     }
   ],
   "tests/bugs/modalg_2/bug20413": [

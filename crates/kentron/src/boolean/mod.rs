@@ -1720,6 +1720,44 @@ mod tests {
         assert!((area - 340.979).abs() < 1e-5 * 340.979, "intersection area {area}");
     }
 
+    /// A cylinder (radius 54, 11 long, along X from x = 0 at z = 6) and a cone about a crossing
+    /// axis far off (along Y at z = 216, 45°, apex at y = -216): their section's branches, by
+    /// angle round the cylinder, meet where its generator only grazes the cone, at the
+    /// cylinder's end and with the linear term of their quadratic zero there by symmetry.
+    /// Joined there, at the point the end's edge meets the cone, the section bounds the faces
+    /// (OCCT's common: 15166.010).
+    #[test]
+    fn a_cylinder_and_a_cone_about_crossing_axes_far_apart() {
+        let mut model = Model::new();
+        let a = cylinder(&mut model, (0.0, 0.0, 6.0), Direction::X, 54.0, 11.0);
+        let b = cone(&mut model, (0.0, -216.0, 216.0), Direction::Y, 0.0, 216.0, 216.0);
+        let both = intersection(&mut model, a, b).unwrap();
+        let report = validity::check(&model, both);
+        assert!(report.is_valid(), "{report:?}");
+        let volume = properties::volume(&model, both).mass;
+        assert!((volume - 15166.010).abs() < 1e-5 * 15166.010, "{volume}");
+    }
+
+    /// A torus cut by a box turned about its axis, one face through the axis: that face meets
+    /// the torus in two of its meridian circles, exactly.
+    #[test]
+    fn a_plane_through_a_torus_axis_meets_it_in_meridian_circles() {
+        use crate::geometry::curve::Curve;
+        use crate::primitives::Torus;
+        let mut model = Model::new();
+        let torus = Torus::new(10.0, 2.0).build(&mut model).unwrap();
+        let turn = 0.3f64;
+        // (Its face at local y = 0 through the axis, from 15 one way along it to 15 the other.)
+        let frame = Frame::new(Point::new(-15.0 * turn.cos(), -15.0 * turn.sin(), -5.0), Direction::Z, Direction::new(turn.cos(), turn.sin(), 0.0));
+        let slab = Cuboid::new(30.0, 20.0, 10.0).with_frame(frame).build(&mut model).unwrap();
+        let curves = section(&mut model, torus, slab).unwrap();
+        let circles: Vec<f64> = model.unique_subshapes(curves, NodeKind::Edge).into_iter().filter_map(|e| match model.edge_curve(e) {
+            Some((Curve::Circle(c), _, _)) if (c.radius() - 2.0).abs() < 1e-9 => Some(c.radius()),
+            _ => None,
+        }).collect();
+        assert!(circles.len() >= 2, "{circles:?}");
+    }
+
     #[test]
     fn rotated_box() {
         // A cube turned 45° about Z, centred on a face of another: the difference removes a prism

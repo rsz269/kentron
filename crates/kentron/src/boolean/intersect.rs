@@ -1300,6 +1300,9 @@ fn sections(fa: &Face, fb: &Face, crossings: &[Point]) -> Vec<Section> {
     if let Some(sections) = plane_along_extrusion(fa, fb) {
         return sections;
     }
+    if let Some(sections) = meridians(a, b).or_else(|| meridians(b, a)) {
+        return sections;
+    }
     match (a, b) {
         (Surface::Revolution(r), _) if coaxial(r, b) => return parallels(fa, fb),
         (_, Surface::Revolution(r)) if coaxial(r, a) => return parallels(fb, fa),
@@ -1443,6 +1446,51 @@ fn coaxial(r: &RevolutionSurface, other: &Surface) -> bool {
         Surface::Revolution(o) => parallel(o.axis().direction) && on_axis(o.axis().origin),
         _ => false,
     }
+}
+
+/// Where a surface of revolution whose meridian lies in a plane through its axis (as a
+/// torus's) meets a plane through that axis: its meridian turned into the plane, on either
+/// side of the axis. `None` for other pairs.
+fn meridians(revolution: &Surface, plane: &Surface) -> Option<Vec<Section>> {
+    use crate::math::{Axis, Transform, Transformable};
+    let (Surface::Revolution(r), Surface::Plane(plane)) = (revolution, plane) else { return None };
+    let axis = r.axis();
+    let z = Vector::from(axis.direction);
+    let n = Vector::from(plane.normal());
+    if n.dot(z).abs() > 1e-9 || n.dot(axis.origin - plane.origin()).abs() > on_tol() {
+        return None;
+    }
+    let basis = r.basis();
+    let (first, last) = (basis.first_parameter(), basis.last_parameter());
+    if !(first.is_finite() && last.is_finite()) {
+        return None;
+    }
+    // The meridian's side of the axis: all its points off the axis there.
+    let radial = |p: Point| {
+        let d = p - axis.origin;
+        d - z * d.dot(z)
+    };
+    let samples: Vec<Vector> = (0..=32).map(|i| radial(basis.point(first + (last - first) * i as f64 / 32.0))).collect();
+    let side = samples.iter().copied().max_by(|a, b| a.length().total_cmp(&b.length()))?;
+    if !(side.length() > on_tol()) {
+        return None;
+    }
+    let side = side.normalized();
+    if samples.iter().any(|v| v.cross(side).length() > on_tol() || v.dot(side) < -on_tol()) {
+        return None;
+    }
+    let across = n.cross(z).normalized();
+    let closed = matches!(basis, Curve::Circle(_) | Curve::Ellipse(_)) && last - first >= TAU - 1e-12;
+    Some(
+        [across, -across]
+            .iter()
+            .map(|&to| {
+                let angle = z.dot(side.cross(to)).atan2(side.dot(to));
+                let curve = basis.transformed(&Transform::rotation(Axis::new(axis.origin, axis.direction), angle));
+                if closed { Section::Closed(curve, Default::default()) } else { Section::Open(curve, first, last) }
+            })
+            .collect(),
+    )
 }
 
 /// The circles where a surface of revolution (`base`) meets a coaxial surface: the
