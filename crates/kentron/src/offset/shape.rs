@@ -20,6 +20,7 @@ use crate::geometry::{ParametricCurve, ParametricSurface};
 use crate::math::{Direction, Point, Point2, Transformable, Vector};
 use crate::topology::{ByOccurrence, CoEdgeId, EdgeId, Model, NodeId, NodeKind, Orientation, Shape, VertexId};
 
+use super::within::Made;
 use super::Join;
 
 /// `shape` (a solid or shell) with each face moved `distance` along its outward normal
@@ -35,7 +36,17 @@ pub fn shape(model: &mut Model, shape: Shape, distance: f64, join: Join) -> Resu
 #[doc(alias = "offsetonface")]
 pub fn shape_with_faces(model: &mut Model, shape: Shape, distance: f64, faces: &[(Shape, f64)], join: Join) -> Result<Shape> {
     let own: Vec<(NodeId, f64)> = faces.iter().map(|(f, d)| (f.node, *d)).collect();
-    let moved = offset_faces(model, shape, distance, &own, &[], join)?;
+    let rounded = moved_and_rounded(model, shape, distance, &own, join);
+    if join == Join::Arc && own.is_empty() {
+        return or_within(model, rounded, shape, distance, Made::Offset);
+    }
+    rounded
+}
+
+/// [`shape_with_faces`] by its faces moved one by one, and the edges where they part
+/// rounded.
+fn moved_and_rounded(model: &mut Model, shape: Shape, distance: f64, own: &[(NodeId, f64)], join: Join) -> Result<Shape> {
+    let moved = offset_faces(model, shape, distance, own, &[], join)?;
     let result = rebuild(model, shape, &moved.faces, &moved.new_faces)?;
     let radius = moved.parting.first().map_or(0.0, |&(a, _)| own.iter().find(|(n, _)| *n == moved.faces[a].shape.node).map_or(distance, |(_, d)| *d).abs());
     let result = round_parting(model, result, &moved, radius)?;
@@ -69,7 +80,17 @@ pub fn thick_solid(model: &mut Model, shape: Shape, removed: &[Shape], thickness
         return thick_solid(model, baked, &removed, thickness, join);
     }
     let kept: Vec<NodeId> = removed.iter().map(|f| f.node).collect();
-    let moved = offset_faces(model, shape, thickness, &[], &kept, join)?;
+    let rounded = hollowed(model, shape, &kept, thickness, join);
+    if join == Join::Arc {
+        return or_within(model, rounded, shape, thickness, Made::Thick { removed: &kept });
+    }
+    rounded
+}
+
+/// [`thick_solid`] of a solid in place by its faces moved one by one (but the removed ones,
+/// `kept` where they are), and the edges where they part rounded.
+fn hollowed(model: &mut Model, shape: Shape, kept: &[NodeId], thickness: f64, join: Join) -> Result<Shape> {
+    let moved = offset_faces(model, shape, thickness, &[], kept, join)?;
     let outwards = thickness > 0.0;
     let shell = model.new_empty(NodeKind::Shell);
     for (i, face) in moved.faces.iter().enumerate() {
@@ -100,6 +121,21 @@ pub fn thick_solid(model: &mut Model, shape: Shape, removed: &[Shape], thickness
     model.add(solid, shell)?;
     let solid = round_parting(model, solid, &moved, thickness.abs())?;
     super::regularize::regularized(model, solid)
+}
+
+/// `rounded` (an offset of `shape` joined by arcs, its faces moved and the edges where they
+/// part rounded) where that is sound; otherwise the offset found as the points within the
+/// distance, where that can be.
+fn or_within(model: &mut Model, rounded: Result<Shape>, shape: Shape, distance: f64, made: Made) -> Result<Shape> {
+    if let Ok(r) = rounded {
+        if crate::validity::check(model, r).errors().next().is_none() {
+            return Ok(r);
+        }
+    }
+    match super::within::offset(model, shape, distance, made) {
+        Ok(Some(found)) => Ok(found),
+        _ => rounded,
+    }
 }
 
 /// The face of `copy` (`original` moved where it is placed) standing for `face` of
@@ -1259,5 +1295,87 @@ mod tests {
         valid(&model, hollow);
         let v = volume(&model, hollow).mass;
         assert!((v - 92.3586).abs() < 1e-3, "{v}");
+    }
+
+    /// A block's outline extruded (its corners in order), 3 high.
+    fn prism(model: &mut Model, corners: &[(f64, f64)], h: f64) -> Shape {
+        use crate::math::Vector;
+        let n = corners.len();
+        let edges: Vec<Shape> = (0..n)
+            .map(|i| {
+                let ((x0, y0), (x1, y1)) = (corners[i], corners[(i + 1) % n]);
+                crate::make::edge_between(model, Point::new(x0, y0, 0.0), Point::new(x1, y1, 0.0)).unwrap()
+            })
+            .collect();
+        let wire = crate::make::wire(model, &edges).unwrap();
+        let face = crate::make::planar_face(model, wire).unwrap();
+        crate::sweep::extrude(model, face, Vector::new(0.0, 0.0, h)).unwrap().shape
+    }
+
+    /// The face of `solid` on the plane `z = h`.
+    fn face_at_height(model: &Model, solid: Shape, h: f64) -> Shape {
+        model
+            .unique_subshapes(solid, NodeKind::Face)
+            .into_iter()
+            .find(|&f| matches!(model.surface(f), Some(Surface::Plane(p)) if (p.origin().z - h).abs() < 1e-9 && p.normal().z().abs() > 0.999))
+            .unwrap()
+    }
+
+    /// A block (11.68 x 14, 2.25 high) with tabs on two sides, 1.05 wide and sticking out
+    /// 1.16, hollowed inwards by 0.6, open at the top: the tabs' walls, moved, pass through
+    /// one another, so the tabs stay solid; the arcs about their inner corners still reach
+    /// into their mouths (OCCT's volume, 151.7534, and faces).
+    #[test]
+    fn tabs_narrower_than_twice_the_wall_stay_solid_when_hollowed() {
+        let mut model = Model::new();
+        let (a, b, c, d, e) = (5.84, 7.0, 7.0, 4.125, 5.175);
+        let corners = [(-a, -b), (a, -b), (a, d), (c, d), (c, e), (a, e), (a, b), (-a, b), (-a, e), (-c, e), (-c, d), (-a, d)];
+        let block = prism(&mut model, &corners, 2.25);
+        let top = face_at_height(&model, block, 2.25);
+        let hollow = thick_solid(&mut model, block, &[top], -0.6, Join::Arc).unwrap();
+        valid(&model, hollow);
+        let v = volume(&model, hollow).mass;
+        assert!((v - 151.7534).abs() < 1e-3, "{v}");
+        assert_eq!(model.unique_subshapes(hollow, NodeKind::Face).len(), 25);
+    }
+
+    /// A 10 x 10 x 3 block, its upright edges rounded by 0.5, hollowed inwards by 0.6 (open
+    /// at the bottom): the rounded corners' offsets pass through their axes, and the
+    /// cavity's corners are sharp, where the flat walls' offsets meet (OCCT's volume,
+    /// 113.5002, and faces).
+    #[test]
+    fn corners_rounded_less_than_the_wall_are_sharp_inside_when_hollowed() {
+        let mut model = Model::new();
+        let block = prism(&mut model, &[(-5.0, -5.0), (5.0, -5.0), (5.0, 5.0), (-5.0, 5.0)], 3.0);
+        let upright: Vec<Shape> = model
+            .unique_subshapes(block, NodeKind::Edge)
+            .into_iter()
+            .filter(|&e| {
+                let (a, b) = model.edge_vertices(e);
+                (model.point(a).z - model.point(b).z).abs() > 1.0
+            })
+            .collect();
+        let rounded = crate::blend::fillet(&mut model, block, &upright, 0.5).unwrap();
+        let bottom = face_at_height(&model, rounded, 0.0);
+        let hollow = thick_solid(&mut model, rounded, &[bottom], -0.6, Join::Arc).unwrap();
+        valid(&model, hollow);
+        let v = volume(&model, hollow).mass;
+        assert!((v - 113.5002).abs() < 1e-3, "{v}");
+        assert_eq!(model.unique_subshapes(hollow, NodeKind::Face).len(), 15);
+    }
+
+    /// A connector's body (a box with a stopper, a platform cut away, pin holes, handle
+    /// pockets and cable holes, their roofs cut off) grown by 0.1, joined by arcs: walls of
+    /// its slots and pockets lie in one plane facing opposite ways, and their offsets cross
+    /// (OCCT's growth, 146.0900).
+    #[test]
+    fn a_body_with_walls_in_one_plane_facing_apart_grows_by_its_distance() {
+        let mut model = Model::new();
+        let body = crate::io::brep::read(&mut model, &mut include_str!("tests/connector_body.brep").as_bytes()).unwrap();
+        let before = volume(&model, body).mass;
+        let grown = shape(&mut model, body, 0.1, Join::Arc).unwrap();
+        valid(&model, grown);
+        let v = volume(&model, grown).mass - before;
+        assert!((v - 146.0900).abs() < 1e-3, "{v}");
     }
 }

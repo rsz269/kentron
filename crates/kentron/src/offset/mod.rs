@@ -8,6 +8,7 @@
 mod regularize;
 pub(crate) mod shape;
 mod wire;
+mod within;
 
 pub use shape::{shape, shape_with_faces, thick_solid};
 pub use wire::{open_planar_wire, planar_wire};

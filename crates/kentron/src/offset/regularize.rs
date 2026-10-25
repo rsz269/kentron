@@ -76,10 +76,15 @@ pub(super) fn regularized(model: &mut Model, solid: Shape) -> Result<Shape> {
     if kept.is_empty() {
         return Err(crate::error::Error::InvalidInput("an offset leaving nothing (the offset is too large)".into()));
     }
-    // The kept cells joined: the faces two of them share are inside.
+    joined(model, &kept, true)
+}
+
+/// The cells joined: the faces two of them share are inside. Faces left in pieces are
+/// merged where they lie on one surface (`same_surface_only`), or on the same geometry.
+pub(super) fn joined(model: &mut Model, cells: &[Shape], same_surface_only: bool) -> Result<Shape> {
     let mut uses: std::collections::HashMap<crate::topology::NodeId, (Shape, usize)> = std::collections::HashMap::new();
     let mut order = Vec::new();
-    for &cell in &kept {
+    for &cell in cells {
         for face in model.explore(cell, NodeKind::Face).collect::<Vec<_>>() {
             let entry = uses.entry(face.node).or_insert_with(|| {
                 order.push(face.node);
@@ -97,7 +102,7 @@ pub(super) fn regularized(model: &mut Model, solid: Shape) -> Result<Shape> {
     }
     let joined = model.new_empty(NodeKind::Solid);
     model.add(joined, shell)?;
-    let options = crate::unify::UnifyOptions { same_surface_only: true, ..Default::default() };
+    let options = crate::unify::UnifyOptions { same_surface_only, ..Default::default() };
     crate::unify::unify_same_domain_with(model, joined, options)
 }
 
@@ -178,7 +183,7 @@ fn signed_area(p: &[Point2]) -> f64 {
 }
 
 /// How many times the closed polygons wind round `q`.
-fn winding(polygons: &[Vec<Point2>], q: Point2) -> i32 {
+pub(super) fn winding(polygons: &[Vec<Point2>], q: Point2) -> i32 {
     let mut w = 0;
     for p in polygons {
         for i in 0..p.len() {
