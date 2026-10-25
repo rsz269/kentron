@@ -282,7 +282,14 @@ impl Output {
                                 }
                                 None => arc.uv[arc.uv.len() / 2],
                             };
-                            aligned_pcurve(curve, &surface, out.first, out.last, middle, [face_data.u_period, face_data.v_period], face_data.drift)?
+                            // (On the surface computed with where it is the output one cut
+                            // down near the face (the same parameters): carried on past the face,
+                            // the output one may fold back over it, a foot found on the fold.)
+                            let near = match (&face_data.surface, &surface) {
+                                (crate::geometry::surface::Surface::BSpline(_), crate::geometry::surface::Surface::BSpline(_)) => &face_data.surface,
+                                _ => &surface,
+                            };
+                            aligned_pcurve(curve, near, out.first, out.last, middle, [face_data.u_period, face_data.v_period], face_data.drift)?
                         }
                         (None, None) => return Err(Error::InvalidInput("a degenerate edge without a pcurve".into())),
                     };

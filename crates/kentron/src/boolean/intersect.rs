@@ -2463,6 +2463,14 @@ impl Graph {
                 continue;
             }
             let mut passes = if crossing && q.distance(p) <= reach { section.passes(q) } else { Vec::new() };
+            // (Or the point itself, where the section was carried on to it: a traced branch
+            // ending just short of it ends on it, off the surfaces as far as it is.)
+            if passes.is_empty() && crossing && q.distance(p) <= reach {
+                let (t, d) = section.project(p);
+                if d <= on_tol() {
+                    passes.push((t, false));
+                }
+            }
             // (Or at an end of an open section, where the curve stops at a surface's bounds,
             // which such a vertex may lie past.)
             if passes.is_empty() && !section.closed() {

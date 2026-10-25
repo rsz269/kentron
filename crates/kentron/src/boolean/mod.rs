@@ -840,6 +840,36 @@ mod tests {
         check(&model, result, 8.0, 2.0 * 8.0 + 12.0 + 4.0, 1);
     }
 
+    /// A block whose top is a face of a surface carried on far past it and folding back over
+    /// it (a hair's breadth above), fused with a box through its top: points on the top, and
+    /// crossings of it, are found on the top itself, not on the fold passing just above.
+    #[test]
+    fn a_face_of_a_surface_folding_back_over_it() {
+        use crate::geometry::surface::{BSplineSurface, KnotVector, Surface};
+        let mut model = Model::new();
+        let (gap, w) = (0.002, 4.0);
+        // Along u: the top from x 0 to 10 at z 1, then back over it at z 1 + gap; across v,
+        // y 0 to w.
+        let row = |y: f64| vec![Point::new(0.0, y, 1.0), Point::new(10.0, y, 1.0), Point::new(10.0, y, 1.0 + gap), Point::new(0.0, y, 1.0 + gap)];
+        let (r0, r1) = (row(0.0), row(w));
+        let poles: Vec<Vec<Point>> = r0.iter().zip(&r1).map(|(&a, &b)| vec![a, b]).collect();
+        let u = KnotVector::new(vec![0.0, 1.0, 2.0, 3.0], vec![2, 1, 1, 2], 1);
+        let v = KnotVector::new(vec![0.0, 1.0], vec![2, 2], 1);
+        let surface = Surface::BSpline(BSplineSurface::new(poles, u, v));
+        let top = crate::make::face_on_domain(&mut model, surface, 0.0, 1.0, 0.0, 1.0).unwrap();
+        // The block under it: the top's edges extruded down to z 0, closed by the bottom.
+        let sides = crate::sweep::extrude(&mut model, top, Vector::new(0.0, 0.0, -1.0)).unwrap().shape;
+        let block = sides;
+        let volume = properties::volume(&model, block).mass.abs();
+        assert!((volume - 40.0).abs() < 1e-9, "{volume}");
+        let tower = cuboid(&mut model, (4.0, 1.0, 0.5), (2.0, 2.0, 1.0));
+        let fused = union(&mut model, block, tower).unwrap();
+        let report = validity::check(&model, fused);
+        assert!(report.is_valid(), "{report:?}");
+        let v = properties::volume(&model, fused).mass;
+        assert!((v - 42.0).abs() < 1e-6, "{v}");
+    }
+
     /// A rod cut back to a torus's side and fused to it again: the rod's end face lies on
     /// the torus, bounded by traced sections that stray from it between their fit points by
     /// more than their tolerance; they lie on the torus's face as far as they stray from

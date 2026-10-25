@@ -1039,6 +1039,7 @@ impl Graph {
             None => self.sample_face(&surface, &boundary),
         };
         let FaceSample { polylines, u_range, v_range, bbox, extent } = sample;
+        let surface = near_face(surface, u_range, v_range);
         let (u_period, v_period) = (surface.u_period(), surface.v_period());
         let closed_bounds = {
             use crate::geometry::ParametricSurface;
@@ -1149,6 +1150,31 @@ fn unplaced_surface(model: &Model, id: FaceId) -> Option<Surface> {
         Surface::Torus(t) => torus_as_revolution(&t),
         s => s,
     })
+}
+
+/// A B-spline surface reaching far past its face's range (three times as far across, or
+/// more, as the face, widened by a quarter each side), cut down to that widened range (the
+/// same parameters), for the operation to compute with: carried on past the face, it may
+/// fold back over it, and points on the face are found on the fold, or crossings with it.
+fn near_face(surface: Surface, u_range: (f64, f64), v_range: (f64, f64)) -> Surface {
+    use crate::geometry::ParametricSurface;
+    let Surface::BSpline(b) = &surface else { return surface };
+    if b.u_knot_vector().periodic || b.v_knot_vector().periodic {
+        return surface;
+    }
+    let (bu0, bu1, bv0, bv1) = surface.bounds();
+    let widened = |(a, c): (f64, f64), (lo, hi): (f64, f64)| {
+        let m = 0.25 * (c - a);
+        ((a - m).max(lo), (c + m).min(hi))
+    };
+    let ((u0, u1), (v0, v1)) = (widened(u_range, (bu0, bu1)), widened(v_range, (bv0, bv1)));
+    let far = |(a, c): (f64, f64), (lo, hi): (f64, f64)| c > a && hi - lo > 3.0 * (c - a);
+    if !(far((u0, u1), (bu0, bu1)) || far((v0, v1), (bv0, bv1))) {
+        return surface;
+    }
+    let mut cut = b.clone();
+    cut.segment(u0, u1, v0, v1);
+    Surface::BSpline(cut)
 }
 
 /// `surface` without the trimming of a trimmed surface (its basis has the same
