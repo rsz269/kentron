@@ -134,7 +134,6 @@ tests.test_importers.TestImporters::testImportDXF
 tests.test_jupyter.TestJupyter::test_display_error
 tests.test_jupyter.TestJupyter::test_repr_javascript
 tests.test_selectors.TestCQSelectors::testNearestToShape
-tests.test_shapes::test_addCavity
 tests.test_shapes::test_bin_import_export
 tests.test_shapes::test_extend
 tests.test_shapes::test_isolines

@@ -600,11 +600,21 @@ pub fn make_shell(faces: Vec<Handle>) -> PyResult<Handle> {
     with_model(|m| {
         let shell = m.new_empty(NodeKind::Shell);
         for f in faces {
-            m.add(shell, f.shape)?;
+            let face = unplaced(m, f.shape)?;
+            m.add(shell, face)?;
         }
         Ok(shell)
     })
     .map(handle)
+}
+
+/// `shape` copied where its placement puts it, where it has one (a shell or solid holds its
+/// children unplaced).
+fn unplaced(m: &mut Model, shape: Shape) -> kentron::Result<Shape> {
+    if shape.placement == kentron::math::Transform::IDENTITY {
+        return Ok(shape);
+    }
+    kentron::modify::copy(m, shape, false)
 }
 
 /// The solid bounded by `shells` (the first the outer one), turned so that it has a
@@ -612,10 +622,12 @@ pub fn make_shell(faces: Vec<Handle>) -> PyResult<Handle> {
 #[pyfunction]
 pub fn make_solid(shells: Vec<Handle>) -> PyResult<Handle> {
     with_model(|m| {
+        // (Placed shells, as those of a solid on a workplane, moved where they are.)
+        let shells: Vec<Shape> = shells.iter().map(|s| unplaced(m, s.shape)).collect::<kentron::Result<_>>()?;
         let build = |m: &mut Model, flip: bool| -> kentron::Result<Shape> {
             let solid = m.new_empty(NodeKind::Solid);
-            for (i, s) in shells.iter().enumerate() {
-                m.add(solid, if flip && i == 0 { s.shape.reversed() } else { s.shape })?;
+            for (i, &s) in shells.iter().enumerate() {
+                m.add(solid, if flip && i == 0 { s.reversed() } else { s })?;
             }
             Ok(solid)
         };
