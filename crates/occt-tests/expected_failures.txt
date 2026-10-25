@@ -938,7 +938,6 @@ tests/feat/featprism/N6
 tests/feat/featprism/O1
 tests/feat/featprism/O5
 tests/feat/featprism/R4
-tests/feat/featprism/R5
 tests/feat/featrevol/I6
 tests/feat/featrevol/J7
 tests/geometry/2dbeziecurve/B1

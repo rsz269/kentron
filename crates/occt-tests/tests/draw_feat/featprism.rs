@@ -2063,21 +2063,18 @@ fn r4() {
 /// `tests/feat/featprism/R5`
 /// kentron: sub-shapes named by OCCT's enumeration are selected by position (draw_selectors.json)
 #[test]
-#[should_panic]
-fn r5() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.restore(&[data_file("CTO900_cts18754-part.rle").as_str(), "s"])?;
-        d.explode(&["s", "f"])?;
-        d.nearest(&["s_3", "s", "F", "-250.0", "82.2058", "34.3655", "507072.0"])?;
-        d.restore(&[data_file("cts18754-tool.rle").as_str(), "w"])?;
-        d.mkplane(&["w", "w"])?;
-        d.featprism(&["s", "w", "w", "0", "1", "0", "1", "1"])?;
-        d.featperform(&["prism", "result", "s_3", "s_3"])?;
-        d.checkprops(&["result", "-s", "1.40005e+006"])?;
-        d.checkshape(&["result"])?;
-        Ok(())
-    })
+fn r5() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.restore(&[data_file("CTO900_cts18754-part.rle").as_str(), "s"])?;
+    d.explode(&["s", "f"])?;
+    d.nearest(&["s_3", "s", "F", "-250.0", "82.2058", "34.3655", "507072.0"])?;
+    d.restore(&[data_file("cts18754-tool.rle").as_str(), "w"])?;
+    d.mkplane(&["w", "w"])?;
+    d.featprism(&["s", "w", "w", "0", "1", "0", "1", "1"])?;
+    d.featperform(&["prism", "result", "s_3", "s_3"])?;
+    d.checkprops(&["result", "-s", "1.40005e+006"])?;
+    d.checkshape(&["result"])?;
+    Ok(())
 }
 
 /// `tests/feat/featprism/R6`
