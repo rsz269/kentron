@@ -1934,8 +1934,21 @@ impl Corner {
         while let (true, Some((Curve::Trimmed(t), first, last))) = (unwrap_trimmed, &curve) {
             curve = Some((t.basis().clone(), *first, *last));
         }
+        // (A B-spline of degree 1 whose poles run along the line between its ends, as a ruled
+        // loft's edges across: that line.)
+        let straight = |b: &crate::geometry::curve::BSplineCurve| {
+            let length = origin.distance(end);
+            if b.degree() != 1 || !(length > 0.0) {
+                return false;
+            }
+            let axis = (end - origin).normalized();
+            let along: Vec<f64> = b.poles().iter().map(|&p| (p - origin).dot(axis)).collect();
+            b.poles().iter().all(|&p| ((p - origin) - axis * (p - origin).dot(axis)).length() <= 1e-9 * length)
+                && (along.windows(2).all(|w| w[0] <= w[1]) || along.windows(2).all(|w| w[0] >= w[1]))
+        };
         let (tangent, path) = match curve {
             Some((Curve::Line(_), _, _)) => ((end - origin).normalized(), Path::Line { length: origin.distance(end) }),
+            Some((Curve::BSpline(b), _, _)) if straight(&b) => ((end - origin).normalized(), Path::Line { length: origin.distance(end) }),
             Some((Curve::Circle(c), first, last)) => {
                 let axis = c.frame().z_axis();
                 let tangent = Vector::from(axis.direction).cross(origin - c.center()).normalized();
@@ -2374,6 +2387,43 @@ mod tests {
         assert_eq!(model.unique_subshapes(result, NodeKind::Face).len(), 18);
         let volume = properties::volume(&model, result).mass;
         assert!((volume - 10812.07).abs() < 5e-4 * 10812.07, "{volume}");
+    }
+
+    /// A 10 x 10 block tapered by 5 degrees over its height of 5 (ruled between its outline
+    /// and the outline drawn in: its edges up B-splines along straight lines), its four
+    /// slanted edges rounded by 0.5: cylinders along them, as along lines (OCCT's volume,
+    /// 456.4692).
+    #[test]
+    fn edges_along_straight_b_splines_round_into_cylinders() {
+        let mut model = Model::new();
+        let square = |model: &mut Model, half: f64, z: f64| {
+            let corners = [(-half, -half), (half, -half), (half, half), (-half, half)];
+            let edges: Vec<Shape> = (0..4)
+                .map(|i| {
+                    let ((x0, y0), (x1, y1)) = (corners[i], corners[(i + 1) % 4]);
+                    crate::make::edge_between(model, Point::new(x0, y0, z), Point::new(x1, y1, z)).unwrap()
+                })
+                .collect();
+            crate::make::wire(model, &edges).unwrap()
+        };
+        let (low, high) = (square(&mut model, 5.0, 0.0), square(&mut model, 5.0 - 5.0 * 5f64.to_radians().tan(), 5.0));
+        let options = crate::loft::LoftOptions { solid: true, ruled: true, ..Default::default() };
+        let block = crate::loft::loft(&mut model, &[low, high], &options).unwrap().shape;
+        let slanted: Vec<Shape> = model
+            .unique_subshapes(block, NodeKind::Edge)
+            .into_iter()
+            .filter(|&e| {
+                let (a, b) = model.edge_vertices(e);
+                (model.point(a).z - model.point(b).z).abs() > 1.0
+            })
+            .collect();
+        assert!(slanted.iter().all(|&e| matches!(model.edge_curve(e), Some((Curve::BSpline(_), _, _)))));
+        let rounded = fillet(&mut model, block, &slanted, 0.5).unwrap();
+        assert!(validity::check(&model, rounded).errors().next().is_none());
+        let cylinders = model.unique_subshapes(rounded, NodeKind::Face).into_iter().filter(|&f| matches!(model.surface(f), Some(Surface::Cylinder(_)))).count();
+        assert_eq!(cylinders, 4);
+        let v = properties::volume(&model, rounded).mass;
+        assert!((v - 456.4692).abs() < 1e-3, "{v}");
     }
 
     /// A sector of a ring (a torus's tube, hollowed by a coaxial torus, bored across and
