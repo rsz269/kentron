@@ -1758,6 +1758,23 @@ mod tests {
         assert!(circles.len() >= 2, "{circles:?}");
     }
 
+    /// A loft between two ellipses (closed in u without a period) cut by a box's top: the
+    /// cut, a closed section starting on the loft's seam, runs against u there; its pcurve is
+    /// fitted from the arc's own start on the seam, not a polyline whose chord the wrong way
+    /// round matched the curve at its middle alone (OCCT's volume, 182.3066).
+    #[test]
+    fn a_loft_cut_across_its_seam() {
+        let mut model = Model::new();
+        let mut read = |text: &str| crate::io::brep::read(&mut model, &mut text.as_bytes()).unwrap();
+        let loft = read(include_str!("tests/ellipse_loft_a.brep"));
+        let slab = read(include_str!("tests/ellipse_loft_b.brep"));
+        let result = intersection(&mut model, loft, slab).unwrap();
+        let report = validity::check(&model, result);
+        assert!(report.is_valid(), "{report:?}");
+        let volume = properties::volume(&model, result).mass;
+        assert!((volume - 182.3066).abs() < 1e-3, "{volume}");
+    }
+
     #[test]
     fn rotated_box() {
         // A cube turned 45° about Z, centred on a face of another: the difference removes a prism

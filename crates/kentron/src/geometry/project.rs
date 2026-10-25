@@ -798,6 +798,7 @@ pub(crate) fn polyline_pcurve_on_range_from(curve: &Curve, surface: &Surface, fi
     use super::{ParametricCurve, ParametricSurface};
     let singular = |v: f64| u_collapses(surface, v);
     let u_period = surface.u_period();
+    let start_given = start;
     let start = match start {
         Some(start) => start,
         None => first_foot(curve, surface, first, last)?,
@@ -821,16 +822,26 @@ pub(crate) fn polyline_pcurve_on_range_from(curve: &Curve, surface: &Surface, fi
         let y = v_period.map_or(p.y, |period| p.y + ((near.y - p.y) / period).round() * period);
         Point2::new(x, y)
     };
-    // Bisect each stretch until the chord's middle matches the curve.
+    // Bisect each stretch until the chord matches the curve at its middle and quarters (a
+    // chord the wrong way round a symmetric curve, as one across a seam, can match at its
+    // middle alone).
     let mut params = vec![first];
-    let mut points = vec![uv(first)?];
+    // (From the start given, on the side of a seam it was found on.)
+    let first_point = match start_given {
+        Some(s) if surface.point(s.0, s.1).distance(curve.point(first)) <= tolerance || singular(s.1) => Point2::new(s.0, s.1),
+        _ => uv(first)?,
+    };
+    let mut points = vec![first_point];
     let mut stack = vec![(last, 0usize)];
     while let Some((t1, depth)) = stack.pop() {
         let (t0, p0) = (*params.last().expect("start"), *points.last().expect("start"));
         let p1 = unwrap(uv(t1)?, p0);
         let tm = 0.5 * (t0 + t1);
-        let mid = Point2::new(0.5 * (p0.x + p1.x), 0.5 * (p0.y + p1.y));
-        let good = singular(p0.y) || singular(p1.y) || surface.point(mid.x, mid.y).distance(curve.point(tm)) <= tolerance;
+        let on = |s: f64| {
+            let q = Point2::new(p0.x + (p1.x - p0.x) * s, p0.y + (p1.y - p0.y) * s);
+            surface.point(q.x, q.y).distance(curve.point(t0 + (t1 - t0) * s)) <= tolerance
+        };
+        let good = singular(p0.y) || singular(p1.y) || (on(0.5) && on(0.25) && on(0.75));
         if good || depth >= 18 {
             params.push(t1);
             points.push(p1);

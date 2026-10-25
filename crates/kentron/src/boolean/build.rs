@@ -289,7 +289,16 @@ impl Output {
                                 (crate::geometry::surface::Surface::BSpline(_), crate::geometry::surface::Surface::BSpline(_)) => &face_data.surface,
                                 _ => &surface,
                             };
-                            aligned_pcurve(curve, near, out.first, out.last, middle, [face_data.u_period, face_data.v_period], face_data.drift)?
+                            // (Across a seam where the surface closes without a period, its two
+                            // uses taken to their sides by the bounds' width, as by a period.)
+                            let closed = |k: usize| face_data.closed_bounds[k].map(|(lo, hi)| hi - lo);
+                            let periods = [face_data.u_period.or_else(|| closed(0)), face_data.v_period.or_else(|| closed(1))];
+                            // (From the arc's end at the curve's start, where the start is on a
+                            // seam: its foot alone may be found on either side.)
+                            let start = [arc.uv[0], arc.uv[arc.uv.len() - 1]]
+                                .into_iter()
+                                .find(|uv| geom::surface_point(near, *uv).distance(curve.point(out.first)) <= 1e3 * TOL);
+                            aligned_pcurve(curve, near, out.first, out.last, middle, periods, face_data.drift, start)?
                         }
                         (None, None) => return Err(Error::InvalidInput("a degenerate edge without a pcurve".into())),
                     };
@@ -406,8 +415,9 @@ fn result_vertex(model: &mut Model, graph: &Graph, v: usize) -> VertexId {
 
 /// The pcurve of `curve` over `[first, last]` on `surface`, shifted by whole periods of
 /// `u` to have its middle at the arc's, `target`; straying from the surface by no more than
-/// the face's edges may (`drift`) where nothing nearer holds.
-fn aligned_pcurve(curve: &Curve, surface: &crate::geometry::surface::Surface, first: f64, last: f64, target: Uv, periods: [Option<f64>; 2], drift: f64) -> Result<Curve2> {
+/// the face's edges may (`drift`) where nothing nearer holds. Fitted from `start`, the
+/// parameters of the curve's first point, where given.
+fn aligned_pcurve(curve: &Curve, surface: &crate::geometry::surface::Surface, first: f64, last: f64, target: Uv, periods: [Option<f64>; 2], drift: f64, start: Option<Uv>) -> Result<Curve2> {
     // An analytic pcurve may hold on part of the curve only (a meridian up to the poles,
     // beyond which it would leave the surface's parameter domain): it must match over the
     // edge's range, within the domain.
@@ -435,11 +445,11 @@ fn aligned_pcurve(curve: &Curve, surface: &crate::geometry::surface::Surface, fi
             // (From the curve's first point's foot as the operation finds it, where that is on
             // it: the projection's own may be on another part of the surface passing nearly as
             // near, as the next turn of one winding round.)
-            let start = {
+            let start = start.map(|uv| (uv[0], uv[1])).or_else(|| {
                 let p = curve.point(first);
                 let uv = geom::uv_of(surface, p);
                 (surface.point(uv[0], uv[1]).distance(p) <= 1e3 * TOL).then_some((uv[0], uv[1]))
-            };
+            });
             project::pcurve_on_range_from(curve, surface, first, last, &[1e-8, 1e-6, 1e-4], start)
                 .or_else(|| project::polyline_pcurve_on_range_from(curve, surface, first, last, 1e-7, start))
                 .or_else(|| project::polyline_pcurve_on_range_from(curve, surface, first, last, 1e-5, start))
