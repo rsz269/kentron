@@ -551,6 +551,14 @@ impl<'a> Writer<'a> {
                 let (u, v) = (b.u_knot_vector(), b.v_knot_vector());
                 (self.bspline_surface(u.degree, v.degree, b.poles(), b.weights(), (&u.knots, &u.multiplicities), (&v.knots, &v.multiplicities)), false)
             }
+            // (A periodic one as the same surface made non-periodic: STEP's knots clamp.)
+            Surface::BSpline(b) => {
+                let mut b = b.clone();
+                b.set_u_not_periodic();
+                b.set_v_not_periodic();
+                let (u, v) = (b.u_knot_vector().clone(), b.v_knot_vector().clone());
+                (self.bspline_surface(u.degree, v.degree, b.poles(), b.weights(), (&u.knots, &u.multiplicities), (&v.knots, &v.multiplicities)), false)
+            }
             Surface::Bezier(_) => {
                 let b = crate::geometry::convert::surface_to_bspline(surface).ok_or_else(|| Error::InvalidInput("writing STEP: a Bezier surface".into()))?;
                 let (u, v) = (b.u_knot_vector().clone(), b.v_knot_vector().clone());
@@ -577,7 +585,6 @@ impl<'a> Writer<'a> {
                 (self.add(format!("OFFSET_SURFACE('',#{basis},{},.F.)", real(distance))), flipped)
             }
             Surface::Trimmed(t) => self.surface(t.basis())?,
-            other => return Err(Error::InvalidInput(format!("writing STEP: a {:?} surface", std::mem::discriminant(other)))),
         })
     }
 
@@ -643,6 +650,43 @@ mod tests {
             let volume = crate::properties::volume(&read_model, read).mass;
             assert!((volume - mm * mm * mm).abs() <= 1e-9 * mm * mm * mm, "{unit:?}: volume {volume}");
         }
+    }
+
+    /// A ring lofted round through squares, periodic across them (B-spline faces periodic in
+    /// one direction): written as the same faces made non-periodic, read back whole.
+    #[test]
+    fn periodic_bspline_faces_written() {
+        use crate::geometry::surface::Surface;
+        let mut model = Model::new();
+        let square = |model: &mut Model, angle: f64| {
+            let turn = Transform::rotation(crate::math::Axis::new(Point::ORIGIN, crate::math::Direction::Z), angle);
+            let corners: Vec<Point> = [(9.0, -1.0), (11.0, -1.0), (11.0, 1.0), (9.0, 1.0)].iter().map(|&(x, z)| Point::new(x, 0.0, z).transformed(&turn)).collect();
+            let edges: Vec<Shape> = (0..4).map(|i| crate::make::edge_between(model, corners[i], corners[(i + 1) % 4]).unwrap()).collect();
+            crate::make::wire(model, &edges).unwrap()
+        };
+        let mut ring: Vec<Shape> = (0..8).map(|k| square(&mut model, k as f64 * std::f64::consts::TAU / 8.0)).collect();
+        ring.push(ring[0]);
+        let options = crate::loft::LoftOptions { solid: false, ..Default::default() };
+        let shell = crate::loft::loft_periodic(&mut model, &ring, &options).unwrap().shape;
+        let shell = model.unique_subshapes(shell, NodeKind::Shell)[0];
+        let mut solid = model.new_empty(NodeKind::Solid);
+        model.add(solid, shell).unwrap();
+        if crate::properties::volume(&model, solid).mass < 0.0 {
+            solid = model.new_empty(NodeKind::Solid);
+            model.add(solid, shell.reversed()).unwrap();
+        }
+        let periodic = model.unique_subshapes(solid, NodeKind::Face).into_iter().any(|f| {
+            matches!(model.surface(f), Some(Surface::BSpline(b)) if b.u_knot_vector().periodic || b.v_knot_vector().periodic)
+        });
+        assert!(periodic, "the loft's faces are periodic");
+        let volume = crate::properties::volume(&model, solid).mass;
+        let mut bytes = Vec::new();
+        write_in(&model, solid, "ring", None, LengthUnit::Millimetre, &mut bytes).unwrap();
+        let mut other = Model::new();
+        let back = super::super::read(&mut other, &mut bytes.as_slice()).unwrap();
+        assert!(crate::validity::check(&other, back).is_valid(), "{:?}", crate::validity::check(&other, back));
+        let read = crate::properties::volume(&other, back).mass;
+        assert!((read - volume).abs() < 1e-6 * volume, "{read} vs {volume}");
     }
 
     /// A box and a cylinder, written and read back: same volumes, names and colours.

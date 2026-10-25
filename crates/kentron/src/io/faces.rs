@@ -291,6 +291,30 @@ pub(crate) fn align_periods(coedges: &mut [(EdgeId, bool, Curve2, f64, f64)], su
             coedges[i].2 = coedges[i].2.transformed(&t);
         }
     }
+    // A seam's two uses on its two sides: where the loop leaves out the edge collapsed at a
+    // pole between them (a meridian's end on the axis), the second joined the first across
+    // the pole, on the same side; moved a period over, whichever way meets its neighbours
+    // better (the pole's edge then added across the gap).
+    let n = coedges.len();
+    for i in 0..n {
+        let Some(j) = (0..i).find(|&j| coedges[j].0 == coedges[i].0) else { continue };
+        let middle = |c: &(EdgeId, bool, Curve2, f64, f64)| c.2.point(0.5 * (c.3 + c.4));
+        if middle(&coedges[i]).distance(middle(&coedges[j])) > 1e-9 {
+            continue;
+        }
+        let (start, end) = ends(&coedges[i]);
+        let (previous, next) = (ends(&coedges[(i + n - 1) % n]).1, ends(&coedges[(i + 1) % n]).0);
+        let shifts: Vec<crate::math::Vector2> = [pu.map(|p| crate::math::Vector2::new(p, 0.0)), pv.map(|p| crate::math::Vector2::new(0.0, p))]
+            .into_iter()
+            .flatten()
+            .flat_map(|d| [d, -d])
+            .collect();
+        let gap = |d: crate::math::Vector2| (start + d).distance(previous).min((end + d).distance(next));
+        if let Some(d) = shifts.into_iter().min_by(|a, b| gap(*a).total_cmp(&gap(*b))) {
+            use crate::math::Transformable2;
+            coedges[i].2 = coedges[i].2.transformed(&crate::math::Transform2::translation(d));
+        }
+    }
 }
 
 

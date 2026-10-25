@@ -17,14 +17,14 @@ use crate::hashing::FastMap as HashMap;
 use std::io::Read;
 
 use crate::error::{Error, Result};
-use crate::geometry::curve::{BSplineCurve, Circle, Curve, Ellipse, Line};
-use crate::geometry::curve2::{BSplineCurve2, Circle2, Curve2, Ellipse2, Line2};
+use crate::geometry::curve::{BSplineCurve, Circle, Curve, Ellipse, Hyperbola, Line, Parabola};
+use crate::geometry::curve2::{BSplineCurve2, Circle2, Curve2, Ellipse2, Hyperbola2, Line2, Parabola2};
 use crate::geometry::extrema::nearest_on_curve;
 use crate::geometry::surface::{
     BSplineSurface, Cone, Cylinder, ExtrusionSurface, KnotVector, OffsetSurface, Plane, RevolutionSurface, Sphere, Surface, Torus,
 };
 use crate::geometry::ParametricCurve;
-use crate::math::{Axis, Direction, Direction2, Frame, Frame2, Point, Point2, Transform, Vector};
+use crate::math::{Axis, Direction, Direction2, Frame, Frame2, Point, Point2, Transform, Vector, Vector2};
 use crate::topology::{EdgeId, Model, NodeKind, Shape, VertexId};
 
 use super::faces::{align_periods, finish_face, fits, follows, project, CurveSpan, Gaps};
@@ -397,6 +397,15 @@ impl<'a> Reader<'a> {
             let frame = self.frame(Self::reference(&p[1])?)?;
             return Ok((Curve::Ellipse(Ellipse::new(frame, self.real(&p[2])? * s, self.real(&p[3])? * s)), 1.0));
         }
+        // (Conics' parameters as kentron's: edges set their ranges from their vertices.)
+        if let Some(p) = inst.record("HYPERBOLA") {
+            let frame = self.frame(Self::reference(&p[1])?)?;
+            return Ok((Curve::Hyperbola(Hyperbola::new(frame, self.real(&p[2])? * s, self.real(&p[3])? * s)), 1.0));
+        }
+        if let Some(p) = inst.record("PARABOLA") {
+            let frame = self.frame(Self::reference(&p[1])?)?;
+            return Ok((Curve::Parabola(Parabola::new(frame, self.real(&p[2])? * s)), 1.0));
+        }
         if inst.has("B_SPLINE_CURVE_WITH_KNOTS") || inst.has("B_SPLINE_CURVE") {
             return Ok((Curve::BSpline(self.bspline(&inst, false)?.0), 1.0));
         }
@@ -495,6 +504,12 @@ impl<'a> Reader<'a> {
         }
         if let Some(p) = inst.record("ELLIPSE") {
             return Ok(Curve2::Ellipse(Ellipse2::new(self.frame2(Self::reference(&p[1])?)?, self.real(&p[2])?, self.real(&p[3])?)));
+        }
+        if let Some(p) = inst.record("HYPERBOLA") {
+            return Ok(Curve2::Hyperbola(Hyperbola2::new(self.frame2(Self::reference(&p[1])?)?, self.real(&p[2])?, self.real(&p[3])?)));
+        }
+        if let Some(p) = inst.record("PARABOLA") {
+            return Ok(Curve2::Parabola(Parabola2::new(self.frame2(Self::reference(&p[1])?)?, self.real(&p[2])?)));
         }
         if inst.has("B_SPLINE_CURVE_WITH_KNOTS") || inst.has("B_SPLINE_CURVE") {
             let (poles, weights, knots, mults, degree) = self.bspline_data(&inst, true)?;
@@ -815,7 +830,7 @@ impl<'a> Reader<'a> {
     fn coedge_pcurve(&mut self, made: &EdgeMade, surface_id: usize, surface: &Surface, k: usize) -> Result<Curve2> {
         let on: Vec<usize> = made.pcurves.iter().filter(|(s, _)| *s == surface_id).map(|&(_, c)| c).collect();
         let given = match on.get(k % on.len().max(1)) {
-            Some(&c) => self.curve2(c, made.scale, made.first, made.last).ok(),
+            Some(&c) => self.curve2(c, made.scale, made.first, made.last).ok().map(|pc| within_bounds(pc, made, surface)),
             None => None,
         };
         Ok(match given {
@@ -1272,12 +1287,42 @@ fn named_colour(name: &str) -> Option<[f64; 3]> {
     })
 }
 
+/// A straight pcurve of an edge on a periodic curve (a meridian of a sphere), taken a
+/// period of the curve along where it leaves the surface's range in a direction that is not
+/// periodic: the edge's range is put in the curve's first period, the file's may be another,
+/// and the surface's formula, periodic in that direction too, hides the difference.
+fn within_bounds(pcurve: Curve2, made: &EdgeMade, surface: &Surface) -> Curve2 {
+    use crate::geometry::ParametricSurface;
+    let (Curve2::Line(line), Some(period)) = (&pcurve, made.curve.period()) else { return pcurve };
+    let (u0, u1, v0, v1) = surface.bounds();
+    let slack = 1e-9 * (1.0 + period);
+    let outside = |l: &Line2| {
+        [made.first, made.last].iter().any(|&t| {
+            let p = l.origin + Vector2::from(l.direction) * t;
+            (surface.u_period().is_none() && (p.x < u0 - slack || p.x > u1 + slack)) || (surface.v_period().is_none() && (p.y < v0 - slack || p.y > v1 + slack))
+        })
+    };
+    if !outside(line) {
+        return pcurve;
+    }
+    for k in [1.0, -1.0, 2.0, -2.0] {
+        let moved = Line2 { origin: line.origin + Vector2::from(line.direction) * (k * period), direction: line.direction };
+        if !outside(&moved) {
+            return Curve2::Line(moved);
+        }
+    }
+    pcurve
+}
+
 /// The parameter range along `curve` from `start` to `end` (a whole period when the edge
 /// closes on itself).
 fn range(curve: &Curve, start: Point, end: Point, closed: bool) -> (f64, f64) {
     let period = curve.period();
     let param = |p: Point| match curve {
         Curve::Line(l) => (p - l.origin).dot(Vector::from(l.direction)),
+        // (Unbounded conics in closed form: from the point's place along the frame's y.)
+        Curve::Hyperbola(h) if h.minor_radius() > 0.0 => ((p - h.frame().origin()).dot(Vector::from(h.frame().y())) / h.minor_radius()).asinh(),
+        Curve::Parabola(c) => (p - c.frame().origin()).dot(Vector::from(c.frame().y())),
         _ => {
             let (lo, hi) = match period {
                 Some(t) => (curve.first_parameter(), curve.first_parameter() + t),
@@ -1356,5 +1401,31 @@ mod tests {
         assert!((volume - 1000.0).abs() < 1e-6, "volume {volume}");
         assert!(crate::validity::check(&model, shape).errors().next().is_none());
         assert_eq!(cube.color, Some([1.0, 0.0, 0.0]));
+    }
+
+    /// A cone whose side, a surface of revolution of a line, closes at the apex without an
+    /// edge there (the seam's two uses meet across it): its seam on its two sides, the
+    /// apex's edge added, the cone whole.
+    #[test]
+    fn a_side_closing_at_a_pole_without_its_edge() {
+        let mut model = Model::new();
+        let shape = read(&mut model, &mut include_str!("tests/cone_without_apex_edge.step").as_bytes()).unwrap();
+        let report = crate::validity::check(&model, shape);
+        assert!(report.is_valid(), "{report:?}");
+        let volume = crate::properties::volume(&model, shape).mass;
+        let expected = std::f64::consts::PI * 100.0 * 5.0 / 3.0;
+        assert!((volume - expected).abs() < 1e-6 * expected, "volume {volume}");
+    }
+
+    /// Unbounded conics' edges get their parameters from their vertices in closed form.
+    #[test]
+    fn hyperbola_and_parabola_edges_ranged_by_their_vertices() {
+        use crate::geometry::ParametricCurve;
+        let frame = Frame::new(Point::new(1.0, 2.0, 3.0), Direction::new(0.0, 0.0, 1.0), Direction::new(1.0, 0.0, 0.0));
+        for curve in [Curve::Hyperbola(Hyperbola::new(frame, 2.0, 0.5)), Curve::Parabola(Parabola::new(frame, 0.75))] {
+            let (a, b) = (-0.7, 1.3);
+            let (first, last) = range(&curve, curve.point(a), curve.point(b), false);
+            assert!((first - a).abs() < 1e-12 && (last - b).abs() < 1e-12, "{curve:?}: {first} {last}");
+        }
     }
 }
