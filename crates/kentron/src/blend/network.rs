@@ -584,15 +584,49 @@ fn joint(model: &Model, shape: Shape, vertex: VertexId, stripes: &[Stripe], a: (
         };
         let (wa, gap_a, qa) = far_crossing(sa, ia, a.1);
         let (wb, gap_b, qb) = far_crossing(sb, ib, b.1);
-        let q = qa + (qb - qa) * 0.5;
-        let size = 1.0 + (q - Point::ORIGIN).length();
-        let near = (1e-6 * size).max(1e3 * sa.rolling.target.max(sb.rolling.target)).max(2.0 * model.tolerance(Shape::from(third)));
+        // (Where the edge slants across the joint, one far contact crosses it before its
+        // fillet's end, the other only past its own, on its face carried on past its patch,
+        // which strays from the first's face there: that one's nearest approach to the first
+        // crossing then.)
+        let own = |s: &Stripe, w: f64| w >= s.rolling.t0.min(s.rolling.t1) - 1e-9 && w <= s.rolling.t0.max(s.rolling.t1) + 1e-9;
+        let nearest_to = |s: &Stripe, c: usize, k: usize, q: Point| -> (f64, f64, Point) {
+            let contact = &s.rolling.contacts[1 - c];
+            let (lo, hi) = (s.ts[0].min(s.ts[s.ts.len() - 1]), s.ts[0].max(s.ts[s.ts.len() - 1]));
+            let end = at_end(s, k);
+            let span = (s.rolling.t1 - s.rolling.t0).abs();
+            let (x0, x1) = ((end - 0.25 * span).max(lo), (end + 0.25 * span).min(hi));
+            let d = |w: f64| contact.point(w).distance(q);
+            let n = 256;
+            let at = (0..=n).map(|j| x0 + (x1 - x0) * j as f64 / n as f64).min_by(|x, y| d(*x).total_cmp(&d(*y))).unwrap_or(end);
+            let step = (x1 - x0) / n as f64;
+            let (mut x, mut y) = (at - step, at + step);
+            for _ in 0..100 {
+                let (p, r) = (x + (y - x) / 3.0, y - (y - x) / 3.0);
+                if d(p) < d(r) { y = r } else { x = p }
+            }
+            let w = 0.5 * (x + y);
+            let p = contact.point(w);
+            (w, crate::geometry::extrema::nearest_on_curve(p, &curve3, first3, last3).distance, p)
+        };
+        // (That one need only come near the first's crossing, which the joint goes through.)
+        let near_at = |q: Point| (1e-6 * (1.0 + (q - Point::ORIGIN).length())).max(1e3 * sa.rolling.target.max(sb.rolling.target)).max(2.0 * model.tolerance(Shape::from(third)));
         // (The far contacts, each square to its own spine, cross the edge a little apart:
         // within a twentieth of the fillets' width, the joint's tolerance covers that.)
         let width = sa.rolling.contacts[0].point(at_end(sa, a.1)).distance(sa.rolling.contacts[1].point(at_end(sa, a.1)));
-        if gap_a.max(gap_b) > near || qa.distance(qb) > near.max(0.05 * width) {
-            return Err(Error::InvalidInput("two fillets joining at a vertex whose far contacts miss the edge between their far faces".into()));
-        }
+        let meet = |gap_a: f64, gap_b: f64, qa: Point, qb: Point, q: Point| gap_a.max(gap_b) <= near_at(q) && qa.distance(qb) <= near_at(q).max(0.05 * width);
+        let (((wa, _, qa), (wb, _, qb)), q) = if meet(gap_a, gap_b, qa, qb, qa + (qb - qa) * 0.5) {
+            (((wa, gap_a, qa), (wb, gap_b, qb)), qa + (qb - qa) * 0.5)
+        } else {
+            let slant = match (own(sa, wa), own(sb, wb)) {
+                (true, false) => Some((((wa, gap_a, qa), nearest_to(sb, ib, b.1, qa)), qa)),
+                (false, true) => Some(((nearest_to(sa, ia, a.1, qb), (wb, gap_b, qb)), qb)),
+                _ => None,
+            };
+            match slant {
+                Some((((wa, ga, qa), (wb, gb, qb)), q)) if meet(ga.min(gb), ga.min(gb), qa, qb, q) => (((wa, ga, qa), (wb, gb, qb)), q),
+                _ => return Err(Error::InvalidInput("two fillets joining at a vertex whose far contacts miss the edge between their far faces".into())),
+            }
+        };
         let on_edge = crate::geometry::extrema::nearest_on_curve(q, &curve3, first3, last3);
         // (Where the far faces are tangent along their edge (a side going on into a rounded
         // corner), fillets' balls (not chamfers') where their far contacts cross it are one, touching
