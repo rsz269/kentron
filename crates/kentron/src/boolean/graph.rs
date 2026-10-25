@@ -1183,7 +1183,10 @@ pub(super) fn sample_face(surface: &Surface, boundary: &[(&Curve2, f64, f64)]) -
             let rows = surface.points_on_grid(&us, &vs);
             (0..=n.0).flat_map(|i| (0..=n.1).map(move |j| (i, j))).map(|(i, j)| rows[j][i]).collect()
         };
-        let mut n = (12, 12);
+        // (Twelve a period at least, where the face runs over more than one, as round a
+        // helix: else the grid's points a period apart fall on the same few places.)
+        let per_period = |period: Option<f64>, (lo, hi): (f64, f64)| period.map_or(12, |p| (12.0 * ((hi - lo) / p).ceil()).clamp(12.0, 512.0) as usize);
+        let mut n = (per_period(surface.u_period(), u_range), per_period(surface.v_period(), v_range));
         let mut points = grid(n);
         // (On a B-spline turning far between those points, as a thread's flank winding many
         // times round, whose points a turn apart are alike: the box missing much of its
@@ -1260,5 +1263,33 @@ fn untrimmed(surface: Surface) -> Surface {
             None => Surface::Offset(o),
         },
         s => s,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::geometry::curve2::Line2;
+    use crate::geometry::surface::Cylinder;
+    use crate::math::{Direction2, Frame, Point2};
+
+    /// A cylinder's face whose boundary runs round four turns (as along a helix): its box
+    /// holds the whole round, the grid's points spread over each turn, not falling on the
+    /// same few places a turn apart.
+    #[test]
+    fn a_face_running_round_several_turns_boxed_whole() {
+        let surface = Surface::Cylinder(Cylinder::new(Frame::WORLD, 10.0));
+        let turns = 4.0 * std::f64::consts::TAU;
+        let corners = [Point2::new(0.0, 0.0), Point2::new(turns, 0.0), Point2::new(turns, 1.0), Point2::new(0.0, 1.0)];
+        let sides: Vec<(Curve2, f64, f64)> = (0..4)
+            .map(|i| {
+                let (a, b) = (corners[i], corners[(i + 1) % 4]);
+                let d = b - a;
+                (Curve2::Line(Line2::new(a, Direction2::from_vector(d))), 0.0, d.length())
+            })
+            .collect();
+        let ranged: Vec<(&Curve2, f64, f64)> = sides.iter().map(|(c, a, b)| (c, *a, *b)).collect();
+        let sample = sample_face(&surface, &ranged);
+        assert!(sample.bbox.0.x <= -10.0 && sample.bbox.1.x >= 10.0 && sample.bbox.0.y <= -10.0 && sample.bbox.1.y >= 10.0, "{:?}", sample.bbox);
     }
 }
