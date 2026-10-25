@@ -1344,6 +1344,59 @@ pub(crate) fn windings_from(surface: &Surface, turns: f64) -> (usize, usize) {
     (winding(u_turn, u_close), winding(v_turn, v_close))
 }
 
+/// For a B-spline surface coming back near itself along its middle iso-line in u or in v
+/// (three quarters of it near another part, as a thread's flank near its next turn: a sixth
+/// of the way along or more, within a twelfth of its length), samples enough that way for two in each gap between its turns (at most 512);
+/// else 0. Kept for the surface.
+pub(crate) fn close_samples(surface: &Surface) -> (usize, usize) {
+    static FOUND: std::sync::Mutex<Vec<(SurfaceKey, (usize, usize))>> = std::sync::Mutex::new(Vec::new());
+    use super::parametric::ParametricSurface;
+    let Surface::BSpline(_) = surface else { return (0, 0) };
+    let key = SurfaceKey::of(surface);
+    let lock = || FOUND.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(&(_, found)) = lock().iter().find(|(k, _)| *k == key) {
+        return found;
+    }
+    let (u0, u1, v0, v1) = surface.bounds();
+    let samples = |points: Vec<Point>| -> usize {
+        let n = points.len() - 1;
+        let length: f64 = points.windows(2).map(|w| w[0].distance(w[1])).sum();
+        // Each point's nearest of those apart from it along the line by a sixth or more,
+        // either way round (a closed line's ends are one point); the largest of those of three
+        // quarters of the points: most of the line near another part of it, as a thread's
+        // turns are, not only some of it (a line pinched to a pole, or passing near itself
+        // once, as a fillet along curves crossing nearly).
+        let mut nearest: Vec<f64> = (0..=n)
+            .map(|i| {
+                (0..=n)
+                    .filter(|&j| {
+                        let apart = i.abs_diff(j);
+                        apart >= n / 6 && n - apart >= n / 6
+                    })
+                    .map(|j| points[i].distance(points[j]))
+                    .fold(f64::INFINITY, f64::min)
+            })
+            .collect();
+        nearest.sort_by(f64::total_cmp);
+        let gap = nearest[3 * n / 4];
+        if !(length > 0.0) || !(gap < length / 12.0) {
+            return 0;
+        }
+        ((2.0 * length / gap.max(1e-300)).ceil() as usize).min(512)
+    };
+    let n = 128;
+    let found = (
+        samples((0..=n).map(|i| surface.point(u0 + (u1 - u0) * i as f64 / n as f64, 0.5 * (v0 + v1))).collect()),
+        samples((0..=n).map(|j| surface.point(0.5 * (u0 + u1), v0 + (v1 - v0) * j as f64 / n as f64)).collect()),
+    );
+    let mut cache = lock();
+    if cache.len() >= 256 {
+        cache.remove(0);
+    }
+    cache.push((key, found));
+    found
+}
+
 /// How far a B-spline surface turns (in radians) along its middle iso-lines in u and in v,
 /// and whether each comes back near itself all along (most of its points within a few of
 /// its chords of a point a sixth of it along or more away: the next turn, not only its ends

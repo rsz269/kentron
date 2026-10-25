@@ -144,8 +144,31 @@ pub(super) fn uv_within(surface: &Surface, p: Point, reach: f64) -> Option<Uv> {
     if !freeform(surface) {
         return Some(uv_of(surface, p));
     }
-    let foot = foot_on(surface, p);
+    let mut foot = foot_on(surface, p);
+    // (Farther than the reach, on a surface coming back near itself, from samples nearer the
+    // point too: the foot found may be on the next turn of one winding round, nearer than its
+    // samples on the point's own turn, with no sample of that turn near enough to lead there.)
+    if foot.point.distance(p) > reach && crate::geometry::extrema::close_samples(surface) != (0, 0) {
+        foot = foot_from_nearest_samples(surface, p, foot, 32);
+    }
     (foot.point.distance(p) <= reach).then_some([foot.u, foot.v])
+}
+
+/// The nearest of `foot` and the feet found from the `n` samples nearest `p`.
+fn foot_from_nearest_samples(surface: &Surface, p: Point, foot: crate::geometry::extrema::SurfaceFoot, n: usize) -> crate::geometry::extrema::SurfaceFoot {
+    let starts: Vec<(f64, f64)> = with_samples(surface, |grid| {
+        let mut ranked: Vec<(f64, usize)> = grid.samples.iter().enumerate().map(|(i, s)| (s.2.distance(p), i)).collect();
+        ranked.sort_by(|a, b| a.0.total_cmp(&b.0));
+        ranked.iter().take(n).map(|&(_, i)| (grid.samples[i].0, grid.samples[i].1)).collect()
+    });
+    let mut nearest = foot;
+    for start in starts {
+        let other = crate::geometry::extrema::newton_foot_from_sample(p, surface, start);
+        if other.point.distance(p) < nearest.point.distance(p) {
+            nearest = other;
+        }
+    }
+    nearest
 }
 
 /// The foot of `p` on a free-form surface: Newton steps from the nearest of a grid of the
@@ -361,12 +384,14 @@ impl SampleGrid {
 fn grid_steps(surface: &Surface) -> (usize, usize) {
     // A few samples per knot span and degree (a bilinear patch needs few); more on one
     // winding round twice or more, its turns close together
-    // ([`crate::geometry::extrema::windings_from`]).
+    // ([`crate::geometry::extrema::windings_from`]), or coming back near itself, two in each
+    // gap between its turns ([`crate::geometry::extrema::close_samples`]).
     let by = |spans: usize, degree: usize| (4 * spans * degree.max(1)).clamp(4, 32);
     match surface {
         Surface::BSpline(b) => {
             let (wu, wv) = crate::geometry::extrema::windings_from(surface, 2.0);
-            (by(b.u_knots().len() - 1, b.u_degree()).max(wu), by(b.v_knots().len() - 1, b.v_degree()).max(wv))
+            let (cu, cv) = crate::geometry::extrema::close_samples(surface);
+            (by(b.u_knots().len() - 1, b.u_degree()).max(wu).max(cu), by(b.v_knots().len() - 1, b.v_degree()).max(wv).max(cv))
         }
         Surface::Bezier(b) => (by(1, b.u_degree()), by(1, b.v_degree())),
         _ => (32, 32),
@@ -375,11 +400,13 @@ fn grid_steps(surface: &Surface) -> (usize, usize) {
 
 
 /// The samples of a surface winding round twice or more, its turns close together
-/// ([`crate::geometry::extrema::windings_from`]), along its more winding direction; 0 for
+/// ([`crate::geometry::extrema::windings_from`]), or coming back near itself
+/// ([`crate::geometry::extrema::close_samples`]), along its more winding direction; 0 for
 /// others.
 pub(super) fn winding_samples(surface: &Surface) -> usize {
     let (u, v) = crate::geometry::extrema::windings_from(surface, 2.0);
-    u.max(v)
+    let (cu, cv) = crate::geometry::extrema::close_samples(surface);
+    u.max(v).max(cu).max(cv)
 }
 
 /// Runs `f` on the surface's sample grid (points `(u, v, p)`, row by row along u), cached.
@@ -1157,6 +1184,40 @@ mod tests {
     use super::*;
     use crate::geometry::curve2::BezierCurve2;
     use crate::math::Point2;
+
+    /// A band winding a turn and a half round an axis, as a thread's flank (its turns 8 apart,
+    /// 88 round): every point on it found on it, on its own turn, not held on the next turn
+    /// nearer than the band's samples on its own.
+    #[test]
+    fn points_on_a_band_winding_round_are_found_on_their_own_turn() {
+        use crate::geometry::fit;
+        use crate::geometry::surface::{BSplineSurface, KnotVector};
+        let (turns, pitch) = (1.5, 8.0);
+        let n = 96;
+        let params: Vec<f64> = (0..=n).map(|i| i as f64 / n as f64).collect();
+        let helix = |r: f64, dz: f64| {
+            let points: Vec<Point> = params
+                .iter()
+                .map(|&t| {
+                    let a = std::f64::consts::TAU * turns * t;
+                    Point::new(r * a.cos(), r * a.sin(), pitch * turns * t + dz)
+                })
+                .collect();
+            fit::interpolate_with_parameters(&points, &params).unwrap()
+        };
+        let (inner, outer) = (helix(84.0, 0.0), helix(88.0, 2.5));
+        let u = KnotVector::new(inner.knots().to_vec(), inner.multiplicities().to_vec(), inner.degree());
+        let v = KnotVector::new(vec![0.0, 1.0], vec![2, 2], 1);
+        let poles: Vec<Vec<Point>> = inner.poles().iter().zip(outer.poles()).map(|(&a, &b)| vec![a, b]).collect();
+        let band = Surface::BSpline(BSplineSurface::new(poles, u, v));
+        for i in 0..=40 {
+            for j in [0.2, 0.5, 0.8] {
+                let p = surface_point(&band, [i as f64 / 40.0, j]);
+                let uv = uv_within(&band, p, 1e-6).unwrap_or_else(|| panic!("{p:?} not found on the band"));
+                assert!(surface_point(&band, uv).distance(p) <= 1e-6);
+            }
+        }
+    }
 
     /// A point between an arch and the chord of its 64-part polyline is inside the arch's
     /// closely sampled outline.
