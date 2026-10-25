@@ -1232,4 +1232,32 @@ mod tests {
         let v = volume(&model, hollow).mass;
         assert!((v - 197.0377).abs() < 1e-2, "{v}");
     }
+
+    /// An L-shaped block (10 x 10, its arms 4 wide, 3 high) hollowed inwards by 0.6, open at
+    /// the top, joined by arcs: the arc about the L's inner corner stands on the floor (as
+    /// thick as the arc's radius), not cut down through it (OCCT's volume, 92.3586).
+    #[test]
+    fn an_l_hollowed_inwards_rounds_its_inner_corner_above_the_floor() {
+        use crate::math::Vector;
+        let mut model = Model::new();
+        let corners = [(0.0, 0.0), (10.0, 0.0), (10.0, 4.0), (4.0, 4.0), (4.0, 10.0), (0.0, 10.0)];
+        let edges: Vec<Shape> = (0..6)
+            .map(|i| {
+                let ((x0, y0), (x1, y1)) = (corners[i], corners[(i + 1) % 6]);
+                crate::make::edge_between(&mut model, Point::new(x0, y0, 0.0), Point::new(x1, y1, 0.0)).unwrap()
+            })
+            .collect();
+        let wire = crate::make::wire(&mut model, &edges).unwrap();
+        let face = crate::make::planar_face(&mut model, wire).unwrap();
+        let block = crate::sweep::extrude(&mut model, face, Vector::new(0.0, 0.0, 3.0)).unwrap().shape;
+        let top = model
+            .unique_subshapes(block, NodeKind::Face)
+            .into_iter()
+            .find(|&f| matches!(model.surface(f), Some(Surface::Plane(p)) if (p.origin().z - 3.0).abs() < 1e-9))
+            .unwrap();
+        let hollow = thick_solid(&mut model, block, &[top], -0.6, Join::Arc).unwrap();
+        valid(&model, hollow);
+        let v = volume(&model, hollow).mass;
+        assert!((v - 92.3586).abs() < 1e-3, "{v}");
+    }
 }

@@ -762,8 +762,9 @@ fn extensions(model: &Model, shape: Shape, corners: &[(Corner, f64)]) -> Vec<[f6
             let inward = (into[0] + into[1]).normalized();
             (p + inward * (0.3 * size), [p + into[0] * (0.8 * size) + inward * (0.1 * size), p + into[1] * (0.8 * size) + inward * (0.1 * size)])
         };
-        // (Material along the edge's line carrying on: no run at all.)
-        if inside(probes(size).0) {
+        // (Material along the edge's line carrying on: no run at all. Half as far too, for
+        // material only as deep as the tool is wide, as a floor as thick as the radius.)
+        if inside(probes(0.5 * size).0) || inside(probes(size).0) {
             return 0.0;
         }
         // All the way, unless the path comes back into material (as an arc's circle may):
