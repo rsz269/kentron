@@ -3527,7 +3527,6 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/simple/X1
-expect: not_done
 build:
   - b: {box: {corner: [-50, -50, 0], size: [100, 100, 100]}}
   - cyl: {cylinder: {radius: 30, height: 105}}
@@ -3747,7 +3746,6 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/simple/Y6
-expect: not_done
 build:
   - tmp: {load: {brep: "CCV_1_o12gsr.rle"}}
   - tmp_5: {select: {of: tmp, edge: [35.0, 0.0, 13.75], length: 27.5}}

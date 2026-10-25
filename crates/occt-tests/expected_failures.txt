@@ -23,7 +23,6 @@ tests/blend/complex/B4
 tests/blend/complex/C1
 tests/blend/complex/C2
 tests/blend/complex/C5
-tests/blend/complex/D8
 tests/blend/complex/E1
 tests/blend/complex/E7
 tests/blend/complex/F1
@@ -48,9 +47,7 @@ tests/blend/simple/U7
 tests/blend/simple/V6
 tests/blend/simple/W5
 tests/blend/simple/W7
-tests/blend/simple/X1
 tests/blend/simple/X4
-tests/blend/simple/Y6
 tests/blend/simple/Y7
 tests/blend/tolblend_simple/A3
 tests/blend/tolblend_simple/A4

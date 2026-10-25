@@ -450,9 +450,16 @@ pub(super) fn surface_point(surface: &Surface, uv: Uv) -> Point {
     surface.point(uv[0], uv[1])
 }
 
-/// True at a pole of a sphere or the apex of a cone (where `u` is undefined).
+/// True at a pole of a sphere, the apex of a cone or where a surface of revolution's
+/// meridian meets its axis (where `u` is undefined).
 pub(super) fn is_pole(surface: &Surface, p: Point) -> bool {
     match surface {
+        Surface::Revolution(r) => {
+            let axis = r.axis();
+            let d = p - axis.origin;
+            let z = Vector::from(axis.direction);
+            (d - z * d.dot(z)).length() <= on_tol()
+        }
         Surface::Cone(c) => p.distance(c.apex()) <= on_tol(),
         Surface::Sphere(s) => {
             let z = Vector::from(s.frame().z()) * s.radius();

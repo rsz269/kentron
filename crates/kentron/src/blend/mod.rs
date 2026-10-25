@@ -2023,7 +2023,34 @@ impl Corner {
     /// `run` for a cut.
     fn tool(&self, model: &mut Model, radius: f64, run: [f64; 2]) -> Result<Shape> {
         let section = self.section(model, radius)?;
+        let section = self.clipped_at_axis(model, section, radius)?;
         self.sweep_section(model, section, run)
+    }
+
+    /// An arc's cross-section `section` less what lies past the circle's axis, where the
+    /// ball of `radius` reaches past it (a ball larger than the arc: the fillet a spindle
+    /// torus, whose part past the axis, swept, would fold over the solid's other side and
+    /// pinch the tool at the axis). The fillets carrying on from the arc's ends cut there.
+    fn clipped_at_axis(&self, model: &mut Model, section: Shape, radius: f64) -> Result<Shape> {
+        let Path::Arc { axis, radius: arc_radius, .. } = self.path else { return Ok(section) };
+        let z = Vector::from(axis.direction);
+        let foot = axis.origin + z * (self.origin - axis.origin).dot(z);
+        let outward = (self.origin - foot).normalized();
+        let (_, t1, t2) = self.ball(radius)?;
+        if [t1, t2].iter().all(|t| (*t - foot).dot(outward) > tolerance::LINEAR) {
+            return Ok(section);
+        }
+        // The half of the section plane on the edge's side of the axis.
+        let far = 4.0 * (arc_radius + radius);
+        let corners = [foot - z * far, foot - z * far + outward * far, foot + z * far + outward * far, foot + z * far];
+        let edges = (0..4).map(|i| make::edge_between(model, corners[i], corners[(i + 1) % 4])).collect::<Result<Vec<_>>>()?;
+        let wire = make::wire(model, &edges)?;
+        let half = make::planar_face(model, wire)?;
+        let clipped = boolean::intersection(model, section, half)?;
+        match model.explore(clipped, NodeKind::Face).collect::<Vec<_>>()[..] {
+            [face] => Ok(face),
+            _ => Err(Error::Failed("a fillet's cross-section clipped at its arc's axis is not one face".into())),
+        }
     }
 
     /// The furthest a tool of `size` across may run past either end of the edge: a cut may
@@ -2313,6 +2340,32 @@ mod tests {
         let volume = properties::volume(&model, rounded).mass;
         let without = 8000.0 - 20.0 * 16.0 * (1.0 - PI / 4.0) + PI * 9.0 * 5.0;
         assert!(volume > without + 1.0 && volume < without + PI * 9.0 * 4.0, "{volume} {without}");
+    }
+
+    /// A 50 x 15 x 15 box with its upright edges rounded (R 2.5), its top outline then rounded
+    /// with a larger ball (R 3.7): over the rounded corners the fillet is a spindle torus,
+    /// whose part past the corner's axis the fillets on either side cut away; the result is
+    /// sound, with a face for each fillet (OCCT's volume, 10812.07, within 0.05%).
+    #[test]
+    fn a_rounded_outline_rounded_again_with_a_larger_ball() {
+        let mut model = Model::new();
+        let block = Cuboid::new(50.0, 15.0, 15.0).build(&mut model).unwrap();
+        let edges_where = |model: &Model, shape: Shape, keep: &dyn Fn(Point, Point) -> bool| -> Vec<Shape> {
+            model.unique_subshapes(shape, NodeKind::Edge).into_iter().filter(|&e| {
+                let (a, b) = model.edge_vertices(e);
+                keep(model.point(a), model.point(b))
+            }).collect()
+        };
+        let upright = edges_where(&model, block, &|p, q| (p.x - q.x).abs() < 1e-9 && (p.y - q.y).abs() < 1e-9);
+        assert_eq!(upright.len(), 4);
+        let rounded = fillet(&mut model, block, &upright, 2.5).unwrap();
+        let top = edges_where(&model, rounded, &|p, q| (p.z - 15.0).abs() < 1e-9 && (q.z - 15.0).abs() < 1e-9);
+        let result = fillet(&mut model, rounded, &top[..1], 3.7).unwrap();
+        let report = validity::check(&model, result);
+        assert!(report.is_valid(), "{report:?}");
+        assert_eq!(model.unique_subshapes(result, NodeKind::Face).len(), 18);
+        let volume = properties::volume(&model, result).mass;
+        assert!((volume - 10812.07).abs() < 5e-4 * 10812.07, "{volume}");
     }
 
     /// A plate (100 x 76.2, 10 thick) whose back edge bulges into an arc (25.4 high, of a

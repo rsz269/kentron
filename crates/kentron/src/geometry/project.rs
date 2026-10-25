@@ -636,6 +636,23 @@ fn off_collapsed_edges(points: &mut [Point2], free: &[(bool, bool)]) {
     }
 }
 
+/// Whether the line of constant `v` on `surface` collapses to a point, where `u` is then
+/// undefined: a sphere's pole, a cone's apex, where a surface of revolution's meridian meets
+/// its axis.
+fn u_collapses(surface: &Surface, v: f64) -> bool {
+    match surface {
+        Surface::Sphere(_) => (v.abs() - std::f64::consts::FRAC_PI_2).abs() <= 1e-9,
+        Surface::Cone(c) => (v + c.radius() / c.semi_angle_sin_cos().0).abs() <= 1e-9,
+        Surface::Revolution(r) => {
+            let axis = r.axis();
+            let d = r.basis().point(v) - axis.origin;
+            let z = Vector::from(axis.direction);
+            (d - z * d.dot(z)).length() <= 1e-9 * (1.0 + d.length())
+        }
+        _ => false,
+    }
+}
+
 /// The curve in `surface`'s parameter space of `curve` over `[first, last]` (lying on the
 /// surface), as a B-spline with the same parametrization, accurate to `tolerance` in 3D.
 /// The periodic `u` parameter is unwrapped so that the result is continuous, starting in
@@ -660,11 +677,7 @@ pub(crate) fn pcurve_on_range_from(curve: &Curve, surface: &Surface, first: f64,
     let u_period = surface.u_period();
     let v_period = surface.v_period();
     // Where u is undefined (at a sphere's poles) it is taken from the neighbouring sample.
-    let singular = |v: f64| match surface {
-        Surface::Sphere(_) => (v.abs() - std::f64::consts::FRAC_PI_2).abs() <= 1e-9,
-        Surface::Cone(c) => (v + c.radius() / c.semi_angle_sin_cos().0).abs() <= 1e-9,
-        _ => false,
-    };
+    let singular = |v: f64| u_collapses(surface, v);
     let loosest = tolerances.iter().copied().fold(0.0, f64::max);
     // The first fit reaching each tolerance.
     let mut reached: Vec<Option<BSplineCurve2>> = vec![None; tolerances.len()];
@@ -783,11 +796,7 @@ pub fn polyline_pcurve_on_range(curve: &Curve, surface: &Surface, first: f64, la
 /// passing nearly as near, as the next turn of one winding round).
 pub(crate) fn polyline_pcurve_on_range_from(curve: &Curve, surface: &Surface, first: f64, last: f64, tolerance: f64, start: Option<(f64, f64)>) -> Option<BSplineCurve2> {
     use super::{ParametricCurve, ParametricSurface};
-    let singular = |v: f64| match surface {
-        Surface::Sphere(_) => (v.abs() - std::f64::consts::FRAC_PI_2).abs() <= 1e-9,
-        Surface::Cone(c) => (v + c.radius() / c.semi_angle_sin_cos().0).abs() <= 1e-9,
-        _ => false,
-    };
+    let singular = |v: f64| u_collapses(surface, v);
     let u_period = surface.u_period();
     let start = match start {
         Some(start) => start,
@@ -1124,6 +1133,24 @@ mod tests {
         let poles: Vec<Vec<Point>> = (0..nv).map(|j| (0..nu).map(|i| b.pole(i, j)).collect()).collect();
         let weights: Vec<Vec<f64>> = (0..nv).map(|j| (0..nu).map(|i| b.weight(i, j)).collect()).collect();
         super::super::bspline::BSplineSurface::try_new(poles, b.v_knot_vector().clone(), b.u_knot_vector().clone()).unwrap().with_weights(weights)
+    }
+
+    /// A meridian of a surface of revolution running to the axis, where u is undefined:
+    /// its pcurve keeps the meridian's u up to the end there.
+    #[test]
+    fn a_meridian_to_a_revolution_axis_keeps_its_u_at_the_pole() {
+        use super::super::surface::RevolutionSurface;
+        use crate::math::{Axis, Transform, Transformable};
+        use std::f64::consts::PI;
+        // An arc from (1, 0, 0) up to the axis at (0, 0, √3), about Z.
+        let arc = Curve::Circle(Circle::new(Frame::new(Point::new(-1.0, 0.0, 0.0), -Direction::Y, Direction::X), 2.0));
+        let surface = Surface::Revolution(RevolutionSurface::new(arc.clone(), Axis::new(Point::ORIGIN, Direction::Z)));
+        let meridian = arc.transformed(&Transform::rotation(Axis::new(Point::ORIGIN, Direction::Z), 0.3));
+        let pcurve = pcurve_on_range(&meridian, &surface, 0.0, PI / 3.0, 1e-7).unwrap();
+        for i in 0..=10 {
+            let q = pcurve.point(PI / 3.0 * i as f64 / 10.0);
+            assert!((q.x - 0.3).abs() < 1e-6, "{i}: {q:?}");
+        }
     }
 
     #[test]
