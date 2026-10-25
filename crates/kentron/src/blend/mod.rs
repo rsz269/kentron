@@ -1980,6 +1980,13 @@ impl Corner {
                         * sign(face.orientation);
                     let along = tangent * sign(model[c].orientation.compose(wire.orientation));
                     let Some(face_trace) = trace(&surface, &path, origin) else { return Ok(None) };
+                    // (A circle through the edge's start itself, which may lie off the surface
+                    // within its tolerance: the cross-section's legs then meet where the
+                    // ball touches them.)
+                    let face_trace = match face_trace {
+                        Trace::Circle { center, radius } if (origin.distance(center) - radius).abs() <= 1e-3 * radius => Trace::Circle { center, radius: origin.distance(center) },
+                        other => other,
+                    };
                     sides.push((normal, along, face_trace, (face.node, surface, sign(face.orientation))));
                 }
             }
@@ -2366,6 +2373,27 @@ mod tests {
         assert_eq!(model.unique_subshapes(result, NodeKind::Face).len(), 18);
         let volume = properties::volume(&model, result).mass;
         assert!((volume - 10812.07).abs() < 5e-4 * 10812.07, "{volume}");
+    }
+
+    /// A sector of a ring (a torus's tube, hollowed by a coaxial torus, bored across and
+    /// grooved by a coaxial cone): the arc where the groove meets the ring's outside, whose
+    /// ends booleans left within the tolerance off the torus, is rounded by a torus tool
+    /// whose cross-section closes there.
+    #[test]
+    fn an_arc_ending_off_its_torus_within_the_tolerance() {
+        let mut model = Model::new();
+        let ring = crate::io::brep::read(&mut model, &mut include_str!("tests/grooved_ring_sector.brep").as_bytes()).unwrap();
+        let arc = model.unique_subshapes(ring, NodeKind::Edge).into_iter().find(|&e| {
+            let (a, b) = model.edge_vertices(e);
+            let (p, q) = (model.point(a), model.point(b));
+            matches!(model.edge_curve(e), Some((Curve::Circle(_), _, _))) && p.y < -42.0 && q.y < -42.0 && p.z > 42.0 && q.z > 42.0
+        }).unwrap();
+        let before = properties::volume(&model, ring).mass;
+        let result = fillet(&mut model, ring, &[arc], 1.5).unwrap();
+        let report = validity::check(&model, result);
+        assert!(report.is_valid(), "{report:?}");
+        let volume = properties::volume(&model, result).mass;
+        assert!(volume < before && volume > before - 10.0, "{volume} {before}");
     }
 
     /// A plate (100 x 76.2, 10 thick) whose back edge bulges into an arc (25.4 high, of a
