@@ -28,14 +28,25 @@ class BRepProj_Projection:
             # near it out past the shape.
             c = (along.X(), along.Y(), along.Z())
             nearest = min(sum((p - q) ** 2 for p, q in zip(v.toTuple(), c)) ** 0.5 for v in source.Vertices()) if source.Vertices() else 1.0
-            far = 1.0 + reach / max(nearest, 1e-9)
+            # (Only out past the shape's farthest corner from the point: rays carried far
+            # beyond it make long surfaces whose small meetings with it are missed.)
+            corners = [(x, y, z) for x in (b.xmin, b.xmax) for y in (b.ymin, b.ymax) for z in (b.zmin, b.zmax)]
+            farthest = max(sum((p - q) ** 2 for p, q in zip(k, c)) ** 0.5 for k in corners)
+            far = 1.1 * farthest / max(nearest, 1e-9)
+            # (And in from well short of its nearest face: surfaces meeting it near their
+            # narrow ends are missed there.)
+            from pykentron.shapes import Compound, Vertex
+            closest = Vertex.makeVertex(*c).distance(Compound.makeCompound(target.Faces())) if target.Faces() else 0.0
+            widest = max(sum((p - q) ** 2 for p, q in zip(v.toTuple(), c)) ** 0.5 for v in source.Vertices()) if source.Vertices() else 1.0
+            near = max(0.5 * closest / max(widest, 1e-9), 1e-3 * far)
+            far = max(far, 1.5 * near)
 
             def scaled(shape, s):
                 return _kentron.transformed(shape, [[s, 0, 0, c[0] * (1 - s)], [0, s, 0, c[1] * (1 - s)], [0, 0, s, c[2] * (1 - s)]])
 
             # (Ruled between each edge's two copies.)
             sweep = _kentron.make_compound([
-                _kentron.make_loft([_kentron.make_wire([scaled(e.wrapped, 1e-3)]), _kentron.make_wire([scaled(e.wrapped, far)])], False, True)
+                _kentron.make_loft([_kentron.make_wire([scaled(e.wrapped, near)]), _kentron.make_wire([scaled(e.wrapped, far)])], False, True)
                 for e in source.Edges()
             ])
         edges = Shape.cast(_kentron.section(sweep, target.wrapped)).Edges()
