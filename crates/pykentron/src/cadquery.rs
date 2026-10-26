@@ -355,7 +355,7 @@ pub fn make_spline_surface_approx(points: Vec<Vec<Xyz>>, tolerance: f64, min_deg
 /// The face spanning the closed loop of `edges` (edges or wires, in any order), through
 /// `points`, of least bending energy of `order` (OCCT's filling `Degree`).
 #[pyfunction]
-#[pyo3(signature = (edges, points=Vec::new(), order=3, points_per_edge=24))]
+#[pyo3(signature = (edges, points=Vec::new(), order=3, points_per_edge=15))]
 pub fn make_filling(edges: Vec<Handle>, points: Vec<Xyz>, order: usize, points_per_edge: usize) -> PyResult<Handle> {
     let edges: Vec<Shape> = edges.iter().map(|h| h.shape).collect();
     let options = kentron::fill::FillingOptions { order, points: points.into_iter().map(point).collect(), points_per_edge };

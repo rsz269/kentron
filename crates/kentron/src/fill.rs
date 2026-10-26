@@ -23,14 +23,15 @@ pub struct FillingOptions {
     pub order: usize,
     /// Points within the loop the surface passes through.
     pub points: Vec<Point>,
-    /// How many points along each edge the surface passes through; between them it may stray
-    /// from the edge, the face's tolerance covering that.
+    /// How many points along an edge the surface passes through on average (OCCT's
+    /// `NbPtsOnCur`): each edge takes its share by its length, between them the surface may
+    /// stray from it, the face's tolerance covering that.
     pub points_per_edge: usize,
 }
 
 impl Default for FillingOptions {
     fn default() -> Self {
-        FillingOptions { order: 3, points: Vec::new(), points_per_edge: 24 }
+        FillingOptions { order: 3, points: Vec::new(), points_per_edge: 15 }
     }
 }
 
@@ -67,9 +68,9 @@ pub fn n_sided(model: &mut Model, edges: &[Shape], options: &FillingOptions) -> 
 /// given (the face reversed where its surface faces the other way).
 pub(crate) fn face_on_loop(model: &mut Model, runs: &[(crate::topology::EdgeId, Orientation, crate::geometry::curve::Curve, f64, f64)], options: &FillingOptions) -> Result<Shape> {
     let order = options.order.clamp(2, 4);
-    // The loop as a polygon, and its mean plane (Newell's normal through the centroid).
-    // (Fewer along each of many edges: the plate's system grows with the cube of the points.)
-    let per_edge = options.points_per_edge.min(BUDGET / runs.len().max(1)).max(3) - 1;
+    // The loop as a polygon (20 points along each edge, as OCCT's average plane takes them),
+    // and its mean plane (Newell's normal through the centroid).
+    let per_edge = 20;
     let mut polygon = Vec::new();
     for (_, o, curve, first, last) in runs {
         let mut ts: Vec<f64> = (0..per_edge).map(|k| first + (last - first) * k as f64 / per_edge as f64).collect();
@@ -107,17 +108,62 @@ pub(crate) fn face_on_loop(model: &mut Model, runs: &[(crate::topology::EdgeId, 
         let least = Vector::new(least[0], least[1], least[2]);
         if least.dot(normal) < 0.0 { -least } else { least }
     };
+    // (In the plane, the axes the constraints spread most along and least, as OCCT's average
+    // plane takes them: the plate is scaled along each by the constraints' extent.)
     let e1 = {
         let a = if normal.x.abs() < 0.9 { Vector::new(1.0, 0.0, 0.0) } else { Vector::new(0.0, 1.0, 0.0) };
-        (a - normal * a.dot(normal)).normalized()
+        let a = (a - normal * a.dot(normal)).normalized();
+        let b = normal.cross(a);
+        let (mut cxx, mut cyy, mut cxy) = (0.0, 0.0, 0.0);
+        let all: Vec<Point> = polygon.iter().chain(&options.points).copied().collect();
+        let mean = Point::ORIGIN + all.iter().fold(Vector::new(0.0, 0.0, 0.0), |s, p| s + (*p - Point::ORIGIN)) * (1.0 / all.len() as f64);
+        for p in &all {
+            let (x, y) = ((*p - mean).dot(a), (*p - mean).dot(b));
+            (cxx, cyy, cxy) = (cxx + x * x, cyy + y * y, cxy + x * y);
+        }
+        let angle = 0.5 * (2.0 * cxy).atan2(cxx - cyy);
+        a * angle.cos() + b * angle.sin()
     };
     let e2 = normal.cross(e1);
     let flat = |p: Point| Point2::new((p - center).dot(e1), (p - center).dot(e2));
     let height = |p: Point| (p - center).dot(normal);
-    // The constraints: the loop's samples and the points, each once.
+    // The constraints: points along the edges and the points given, each once. Along the
+    // edges as OCCT's plate takes them: each edge its share of 1.2 times as many points as
+    // asked for in all, by its length (3 at least), closer together towards its ends (by
+    // the cosine of even steps along its length on the plane).
+    // (Fewer in all with many edges: the plate's system grows with the cube of the points.)
     let size = polygon.iter().map(|p| p.distance(center)).fold(0.0, f64::max);
+    let lengths: Vec<Vec<(f64, f64)>> = runs
+        .iter()
+        .map(|(_, _, curve, first, last)| {
+            let k = 64;
+            let mut acc = vec![(*first, 0.0)];
+            for i in 1..=k {
+                let (t0, t1) = (first + (last - first) * (i - 1) as f64 / k as f64, first + (last - first) * i as f64 / k as f64);
+                let (a, b) = (flat(curve.point(t0)), flat(curve.point(t1)));
+                acc.push((t1, acc[i - 1].1 + (b.x - a.x).hypot(b.y - a.y)));
+            }
+            acc
+        })
+        .collect();
+    let total: f64 = lengths.iter().map(|l| l[l.len() - 1].1).sum();
+    let wanted = (options.points_per_edge * runs.len()) as f64;
+    let thin = (BUDGET as f64 / (1.2 * wanted).max(1.0)).min(1.0);
+    let mut along = Vec::new();
+    for ((_, _, curve, _, _), l) in runs.iter().zip(&lengths) {
+        let length = l[l.len() - 1].1;
+        let count = ((1.2 * wanted * thin * length / total.max(1e-300)) as usize).max(3);
+        for j in 0..count {
+            let s = length * (1.0 - (j as f64 * std::f64::consts::PI / (count - 1) as f64).cos()) / 2.0;
+            // (The parameter at that length, between the samples about it.)
+            let i = l.partition_point(|&(_, a)| a < s).clamp(1, l.len() - 1);
+            let ((t0, a0), (t1, a1)) = (l[i - 1], l[i]);
+            let t = if a1 > a0 { t0 + (t1 - t0) * (s - a0) / (a1 - a0) } else { t1 };
+            along.push(curve.point(t));
+        }
+    }
     let mut sites: Vec<(Point2, f64)> = Vec::new();
-    for p in polygon.iter().chain(&options.points) {
+    for p in along.iter().chain(&options.points) {
         let (q, h) = (flat(*p), height(*p));
         if !sites.iter().any(|(s, _)| (s.x - q.x).hypot(s.y - q.y) <= 1e-9 * size) {
             sites.push((q, h));
@@ -158,7 +204,7 @@ pub(crate) fn face_on_loop(model: &mut Model, runs: &[(crate::topology::EdgeId, 
     let mut uses = Vec::with_capacity(runs.len());
     let mut worst: f64 = 0.0;
     for (edge, o, curve, first, last) in runs {
-        let k = 4 * per_edge.max(24);
+        let k = 96;
         let ts: Vec<f64> = (0..=k).map(|i| first + (last - first) * i as f64 / k as f64).collect();
         let on_plane: Vec<Point2> = ts.iter().map(|&t| flat(curve.point(t))).collect();
         for (t, q) in ts.iter().zip(&on_plane) {
@@ -243,14 +289,20 @@ struct Plate {
     /// The polynomial's coefficients, over monomials `x^a y^b` with `a + b < order`.
     polynomial: Vec<f64>,
     order: usize,
-    /// Coordinates scaled by this (the sites within about the unit disc).
-    scale: f64,
+    /// Coordinates scaled by these, each way (the sites' box within about the unit square:
+    /// the plate's energy measured so, as OCCT's is).
+    scale: (f64, f64),
 }
 
 impl Plate {
     fn through(sites: &[(Point2, f64)], order: usize, size: f64) -> Result<Plate> {
-        let scale = 1.0 / size.max(1e-300);
-        let at: Vec<Point2> = sites.iter().map(|(p, _)| Point2::new(p.x * scale, p.y * scale)).collect();
+        // (Each way by half the sites' extent that way.)
+        let half = |f: &dyn Fn(&Point2) -> f64| {
+            let (lo, hi) = sites.iter().map(|(p, _)| f(p)).fold((f64::INFINITY, f64::NEG_INFINITY), |(l, h), x| (l.min(x), h.max(x)));
+            (0.5 * (hi - lo)).max(1e-9 * size).max(1e-300)
+        };
+        let scale = (1.0 / half(&|p| p.x), 1.0 / half(&|p| p.y));
+        let at: Vec<Point2> = sites.iter().map(|(p, _)| Point2::new(p.x * scale.0, p.y * scale.1)).collect();
         let n = at.len();
         let monomials = Self::monomials(order);
         let m = monomials.len();
@@ -290,7 +342,7 @@ impl Plate {
     }
 
     fn at(&self, p: Point2) -> f64 {
-        let p = Point2::new(p.x * self.scale, p.y * self.scale);
+        let p = Point2::new(p.x * self.scale.0, p.y * self.scale.1);
         let mut h: f64 = self.sites.iter().zip(&self.weights).map(|(s, w)| w * Self::kernel(p, *s, self.order)).sum();
         for (k, &(px, py)) in Self::monomials(self.order).iter().enumerate() {
             h += self.polynomial[k] * p.x.powi(px as i32) * p.y.powi(py as i32);
@@ -377,6 +429,25 @@ mod tests {
         let corners = [Point::new(0.0, 0.0, 0.0), Point::new(10.0, 0.0, lift), Point::new(10.0, 10.0, 0.0), Point::new(0.0, 10.0, lift)];
         // (Given out of order, one the other way round.)
         [(0, 1), (2, 3), (2, 1), (3, 0)].iter().map(|&(i, j)| crate::make::edge_between(model, corners[i], corners[j]).unwrap()).collect()
+    }
+
+    /// A 20 x 10 rectangle's filling through a point 3 above its middle: its plate measured
+    /// along the rectangle's own axes, each scaled by its half width, as OCCT's is (OCCT's
+    /// heights at points within it, and its area 221.3898).
+    #[test]
+    fn a_long_loop_fills_as_occt_measures_its_plate() {
+        let mut model = Model::new();
+        let corners = [Point::new(0.0, 0.0, 0.0), Point::new(20.0, 0.0, 0.0), Point::new(20.0, 10.0, 0.0), Point::new(0.0, 10.0, 0.0)];
+        let edges: Vec<Shape> = (0..4).map(|i| crate::make::edge_between(&mut model, corners[i], corners[(i + 1) % 4]).unwrap()).collect();
+        let options = FillingOptions { points: vec![Point::new(10.0, 5.0, 3.0)], ..Default::default() };
+        let face = n_sided(&mut model, &edges, &options).unwrap();
+        let surface = model.surface(face).unwrap().clone();
+        for (x, y, z) in [(10.0, 5.0, 3.0), (5.0, 5.0, 1.8935), (15.0, 2.5, 1.2191), (3.0, 7.0, 0.8482)] {
+            let (_, _, d) = crate::geometry::extrema::nearest_on_surface(Point::new(x, y, z), &surface, None);
+            assert!(d < 2e-4, "{x} {y}: {d}");
+        }
+        let area = crate::properties::area(&model, face).mass;
+        assert!((area - 221.3898).abs() < 1e-3, "{area}");
     }
 
     #[test]

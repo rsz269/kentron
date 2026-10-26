@@ -1690,14 +1690,17 @@ class Face(Shape):
     @classmethod
     def makeNSidedSurface(cls, edges, constraints=(), continuity=None, degree: int = 3, *args, **kwargs) -> "Face":
         """The face spanning the closed loop of `edges` (edges or wires) through the points of
-        `constraints`, of least bending energy (OCCT's filling: `degree` the energy's order;
-        the other settings, its approximation's, are not needed)."""
+        `constraints`, of least bending energy (OCCT's filling: `degree` the energy's order,
+        `nbPtsOnCur` the points taken along each edge on average; the other settings, its
+        approximation's, are not needed)."""
         points = []
         for c in constraints:
             if isinstance(c, Shape):
                 raise NotImplementedError("filling surfaces constrained by curves within them")
             points.append(_tuple(c))
-        return Shape.cast(native.make_filling([e.wrapped for e in edges], points, int(degree)))
+        # (nbPtsOnCur, after degree: points along each edge on average.)
+        per_edge = kwargs.get("nbPtsOnCur", args[0] if args else 15)
+        return Shape.cast(native.make_filling([e.wrapped for e in edges], points, int(degree), int(per_edge)))
 
     @classmethod
     def makeSplineApprox(cls, points, tol: float = 1e-2, smoothing=None, minDeg: int = 1, maxDeg: int = 3) -> "Face":

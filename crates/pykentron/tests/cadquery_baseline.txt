@@ -81,7 +81,6 @@ tests.test_cadquery.TestCadQuery::testNullShape
 tests.test_cadquery.TestCadQuery::testSplineApprox
 tests.test_cadquery.TestCadQuery::testSweep
 tests.test_cadquery.TestCadQuery::testToOCC
-tests.test_cadquery.TestCadQuery::test_interpPlate
 tests.test_cadquery.TestCadQuery::test_makeNSidedSurface
 tests.test_cadquery.TestCadQuery::test_project
 tests.test_cadquery.TestCadQuery::test_toVtk
