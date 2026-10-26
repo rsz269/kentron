@@ -227,18 +227,15 @@ fn bug24094() -> DrawResult<()> {
 
 /// `tests/bugs/modalg_6/bug24161`
 #[test]
-#[should_panic]
-fn bug24161() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.restore(&[data_file("bug24161_MirrorSolids.brep").as_str(), "m"])?;
-        d.explode(&["m"])?;
-        d.bop(&["m_1", "m_2"])?;
-        d.bopfuse(&["result"])?;
-        d.checkshape(&["result"])?;
-        d.bopargcheck(&["result"])?;
-        Ok(())
-    })
+fn bug24161() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.restore(&[data_file("bug24161_MirrorSolids.brep").as_str(), "m"])?;
+    d.explode(&["m"])?;
+    d.bop(&["m_1", "m_2"])?;
+    d.bopfuse(&["result"])?;
+    d.checkshape(&["result"])?;
+    d.bopargcheck(&["result"])?;
+    Ok(())
 }
 
 /// `tests/bugs/modalg_6/bug24417`

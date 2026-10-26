@@ -238,9 +238,23 @@ impl Graph {
         // Each piece once (coincident pieces of the two operands are one): those of the
         // boundary first.
         let mut reps: crate::hashing::FastSet<usize> = arcs.iter().map(|a: &ArcOnFace| pieces[a.piece].rep).collect();
+        // (Not a piece of a section followed past a free-form face's surface's bounds, on the
+        // surface carried on beyond them, its points (those within it) off the surface itself
+        // (their feet held on its bounds) by more than the face's edges may stray, and by a tenth of its
+        // length (a fitted section strays a little between its fit points): not on the face.)
+        let reach = (2.0 * face.drift).max(4.0 * geom::on_tol());
+        let freeform = geom::freeform(&face.surface);
+        let off_surface = |p: &Piece| {
+            let edge = &self.edges[p.edge];
+            let length = edge.point(p.first, &self.vertices).distance(edge.point(p.last, &self.vertices));
+            freeform && [0.25, 0.5, 0.75].iter().all(|&s| {
+                let x = edge.point(p.first + (p.last - p.first) * s, &self.vertices);
+                geom::surface_point(&face.surface, geom::uv_of(&face.surface, x)).distance(x) > reach.max(0.1 * length)
+            })
+        };
         for &e in &face.sections {
             for &pi in &of_edge[e] {
-                if reps.insert(pieces[pi].rep) {
+                if !off_surface(&pieces[pi]) && reps.insert(pieces[pi].rep) {
                     arcs.push(self.arc_from_3d(fi, &pieces[pi], pi));
                 }
             }

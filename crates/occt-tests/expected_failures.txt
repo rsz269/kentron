@@ -503,7 +503,6 @@ tests/bugs/modalg_6/bug21246
 tests/bugs/modalg_6/bug21727
 tests/bugs/modalg_6/bug22794
 tests/bugs/modalg_6/bug23585
-tests/bugs/modalg_6/bug24161
 tests/bugs/modalg_6/bug24803
 tests/bugs/modalg_6/bug24932
 tests/bugs/modalg_6/bug25055

@@ -457,6 +457,10 @@ fn aligned_pcurve(curve: &Curve, surface: &crate::geometry::surface::Surface, fi
                 // (A section in the tolerance of the face's edges, as where faces meet within
                 // it past the surface's domain: as far off as those edges may be.)
                 .or_else(|| (drift > TOL).then(|| project::polyline_pcurve_on_range_from(curve, surface, first, last, drift, start)).flatten())
+                // (Or twice as far, as an edge of the other shape taken as lying on a face
+                // whose edges are that loose (a filling's), but leaving it near a corner: the
+                // edge's tolerance then covers how far it strays.)
+                .or_else(|| (drift > TOL).then(|| project::polyline_pcurve_on_range_from(curve, surface, first, last, 2.0 * drift, start)).flatten())
                 .map(Curve2::BSpline)
                 .ok_or_else(|| Error::InvalidInput("no pcurve for a section edge".into()))?
         }

@@ -379,9 +379,19 @@ fn run_with_sections(model: &mut Model, a: Shape, b: Shape, operation: Operation
     }
     let crossing = |p: &crate::validity::Problem| p.kind == crate::validity::ProblemKind::SelfIntersection;
     match crate::tolerance::with_loosened(true, || run_tolerant(model, a, b, operation)) {
-        Ok((r, s, _)) if crate::validity::check(model, r).errors().all(crossing) => Ok((r, s)),
-        _ => first.map(|(r, s, _)| (r, s)),
+        Ok((r, s, _)) if crate::validity::check(model, r).errors().all(crossing) => return Ok((r, s)),
+        _ => {}
     }
+    // (A union or an intersection the other way round, the same operation: where the
+    // operands meet in pieces about as small as the tolerance (walls of plates nearly
+    // touching at a corner), which of them is traced first may decide whether the pieces
+    // close up. Taken where its shells close.)
+    if matches!(operation, Operation::Union | Operation::Intersection) {
+        if let Ok((r, s, true)) = run_tolerant(model, b, a, operation) {
+            return Ok((r, s));
+        }
+    }
+    first.map(|(r, s, _)| (r, s))
 }
 
 /// Whether every shell of `shape` is closed (each edge used by its faces once each way).
