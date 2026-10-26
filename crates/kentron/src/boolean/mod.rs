@@ -256,7 +256,7 @@ impl PointClassifier {
 
     /// Where `p` lies with respect to the shape's solids.
     pub fn locate(&self, p: crate::math::Point) -> PointLocation {
-        match self.graph.classify(p, crate::math::Vector::new(0.0, 0.0, 1.0), 0) {
+        match self.graph.classify(p, crate::math::Vector::new(0.0, 0.0, 1.0), 0, geom::ON_TOL) {
             State::Inside => PointLocation::Inside,
             State::Outside => PointLocation::Outside,
             State::OnSame | State::OnOpposite => PointLocation::Boundary,
@@ -506,7 +506,7 @@ fn classified(model: &Model, graph: &mut Graph) -> (Vec<split::Piece>, Vec<Vec<s
         let at = |uv: geom::Uv| {
             let p = geom::surface_point(&face.surface, uv);
             let outward = geom::normal_at(&face.surface, uv) * face.outward;
-            graph.classify(p, outward, 1 - face.operand)
+            graph.classify(p, outward, 1 - face.operand, face.drift)
         };
         let state = at(region.interior);
         if !matches!(state, State::OnSame | State::OnOpposite) {
@@ -730,6 +730,40 @@ mod tests {
     use crate::primitives::{Cone, Cuboid, Cylinder, Sphere};
     use crate::topology::NodeKind;
     use crate::{properties, validity};
+
+    /// A door (25 x 4.5 x 55) with its lower corners cut away by a block (5 x 4.5 x 20, as
+    /// thick as the door) whose upper edge is chamfered back all but 1e-6 of its width,
+    /// leaving a sliver of its top face 1e-6 wide standing on the door's side: the sliver is
+    /// not taken as lying on the side (it stands across it, apart from it by more than the
+    /// faces' tolerances), and stays in the result, closing it (OCCT's volume).
+    #[test]
+    fn a_sliver_standing_on_a_face_is_not_on_it() {
+        let mut model = Model::new();
+        let door = Cuboid::from_corners(Point::new(-12.5, -2.25, -27.5), Point::new(12.5, 2.25, 27.5)).build(&mut model).unwrap();
+        let block = Cuboid::from_corners(Point::new(-2.5, -2.25, -10.0), Point::new(2.5, 2.25, 10.0)).build(&mut model).unwrap();
+        let top_right: Vec<Shape> = model
+            .unique_subshapes(block, NodeKind::Edge)
+            .into_iter()
+            .filter(|&e| {
+                let (a, b) = model.edge_vertices(e);
+                let (p, q) = (model.point(a), model.point(b));
+                (p.x - 2.5).abs() < 1e-9 && (q.x - 2.5).abs() < 1e-9 && (p.z - 10.0).abs() < 1e-9 && (q.z - 10.0).abs() < 1e-9
+            })
+            .collect();
+        assert_eq!(top_right.len(), 1);
+        let block = crate::blend::chamfer(&mut model, block, &top_right, 4.999999).unwrap();
+        let cut = |model: &mut Model, body: Shape, at: crate::math::Transform| {
+            let tool = crate::modify::transform(model, block, &at, Default::default()).unwrap();
+            difference(model, body, tool).unwrap()
+        };
+        let lower_left = crate::math::Transform::translation(Vector::new(-10.0, 0.0, -17.5));
+        let once = cut(&mut model, door, lower_left);
+        assert!(validity::check(&model, once).is_valid(), "{:?}", validity::check(&model, once));
+        let twice = cut(&mut model, once, crate::math::Transform::rotation(crate::math::Axis::Z, PI) * lower_left);
+        assert!(validity::check(&model, twice).is_valid(), "{:?}", validity::check(&model, twice));
+        let v = properties::volume(&model, twice).mass;
+        assert!((v - 5400.0).abs() < 1e-3, "{v}");
+    }
 
     fn cuboid(model: &mut Model, corner: (f64, f64, f64), size: (f64, f64, f64)) -> Shape {
         let p = Point::new(corner.0, corner.1, corner.2);

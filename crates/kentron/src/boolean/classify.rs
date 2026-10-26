@@ -31,12 +31,19 @@ const DIRECTIONS: [(f64, f64, f64); 7] = [
 
 impl Graph {
     /// Where `p`, inside a piece with outward normal `outward`, lies with respect to
-    /// operand `operand`.
-    pub fn classify(&self, p: Point, outward: Vector, operand: usize) -> State {
+    /// operand `operand`; `drift`, how far the piece's own face's edges may stray from it.
+    pub fn classify(&self, p: Point, outward: Vector, operand: usize, drift: f64) -> State {
         let faces = self.faces_of(operand);
         for g in self.index().faces_containing(operand, p) {
             let face = &self.faces[g];
-            if geom::signed_distance(&face.surface, p).abs() <= on_tol()
+            // (On it within the usual distance where the piece lies along it (faces a little
+            // apart taken as one); across it, as a sliver of a face standing on the other,
+            // within a few times the tolerances of the faces' edges, at least the linear
+            // tolerance's: faces exact to it are told apart a few times that apart.)
+            let n = face.outward_normal(p);
+            let along = outward.dot(n).abs() >= 0.9 * outward.length() * n.length();
+            let near = if along { on_tol() } else { (3.0 * face.drift.max(drift).max(geom::TOL)).min(on_tol()) };
+            if geom::signed_distance(&face.surface, p).abs() <= near
                 && face.locate(p, &self.edges, &self.vertices) != Location::Outside
             {
                 return if outward.dot(face.outward_normal(p)) > 0.0 { State::OnSame } else { State::OnOpposite };
