@@ -999,10 +999,15 @@ impl Section {
     /// singular point passes it more than once), each with whether it was found only near a
     /// point where the surfaces touch crossing (see [`touching_across`]).
     fn passes(&self, p: Point) -> Vec<(f64, bool)> {
+        self.passes_within(p, on_tol())
+    }
+
+    /// [`Self::passes`], `p` within `tolerance` of the curve (on both surfaces as nearly).
+    fn passes_within(&self, p: Point, tolerance: f64) -> Vec<(f64, bool)> {
         if let Section::Sampled(points, closed, traced) = self {
             // On the curve only if on both surfaces (one inversion each, before refining
             // along the curve).
-            if geom::signed_distance(&traced.base, p).abs() > on_tol() || geom::signed_distance(&traced.other, p).abs() > on_tol() {
+            if geom::signed_distance(&traced.base, p).abs() > tolerance || geom::signed_distance(&traced.other, p).abs() > tolerance {
                 return Vec::new();
             }
             // Each stretch of the polyline passing near p (a local minimum of the gap), refined
@@ -1028,7 +1033,7 @@ impl Section {
             let mut out: Vec<(f64, bool)> = Vec::new();
             for i in 0..segments {
                 let (d, s, length) = gaps[i];
-                if d > 2.0 * length + on_tol() || d > gap_at(i as isize - 1) || d >= gap_at(i as isize + 1) {
+                if d > 2.0 * length + tolerance || d > gap_at(i as isize - 1) || d >= gap_at(i as isize + 1) {
                     continue;
                 }
                 let (t, dist) = self.project_near(p, i as f64 + s);
@@ -1037,10 +1042,10 @@ impl Section {
                 // refining onto both is singular: a point on both surfaces within the samples'
                 // spacing (two samples', where the tracing's cells are coarse) of the polyline
                 // may be on it there.
-                let found = if dist <= on_tol() {
+                let found = if dist <= tolerance {
                     Some((t, false))
                 } else {
-                    (d <= 2.0 * length + on_tol() && touching_across(&traced.base, &traced.other, p)).then_some((i as f64 + s, true))
+                    (d <= 2.0 * length + tolerance && touching_across(&traced.base, &traced.other, p)).then_some((i as f64 + s, true))
                 };
                 if let Some(found) = found.filter(|&(t, _)| !out.iter().any(|&(u, _)| (u - t).abs() <= 1.5)) {
                     out.push(found);
@@ -1053,7 +1058,7 @@ impl Section {
             Section::Chain(branches, _, samples) => (branches.len() * 512, samples),
             _ => {
                 let (t, d) = self.project(p);
-                return if d <= on_tol() { vec![(t, false)] } else { Vec::new() };
+                return if d <= tolerance { vec![(t, false)] } else { Vec::new() };
             }
         };
         let len = self.range().1;
@@ -1070,7 +1075,7 @@ impl Section {
             // A local minimum no farther than the neighbouring samples are apart (the
             // parameter is not proportional to arc length, so compare in space).
             let spacing = samples[(i + n - 1) % n].distance(samples[(i + 1) % n]);
-            if b > a || b > c || b > spacing + on_tol() {
+            if b > a || b > c || b > spacing + tolerance {
                 continue;
             }
             let (mut lo, mut hi) = (step * (i as f64 - 1.0), step * (i as f64 + 1.0));
@@ -1085,13 +1090,13 @@ impl Section {
             }
             let t = 0.5 * (lo + hi);
             let t = if *closed { t.rem_euclid(len) } else { t.clamp(0.0, len) };
-            if self.point(t).distance(p) <= on_tol() && !out.iter().any(|&u| (u - t).abs() <= 2.0 * step) {
+            if self.point(t).distance(p) <= tolerance && !out.iter().any(|&u| (u - t).abs() <= 2.0 * step) {
                 out.push(t);
             }
         }
         if !closed {
             for t in [0.0, len] {
-                if self.point(t).distance(p) <= on_tol() && !out.iter().any(|&u| (u - t).abs() <= 2.0 * step) {
+                if self.point(t).distance(p) <= tolerance && !out.iter().any(|&u| (u - t).abs() <= 2.0 * step) {
                     out.push(t);
                 }
             }
@@ -2087,8 +2092,10 @@ impl Graph {
             Vertex(usize),
             /// The edge lies on the face's surface.
             On,
-            /// The edge crosses the face at these parameters and points.
-            At(Vec<(f64, Point)>),
+            /// The edge crosses the face at these parameters and points (and, where it meets
+            /// the face at its boundary, within the tolerances of a boundary edge, that edge
+            /// and its parameter: both split at one vertex).
+            At(Vec<(f64, Point, Option<(usize, f64)>)>),
         }
         // Each edge's meetings, found for all edges at once (locating points reads the
         // operands' own edges and vertices, which this does not change); then recorded in
@@ -2143,12 +2150,23 @@ impl Graph {
                             .into_iter()
                             .map(|t| (t, curve.point(t)))
                             .filter_map(|(t, p)| {
-                                if face.locate(p, &self.edges, &self.vertices) != Location::Outside
-                                    || (face.drift > on_tol() && face.near_boundary(p, face.drift, &self.edges, &self.vertices))
-                                {
-                                    return Some((t, p));
+                                let location = face.locate(p, &self.edges, &self.vertices);
+                                if location == Location::Inside {
+                                    return Some((t, p, None));
                                 }
-                                self.meeting_at_boundary(curve, edge.first, edge.last, t, face)
+                                // (On its boundary, or near it: a boundary edge passing within
+                                // the tolerances is met there too; on a free-form face at any
+                                // angle, within the face's own tolerance where that is wider
+                                // (at most a thousand times the classifying distance), as
+                                // where the rims of two filled faces' walls cross.)
+                                if location == Location::Boundary || (face.drift > on_tol() && face.near_boundary(p, face.drift, &self.edges, &self.vertices)) {
+                                    let within = if geom::freeform(&face.surface) && face.drift > on_tol() { face.drift.min(1e3 * on_tol()) } else { 0.0 };
+                                    return match self.meeting_at_boundary(curve, edge.first, edge.last, t, face, within) {
+                                        Some(crossing @ (_, _, Some(_))) => Some(crossing),
+                                        _ => Some((t, p, None)),
+                                    };
+                                }
+                                self.meeting_at_boundary(curve, edge.first, edge.last, t, face, 0.0)
                             })
                             .collect();
                         meetings.push((fi, Meeting::At(at)));
@@ -2163,10 +2181,36 @@ impl Graph {
                     Meeting::Vertex(v) => self.faces[fi].vertices_on.push(v),
                     Meeting::On => self.faces[fi].on_edges.push(ei),
                     Meeting::At(at) => {
-                        for (t, p) in at {
-                            let v = self.vertices.add(p);
-                            self.add_pave(ei, t, v);
-                            self.faces[fi].vertices_on.push(v);
+                        for (t, p, crossing) in at {
+                            match crossing {
+                                Some((other, s)) => {
+                                    // (As far off the surfaces as the edges are apart there.)
+                                    let gap = self.edges[other].point(s, &self.vertices).distance(p);
+                                    let within = 2.0 * gap + on_tol();
+                                    // (The vertex either edge has there already, from the
+                                    // other's meeting this one's face: one for both.)
+                                    let known = [ei, other].iter().flat_map(|&e| self.edges[e].paves.iter().map(|&(_, v)| v)).find(|&v| self.vertices.points[v].distance(p) <= within);
+                                    let v = match known {
+                                        Some(v) => {
+                                            let q = self.vertices.points[v];
+                                            let (a, b) = (&self.edges[ei], &self.edges[other]);
+                                            let (t, s) = (geom::project(a.curve.as_ref().unwrap(), a.first, a.last, q).0, geom::project(b.curve.as_ref().unwrap(), b.first, b.last, q).0);
+                                            self.add_pave(ei, t, v);
+                                            self.add_pave(other, s, v);
+                                            v
+                                        }
+                                        None => self.add_crossing(ei, t, other, s),
+                                    };
+                                    self.faces[fi].vertices_on.push(v);
+                                    let allowance = self.loose_vertices.entry(v).or_insert(0.0);
+                                    *allowance = allowance.max(within);
+                                }
+                                None => {
+                                    let v = self.vertices.add(p);
+                                    self.add_pave(ei, t, v);
+                                    self.faces[fi].vertices_on.push(v);
+                                }
+                            }
                         }
                     }
                 }
@@ -2177,13 +2221,13 @@ impl Graph {
     /// Splits two edges where they cross (at `t` on `e1`, `s` on `e2`). Where they cross at
     /// a small angle the point is found only roughly along them (by the tolerance over the
     /// angle's sine): an end vertex of either within that is where they meet.
-    fn add_crossing(&mut self, e1: usize, t: f64, e2: usize, s: f64) {
+    fn add_crossing(&mut self, e1: usize, t: f64, e2: usize, s: f64) -> usize {
         let p = self.edges[e1].point(t, &self.vertices);
         let (Some(c1), Some(c2)) = (self.edges[e1].curve.clone(), self.edges[e2].curve.clone()) else {
             let v = self.vertices.add(p);
             self.add_pave(e1, t, v);
             self.add_pave(e2, s, v);
-            return;
+            return v;
         };
         let (d1, d2) = (c1.d1(t).1, c2.d1(s).1);
         let sine = d1.cross(d2).length() / (d1.length() * d2.length()).max(1e-300);
@@ -2203,11 +2247,13 @@ impl Graph {
                 };
                 self.add_pave(e1, t, v);
                 self.add_pave(e2, s, v);
+                v
             }
             None => {
                 let v = self.vertices.add(p);
                 self.add_pave(e1, t, v);
                 self.add_pave(e2, s, v);
+                v
             }
         }
     }
@@ -2251,8 +2297,11 @@ impl Graph {
     /// within the tolerance over the sine of that angle along the surface, so where the face's
     /// boundary is that near, the edge meets it there: at the edge's point nearest the
     /// boundary edge, where the two pass within the tolerance (as where two faces lying
-    /// nearly on one another have their edges cross). `None` otherwise.
-    fn meeting_at_boundary(&self, curve: &Curve, first: f64, last: f64, t: f64, face: &Face) -> Option<(f64, Point)> {
+    /// nearly on one another have their edges cross), the boundary edge given to be split
+    /// there too. So too at any angle where the boundary edge passes `within` (the face's
+    /// own tolerance, met on or near its boundary): the edges cross there, one vertex
+    /// splitting both. `None` otherwise.
+    fn meeting_at_boundary(&self, curve: &Curve, first: f64, last: f64, t: f64, face: &Face, within: f64) -> Option<(f64, Point, Option<(usize, f64)>)> {
         let p = curve.point(t);
         let tangent = curve.d1(t).1;
         let n = face.outward_normal(p);
@@ -2261,10 +2310,11 @@ impl Graph {
             return None;
         }
         let sine = (tangent.dot(n) / (a * b)).abs();
-        if sine >= TANGENT_SINE {
+        let tangent = sine < TANGENT_SINE;
+        if !tangent && within <= 0.0 {
             return None;
         }
-        let reach = on_tol() / sine.max(1e-6);
+        let reach = if tangent { on_tol() / sine.max(1e-6) } else { 0.0 }.max(within);
         // The nearest boundary edge of the face, and the closest points of the two curves
         // (alternate projections from `p`).
         let nearest = face
@@ -2289,7 +2339,24 @@ impl Graph {
             s = geom::project(other_curve, other.first, other.last, curve.point(u)).0;
         }
         let (x, y) = (curve.point(u), other_curve.point(s));
-        (x.distance(y) <= on_tol().max(other.tolerance)).then_some((u, x))
+        let gap = x.distance(y);
+        // (Within the boundary edge's tolerance, or the tolerance over the sine of the angle
+        // the edge meets the face's surface at (as the rims of two faces lying nearly on one
+        // another, passing a hair apart where they would cross): one vertex splits both. At
+        // most a thousandth, and only on a free-form face (an edge lying along an exact one
+        // is found on it as such).)
+        // (Within the boundary edge's own tolerance, or where the edge comes nearest it at an
+        // end of it (passing a corner of the face, not crossing an edge): the edge's point
+        // only.)
+        let at_end = [other.start, other.end].iter().any(|&v| self.vertices.points[v].distance(y) <= gap.max(on_tol()));
+        if gap <= on_tol().max(other.tolerance) {
+            return Some((u, x, None));
+        }
+        if at_end {
+            return None;
+        }
+        let loose = if tangent && geom::freeform(&face.surface) { (on_tol() / sine.max(1e-6)).min(1e-3) } else { 0.0 };
+        (gap <= loose.max(other.tolerance).max(within)).then_some((u, x, Some((nearest.1, s))))
     }
 
     /// Edges lying on a face of the other operand cross its boundary edges: splits both
@@ -2460,8 +2527,25 @@ impl Graph {
             // where the edge passes it: no edge crosses the other face there to tell.)
             let mut ends: Vec<Vec<(f64, usize, bool)>> = Vec::with_capacity(curves.len());
             for section in &curves {
-                let mut met = Vec::new();
+                let mut met: Vec<(f64, usize, bool)> = Vec::new();
                 for (edge, s, t, q) in self.section_end_meetings(fa, fb, section) {
+                    // (One vertex where it meets coincident edges, or meets an edge where it
+                    // has one already, or the sections cross: a vertex there lying on the
+                    // edge. Found along the edge only roughly, where the surfaces touch.)
+                    let e = &self.edges[edge];
+                    let on_edge = |v: usize| {
+                        let x = self.vertices.points[v];
+                        x.distance(q) <= 100.0 * on_tol() && e.curve.as_ref().is_some_and(|c| geom::project(c, e.first, e.last, x).1 <= 10.0 * on_tol())
+                    };
+                    let known = met.iter().map(|m| m.1).chain(e.paves.iter().map(|p| p.1)).chain(self.faces[fa].vertices_on.iter().chain(&self.faces[fb].vertices_on).copied());
+                    if let Some(v) = known.filter(|&v| on_edge(v)).min_by(|&v, &w| self.vertices.points[v].distance(q).total_cmp(&self.vertices.points[w].distance(q))) {
+                        let s = geom::project(e.curve.as_ref().unwrap(), e.first, e.last, self.vertices.points[v]).0;
+                        self.add_pave(edge, s, v);
+                        if !met.iter().any(|m| m.1 == v) {
+                            met.push((t, v, false));
+                        }
+                        continue;
+                    }
                     let v = self.vertices.add(q);
                     self.add_pave(edge, s, v);
                     self.faces[fa].vertices_on.push(v);
@@ -2555,7 +2639,9 @@ impl Graph {
                     if q.distance(self.vertices.points[e.start]) <= reach || q.distance(self.vertices.points[e.end]) <= reach {
                         continue;
                     }
-                    if !out.iter().any(|(_, _, _, p)| p.distance(q) <= reach) {
+                    // (Once on each edge: on edges of both faces where they coincide, as the
+                    // edge two faces lying nearly on one another each have.)
+                    if !out.iter().any(|&(other, _, _, p)| other == bound.edge && p.distance(q) <= reach) {
                         out.push((bound.edge, s, t, q));
                     }
                 }
@@ -2626,7 +2712,19 @@ impl Graph {
         // (Only of the points where an edge of one meets the other: a corner of a face near
         // the section is not on it.)
         let crossings: Vec<usize> = self.faces[fa].vertices_on.iter().chain(&self.faces[fb].vertices_on).copied().collect();
-        let exact: Vec<(f64, usize, bool)> = candidates.iter().flat_map(|&v| section.passes(self.vertices.points[v]).into_iter().map(move |(t, near)| (t, v, near))).collect();
+        // (A vertex where edges were taken to meet a hair apart is on the section within
+        // that.)
+        let exact: Vec<(f64, usize, bool)> = candidates
+            .iter()
+            .flat_map(|&v| {
+                let p = self.vertices.points[v];
+                let found = match self.loose_vertices.get(&v) {
+                    Some(&allowance) => section.passes_within(p, allowance),
+                    None => section.passes(p),
+                };
+                found.into_iter().map(move |(t, near)| (t, v, near))
+            })
+            .collect();
         // (Only where the section would otherwise have too few to make a piece of: elsewhere
         // the points found exactly bound it. Points within a few tolerances of each other
         // count once: the same point met by the edges of both faces, each off its face.)

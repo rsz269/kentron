@@ -514,7 +514,9 @@ impl Model {
             left.retain(|&x| x != c);
             sorted.push(c);
             // Where several coedges continue the chain (around a seam), the one whose pcurve
-            // starts where the current one's ends.
+            // starts where the current one's ends; first, one from the very vertex (where
+            // vertices lie within one another's tolerances, as the ends of edges shorter than
+            // those).
             let uv_gap = |a: CoEdgeId, b: CoEdgeId| -> f64 {
                 let at = |c: CoEdgeId, start: bool| {
                     let record = &self.coedges[c];
@@ -533,7 +535,7 @@ impl Model {
                     .iter()
                     .enumerate()
                     .filter(|&(_, &n)| meets(ends(c).1, ends(n).0))
-                    .min_by(|(_, &x), (_, &y)| uv_gap(c, x).total_cmp(&uv_gap(c, y)))
+                    .min_by(|(_, &x), (_, &y)| (ends(c).1 != ends(x).0).cmp(&(ends(c).1 != ends(y).0)).then(uv_gap(c, x).total_cmp(&uv_gap(c, y))))
                     .map(|(i, _)| i);
                 let Some(i) = next else { break };
                 c = left.remove(i);

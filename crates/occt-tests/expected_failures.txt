@@ -1002,7 +1002,6 @@ tests/heal/split_angle/F2
 tests/heal/split_angle_advanced/S8
 tests/heal/split_angle_advanced/ZA2
 tests/heal/split_angle_standard/F5
-tests/heal/split_angle_standard/I6
 tests/heal/split_angle_standard/R4
 tests/heal/split_angle_standard/ZL1
 tests/heal/split_angle_standard/ZR7

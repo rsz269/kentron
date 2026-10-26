@@ -484,6 +484,10 @@ pub(super) struct Graph {
     pub free_vertices: Vec<(usize, usize)>,
     /// The operands' vertices (unplaced) the graph's vertices are, which the result reuses.
     pub vertex_origin: HashMap<usize, VertexId>,
+    /// Vertices where edges meeting nearly along each other were taken to meet though a
+    /// hair apart, each with how far off the surfaces there it may lie (sections passing
+    /// them are found within that).
+    pub loose_vertices: HashMap<usize, f64>,
     /// Faces left out, far from the other operand.
     pub far: Vec<super::far::FarFace>,
     /// Per operand: a box holding each of its faces, in the order `Model::explore` lists
@@ -519,6 +523,7 @@ impl Graph {
             dimension: vec![0; n],
             free_vertices: Vec::new(),
             vertex_origin: HashMap::default(),
+            loose_vertices: HashMap::default(),
             far: Vec::new(),
             face_bounds: vec![Vec::new(); n],
             seq: 0,

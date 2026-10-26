@@ -699,15 +699,12 @@ fn i5() -> DrawResult<()> {
 
 /// `tests/heal/split_angle_standard/I6`
 #[test]
-#[should_panic]
-fn i6() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.restore(&[data_file("cts20736b.rle").as_str(), "a"])?;
-        d.DT_SplitAngle(&["result", "a"])?;
-        d.checkshape(&["result"])?;
-        Ok(())
-    })
+fn i6() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.restore(&[data_file("cts20736b.rle").as_str(), "a"])?;
+    d.DT_SplitAngle(&["result", "a"])?;
+    d.checkshape(&["result"])?;
+    Ok(())
 }
 
 /// `tests/heal/split_angle_standard/I7`

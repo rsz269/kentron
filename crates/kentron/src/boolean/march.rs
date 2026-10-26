@@ -673,6 +673,13 @@ impl Tracer<'_> {
         (q + es * ds + et * dt, es, et)
     }
 
+    /// Whether `(s, t)` lies past the other surface's own bounds (across a bound that is
+    /// not a period's), where `other_d1` carries it on.
+    fn past_own(&self, s: f64, t: f64) -> bool {
+        let (s0, s1, t0, t1) = self.own;
+        (self.bounds.u_period.is_none() && (s < s0 || s > s1)) || (self.bounds.v_period.is_none() && (t < t0 || t > t1))
+    }
+
     /// The point both surfaces share near `guess` (Newton steps moving all four parameters
     /// the least); `None` if they do not converge within the ranges.
     fn onto_both(&self, guess: Both) -> Option<Both> {
@@ -820,10 +827,11 @@ impl Tracer<'_> {
             return (out, false);
         };
         // Where the steps fail: the branch ends there where the surfaces turn tangent
-        // (meeting there, or touching along a curve, as a fillet the face it rolls on), else
-        // it is not followed.
+        // (meeting there, or touching along a curve, as a fillet the face it rolls on), or
+        // past the other's own bounds (on it carried on across its edge, kinked there, where
+        // no face lies), else it is not followed.
         let failed = |at: &Both| {
-            if self.sine(at) > TANGENT {
+            if self.sine(at) > TANGENT && !self.past_own(at.s, at.t) {
                 self.stopped.set(true);
             }
         };
