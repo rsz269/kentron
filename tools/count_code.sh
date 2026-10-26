@@ -7,9 +7,12 @@
 #     tools/gtest2yaml.py);
 #   - the not-implemented command stubs tools/draw2rs.py appends to
 #     crates/occt-tests/src/draw/commands.rs (the implemented commands there count);
+#   - code by others: CadQuery's sources vendored into pykentron's shim (listed in its
+#     VENDORED.txt) and the CadQuery scripts from public projects under
+#     crates/pykentron/tests/found/;
 #   - untracked files (scratch examples), documentation and JSON data.
 # Counted: the library with its unit tests, the hand-ported test suites, the test harness,
-# pykentron and the tools: one table, a row per part and the total, code lines by language.
+# pykentron (its own code) and the tools: one table, a row per part and the total, code lines by language.
 #
 # Usage: tools/count_code.sh [--by-file]   (--by-file: also every file's counts)
 
@@ -47,13 +50,22 @@ awk '
         }
     }' "$commands" > "$stripped"
 
+# CadQuery's files vendored into the shim: the indented lines of VENDORED.txt.
+vendored_dir=crates/pykentron/python/pykentron/cadquery_shim/cadquery
+sed -n 's/^  \(.*[^ ]\) *$/\1/p' "$vendored_dir/VENDORED.txt" | sed "s|^|$vendored_dir/|" > "$work/vendored"
+[[ -s "$work/vendored" ]] || { echo "no vendored files listed in $vendored_dir/VENDORED.txt" >&2; exit 1; }
+
 # The authored files among those git tracks under the given paths, one per line.
 authored() {
     git ls-files -- "$@" | while IFS= read -r f; do
         case "$f" in
             crates/occt-tests/cases/occt/*) continue ;;
+            crates/pykentron/tests/found/*) continue ;;
             "$commands") echo "$stripped"; continue ;;
         esac
+        if grep -qxF "$f" "$work/vendored"; then
+            continue
+        fi
         if [[ "$f" == *.rs ]] && head -n 1 "$f" | grep -q '@generated'; then
             continue
         fi
@@ -107,4 +119,7 @@ fi
 generated=$(git ls-files -- '*.rs' | while IFS= read -r f; do if head -n 1 "$f" | grep -q '@generated'; then echo "$f"; fi; done | wc -l)
 yaml=$(git ls-files -- 'crates/occt-tests/cases/occt/*' | wc -l)
 stubs=$(( $(grep -c 'pub fn' "$commands") - $(grep -c 'pub fn' "$stripped") ))
-echo "Left out: $generated generated Rust files, $yaml generated YAML files, $stubs generated command stubs."
+found=$(git ls-files -- crates/pykentron/tests/found | wc -l)
+vendored=$(wc -l < "$work/vendored")
+echo "Left out: $generated generated Rust files, $yaml generated YAML files, $stubs generated command stubs,"
+echo "$vendored vendored CadQuery files, $found files of CadQuery scripts from public projects."
