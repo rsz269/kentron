@@ -620,11 +620,7 @@ class Shape:
         if kind in ("Edge", "Wire"):
             return self.IsClosed()
         if kind == "Shell":
-            counts: Dict[Shape, int] = {}
-            for f in self.Faces():
-                for e in f.Edges():
-                    counts[e] = counts.get(e, 0) + 1
-            return bool(counts) and all(c >= 2 for c in counts.values())
+            return native.is_closed(self.wrapped)
         return kind in ("Solid", "CompSolid")
 
     # --- files ----------------------------------------------------------------------------

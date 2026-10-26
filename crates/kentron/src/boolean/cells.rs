@@ -329,8 +329,8 @@ pub(super) fn dimension(model: &Model, shape: Shape) -> u8 {
 }
 
 /// The parts of `shape` either side of `cutter` of lower dimension: a planar face across a
-/// solid splits it in two, sharing the face where they meet (also given); anything else
-/// leaves it whole.
+/// solid splits it in two, sharing the face where they meet (also given); other faces split
+/// it into the pieces of space they enclose with it; anything else leaves it whole.
 fn split_by(model: &mut Model, shape: Shape, cutter: Shape) -> Result<(Vec<Shape>, Option<Shape>)> {
     use crate::geometry::surface::Surface;
     use crate::math::Transformable;
@@ -340,7 +340,14 @@ fn split_by(model: &mut Model, shape: Shape, cutter: Shape) -> Result<(Vec<Shape
         return split_by_faces(model, shape, cutter);
     }
     let ([face], 3) = (faces.as_slice(), dimension(model, shape)) else { return whole };
-    let Some(Surface::Plane(plane)) = model.surface(*face).map(|s| s.transformed(&face.placement)) else { return whole };
+    // (A face on another surface reaching past the solid's box: as faces are, by the pieces
+    // of space it encloses with the solid. One within the box is left to cross it no more
+    // than before, which spares the search among many small faces inside.)
+    let Some(Surface::Plane(plane)) = model.surface(*face).map(|s| s.transformed(&face.placement)) else {
+        let (b, f) = (crate::properties::bounding_box(model, shape), crate::properties::bounding_box(model, *face));
+        let within = f.min.x >= b.min.x && f.min.y >= b.min.y && f.min.z >= b.min.z && f.max.x <= b.max.x && f.max.y <= b.max.y && f.max.z <= b.max.z;
+        return if within { whole } else { split_by_faces(model, shape, cutter) };
+    };
     // Across the solid: the face covers its shadow on the plane.
     let b = crate::properties::bounding_box(model, shape);
     let reach = (b.max - b.min).length();
@@ -467,5 +474,43 @@ mod tests {
         assert!((volume([true, true]) - 4.0).abs() < 1e-9);
         assert!((volume([true, false]) - 4.0).abs() < 1e-9);
         assert!((volume([false, true]) - 4.0).abs() < 1e-9);
+    }
+
+    /// A unit square split by a segment running across it (on past its sides): two halves,
+    /// the segment's part across it inside both shapes, its ends outside the square.
+    #[test]
+    fn a_face_is_split_by_an_edge_across_it() {
+        use crate::geometry::surface::{Plane, Surface};
+        let mut model = Model::new();
+        let square = crate::make::face_on_domain(&mut model, Surface::Plane(Plane::XY), 0.0, 1.0, 0.0, 1.0).unwrap();
+        let segment = crate::make::edge_between(&mut model, Point::new(-1.0, 0.5, 0.0), Point::new(2.0, 0.5, 0.0)).unwrap();
+        let found = cells(&mut model, &[square, segment]).unwrap();
+        let halves: Vec<f64> = found.iter().filter(|c| c.inside == [true, false]).map(|c| crate::properties::area(&model, c.shape).mass).collect();
+        assert_eq!(halves.len(), 2);
+        assert!(halves.iter().all(|a| (a - 0.5).abs() < 1e-9), "{halves:?}");
+        let length = |inside: [bool; 2]| -> f64 { found.iter().filter(|c| c.inside == inside && c.shape.kind() == NodeKind::Edge).map(|c| crate::properties::length(&model, c.shape).mass).sum() };
+        assert!((length([true, true]) - 1.0).abs() < 1e-9);
+        assert!((length([false, true]) - 2.0).abs() < 1e-9);
+    }
+
+    /// A box (1 x 1 x 3) split by a piece of a cylinder (radius 3.6, its axis along y 2
+    /// below the box) reaching past it on all sides: the parts below and above it.
+    #[test]
+    fn a_box_is_split_by_a_curved_face_across_it() {
+        use crate::geometry::surface::{Cylinder, Surface};
+        use crate::math::{Direction, Frame};
+        let mut model = Model::new();
+        let block = Cuboid::new(1.0, 1.0, 3.0).build(&mut model).unwrap();
+        let r = 3.6;
+        let axis = Frame::new(Point::new(0.5, 0.0, -2.0), Direction::new(0.0, 1.0, 0.0), Direction::new(0.0, 0.0, 1.0));
+        let sheet = crate::make::face_on_domain(&mut model, Surface::Cylinder(Cylinder::new(axis, r)), -0.3, 0.3, -1.0, 2.0).unwrap();
+        let found = cells(&mut model, &[block, sheet]).unwrap();
+        let mut parts: Vec<f64> = found.iter().filter(|c| c.inside == [true, false]).map(|c| crate::properties::volume(&model, c.shape).mass).collect();
+        parts.sort_by(f64::total_cmp);
+        // (Below the sheet: the integral of its height over the box's width.)
+        let area = |t: f64| 0.5 * t * (r * r - t * t).sqrt() + 0.5 * r * r * (t / r).asin();
+        let below = area(0.5) - area(-0.5) - 2.0;
+        assert_eq!(parts.len(), 2, "{parts:?}");
+        assert!((parts[0] - (3.0 - below)).abs() < 1e-6 && (parts[1] - below).abs() < 1e-6, "{parts:?} {below}");
     }
 }

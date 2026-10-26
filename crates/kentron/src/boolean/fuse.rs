@@ -4,8 +4,8 @@
 //!
 //! Each part of a shape (a region of a face, a piece of an edge, a vertex) is a cell, inside
 //! its own shape and those of the others it lies on, of at least its dimension. Faces are
-//! split where they meet faces, not by the edges of other shapes lying on them; parts of
-//! edges and vertices that coincide are one cell.
+//! split where they meet faces and by the edges of other shapes lying across them (as OCCT's
+//! general fuse splits them); parts of edges and vertices that coincide are one cell.
 
 use crate::hashing::FastMap as HashMap;
 
@@ -45,11 +45,6 @@ pub(super) fn cells(model: &mut Model, shapes: &[Shape]) -> Result<Option<Vec<Ce
     graph.intersect_sections();
     graph.share_vertices();
     let (mut pieces, of_edge) = graph.pieces();
-    // (Faces are not split by other shapes' edges lying on them.)
-    let free: Vec<bool> = graph.edges.iter().map(|e| e.free).collect();
-    for face in &mut graph.faces {
-        face.on_edges.retain(|&e| !free[e]);
-    }
     let dimension = graph.dimension.clone();
 
     // The regions of the faces, each inside its own shape and those whose faces it lies on:

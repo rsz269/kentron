@@ -473,8 +473,10 @@ fn make_wire(edges: Vec<Handle>, tolerance: f64) -> PyResult<Handle> {
     with_model(|m| make::wire_within(m, &edges, tolerance)).map(handle)
 }
 
-/// Whether an edge or wire is closed topologically: an edge starting and ending at one
-/// vertex, a wire whose last edge returns to its first vertex (OCCT's `BRep_Tool::IsClosed`).
+/// Whether an edge, wire or shell is closed topologically: an edge starting and ending at
+/// one vertex, a wire whose last edge returns to its first vertex, a shell whose every edge
+/// (but degenerate ones) two faces use, or one face along a seam (OCCT's
+/// `BRep_Tool::IsClosed`).
 #[pyfunction]
 fn is_closed(shape: Handle) -> PyResult<bool> {
     with_model(|m| {
@@ -483,6 +485,13 @@ fn is_closed(shape: Handle) -> PyResult<bool> {
             NodeKind::Edge => {
                 let (a, b) = m.edge_vertices(shape.shape);
                 a.node == b.node
+            }
+            NodeKind::Shell => {
+                let mut uses: std::collections::HashMap<NodeId, usize> = std::collections::HashMap::new();
+                for edge in m.explore(shape.shape, NodeKind::Edge).filter(|&e| !m.is_degenerate(e)) {
+                    *uses.entry(edge.node).or_default() += 1;
+                }
+                !uses.is_empty() && uses.values().all(|&n| n >= 2)
             }
             _ => false,
         })

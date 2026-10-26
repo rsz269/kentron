@@ -498,10 +498,16 @@ def revolve(s: Shape, p, d, a: float = 360, history=None, name=None) -> Shape:
 
 
 def offset(s: Shape, t: float, cap: bool = True, both: bool = False, tol: float = 1e-6, history=None, name=None) -> Shape:
-    """Faces or shells thickened by `t` along their normals (planar faces)."""
+    """Faces or shells thickened by `t` along their normals: a closed shell into the solid
+    between it and its offset (joined where they meet, as CadQuery's offsets are), the faces
+    of others one by one."""
     def one(t):
         out = []
         for el in _get(s, ("Face", "Shell")):
+            if el.ShapeType() == "Shell" and el.Closed():
+                solid = Shape.cast(native.make_solid([el.wrapped]))
+                out.append(Shape.cast(native.thick_solid(solid.wrapped, [], t, "intersection")))
+                continue
             for f in el.Faces():
                 out.append(f.thicken(t))
         return out

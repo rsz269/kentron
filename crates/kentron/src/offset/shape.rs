@@ -93,6 +93,8 @@ fn hollowed(model: &mut Model, shape: Shape, kept: &[NodeId], thickness: f64, jo
     let moved = offset_faces(model, shape, thickness, &[], kept, join)?;
     let outwards = thickness > 0.0;
     let shell = model.new_empty(NodeKind::Shell);
+    // (With no face removed, the walls' insides bound a cavity: a shell of their own.)
+    let cavity = if kept.is_empty() { model.new_empty(NodeKind::Shell) } else { shell };
     for (i, face) in moved.faces.iter().enumerate() {
         let old = face.shape;
         let new = Shape { orientation: old.orientation, ..moved.new_faces[i] };
@@ -100,7 +102,7 @@ fn hollowed(model: &mut Model, shape: Shape, kept: &[NodeId], thickness: f64, jo
             // The wall's outside and inside.
             let (outside, inside) = if outwards { (new, old) } else { (old, new) };
             model.add(shell, outside)?;
-            model.add(shell, inside.reversed())?;
+            model.add(cavity, inside.reversed())?;
             continue;
         }
         // The rim: the larger face, the smaller one cut out of it.
@@ -119,6 +121,9 @@ fn hollowed(model: &mut Model, shape: Shape, kept: &[NodeId], thickness: f64, jo
     }
     let solid = model.new_empty(NodeKind::Solid);
     model.add(solid, shell)?;
+    if cavity != shell {
+        model.add(solid, cavity)?;
+    }
     let solid = round_parting(model, solid, &moved, thickness.abs())?;
     super::regularize::regularized(model, solid)
 }
@@ -1188,6 +1193,18 @@ mod tests {
         let inner = thick_solid(&mut model, c, &[top], -1.0, Join::Intersection).unwrap();
         let expected = std::f64::consts::PI * (25.0 * 15.0 - 16.0 * 14.0);
         assert!((volume(&model, inner).mass - expected).abs() < 1e-5 * expected, "{}", volume(&model, inner).mass);
+    }
+
+    /// A 2 x 2 x 2 box hollowed with no face removed, its walls 0.5 thick inside: a solid
+    /// of two shells, the box's and the cavity's (as OCCT thickens a closed shell).
+    #[test]
+    fn a_box_hollowed_shut_bounds_a_cavity() {
+        let mut model = Model::new();
+        let block = Cuboid::new(2.0, 2.0, 2.0).build(&mut model).unwrap();
+        let hollow = thick_solid(&mut model, block, &[], -0.5, Join::Intersection).unwrap();
+        valid(&model, hollow);
+        assert_eq!(model.unique_subshapes(hollow, NodeKind::Shell).len(), 2);
+        assert!((volume(&model, hollow).mass - 7.0).abs() < 1e-9, "{}", volume(&model, hollow).mass);
     }
 
     /// A wavy face (a cubic B-spline on a 13 x 13 grid of poles at sin x · sin y, two waves
