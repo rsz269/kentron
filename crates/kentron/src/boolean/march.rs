@@ -280,6 +280,19 @@ pub(super) fn trace(base: &Surface, other: &Surface, range: Range, (nu, nv): (us
         // is one; where it is both, the stretches where they cross are sections, those where
         // they only touch none.
         let tangent: Vec<usize> = (0..chain.0.len()).filter(|&i| tracer.sine(&chain.0[i]) < TANGENT).collect();
+        // (A chain crossing clearly elsewhere (its surfaces well apart in angle) is a section
+        // all along, its nearly tangent stretch too: as two faces lying nearly on one
+        // another, crossing along a line from where they touch, at an edge of both.)
+        // (Only where the tangent stretches are at the chain's ends: one between crossing
+        // stretches is weighed below.)
+        if !tangent.is_empty() && tangent.len() < chain.0.len() {
+            let first_clear = (0..chain.0.len()).find(|i| !tangent.contains(i)).expect("a point not tangent");
+            let last_clear = (0..chain.0.len()).rev().find(|i| !tangent.contains(i)).expect("a point not tangent");
+            if tangent.iter().all(|&i| i < first_clear || i > last_clear) {
+                chains.push(chain);
+                continue;
+            }
+        }
         if !tangent.is_empty() {
             let crossing: Vec<bool> = tangent.iter().map(|&i| tracer.crosses(&chain.0, i, 0.1 * leaf)).collect();
             if crossing.iter().all(|&c| !c) {
@@ -290,6 +303,28 @@ pub(super) fn trace(base: &Surface, other: &Surface, range: Range, (nu, nv): (us
                 let mut keep = vec![true; chain.0.len()];
                 for (&i, &c) in tangent.iter().zip(&crossing) {
                     keep[i] = c;
+                }
+                // (A few points between crossing ones, where the surfaces cross at so slight an
+                // angle that the test a little aside misses it, cross too: touching stretches
+                // are longer.)
+                let n = keep.len();
+                let mut i = 0;
+                while i < n {
+                    if keep[i] {
+                        i += 1;
+                        continue;
+                    }
+                    let start = i;
+                    while i < n && !keep[i] {
+                        i += 1;
+                    }
+                    if start > 0 && i < n && i - start <= 3 {
+                        keep[start..i].iter_mut().for_each(|k| *k = true);
+                    }
+                }
+                if keep.iter().all(|&k| k) {
+                    chains.push(chain);
+                    continue;
                 }
                 let (crossed, touched) = stretches(&chain.0, chain.1, &keep);
                 chains.extend(crossed);
