@@ -2243,13 +2243,6 @@
       "reason": "kentron's result splits its edges and faces otherwise than OCCT's, its length and area and volume as OCCT's and the shape valid: counts kentron's, vertex 6 (OCCT 8), edge 6 (OCCT 8)."
     }
   ],
-  "tests/bugs/modalg_2/bug5805_1": [
-    {
-      "from": "checknbshapes result -t -wire 8 -face 6 -shell 1 -solid 1",
-      "to": "checknbshapes result -t -wire 10 -face 8 -shell 1 -solid 1",
-      "reason": "kentron's result splits its edges and faces otherwise than OCCT's, its area as OCCT's and the shape valid: counts kentron's, wire 10 (OCCT 8), face 8 (OCCT 6)."
-    }
-  ],
   "tests/bugs/modalg_1/buc60682": [
     {
       "from": "checknbshapes result -edge 1",

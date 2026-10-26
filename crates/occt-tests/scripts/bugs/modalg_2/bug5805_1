@@ -37,6 +37,5 @@ checkmaxtol result -min_tol 1.
 checkprops result -s 981.941 
 checkshape result
 
-# kentron deviation (draw_deviations.json): kentron's result splits its edges and faces otherwise than OCCT's, its area as OCCT's and the shape valid: counts kentron's, wire 10 (OCCT 8), face 8 (OCCT 6).
-checknbshapes result -t -wire 10 -face 8 -shell 1 -solid 1
+checknbshapes result -t -wire 8 -face 6 -shell 1 -solid 1
 checkview -display result -2d -path ${imagedir}/${test_image}.png

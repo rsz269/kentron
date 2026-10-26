@@ -2389,6 +2389,65 @@ mod tests {
         assert!((volume - 10812.07).abs() < 5e-4 * 10812.07, "{volume}");
     }
 
+    /// A spout (a loft through four ellipses along a rising curve, cut off at a height of
+    /// 20.5) hollowed to walls of 0.5, open at both ends, and the rims of its top opening
+    /// rounded by 0.1. Each wall is two faces, each on its own copy of the loft's surface cut
+    /// down to that face: both rims' fillets roll on past their edges onto those surfaces (an
+    /// offset's carried on as its basis is) no farther than they reach, round the narrow
+    /// opening (OCCT's fillets' areas: 0.3572, 0.4503, 1.0357, 1.4542).
+    #[test]
+    fn rims_of_a_hollowed_loft_round_where_its_walls_change_faces() {
+        use crate::geometry::curve::Ellipse;
+        use crate::math::{Direction, Frame};
+        let mut model = Model::new();
+        // (Centre, the curve's direction there, and the radii across and up.)
+        let profiles = [
+            ((-14.0, 0.0, 8.0), (-1.0, 0.0, 0.0), 4.0, 3.0),
+            ((-22.107645564074964, 0.0, 8.64182057913873), (-0.9175406224622819, 0.0, 0.39764205780013806), 3.0941333421411774, 2.5470666710705885),
+            ((-26.850968015718305, 0.0, 15.050167034567085), (-0.34078344559468, 0.0, 0.9401418207954679), 2.25, 2.125),
+            ((-31.0, 0.0, 22.0), (-0.7071067811865476, 0.0, 0.7071067811865474), 1.525126265847084, 1.762563132923542),
+        ];
+        let sections: Vec<Shape> = profiles
+            .iter()
+            .map(|&((x, y, z), (a, b, c), across, up)| {
+                let normal = Direction::new(a, b, c);
+                let x_dir = Direction::new(0.0, -1.0, 0.0);
+                // (The major axis first: turned a quarter about the normal where it is up.)
+                let (major, minor, x_dir) = if up > across { (up, across, Direction::from_vector(Vector::from(normal).cross(Vector::from(x_dir)))) } else { (across, up, x_dir) };
+                let edge = crate::make::edge_from_curve(&mut model, Curve::Ellipse(Ellipse::new(Frame::new(Point::new(x, y, z), normal, x_dir), major, minor))).unwrap();
+                crate::make::wire(&mut model, &[edge]).unwrap()
+            })
+            .collect();
+        let options = crate::loft::LoftOptions { solid: true, ruled: false, matching: crate::loft::Matching::ByRays, spacing: crate::loft::Spacing::ByDistance };
+        let loft = crate::loft::loft(&mut model, &sections, &options).unwrap().shape;
+        let block = Cuboid::from_corners(Point::new(-50.0, -50.0, 0.0), Point::new(50.0, 50.0, 20.5)).build(&mut model).unwrap();
+        let spout = crate::boolean::intersection(&mut model, loft, block).unwrap();
+        let ends: Vec<Shape> = model.unique_subshapes(spout, NodeKind::Face).into_iter().filter(|&f| matches!(model.surface(f), Some(Surface::Plane(_)))).collect();
+        assert_eq!(ends.len(), 2);
+        let hollow = crate::offset::thick_solid(&mut model, spout, &ends, -0.5, crate::offset::Join::Arc).unwrap();
+        // (The walls' faces meet all but tangentially: offset, they meet without slivers between.)
+        assert_eq!(model.unique_subshapes(hollow, NodeKind::Face).len(), 6);
+        let rims: Vec<Shape> = model
+            .unique_subshapes(hollow, NodeKind::Edge)
+            .into_iter()
+            .filter(|&e| {
+                let (a, b) = model.edge_vertices(e);
+                (model.point(a).z - 20.5).abs() < 1e-6 && (model.point(b).z - 20.5).abs() < 1e-6
+            })
+            .collect();
+        assert_eq!(rims.len(), 4);
+        let rounded = fillet(&mut model, hollow, &rims, 0.1).unwrap();
+        let report = validity::check(&model, rounded);
+        assert!(report.is_valid(), "{report:?}");
+        let faces = model.unique_subshapes(rounded, NodeKind::Face);
+        assert_eq!(faces.len(), 10);
+        let mut fillets: Vec<f64> = faces.iter().map(|&f| properties::area(&model, f).mass).filter(|&a| a < 2.0).collect();
+        fillets.sort_by(f64::total_cmp);
+        for (area, occt) in fillets.iter().zip([0.3572, 0.4503, 1.0357, 1.4542]) {
+            assert!((area - occt).abs() < 0.02 * occt, "{fillets:?}");
+        }
+    }
+
     /// A 10 x 10 block tapered by 5 degrees over its height of 5 (ruled between its outline
     /// and the outline drawn in: its edges up B-splines along straight lines), its four
     /// slanted edges rounded by 0.5: cylinders along them, as along lines (OCCT's volume,

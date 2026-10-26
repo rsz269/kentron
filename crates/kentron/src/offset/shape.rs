@@ -471,22 +471,29 @@ fn parts(faces: &[OldFace], edge: &OldEdge, distance_of: &dyn Fn(NodeId) -> f64)
         return false;
     }
     let distance = d1;
-    let t = 0.5 * (edge.first + edge.last);
-    // Outward normals, and the edge's direction along the first face's boundary.
-    let outward = |u: &Use| {
+    // Outward normals, and the edge's direction along the first face's boundary, at `t`.
+    let outward = |u: &Use, t: f64| {
         let f = &faces[u.face];
         let uv = u.pcurve.point(t);
         let (_, du, dv) = f.surface.d1(uv.x, uv.y);
         let n = du.cross(dv);
         if f.shape.orientation == Orientation::Reversed { -n } else { n }
     };
-    let (n1, n2) = (outward(u1).normalized(), outward(u2).normalized());
-    let along = curve.d1(t).1;
     let reversed = (u1.orientation == Orientation::Reversed) != (faces[u1.face].shape.orientation == Orientation::Reversed);
-    let along = if reversed { -along } else { along };
-    let turn = n1.cross(n2);
-    if turn.length() <= 1e-6 {
-        return false; // tangent faces
+    // How the faces turn along the edge, where they turn most.
+    let (turn, along) = (0..=8)
+        .map(|i| {
+            let t = edge.first + (edge.last - edge.first) * i as f64 / 8.0;
+            let turn = outward(u1, t).normalized().cross(outward(u2, t).normalized());
+            let along = curve.d1(t).1;
+            (turn, if reversed { -along } else { along })
+        })
+        .fold((Vector::ZERO, Vector::ZERO), |best, x| if x.0.length() > best.0.length() { x } else { best });
+    // Tangent faces, or so nearly that their offsets meeting sharply stray from an arc's
+    // join by no more than the tolerance (the arc would be a sliver).
+    let angle = turn.length().min(1.0).asin();
+    if distance.abs() * (1.0 / (0.5 * angle).cos() - 1.0) <= crate::tolerance::LINEAR {
+        return false;
     }
     let convex = turn.dot(along) > 0.0;
     convex == (distance > 0.0)

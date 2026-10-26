@@ -471,6 +471,11 @@ fn rolling_on(model: &Model, shape: Shape, edge: Shape, profile: &Profile, far: 
                 last_contacts.set(spine.map(|(s, o)| [s.contacts[0] - o, s.contacts[1] - o]));
             };
             restart(None);
+            // (The feet searched afresh past the start: the last ones found are at the other end,
+            // from where the search may land on another part of a face's surface.)
+            for side in &sides {
+                side.last.set(None);
+            }
             let before = if vanishing[0] { Vec::new() } else { past(t0, t_min, past_steps(0)) };
             restart(before.first());
             // (On from the section past the start nearest it.)
@@ -861,13 +866,14 @@ fn sides_of(model: &Model, shape: Shape, id: EdgeId, carry: Option<f64>) -> Resu
                 // (A patch carried on past its bounds, the same over them: the
                 // sections past the edge's ends then follow the faces on smoothly, as
                 // projected onto the patch itself they would stop at its bounds.)
-                // (By `carry`, no more than half the face's size: farther, the surface carried
-                // on may curl round.)
+                // (By `carry`, as far as the sections reach, and no more than half the face's
+                // size: farther, the surface carried on may curl round, or pass through the
+                // solid where it is thin, as round the narrow end of a hollow loft, and the
+                // contacts land on it there.)
                 let surface = match carry {
                     Some(reach) => {
                         let size = { let b = crate::properties::bounding_box(model, face); (b.max - b.min).length() };
-                        let _ = reach;
-                        carried_on(&surface, 0.5 * size).unwrap_or(surface)
+                        carried_on(&surface, reach.min(0.5 * size)).unwrap_or(surface)
                     }
                     None => surface,
                 };
@@ -1356,8 +1362,11 @@ fn closes_across(surface: &Surface, bounds: (f64, f64, f64, f64), tolerance: f64
 }
 
 /// `surface` carried on past each bound by about `length`, if it is a patch (a Bezier or
-/// B-spline surface).
+/// B-spline surface, or an offset of one: its basis carried on).
 fn carried_on(surface: &Surface, length: f64) -> Option<Surface> {
+    if let Surface::Offset(o) = surface {
+        return carried_on(o.basis(), length).map(|basis| Surface::Offset(crate::geometry::surface::OffsetSurface::new(basis, o.offset())));
+    }
     if !matches!(surface, Surface::Bezier(_) | Surface::BSpline(_)) {
         return None;
     }

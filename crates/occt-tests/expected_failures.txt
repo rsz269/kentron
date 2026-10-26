@@ -884,7 +884,6 @@ tests/bugs/moddata_3/bug33318
 tests/bugs/moddata_3/bug5145
 tests/chamfer/dist_angle/E9
 tests/chamfer/dist_angle/F1
-tests/chamfer/dist_angle_sequence/C1
 tests/chamfer/dist_dist/C1
 tests/chamfer/dist_dist/E9
 tests/chamfer/dist_dist_complex/B8
