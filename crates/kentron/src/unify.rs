@@ -105,8 +105,86 @@ fn rebuild(model: &mut Model, shape: Shape, options: UnifyOptions) -> Result<Sha
                 _ => Ok(shape),
             }
         }
+        NodeKind::Wire if options.edges => unify_wire(model, shape),
         _ => Ok(shape),
     }
+}
+
+/// A wire alone with its edges merged where consecutive ones lie on one line or one circle
+/// and meet at a vertex of no other edge of it: lines into the segment between the group's
+/// ends, arcs into the arc of the circle they run round together.
+fn unify_wire(model: &mut Model, wire: Shape) -> Result<Shape> {
+    let edges = model.ordered_edges(wire);
+    if edges.len() < 2 || edges.iter().any(|e| e.placement != Transform::IDENTITY) {
+        return Ok(wire);
+    }
+    let untrimmed = |(c, a, b): (Curve, f64, f64)| match c {
+        Curve::Trimmed(t) if matches!(t.basis(), Curve::Line(_) | Curve::Circle(_)) => (t.basis().clone(), a, b),
+        c => (c, a, b),
+    };
+    let Some(curves) = edges.iter().map(|&e| model.edge_curve(Shape { orientation: Orientation::Forward, ..e }).map(untrimmed)).collect::<Option<Vec<_>>>() else { return Ok(wire) };
+    let ends: Vec<(Shape, Shape)> = edges.iter().map(|&e| model.edge_vertices(e)).collect();
+    let mut uses: HashMap<crate::topology::NodeId, usize> = HashMap::default();
+    for (a, b) in &ends {
+        *uses.entry(a.node).or_default() += 1;
+        *uses.entry(b.node).or_default() += 1;
+    }
+    // (Each edge joins the one before it where they share a carrier and the vertex between
+    // them is theirs alone.)
+    let joins = |i: usize, j: usize| ends[i].1.node == ends[j].0.node && uses[&ends[i].1.node] == 2 && same_carrier(&curves[i], &curves[j]);
+    let n = edges.len();
+    let mut groups: Vec<Vec<usize>> = Vec::new();
+    for i in 0..n {
+        match groups.last_mut() {
+            Some(g) if joins(*g.last().expect("a group"), i) => g.push(i),
+            _ => groups.push(vec![i]),
+        }
+    }
+    // (Round a closed wire: the last group goes on into the first.)
+    if groups.len() > 1 && joins(n - 1, 0) {
+        let last = groups.pop().expect("groups");
+        groups[0].splice(0..0, last);
+    }
+    if groups.iter().all(|g| g.len() == 1) {
+        return Ok(wire);
+    }
+    let vertex = |s: Shape| VertexId::try_from(s.node).map_err(|n| crate::error::Error::InvalidInput(format!("{n:?} is not a vertex")));
+    let mut out = Vec::with_capacity(groups.len());
+    for g in &groups {
+        let (first, last) = (g[0], g[g.len() - 1]);
+        if g.len() == 1 {
+            out.push(edges[first]);
+            continue;
+        }
+        let (start, end) = (ends[first].0, ends[last].1);
+        let (p, q) = (model.point(start), model.point(end));
+        let tolerance = g.iter().map(|&i| model.tolerance(edges[i])).fold(tolerance::LINEAR, f64::max);
+        let (curve, from, to, forward) = match &curves[first].0 {
+            Curve::Line(_) => {
+                let Some(direction) = Direction::try_from_vector(q - p) else { return Ok(wire) };
+                (Curve::Line(Line::new(p, direction)), 0.0, p.distance(q), true)
+            }
+            Curve::Circle(c) => {
+                // The arcs' angles together, from the group's start the way the first runs.
+                let angle = |x: Point| {
+                    let d = x - c.center();
+                    d.dot(Vector::from(c.frame().y())).atan2(d.dot(Vector::from(c.frame().x())))
+                };
+                let sweep: f64 = g.iter().map(|&i| (curves[i].2 - curves[i].1).abs()).sum();
+                let along = edges[first].orientation == Orientation::Forward;
+                let a = angle(p);
+                if along { (curves[first].0.clone(), a, a + sweep, true) } else { (curves[first].0.clone(), a - sweep, a, false) }
+            }
+            _ => return Ok(wire),
+        };
+        let (v0, v1) = if forward { (vertex(start)?, vertex(end)?) } else { (vertex(end)?, vertex(start)?) };
+        let id = model.add_edge(v0, v1, tolerance)?;
+        model.set_edge_curve(id.into(), curve, tolerance)?;
+        model.set_edge_range(id.into(), from, to)?;
+        let merged = Shape::from(id);
+        out.push(if forward { merged } else { merged.reversed() });
+    }
+    crate::make::wire(model, &out)
 }
 
 /// An edge's use in a face's loop, relative to the face.
@@ -883,6 +961,24 @@ mod tests {
     use crate::math::Frame;
     use crate::primitives::{Cuboid, Cylinder};
     use crate::{properties, validity};
+
+    /// The offset all round a segment (each side cut in two pieces, an arc round each end)
+    /// unified: one line each side, the arcs kept (as OCCT's clean leaves a stadium).
+    #[test]
+    fn a_wire_alone_has_its_pieces_of_one_line_merged() {
+        let mut model = Model::new();
+        let segment = crate::make::edge_between(&mut model, Point::new(0.0, 0.0, 0.0), Point::new(10.0, 0.0, 0.0)).unwrap();
+        let segment = crate::make::wire(&mut model, &[segment]).unwrap();
+        let around = crate::offset::planar_wire(&mut model, segment, 1.0, crate::offset::Join::Arc).unwrap();
+        assert_eq!(model.ordered_edges(around).len(), 6);
+        let merged = unify_same_domain(&mut model, around).unwrap();
+        let edges = model.ordered_edges(merged);
+        assert_eq!(edges.len(), 4);
+        assert_eq!(edges.iter().filter(|&&e| matches!(model.edge_curve(e), Some((Curve::Line(_), _, _)))).count(), 2);
+        assert!(model.is_closed_wire(WireId::try_from(merged.node).unwrap()));
+        let length = properties::length(&model, merged).mass;
+        assert!((length - (20.0 + 2.0 * std::f64::consts::PI)).abs() < 1e-9, "{length}");
+    }
 
     fn cuboid(model: &mut Model, corner: (f64, f64, f64), size: (f64, f64, f64)) -> Shape {
         let frame = Frame::new(Point::new(corner.0, corner.1, corner.2), Direction::Z, Direction::X);

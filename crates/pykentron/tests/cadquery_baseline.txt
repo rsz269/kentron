@@ -74,12 +74,10 @@ tests.test_cadquery.TestCadQuery::testClean
 tests.test_cadquery.TestCadQuery::testCompSolid
 tests.test_cadquery.TestCadQuery::testExtrude
 tests.test_cadquery.TestCadQuery::testExtrudeUntilFace
-tests.test_cadquery.TestCadQuery::testFaceIntersectedByLine
 tests.test_cadquery.TestCadQuery::testFuzzyBoolOp
 tests.test_cadquery.TestCadQuery::testLocationAt
 tests.test_cadquery.TestCadQuery::testMultisectionSweep
 tests.test_cadquery.TestCadQuery::testNullShape
-tests.test_cadquery.TestCadQuery::testOffset2D
 tests.test_cadquery.TestCadQuery::testSplineApprox
 tests.test_cadquery.TestCadQuery::testSweep
 tests.test_cadquery.TestCadQuery::testToOCC
@@ -117,7 +115,6 @@ tests.test_free_functions::test_history_sweep
 tests.test_free_functions::test_imprint
 tests.test_free_functions::test_imprint_error
 tests.test_free_functions::test_moved
-tests.test_free_functions::test_offset2D
 tests.test_free_functions::test_operators
 tests.test_free_functions::test_prism
 tests.test_free_functions::test_prism_taper
@@ -137,6 +134,5 @@ tests.test_shapes::test_extend
 tests.test_shapes::test_isolines
 tests.test_shapes::test_remove
 tests.test_shapes::test_replace
-tests.test_shapes::test_sample
 tests.test_shapes::test_trimming
 tests.test_sketch::test_constraint_solver

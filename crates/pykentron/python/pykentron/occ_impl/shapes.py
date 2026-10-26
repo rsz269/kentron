@@ -520,9 +520,10 @@ def offset(s: Shape, t: float, cap: bool = True, both: bool = False, tol: float 
 
 
 def offset2D(s: Shape, t: float, ctx=None, kind: str = "arc", closed: bool = True) -> Shape:
+    """Edges or wires offset in their plane; open ones (not `closed`) on one side only."""
     results = []
     for w in _get_wires(s):
-        results.extend(w.offset2D(t, kind))
+        results.extend(w.offset2D(t, kind, not closed))
     return _compound_or_shape(results)
 
 

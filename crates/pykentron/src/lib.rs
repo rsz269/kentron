@@ -643,12 +643,14 @@ fn make_loft(sections: Vec<Handle>, solid: bool, ruled: bool, spacing: &str, mat
     with_model(|m| loft::loft(m, &sections, &loft::LoftOptions { solid, ruled, matching, spacing }).map(|l| l.shape)).map(handle)
 }
 
-/// A planar wire offset in its plane ("arc" or "intersection" joins).
+/// A planar wire offset in its plane ("arc" or "intersection" joins); if `open`, an open
+/// wire on one side only (to the right of its direction for a positive distance), its ends
+/// not gone round.
 #[pyfunction]
-#[pyo3(signature = (wire, distance, join="arc"))]
-fn offset_wire(wire: Handle, distance: f64, join: &str) -> PyResult<Handle> {
+#[pyo3(signature = (wire, distance, join="arc", open=false))]
+fn offset_wire(wire: Handle, distance: f64, join: &str, open: bool) -> PyResult<Handle> {
     let join = join_of(join)?;
-    with_model(|m| offset::planar_wire(m, wire.shape, distance, join)).map(handle)
+    with_model(|m| if open { offset::open_planar_wire(m, wire.shape, distance, join) } else { offset::planar_wire(m, wire.shape, distance, join) }).map(handle)
 }
 
 /// A solid or shell offset along its faces' normals.

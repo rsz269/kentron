@@ -132,7 +132,46 @@ pub fn open_planar_wire(model: &mut Model, wire: Shape, distance: f64, join: Joi
             }
         }
     }
+    // Each chain run the way the wire does (from the piece of it nearest the chain's start),
+    // its pieces along one line joined.
+    let along = |chain: &[Piece]| -> bool {
+        let piece = &chain[0];
+        let (p, t) = (piece.at(0.5), piece.tangent(piece.first + 0.5 * (piece.last - piece.first)));
+        let nearest = forward
+            .iter()
+            .flat_map(|f| (0..=16).map(move |i| (f, i as f64 / 16.0)))
+            .min_by(|a, b| a.0.at(a.1).distance(p).total_cmp(&b.0.at(b.1).distance(p)))
+            .map(|(f, s)| f.tangent(f.first + (f.last - f.first) * s));
+        nearest.is_none_or(|w| w.dot(t) >= 0.0)
+    };
+    let chains: Vec<Vec<Piece>> = chains
+        .into_iter()
+        .map(|chain| if along(&chain) { chain } else { chain.iter().rev().map(Piece::reversed).collect() })
+        .map(join_collinear_run)
+        .collect();
     build_open(model, &plane, &chains)
+}
+
+/// [`join_collinear`] along an open run of pieces (not round from its last to its first).
+fn join_collinear_run(pieces: Vec<Piece>) -> Vec<Piece> {
+    let mut out: Vec<Piece> = Vec::with_capacity(pieces.len());
+    for piece in pieces {
+        let merged = match (out.last(), &piece.curve) {
+            (Some(prev), Curve2::Line(_)) if matches!(prev.curve, Curve2::Line(_)) => {
+                let (a, b, c) = (prev.start(), prev.end(), piece.end());
+                let (da, db) = (b - a, c - b);
+                let (la, lb) = (da.length(), db.length());
+                (la > 0.0 && lb > 0.0 && (da * (1.0 / la)).cross(db * (1.0 / lb)).abs() <= 1e-12 && da.dot(db) > 0.0)
+                    .then(|| Piece { curve: Curve2::Line(Line2::new(a, Direction2::from_vector(da))), first: 0.0, last: a.distance(c), origin: prev.origin })
+            }
+            _ => None,
+        };
+        match merged {
+            Some(m) => *out.last_mut().expect("a piece") = m,
+            None => out.push(piece),
+        }
+    }
+    out
 }
 
 /// Open wires through `chains` of pieces (each following on from the one before).
@@ -1068,6 +1107,19 @@ mod tests {
         let length = properties::length(&model, out).mass;
         assert!((length - expected).abs() < 1e-6, "length {length}, expected {expected}");
         assert_eq!(counts(&model, out), (11, 1));
+    }
+
+    /// One side of a segment (to its left, for a negative distance): one edge along it, run
+    /// the way it runs (the pieces it is cut into, as round both sides, joined again).
+    #[test]
+    fn one_side_of_a_segment_is_one_edge_along_it() {
+        let mut model = Model::new();
+        let segment = polyline(&mut model, &[[0., 0.], [10., 0.]], false);
+        let side = open_planar_wire(&mut model, segment, -1.0, Join::Arc).unwrap();
+        let edges = model.ordered_edges(side);
+        assert_eq!(edges.len(), 1);
+        let (a, b) = model.edge_vertices(edges[0]);
+        assert!(model.point(a).distance(Point::new(0.0, 1.0, 0.0)) < 1e-9 && model.point(b).distance(Point::new(10.0, 1.0, 0.0)) < 1e-9);
     }
 
     #[test]
