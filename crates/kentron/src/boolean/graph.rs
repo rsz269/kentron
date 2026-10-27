@@ -251,6 +251,9 @@ pub(super) struct Face {
     pub samples: std::sync::OnceLock<(Vec<Vec<Point>>, f64)>,
     /// Its boundary's polylines indexed for telling points inside (made on first use).
     pub inside_index: std::sync::OnceLock<geom::InsidePolylines>,
+    /// How far its boundary's polylines may stray from the boundary: arcs' chords (made on
+    /// first use).
+    pub polyline_sag: std::sync::OnceLock<f64>,
     /// Boxes of the cells of a grid over its surface's range, each grown by the grid's
     /// spacing, indexed: what passes none is clear of the surface there (made on first use,
     /// for free-form faces).
@@ -328,6 +331,25 @@ impl Face {
         // their size): beyond its edge.
         let reach = 1e-3 * self.extent.0.distance(self.extent.1) + on_tol();
         let Some(uv) = geom::uv_within(&self.surface, p, reach) else { return Location::Outside };
+        // (Within the polylines' sag of the boundary, by the nearest edge's own curve: a face
+        // narrower than its arcs' chords stray, a sliver between circles, is told apart from
+        // what lies beside it only so.)
+        let sag = *self.polyline_sag.get_or_init(|| {
+            self.boundary
+                .iter()
+                .filter(|b| b.bounds)
+                .map(|b| match &b.pcurve {
+                    Curve2::Circle(c) => geom::arc_sag(c.radius()),
+                    Curve2::Ellipse(e) => geom::arc_sag(e.major_radius()),
+                    _ => 0.0,
+                })
+                .fold(0.0, f64::max)
+        });
+        if sag > 0.0 {
+            if let Some(inside) = self.inside_by_nearest_edge(p, 2.0 * sag, edges) {
+                return if inside { Location::Inside } else { Location::Outside };
+            }
+        }
         let inside_at = |uv: Uv| self.representatives(uv).into_iter().any(|uv| self.inside_polylines(uv));
         if inside_at(uv) {
             return Location::Inside;
@@ -1094,6 +1116,7 @@ impl Graph {
             drift: 0.0,
             samples: Default::default(),
             inside_index: Default::default(),
+            polyline_sag: Default::default(),
             cells: Default::default(),
         });
     }

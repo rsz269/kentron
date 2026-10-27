@@ -812,10 +812,18 @@ pub(super) fn sample_parameters(curve: Option<&Curve>, first: f64, last: f64) ->
 }
 
 /// A pcurve sampled over `[first, last]` (its two ends for a line).
+/// The angle between the samples [`sample_pcurve`] takes along a circle or an ellipse.
+const ARC_STEP: f64 = std::f64::consts::PI / 90.0;
+
+/// How far the chords between [`sample_pcurve`]'s samples of an arc of `radius` stray from it.
+pub(super) fn arc_sag(radius: f64) -> f64 {
+    radius.abs() * (1.0 - (0.5 * ARC_STEP).cos())
+}
+
 pub(super) fn sample_pcurve(pcurve: &Curve2, first: f64, last: f64) -> Vec<Uv> {
     let n = match pcurve {
         Curve2::Line(_) => 1,
-        Curve2::Circle(_) | Curve2::Ellipse(_) => (((last - first).abs() / (std::f64::consts::PI / 90.0)).ceil() as usize).max(4),
+        Curve2::Circle(_) | Curve2::Ellipse(_) => (((last - first).abs() / ARC_STEP).ceil() as usize).max(4),
         _ => 64,
     };
     let params: Vec<f64> = (0..=n).map(|i| first + (last - first) * i as f64 / n as f64).collect();

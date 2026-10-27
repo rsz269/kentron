@@ -885,9 +885,7 @@ tests/chamfer/dist_angle/F1
 tests/chamfer/dist_dist/C1
 tests/chamfer/dist_dist/E9
 tests/chamfer/dist_dist_complex/B8
-tests/chamfer/dist_dist_complex/C3
 tests/chamfer/dist_dist_sequence/C1
-tests/chamfer/dist_dist_sequence/C3
 tests/chamfer/equal_dist/E9
 tests/chamfer/equal_dist_complex/B4
 tests/chamfer/equal_dist_sequence/C1
