@@ -383,7 +383,18 @@ fn integrate_face(model: &Model, face: Shape, mut sample: impl FnMut(Point, Vect
                 (low(b.u_knots(), b.u_multiplicities(), b.u_degree()), low(b.v_knots(), b.v_multiplicities(), b.v_degree()))
             }
             Surface::Trimmed(t) => kinks(t.basis()),
-            Surface::Offset(o) => kinks(o.basis()),
+            // (An offset's derivatives take its basis's normal's: one order less smooth, at
+            // most C1 where the basis is C2, as a cubic at all its knots.)
+            Surface::Offset(o) => match o.basis() {
+                Surface::BSpline(b) => {
+                    let low = |knots: &[f64], mults: &[usize], degree: usize| -> Vec<f64> {
+                        let n = knots.len();
+                        (1..n.saturating_sub(1)).filter(|&i| mults[i] + 2 >= degree).map(|i| knots[i]).collect()
+                    };
+                    (low(b.u_knots(), b.u_multiplicities(), b.u_degree()), low(b.v_knots(), b.v_multiplicities(), b.v_degree()))
+                }
+                basis => kinks(basis),
+            },
             _ => (Vec::new(), Vec::new()),
         }
     }
@@ -515,9 +526,35 @@ fn integrate_face(model: &Model, face: Shape, mut sample: impl FnMut(Point, Vect
                 if last < first {
                     inner.reverse();
                 }
-                // Group spans only where they join smoothly (not at a polyline's kinks).
+                // Group spans only where they join smoothly (not at a polyline's kinks), and
+                // where one rule integrates the group as span by span does (not a fitted
+                // pcurve's ripples, its speed changing from span to span).
                 let group = if b.degree() >= 2 { inner.len().div_ceil(32).max(1) } else { 1 };
-                breaks.extend(inner.into_iter().skip(group - 1).step_by(group));
+                if group > 1 {
+                    let mut ends = vec![first];
+                    ends.extend(inner);
+                    ends.push(last);
+                    let mut todo = Vec::new();
+                    let mut i = 0;
+                    while i + 1 < ends.len() {
+                        let j = (i + group).min(ends.len() - 1);
+                        todo.push((i, j));
+                        i = j;
+                    }
+                    todo.reverse();
+                    while let Some((i, j)) = todo.pop() {
+                        if j - i > 1 && !rule_suffices(&pcurve, &ends[i..=j]) {
+                            let m = (i + j) / 2;
+                            todo.push((m, j));
+                            todo.push((i, m));
+                            continue;
+                        }
+                        breaks.push(ends[j]);
+                    }
+                    breaks.pop();
+                } else {
+                    breaks.extend(inner);
+                }
             }
             breaks.push(last);
             if !u_kinks.is_empty() || !v_kinks.is_empty() {
@@ -667,6 +704,33 @@ fn integrate_face(model: &Model, face: Shape, mut sample: impl FnMut(Point, Vect
             }
         }
     }
+}
+
+/// Whether the Gauss rule over the stretch from the first to the last of `ends` (knots of
+/// `pcurve`, in the direction of travel) integrates `(u - u0) v'` and `(v - v0) u'` as the
+/// rule span by span does, to a part in 1e8 of the stretch's extent squared.
+fn rule_suffices(pcurve: &Curve2, ends: &[f64]) -> bool {
+    let (a, b) = (ends[0], ends[ends.len() - 1]);
+    let origin = pcurve.point(a);
+    let terms = |t: f64| {
+        let (p, d) = pcurve.d1(t);
+        ((p.x - origin.x) * d.y, (p.y - origin.y) * d.x, p)
+    };
+    let mut whole = (0.0, 0.0);
+    for &(node, w) in &GAUSS_LEGENDRE {
+        let (x, y, _) = terms(a + (b - a) * (node + 1.0) / 2.0);
+        whole = (whole.0 + x * w * (b - a) / 2.0, whole.1 + y * w * (b - a) / 2.0);
+    }
+    let (mut spans, mut extent) = ((0.0, 0.0), 0.0f64);
+    for e in ends.windows(2) {
+        for &(node, w) in &GAUSS_LEGENDRE_3 {
+            let (x, y, p) = terms(e[0] + (e[1] - e[0]) * (node + 1.0) / 2.0);
+            spans = (spans.0 + x * w * (e[1] - e[0]) / 2.0, spans.1 + y * w * (e[1] - e[0]) / 2.0);
+            extent = extent.max((p.x - origin.x).abs()).max((p.y - origin.y).abs());
+        }
+    }
+    let error = (whole.0 - spans.0).abs().max((whole.1 - spans.1).abs());
+    error <= 1e-8 * extent * extent
 }
 
 /// The longest angular parameter span integrated by one Gauss–Legendre rule.
@@ -1675,6 +1739,32 @@ mod tests {
         let prism = crate::sweep::extrude(&mut model, face, Vector::new(0.0, 0.0, 3.0)).unwrap().shape;
         let v = volume(&model, prism).mass;
         assert!((v - PI * 12.0).abs() <= 1e-5 * PI * 12.0, "{v}");
+    }
+
+    /// A face bounded by a fitted curve of many spans that ripples (its speed changing from
+    /// span to span, as a fitted section's): its area as a fine sum along the curve finds,
+    /// the Gauss rules not spanning groups of spans one rule integrates poorly.
+    #[test]
+    fn areas_inside_rippling_fitted_curves() {
+        use crate::geometry::ParametricCurve;
+        let n = 400;
+        let points: Vec<Point> = (0..n).map(|i| {
+            let a = TAU * i as f64 / n as f64;
+            // (Ripples of a part in 1e4, from a hash of the index.)
+            let r = 2.0 * (1.0 + 1e-4 * (((i * 7919) % 101) as f64 / 50.0 - 1.0));
+            Point::new(r * a.cos(), r * a.sin(), 0.0)
+        }).collect();
+        let curve = crate::geometry::fit::interpolate(&points, true, 1e-9).unwrap();
+        let (first, last) = (curve.first_parameter(), curve.last_parameter());
+        let fine = 400_000;
+        let ring: Vec<Point> = (0..fine).map(|i| curve.point(first + (last - first) * i as f64 / fine as f64)).collect();
+        let shoelace = 0.5 * (0..fine).map(|i| { let (p, q) = (ring[i], ring[(i + 1) % fine]); p.x * q.y - q.x * p.y }).sum::<f64>().abs();
+        let mut model = Model::new();
+        let edge = crate::make::edge_from_curve(&mut model, crate::geometry::curve::Curve::BSpline(curve)).unwrap();
+        let wire = crate::make::wire(&mut model, &[edge]).unwrap();
+        let face = crate::make::planar_face(&mut model, wire).unwrap();
+        let a = area(&model, face).mass;
+        assert!((a - shoelace).abs() <= 1e-9 * shoelace, "area {a} != {shoelace}");
     }
 
     #[test]
