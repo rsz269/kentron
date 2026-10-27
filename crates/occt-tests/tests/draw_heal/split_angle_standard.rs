@@ -3267,15 +3267,12 @@ fn zk9() -> DrawResult<()> {
 
 /// `tests/heal/split_angle_standard/ZL1`
 #[test]
-#[should_panic]
-fn zl1() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.restore(&[data_file("cts20960b.rle").as_str(), "a"])?;
-        d.DT_SplitAngle(&["result", "a"])?;
-        d.checkshape(&["result"])?;
-        Ok(())
-    })
+fn zl1() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.restore(&[data_file("cts20960b.rle").as_str(), "a"])?;
+    d.DT_SplitAngle(&["result", "a"])?;
+    d.checkshape(&["result"])?;
+    Ok(())
 }
 
 /// `tests/heal/split_angle_standard/ZL2`

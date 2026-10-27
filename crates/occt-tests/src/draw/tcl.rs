@@ -863,6 +863,29 @@ pub fn known_failure(script: &str) -> Option<String> {
     None
 }
 
+/// The output a script requires on this platform (`puts "REQUIRED platforms: regexp"`,
+/// outside braces): OCCT's harness fails the script unless its log has a line matching each,
+/// and does not count the lines matching them as errors. (Where kentron does better than the
+/// output OCCT requires, as building a sweep OCCT cannot, the script is an expected failure.)
+fn required_output(script: &str) -> Vec<regex::Regex> {
+    let required = regex::Regex::new(r#"^\s*puts\s+"REQUIRED\s+([^:"]+):\s*([^"]*)""#).expect("a pattern");
+    let mut depth = 0i32;
+    let mut out = Vec::new();
+    for line in script.lines() {
+        if depth == 0 {
+            if let Some(c) = required.captures(line) {
+                if c[1].split([' ', ',']).any(|p| ["ALL", "All", "Linux", "Debian", "Ubuntu"].contains(&p)) {
+                    if let Ok(re) = rust_regex(c[2].trim(), false, false) {
+                        out.push(re);
+                    }
+                }
+            }
+        }
+        depth += line.matches('{').count() as i32 - line.matches('}').count() as i32;
+    }
+    out
+}
+
 /// The file of the script `<group>/<grid>/<case>` under `tests`: in the grid's directory, or
 /// in the one its `cases.list` names (a grid running another's scripts with its own begin
 /// and end files).
@@ -887,6 +910,7 @@ pub fn run_script(tests: &Path, group: &str, grid: &str, case: &str) -> Outcome 
     if let Some(todo) = std::fs::read_to_string(&script).ok().and_then(|t| known_failure(&t)) {
         return Outcome::KnownFailure(todo);
     }
+    let required = std::fs::read_to_string(&script).map(|t| required_output(&t)).unwrap_or_default();
     let session = Session {
         draw: Draw::new(),
         log: Vec::new(),
@@ -962,11 +986,25 @@ pub fn run_script(tests: &Path, group: &str, grid: &str, case: &str) -> Outcome 
         return Outcome::KnownFailure(todo.clone());
     }
     let mut failures = errors;
+    let mut found = vec![false; required.len()];
     for line in session.log.iter() {
+        // (The REQUIRED and TODO lines themselves, which the script puts, hold the patterns.)
+        if line.trim_start().starts_with("REQUIRED") || line.trim_start().starts_with("TODO") {
+            continue;
+        }
+        if let Some(i) = required.iter().position(|re| re.is_match(line)) {
+            found[i] = true;
+            continue;
+        }
         if let Some((failed, _)) = rules.iter().find(|(_, re)| re.is_match(line)) {
             if *failed {
                 failures.push(line.clone());
             }
+        }
+    }
+    for (re, found) in required.iter().zip(found) {
+        if !found {
+            failures.push(format!("required output missing: {}", re.as_str()));
         }
     }
     if failures.is_empty() { Outcome::Passed } else { Outcome::Failed(failures) }

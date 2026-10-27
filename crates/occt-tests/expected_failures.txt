@@ -58,6 +58,7 @@ tests/blend/tolblend_simple/C3
 tests/blend/tolblend_simple/C5
 tests/blend/tolblend_simple/D2
 tests/blend/tolblend_simple/D6
+tests/blend/tolblend_simple/D7
 tests/blend/tolblend_simple/D8
 tests/blend/tolblend_simple/D9
 tests/blend/tolblend_simple/E2
@@ -259,7 +260,6 @@ tests/bugs/modalg_1/buc60878_3
 tests/bugs/modalg_1/buc60880
 tests/bugs/modalg_1/buc60899_1
 tests/bugs/modalg_1/buc60899_2
-tests/bugs/modalg_1/buc60942
 tests/bugs/modalg_1/bug1013
 tests/bugs/modalg_1/bug10435_1
 tests/bugs/modalg_1/bug10435_2
@@ -487,6 +487,8 @@ tests/bugs/modalg_5/bug25354_34
 tests/bugs/modalg_5/bug25354_49
 tests/bugs/modalg_5/bug25354_50
 tests/bugs/modalg_5/bug25398
+tests/bugs/modalg_5/bug25509_1
+tests/bugs/modalg_5/bug25509_3
 tests/bugs/modalg_5/bug25509_4
 tests/bugs/modalg_5/bug25509_5
 tests/bugs/modalg_5/bug25509_6
@@ -727,6 +729,7 @@ tests/bugs/modalg_7/bug32447_2
 tests/bugs/modalg_7/bug32447_3
 tests/bugs/modalg_7/bug32447_4
 tests/bugs/modalg_7/bug32578
+tests/bugs/modalg_7/bug32691
 tests/bugs/modalg_7/bug32717
 tests/bugs/modalg_7/bug32744
 tests/bugs/modalg_7/bug32863
@@ -804,7 +807,6 @@ tests/bugs/moddata_2/bug278_1
 tests/bugs/moddata_2/bug278_2
 tests/bugs/moddata_2/bug278_3
 tests/bugs/moddata_2/bug308
-tests/bugs/moddata_2/bug35
 tests/bugs/moddata_2/bug354_1
 tests/bugs/moddata_2/bug360
 tests/bugs/moddata_2/bug367
@@ -840,6 +842,7 @@ tests/bugs/moddata_3/bug24065
 tests/bugs/moddata_3/bug24627
 tests/bugs/moddata_3/bug24959_1
 tests/bugs/moddata_3/bug24959_2
+tests/bugs/moddata_3/bug25109
 tests/bugs/moddata_3/bug25202_1
 tests/bugs/moddata_3/bug25631
 tests/bugs/moddata_3/bug25660
@@ -953,6 +956,7 @@ tests/geometry/preview/rectangle
 tests/geometry/preview/vertex
 tests/geometry/project/A9
 tests/heal/checkshape/bug27814_1
+tests/heal/checkshape/bug32448_1
 tests/heal/direct_faces/A2
 tests/heal/direct_faces/A6
 tests/heal/direct_faces/A7
@@ -1001,7 +1005,6 @@ tests/heal/split_angle_advanced/S8
 tests/heal/split_angle_advanced/ZA2
 tests/heal/split_angle_standard/F5
 tests/heal/split_angle_standard/R4
-tests/heal/split_angle_standard/ZL1
 tests/heal/split_angle_standard/ZR7
 tests/heal/split_angle_standard/ZV7
 tests/heal/split_closed_faces/C9

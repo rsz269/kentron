@@ -19,6 +19,8 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/bugs/moddata_3/bug25109
+expect: not_done
+faulty: required
 build:
   - b: {load: {brep: "bug25109_e1.brep"}}
 checks:

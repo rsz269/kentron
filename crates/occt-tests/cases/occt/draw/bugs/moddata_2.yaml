@@ -74,6 +74,7 @@ ported_from:
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/bugs/moddata_2/bug278_3
 expect: not_done
+faulty: required
 build:
   - a: {load: {brep: "OCC278c.brep"}}
   - result: {face: {wire: a}}
@@ -114,6 +115,7 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/bugs/moddata_2/bug325
+faulty: required
 build:
   - result: {load: {brep: "OCC325.brep"}}
 checks:
@@ -125,7 +127,7 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/bugs/moddata_2/bug35
-expect: not_done
+faulty: required
 build:
   - result: {load: {brep: "OCC35.brep"}}
 checks:

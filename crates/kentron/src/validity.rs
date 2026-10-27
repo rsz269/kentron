@@ -54,6 +54,10 @@ pub enum ProblemKind {
     /// A face's boundary crosses itself: two of its edges (or one) cross away from a vertex
     /// they share (OCCT's `BRepCheck_SelfIntersectingWire`).
     SelfIntersection,
+    /// A face's boundary runs clockwise in its surface's parameters: the face is inside
+    /// out against its own surface (OCCT's `BRepCheck_BadOrientationOfSubshape` on a face,
+    /// whose area OCCT then gives as negative).
+    InvertedFace,
     /// Any geometric defect found by [`check`].
     Geometry,
 }
@@ -331,6 +335,7 @@ impl Checker<'_> {
             self.problem(id, ProblemKind::FaceWithoutBoundary, Severity::Warning, format!("{id:?} has no wires"));
         }
         let mut all = Vec::new();
+        let mut loops = Vec::new();
         for use_id in wire_uses {
             let Some(wire_use) = self.model.get(use_id) else {
                 self.error(id, ProblemKind::DanglingReference, format!("{id:?} has a missing wire use"));
@@ -339,6 +344,7 @@ impl Checker<'_> {
             if wire_use.face != id {
                 self.error(id, ProblemKind::InconsistentLink, format!("{use_id:?} names another face"));
             }
+            let wire_use_orientation = wire_use.orientation;
             let Some(wire) = self.model.get(wire_use.wire) else {
                 self.error(id, ProblemKind::DanglingReference, format!("{id:?} uses a missing wire"));
                 continue;
@@ -361,10 +367,14 @@ impl Checker<'_> {
             if let Some(surface) = &surface {
                 self.closed_in_parameters(id, &coedges, surface, tolerance);
             }
-            all.extend(coedges);
+            all.extend(coedges.iter().copied());
+            loops.push((coedges, wire_use_orientation));
         }
         if let Some(surface) = &surface {
             self.boundary_crossings(id, &all, surface);
+            if signed_area_in_parameters(self.model, &loops, surface).is_some_and(|(area, size)| area < -1e-6 * size) {
+                self.error(id, ProblemKind::InvertedFace, format!("the boundary of {id:?} runs clockwise in its surface's parameters (the face is inside out)"));
+            }
         }
     }
 
@@ -517,6 +527,54 @@ impl Checker<'_> {
 
 /// The faces of `shape` whose boundaries cross themselves (see [`check`]), each with two
 /// edges crossing there (or one edge twice).
+/// A face's area in its surface's parameters, signed (positive where its outer loop runs
+/// counter-clockwise, its holes clockwise), with the sum of its loops' unsigned areas: its
+/// loops (coedges, each with its wire's orientation in the face). `None` where a loop has no
+/// pcurves or does not close in the parameters (it runs round a period, as a band round a
+/// cylinder: it encloses no area there).
+fn signed_area_in_parameters(model: &Model, loops: &[(Vec<CoEdgeId>, Orientation)], surface: &Surface) -> Option<(f64, f64)> {
+    let (mut signed, mut size) = (0.0, 0.0);
+    for (coedges, wire_orientation) in loops {
+        let area = loop_area_in_parameters(model, coedges, *wire_orientation, surface)?;
+        signed += area;
+        size += area.abs();
+    }
+    Some((signed, size))
+}
+
+/// The area one loop of a face encloses in its surface's parameters, signed (positive
+/// counter-clockwise), its coedges run as its wire's `orientation` in the face has them;
+/// `None` as for [`signed_area_in_parameters`].
+pub(crate) fn loop_area_in_parameters(model: &Model, coedges: &[CoEdgeId], orientation: Orientation, surface: &Surface) -> Option<f64> {
+    let mut points: Vec<Point2> = Vec::new();
+    for &c in coedges {
+        let (pcurve, first, last) = model.effective_pcurve(c)?;
+        let reversed = model.get(c)?.orientation == Orientation::Reversed;
+        const SAMPLES: usize = 16;
+        for i in 0..SAMPLES {
+            let s = i as f64 / SAMPLES as f64;
+            points.push(pcurve.point(if reversed { last - (last - first) * s } else { first + (last - first) * s }));
+        }
+    }
+    // (Closing in the parameters: back where it began, not a period away.)
+    let start = *points.first()?;
+    let end = {
+        let &c = coedges.last()?;
+        let (pcurve, first, last) = model.effective_pcurve(c)?;
+        let reversed = model.get(c)?.orientation == Orientation::Reversed;
+        pcurve.point(if reversed { first } else { last })
+    };
+    for (d, period) in [(end.x - start.x).abs(), (end.y - start.y).abs()].into_iter().zip([surface.u_period(), surface.v_period()]) {
+        if period.is_some_and(|p| d > 0.5 * p) {
+            return None;
+        }
+    }
+    let n = points.len();
+    let area = (0..n).map(|i| points[i].x * points[(i + 1) % n].y - points[(i + 1) % n].x * points[i].y).sum::<f64>() * 0.5;
+    // (A wire used reversed runs its coedges backwards.)
+    Some(if orientation == Orientation::Reversed { -area } else { area })
+}
+
 pub fn boundary_crossings(model: &Model, shape: Shape) -> Vec<(Shape, [Shape; 2])> {
     let mut out = Vec::new();
     for face in model.unique_subshapes(shape, NodeKind::Face) {
@@ -1033,6 +1091,33 @@ mod tests {
         model.set_edge_range(circle, 0.0, std::f64::consts::TAU).unwrap();
         let report = check(&model, solid);
         assert!(report.has(ProblemKind::Geometry, Severity::Error), "{report:?}");
+    }
+
+    /// A face whose boundary runs clockwise in its surface's parameters (its plane turned
+    /// over under it) is inside out: reported, as OCCT's check reports it.
+    #[test]
+    fn faces_inside_out_against_their_surfaces_are_reported() {
+        use crate::geometry::surface::Plane;
+        use crate::math::Direction;
+        let mut model = Model::new();
+        let corners = [(0.0, 0.0), (2.0, 0.0), (2.0, 1.0), (0.0, 1.0)];
+        let edges: Vec<Shape> = (0..4)
+            .map(|i| {
+                let (a, b) = (corners[i], corners[(i + 1) % 4]);
+                crate::make::edge_between(&mut model, Point::new(a.0, a.1, 0.0), Point::new(b.0, b.1, 0.0)).unwrap()
+            })
+            .collect();
+        let wire = crate::make::wire(&mut model, &edges).unwrap();
+        let face = crate::make::planar_face(&mut model, wire).unwrap();
+        assert!(!check(&model, face).has(ProblemKind::InvertedFace, Severity::Error));
+        let normal = match model.surface(face).unwrap() {
+            Surface::Plane(p) => p.normal(),
+            other => panic!("{other:?}"),
+        };
+        let flipped = Surface::Plane(Plane::new(Point::ORIGIN, Direction::from_vector(-Vector::from(normal))));
+        model.set_face_surface(face, flipped, LINEAR).unwrap();
+        let report = check(&model, face);
+        assert!(report.has(ProblemKind::InvertedFace, Severity::Error), "{report:?}");
     }
 
     #[test]

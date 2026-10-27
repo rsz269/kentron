@@ -1855,6 +1855,7 @@ ported_from:
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/bugs/modalg_2/bug420
 expect: not_done
+faulty: required
 build:
   - a: {load: {brep: "CTO909_objects.brep"}}
   - check: {valid: a}

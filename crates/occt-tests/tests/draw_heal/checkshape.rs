@@ -4,11 +4,16 @@ use occt_tests::draw::*;
 
 /// `tests/heal/checkshape/bug32448_1`
 #[test]
-fn bug32448_1() -> DrawResult<()> {
-    let mut d = Draw::new();
-    d.restore(&[data_file("bug27814.brep").as_str(), "b"])?;
-    d.checkshape(&["b", "-exact", "-parallel"])?;
-    Ok(())
+#[should_panic]
+fn bug32448_1() {
+    expected_failure(|| {
+        let mut d = Draw::new();
+        d.expect_faulty();
+        d.restore(&[data_file("bug27814.brep").as_str(), "b"])?;
+        d.checkshape(&["b", "-exact", "-parallel"])?;
+        d.found_faulty()?;
+        Ok(())
+    })
 }
 
 /// `tests/heal/checkshape/bug32448_2`
@@ -26,8 +31,10 @@ fn bug32448_2() -> DrawResult<()> {
 #[test]
 fn bug32448_3() -> DrawResult<()> {
     let mut d = Draw::new();
+    d.expect_faulty();
     d.restore(&[data_file("BPLSEITLI.brep").as_str(), "b"])?;
     d.checkshape(&["b", "-exact", "-parallel"])?;
+    d.found_faulty()?;
     Ok(())
 }
 
@@ -46,8 +53,10 @@ fn bug32448_4() -> DrawResult<()> {
 #[test]
 fn bug32448_5() -> DrawResult<()> {
     let mut d = Draw::new();
+    d.expect_faulty();
     d.restore(&[data_file("bug26278_E01754_000000_P00_01_0_VS3_1_20070102_sewed_fixed.brep").as_str(), "b"])?;
     d.checkshape(&["b", "-exact", "-parallel"])?;
+    d.found_faulty()?;
     Ok(())
 }
 
@@ -56,8 +65,10 @@ fn bug32448_5() -> DrawResult<()> {
 #[test]
 fn bug32448_6() -> DrawResult<()> {
     let mut d = Draw::new();
+    d.expect_faulty();
     d.restore(&[data_file("bug30360_GES-13500-000.brep").as_str(), "b"])?;
     d.checkshape(&["b", "-exact", "-parallel"])?;
+    d.found_faulty()?;
     Ok(())
 }
 
@@ -66,8 +77,10 @@ fn bug32448_6() -> DrawResult<()> {
 #[test]
 fn bug32448_7() -> DrawResult<()> {
     let mut d = Draw::new();
+    d.expect_faulty();
     d.restore(&[data_file("OCC187_from_bug_description.brep").as_str(), "b"])?;
     d.checkshape(&["b", "-exact", "-parallel"])?;
+    d.found_faulty()?;
     Ok(())
 }
 
@@ -76,8 +89,10 @@ fn bug32448_7() -> DrawResult<()> {
 #[test]
 fn bug32448_8() -> DrawResult<()> {
     let mut d = Draw::new();
+    d.expect_faulty();
     d.restore(&[data_file("OCC394.brep").as_str(), "b"])?;
     d.checkshape(&["b", "-exact", "-parallel"])?;
+    d.found_faulty()?;
     Ok(())
 }
 
@@ -86,7 +101,9 @@ fn bug32448_8() -> DrawResult<()> {
 #[test]
 fn bug32448_9() -> DrawResult<()> {
     let mut d = Draw::new();
+    d.expect_faulty();
     d.restore(&[data_file("OCC396.brep").as_str(), "b"])?;
     d.checkshape(&["b", "-exact", "-parallel"])?;
+    d.found_faulty()?;
     Ok(())
 }

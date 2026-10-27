@@ -1703,6 +1703,7 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/boolean/bcut_complex/O3
+faulty: required
 build:
   - obj1: {load: {brep: "CTO908_topo101-o1.brep"}}
   - tool1: {load: {brep: "CTO908_topo101-t1.brep"}}
@@ -1717,6 +1718,7 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/boolean/bcut_complex/O4
+faulty: required
 build:
   - obj2: {load: {brep: "CTO908_topo101-o2.brep"}}
   - tool2: {load: {brep: "CTO908_topo101-t2.brep"}}
@@ -1732,6 +1734,7 @@ ported_from:
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/boolean/bcut_complex/O5
 expect: not_done
+faulty: required
 build:
   - obj: {load: {brep: "CTO908_topo102-o.brep"}}
   - tool: {load: {brep: "CTO908_topo102-t.brep"}}
@@ -1746,6 +1749,7 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/boolean/bcut_complex/O6
+faulty: required
 build:
   - obj: {load: {brep: "CTO908_topo103-o.brep"}}
   - tool: {load: {brep: "CTO908_topo103-t.brep"}}

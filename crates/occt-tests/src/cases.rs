@@ -92,8 +92,18 @@ pub fn run(case: &Case) -> Result<(), String> {
     if let Some(e) = failed {
         return Err(e);
     }
+    // (A case requiring a faulty shape, as its script's `REQUIRED All: Faulty shapes ...`:
+    // its `valid` checks are to fail once at least, its other checks to pass.)
+    let faulty_required = case.doc["faulty"].as_str() == Some("required");
+    let mut faulty = env.faulty.get();
     for check in seq(&case.doc["checks"]) {
-        env.check(check)?;
+        match env.check(check) {
+            Err(_) if faulty_required && check["valid"].as_str().is_some() => faulty += 1,
+            other => other?,
+        }
+    }
+    if faulty_required && faulty == 0 {
+        return Err("no faulty shape found where the script requires one (REQUIRED: Faulty shapes)".into());
     }
     Ok(())
 }
@@ -113,7 +123,10 @@ fn built(case: &Case) -> Result<(Env, Option<String>), String> {
         let (key, value) = map.iter().next().ok_or("an empty build step")?;
         let key = key.as_str().ok_or("a build step's key is a name")?;
         if key == "check" {
-            env.check(value)?;
+            match env.check(value) {
+                Err(_) if case.doc["faulty"].as_str() == Some("required") && value["valid"].as_str().is_some() => env.faulty.set(env.faulty.get() + 1),
+                other => other?,
+            }
         } else {
             match env.operation(value) {
                 Ok(v) => {
@@ -152,6 +165,9 @@ struct Env {
     model: Model,
     params: HashMap<String, f64>,
     vars: HashMap<String, Value>,
+    /// The `valid` checks among the build steps that failed, in a case requiring a faulty
+    /// shape (counted towards the one it requires).
+    faulty: std::cell::Cell<usize>,
 }
 
 thread_local! {

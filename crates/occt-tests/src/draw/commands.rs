@@ -2278,6 +2278,10 @@ impl Draw {
             true => Ok("This shape seems to be valid".into()),
             false => {
                 let problems: Vec<String> = report.errors().map(|p| p.description.clone()).collect();
+                if self.faulty_expected {
+                    self.faulty_found += 1;
+                    return Ok(format!("faulty, as required: {}: {}", args[0], problems.join("; ")));
+                }
                 Err(DrawError::Failed(format!("Faulty shape {}: {}", args[0], problems.join("; "))))
             }
         }

@@ -2472,15 +2472,20 @@ fn bug25480() -> DrawResult<()> {
 
 /// `tests/bugs/modalg_5/bug25509_1`
 #[test]
-fn bug25509_1() -> DrawResult<()> {
-    let mut d = Draw::new();
-    d.r#box(&["b", "10", "10", "10"])?;
-    d.explode(&["b"])?;
-    d.shape(&["result", "so"])?;
-    d.add(&["b_1", "result"])?;
-    d.add(&["b_1", "result"])?;
-    d.checkshape(&["result"])?;
-    Ok(())
+#[should_panic]
+fn bug25509_1() {
+    expected_failure(|| {
+        let mut d = Draw::new();
+        d.expect_faulty();
+        d.r#box(&["b", "10", "10", "10"])?;
+        d.explode(&["b"])?;
+        d.shape(&["result", "so"])?;
+        d.add(&["b_1", "result"])?;
+        d.add(&["b_1", "result"])?;
+        d.checkshape(&["result"])?;
+        d.found_faulty()?;
+        Ok(())
+    })
 }
 
 /// `tests/bugs/modalg_5/bug25509_2`
@@ -2488,25 +2493,32 @@ fn bug25509_1() -> DrawResult<()> {
 #[test]
 fn bug25509_2() -> DrawResult<()> {
     let mut d = Draw::new();
+    d.expect_faulty();
     d.restore(&[data_file("bug25509_r7.brep").as_str(), "result"])?;
     d.invert(&["result"])?;
     d.checkshape(&["result"])?;
+    d.found_faulty()?;
     Ok(())
 }
 
 /// `tests/bugs/modalg_5/bug25509_3`
 #[test]
-fn bug25509_3() -> DrawResult<()> {
-    let mut d = Draw::new();
-    d.r#box(&["b1", "10", "10", "10"])?;
-    d.r#box(&["b2", "4", "4", "4", "4", "4", "4"])?;
-    d.explode(&["b1"])?;
-    d.explode(&["b2"])?;
-    d.shape(&["result", "so"])?;
-    d.add(&["b1_1", "result"])?;
-    d.add(&["b2_1", "result"])?;
-    d.checkshape(&["result"])?;
-    Ok(())
+#[should_panic]
+fn bug25509_3() {
+    expected_failure(|| {
+        let mut d = Draw::new();
+        d.expect_faulty();
+        d.r#box(&["b1", "10", "10", "10"])?;
+        d.r#box(&["b2", "4", "4", "4", "4", "4", "4"])?;
+        d.explode(&["b1"])?;
+        d.explode(&["b2"])?;
+        d.shape(&["result", "so"])?;
+        d.add(&["b1_1", "result"])?;
+        d.add(&["b2_1", "result"])?;
+        d.checkshape(&["result"])?;
+        d.found_faulty()?;
+        Ok(())
+    })
 }
 
 /// `tests/bugs/modalg_5/bug25509_4`
@@ -2515,6 +2527,7 @@ fn bug25509_3() -> DrawResult<()> {
 fn bug25509_4() {
     expected_failure(|| {
         let mut d = Draw::new();
+        d.expect_faulty();
         d.r#box(&["b1", "10", "10", "10"])?;
         d.explode(&["b1"])?;
         d.vertex(&["v1", "11", "11", "0"])?;
@@ -2524,6 +2537,7 @@ fn bug25509_4() {
         d.add(&["b1_1", "result"])?;
         d.add(&["e2", "result"])?;
         d.checkshape(&["result"])?;
+        d.found_faulty()?;
         Ok(())
     })
 }
@@ -2534,6 +2548,7 @@ fn bug25509_4() {
 fn bug25509_5() {
     expected_failure(|| {
         let mut d = Draw::new();
+        d.expect_faulty();
         d.r#box(&["b1", "10", "10", "10"])?;
         d.explode(&["b1"])?;
         d.vertex(&["v1", "11", "11", "0"])?;
@@ -2543,6 +2558,7 @@ fn bug25509_5() {
         d.add(&["v1", "result"])?;
         d.add(&["v2", "result"])?;
         d.checkshape(&["result"])?;
+        d.found_faulty()?;
         Ok(())
     })
 }
@@ -2553,6 +2569,7 @@ fn bug25509_5() {
 fn bug25509_6() {
     expected_failure(|| {
         let mut d = Draw::new();
+        d.expect_faulty();
         d.r#box(&["b1", "10", "10", "10"])?;
         d.explode(&["b1"])?;
         d.vertex(&["v1", "11", "11", "0"])?;
@@ -2570,6 +2587,7 @@ fn bug25509_6() {
         d.add(&["b3_1", "result"])?;
         d.add(&["x", "result"])?;
         d.checkshape(&["result"])?;
+        d.found_faulty()?;
         Ok(())
     })
 }

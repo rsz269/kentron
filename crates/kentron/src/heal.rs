@@ -52,7 +52,8 @@ pub fn add_plane_pcurves(model: &mut Model, shape: Shape) -> Result<usize> {
 /// Repairs `shape` in place, returning it: the tolerances of its edges cover the distance between
 /// their curves and their pcurves on their faces' surfaces (as OCCT's
 /// `BRepLib::SameParameter` updates them), those of vertices their distances from the
-/// curves and surfaces they bound, all within `[precision, max_tolerance]`; solids
+/// curves and surfaces they bound, all within `[precision, max_tolerance]`; faces on their
+/// own whose loops run the wrong way round are turned round (as `ShapeFix_Face`); solids
 /// enclosing negative volume are reversed (as `ShapeFix_Solid`).
 #[doc(alias = "ShapeFix_Shape")]
 #[doc(alias = "fixshape")]
@@ -104,6 +105,40 @@ pub fn fix_shape(model: &mut Model, shape: Shape, options: &FixOptions) -> Resul
             }
         }
     }
+    // Faces on their own whose loops run the wrong way round in their surfaces' parameters
+    // (an outer one clockwise, a hole counter-clockwise): those turned round; and faces with
+    // several outer loops (none inside another) split into a face for each, with the holes
+    // inside it (as `ShapeFix_Face::FixOrientation` and `FixSplitFace`). (In a shell, a
+    // face's edges are shared with its neighbours', running the other way: its loops are
+    // left as they are.)
+    let in_shells: std::collections::HashSet<crate::topology::NodeId> =
+        model.unique_subshapes(shape, NodeKind::Shell).into_iter().flat_map(|s| model.unique_subshapes(s, NodeKind::Face)).map(|f| f.node).collect();
+    let mut shape = shape;
+    for face in model.unique_subshapes(shape, NodeKind::Face) {
+        if in_shells.contains(&face.node) {
+            continue;
+        }
+        let Some(pieces) = oriented_loops(model, Shape { orientation: Orientation::Forward, ..face })? else { continue };
+        // (Turned round in place.)
+        if let [piece] = pieces[..] {
+            if piece.node == face.node {
+                continue;
+            }
+        }
+        let compound = model.new_empty(NodeKind::Compound);
+        for piece in pieces {
+            model.add(compound, Shape { orientation: face.orientation, ..piece })?;
+        }
+        if shape.node == face.node {
+            shape = compound;
+        } else {
+            for parent in model.unique_subshapes(shape, NodeKind::Compound) {
+                if let Some(child) = model.children(parent).find(|c| c.node == face.node) {
+                    model.replace_child(parent, child, Shape { orientation: child.orientation, ..compound })?;
+                }
+            }
+        }
+    }
     // Solids inside out: their shells turned round.
     for solid in model.unique_subshapes(shape, NodeKind::Solid) {
         let solid = Shape { orientation: Orientation::Forward, ..solid };
@@ -114,6 +149,83 @@ pub fn fix_shape(model: &mut Model, shape: Shape, options: &FixOptions) -> Resul
         }
     }
     Ok(shape)
+}
+
+/// `face`'s loops turned to run as they should in its surface's parameters (outer loops
+/// counter-clockwise, holes clockwise, by how deep each lies inside the others), the face
+/// split in a face for each outer loop where it has several. `None` where they all run as
+/// they should in one face already, or the loops' areas cannot be told (a loop without
+/// pcurves, or running round a period).
+fn oriented_loops(model: &mut Model, face: Shape) -> Result<Option<Vec<Shape>>> {
+    let Some(surface) = model.surface(face).cloned() else { return Ok(None) };
+    let wires: Vec<Shape> = model.children(face).collect();
+    let mut loops = Vec::new();
+    for &w in &wires {
+        let Ok(id) = crate::topology::WireId::try_from(w.node) else { return Ok(None) };
+        let coedges = model[id].coedges.clone();
+        let Some(area) = crate::validity::loop_area_in_parameters(model, &coedges, w.orientation, &surface) else { return Ok(None) };
+        let mut points = Vec::new();
+        for &c in &coedges {
+            let Some((pcurve, first, last)) = model.effective_pcurve(c) else { return Ok(None) };
+            for i in 0..8 {
+                points.push(pcurve.point(first + (last - first) * i as f64 / 8.0));
+            }
+        }
+        loops.push((w, coedges, area, points));
+    }
+    // How many other loops each lies inside (by a point of its, in their polygons).
+    let inside = |p: crate::math::Point2, polygon: &[crate::math::Point2]| {
+        let mut odd = false;
+        for i in 0..polygon.len() {
+            let (a, b) = (polygon[i], polygon[(i + 1) % polygon.len()]);
+            if (a.y > p.y) != (b.y > p.y) && p.x < a.x + (p.y - a.y) / (b.y - a.y) * (b.x - a.x) {
+                odd = !odd;
+            }
+        }
+        odd
+    };
+    let depth: Vec<usize> = (0..loops.len()).map(|i| (0..loops.len()).filter(|&j| j != i && inside(loops[i].3[0], &loops[j].3)).count()).collect();
+    let outer: Vec<usize> = (0..loops.len()).filter(|&i| depth[i] % 2 == 0).collect();
+    let wrong: Vec<bool> = (0..loops.len()).map(|i| (depth[i] % 2 == 0) != (loops[i].2 > 0.0)).collect();
+    if outer.len() <= 1 && !wrong.iter().any(|&w| w) {
+        return Ok(None);
+    }
+    if outer.len() <= 1 {
+        for (i, (w, ..)) in loops.iter().enumerate() {
+            if wrong[i] {
+                model.replace_child(face, *w, w.reversed())?;
+            }
+        }
+        return Ok(Some(vec![face]));
+    }
+    // A face for each outer loop, with the holes just inside it, on the same surface.
+    let tolerance = model.tolerance(face);
+    let mut faces = Vec::new();
+    for &o in &outer {
+        let holes = (0..loops.len()).filter(|&h| depth[h] == depth[o] + 1 && inside(loops[h].3[0], &loops[o].3));
+        let piece = model.new_empty(NodeKind::Face);
+        model.set_face_surface(piece, surface.clone(), tolerance)?;
+        for i in std::iter::once(o).chain(holes) {
+            let (wire, coedges, ..) = &loops[i];
+            let flip = wrong[i] != (wire.orientation == Orientation::Reversed);
+            let mut fresh = Vec::new();
+            for &c in coedges {
+                let orientation = if flip { model[c].orientation.reversed() } else { model[c].orientation };
+                let coedge = model.add_coedge(model[c].edge, orientation)?;
+                if let Some((pcurve, first, last)) = model.effective_pcurve(c) {
+                    model.set_pcurve_with_range(coedge, pcurve, first, last)?;
+                }
+                fresh.push(coedge);
+            }
+            if flip {
+                fresh.reverse();
+            }
+            let wire = model.add_wire(&fresh)?;
+            model.add(piece, wire.into())?;
+        }
+        faces.push(piece);
+    }
+    Ok(Some(faces))
 }
 
 /// The largest distance between a coedge's edge curve and its pcurve on `surface` (at

@@ -432,6 +432,18 @@ class CaseResult:
     examples: dict = field(default_factory=dict)
     data_files: list = field(default_factory=list)
     todos: list = field(default_factory=list)
+    # `puts "REQUIRED platforms: regexp"`: output the log must contain (OCCT's harness fails
+    # the script without it, and does not count the lines matching it as errors).
+    required: list = field(default_factory=list)
+
+
+def required_faulty(res: "CaseResult") -> bool:
+    """Whether the script requires a faulty shape on this platform (`REQUIRED All: Faulty
+    shapes in variables faulty_1 to faulty_N`): its `checkshape`s are to find one at least,
+    the shape it was written for being faulty."""
+    # (Platforms as OCCT's harness reads them, `All` too: as the Tcl scripts' runner does.)
+    here = lambda plat: any(p in ("ALL", "All", "Linux", "Debian", "Ubuntu") for p in re.split(r"[\s,]+", plat))
+    return any(here(plat) and "Faulty shapes" in msg for plat, msg in res.required)
 
 
 def rust_str(s: str) -> str:
@@ -601,6 +613,9 @@ class Translator:
                 m = re.match(r"TODO\s+(\S+)\s+([^:]+):\s*(.*)", lit)
                 if m:
                     self.res.todos.append((m.group(1), m.group(2).strip(), m.group(3)))
+                m = re.match(r"REQUIRED\s+([^:]+):\s*(.*)", lit)
+                if m:
+                    self.res.required.append((m.group(1).strip(), m.group(2)))
                 return
             parts = c.words[1].parts
             if len(parts) == 1 and isinstance(parts[0], Sub):
@@ -937,7 +952,7 @@ def try_yaml(case: Case, res: CaseResult, data_index: dict, occt: Path, deviatio
         skip = f"known failure in OCCT: {known_fail[0][0]}"
     try:
         return drawyaml.to_yaml(case.name, rel, git_hash, body, notes, skip, case_timeout(rel, deviations),
-                                rel in expected)
+                                rel in expected, required_faulty(res))
     except drawyaml.Unsupported as e:
         if os.environ.get("YAML_REASONS"):
             with open(os.environ["YAML_REASONS"], "a") as f:
@@ -973,8 +988,14 @@ def emit_case(case: Case, res: CaseResult, fn_name: str, data_index: dict, occt:
         lines.append(f"fn {fn_name}() -> DrawResult<()> {{")
         indent = "    "
     lines.append(indent + "let mut d = Draw::new();")
+    faulty = required_faulty(res)
+    if faulty:
+        # (The script requires a faulty shape: its checkshapes count them, one at least.)
+        lines.append(indent + "d.expect_faulty();")
     for stmt in res.rust_body:
         lines.append(indent + stmt)
+    if faulty:
+        lines.append(indent + "d.found_faulty()?;")
     lines.append(indent + "Ok(())")
     if rel.as_posix() in expected:
         lines.append("    })")

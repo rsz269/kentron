@@ -375,6 +375,7 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/bugs/modalg_5/bug24035
+faulty: required
 build:
   - face1: {load: {brep: "bug24035_face1"}}
   - face2: {load: {brep: "bug24035_face2"}}
@@ -1965,6 +1966,7 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/bugs/modalg_5/bug25509_7
+faulty: required
 build:
   - result: {load: {brep: "bug25509_Aggreg_4.brep"}}
 checks:
@@ -1976,6 +1978,7 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/bugs/modalg_5/bug25509_8
+faulty: required
 build:
   - result: {load: {brep: "bug25509_r_6.brep"}}
 checks:
@@ -2056,6 +2059,7 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/bugs/modalg_5/bug25735
+faulty: required
 build:
   - result: {load: {brep: "bug25735_r5"}}
 checks:

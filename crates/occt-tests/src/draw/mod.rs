@@ -229,6 +229,10 @@ pub fn expected_failure(test: impl FnOnce() -> DrawResult<()>) {
 #[derive(Debug, Default)]
 pub struct Draw {
     vars: HashMap<String, DrawObject>,
+    /// Whether the script requires a faulty shape (`REQUIRED All: Faulty shapes ...`): then
+    /// `checkshape` counts the faulty shapes it finds (in `faulty_found`) instead of failing.
+    faulty_expected: bool,
+    faulty_found: usize,
     /// Owns every shape the session creates.
     pub model: Model,
     /// The object and tool of the last `bop`, for `bopfuse`, `bopcut`, ...
@@ -285,6 +289,20 @@ pub struct Draw {
 impl Draw {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// The script requires a faulty shape (OCCT's `REQUIRED All: Faulty shapes in variables
+    /// faulty_1 to faulty_N`): `checkshape` counts faulty shapes from here on, not failing.
+    pub fn expect_faulty(&mut self) {
+        self.faulty_expected = true;
+    }
+
+    /// Fails unless `checkshape` found a faulty shape, as the script requires.
+    pub fn found_faulty(&self) -> DrawResult<()> {
+        match self.faulty_found {
+            0 => Err(DrawError::Failed("no faulty shape found where the script requires one (REQUIRED: Faulty shapes)".into())),
+            _ => Ok(()),
+        }
     }
 
     /// A compound of `parts`.

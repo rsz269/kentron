@@ -879,7 +879,7 @@ def walk(v):
 
 
 def to_yaml(case_name: str, file: str, git_hash: str, body: list, notes: list, skip: str | None, timeout: float | None = None,
-            expect_failure: bool = False) -> str:
+            expect_failure: bool = False, required_faulty: bool = False) -> str:
     """The YAML document for a translated script, or raises Unsupported."""
     conv = Converter()
     for cmd, args in parse_calls(body):
@@ -904,6 +904,9 @@ def to_yaml(case_name: str, file: str, git_hash: str, body: list, notes: list, s
         out.append(f"timeout: {timeout}")
     if expect_failure:
         out.append("expect: not_done")
+    if required_faulty:
+        # (The script requires a faulty shape: its `valid` checks are to fail once at least.)
+        out.append("faulty: required")
     # The scripts' parameters (DRAW variables such as the blend group's SCALE1) are inlined:
     # arithmetic on numbers becomes its value, other expressions (with pi or functions) keep
     # their text with the values substituted.

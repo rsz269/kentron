@@ -537,7 +537,9 @@ impl Copier {
         }
         let wires: Vec<Shape> = model.children_local(shape).collect();
         for wire in wires {
-            let mut ids = Vec::new();
+            // Each coedge's new edge, orientation, range, pcurve and (where it was refitted)
+            // the shape's own pcurve in the new parameters.
+            let mut uses: Vec<(EdgeId, Orientation, f64, f64, Curve2, Option<Curve2>)> = Vec::new();
             let coedge_shapes: Vec<Shape> = model.children_local(wire).collect();
             for c in coedge_shapes {
                 let id = CoEdgeId::try_from(c.node).expect("a wire holds coedges");
@@ -562,20 +564,44 @@ impl Copier {
                     }),
                 };
                 let scaled = scaled_pcurve(&pcurve, uv_scales);
-                let pcurve = match scaled.clone().filter(|p| fits(p)) {
-                    Some(p) => p,
+                let (pcurve, own) = match scaled.clone().filter(|p| fits(p)) {
+                    Some(p) => (p, None),
                     None => {
                         let (c, _, _) = curve.as_ref().ok_or_else(|| Error::InvalidInput("no pcurve for a degenerate edge".into()))?;
                         // (Refitted as closely as it goes; else, where the shape's own pcurve
                         // strays from its edge already, that one as it is.)
                         match project::pcurve_on_range_within(c, &surface, first, last, &[1e-9, 1e-7, 1e-5]) {
-                            Some(p) => Curve2::BSpline(p),
-                            None => scaled.ok_or_else(|| Error::InvalidInput("no pcurve for a transformed edge".into()))?,
+                            Some(p) => (Curve2::BSpline(p), scaled),
+                            None => (scaled.ok_or_else(|| Error::InvalidInput("no pcurve for a transformed edge".into()))?, None),
                         }
                     }
                 };
-                let coedge = model.add_coedge(new_edge, orientation)?;
-                model.set_pcurve_with_range(coedge, pcurve, first, last)?;
+                uses.push((new_edge, orientation, first, last, pcurve, own));
+            }
+            // (Refitted pcurves that leave the loop open where the shape's own close it (an
+            // edge whose curve strays from them within its loose tolerance, half a turn round
+            // a cylinder): the shape's own for the loop.)
+            let closes = |pcurves: &[&Curve2]| -> bool {
+                let n = uses.len();
+                (0..n).all(|i| {
+                    let j = (i + 1) % n;
+                    let end = |k: usize, start: bool| {
+                        let (_, orientation, first, last, ..) = &uses[k];
+                        let at_start = start != (*orientation == Orientation::Reversed);
+                        let uv = pcurves[k].point(if at_start { *first } else { *last });
+                        surface.point(uv.x, uv.y)
+                    };
+                    end(i, false).distance(end(j, true)) <= (10.0 * tolerance).max(crate::tolerance::LINEAR)
+                })
+            };
+            let chosen: Vec<&Curve2> = uses.iter().map(|u| &u.4).collect();
+            let own: Vec<&Curve2> = uses.iter().map(|u| u.5.as_ref().unwrap_or(&u.4)).collect();
+            let keep_own = uses.iter().any(|u| u.5.is_some()) && !closes(&chosen) && closes(&own);
+            let mut ids = Vec::new();
+            for (k, (new_edge, orientation, first, last, ..)) in uses.iter().enumerate() {
+                let pcurve = if keep_own { own[k].clone() } else { chosen[k].clone() };
+                let coedge = model.add_coedge(*new_edge, *orientation)?;
+                model.set_pcurve_with_range(coedge, pcurve, *first, *last)?;
                 ids.push(coedge);
             }
             let w = model.add_wire(&ids)?;
