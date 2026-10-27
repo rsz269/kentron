@@ -1068,8 +1068,10 @@ fn section_poles(sections: &[Section], edges: usize) -> Vec<Vec<Point>> {
         }
         let mut spans = 1;
         loop {
+            // (Each span's points once, for every degree tried.)
+            let points: Vec<Vec<Point>> = (0..spans).map(|k| span_points(piece, spans, k)).collect();
             for n in 1..=MOST {
-                if (0..spans).all(|k| fit(&span_points(piece, spans, k), n).1 <= TOLERANCE) {
+                if points.iter().all(|p| fit(p, n).1 <= TOLERANCE) {
                     return (n, spans);
                 }
             }

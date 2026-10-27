@@ -383,18 +383,7 @@ fn integrate_face(model: &Model, face: Shape, mut sample: impl FnMut(Point, Vect
                 (low(b.u_knots(), b.u_multiplicities(), b.u_degree()), low(b.v_knots(), b.v_multiplicities(), b.v_degree()))
             }
             Surface::Trimmed(t) => kinks(t.basis()),
-            // (An offset's derivatives take its basis's normal's: one order less smooth, at
-            // most C1 where the basis is C2, as a cubic at all its knots.)
-            Surface::Offset(o) => match o.basis() {
-                Surface::BSpline(b) => {
-                    let low = |knots: &[f64], mults: &[usize], degree: usize| -> Vec<f64> {
-                        let n = knots.len();
-                        (1..n.saturating_sub(1)).filter(|&i| mults[i] + 2 >= degree).map(|i| knots[i]).collect()
-                    };
-                    (low(b.u_knots(), b.u_multiplicities(), b.u_degree()), low(b.v_knots(), b.v_multiplicities(), b.v_degree()))
-                }
-                basis => kinks(basis),
-            },
+            Surface::Offset(o) => kinks(o.basis()),
             _ => (Vec::new(), Vec::new()),
         }
     }
