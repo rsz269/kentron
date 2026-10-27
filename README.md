@@ -155,7 +155,7 @@ An existing CadQuery script runs unchanged with `pykentron-run script.py`, or af
 ## Licence
 
 kentron and pykentron are dual-licensed under the [MIT](LICENSE-MIT) and
-[Apache 2.0](LICENSE-APACHE) licences, at your option. Two parts keep the licences of the
+[Apache 2.0](LICENSE-APACHE) licences, at your option. These parts keep the licences of the
 code they come from:
 - `crates/occt-tests`, translated from OCCT's and BRL-CAD's tests: LGPL-2.1 (OCCT's with the
   Open CASCADE exception). Nothing else depends on it.
