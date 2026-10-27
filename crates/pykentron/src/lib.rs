@@ -515,6 +515,30 @@ fn make_polygon(points: Vec<Xyz>, close: bool) -> PyResult<Handle> {
     .map(handle)
 }
 
+/// A face on `face`'s surface (placed as it is) covering all of the surface where it is
+/// bounded, round the whole of it where it closes, and the face's own range widened by
+/// `reach` (in the surface's parameters) where it runs on without end: the surface a feature
+/// extruded up to a face ends on (as OCCT's features take it).
+#[pyfunction]
+fn extended_face(face: Handle, reach: f64) -> PyResult<Handle> {
+    use kentron::geometry::ParametricSurface;
+    use kentron::math::Transformable;
+    with_model(|m| {
+        let surface = m.surface(face.shape).ok_or_else(|| kentron::Error::InvalidInput("a face without a surface".into()))?.clone();
+        let (fu0, fu1, fv0, fv1) = m.face_uv_bounds(face.shape);
+        let (su0, su1, sv0, sv1) = surface.bounds();
+        let range = |lo: f64, hi: f64, s_lo: f64, s_hi: f64, period: Option<f64>| match period {
+            Some(p) => (lo, lo + p),
+            None => (if s_lo.is_finite() && s_lo > -1e100 { s_lo } else { lo - reach }, if s_hi.is_finite() && s_hi < 1e100 { s_hi } else { hi + reach }),
+        };
+        let (u0, u1) = range(fu0, fu1, su0, su1, surface.u_period());
+        let (v0, v1) = range(fv0, fv1, sv0, sv1, surface.v_period());
+        let placed = surface.transformed(&face.shape.placement);
+        make::face_on_domain(m, placed, u0, u1, v0, v1)
+    })
+    .map(handle)
+}
+
 /// The planar face inside `outer`, with holes inside `inners`.
 #[pyfunction]
 #[pyo3(signature = (outer, inners=Vec::new()))]
@@ -1307,6 +1331,7 @@ fn _kentron(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(make_wire, m)?)?;
     m.add_function(wrap_pyfunction!(make_polygon, m)?)?;
     m.add_function(wrap_pyfunction!(make_face, m)?)?;
+    m.add_function(wrap_pyfunction!(extended_face, m)?)?;
     m.add_function(wrap_pyfunction!(extrude, m)?)?;
     m.add_function(wrap_pyfunction!(extrude_drafted, m)?)?;
     m.add_function(wrap_pyfunction!(revolve, m)?)?;

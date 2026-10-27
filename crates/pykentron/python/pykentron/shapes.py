@@ -1832,7 +1832,21 @@ class Mixin3D:
                 slab = Shape.cast(native.extrude(Face.makePlane(size, size, origin, normal).wrapped, (normal * (side * size)).toTuple()))
                 prism = far.intersect(slab).wrapped
             elif upToFace is not None:
-                prism = native.extrude(face.wrapped, (n * (upToFace.Center() - face.Center()).dot(n)).toTuple())
+                # Far along the normal, then split by the face's surface (all of it, or the
+                # face's widened: as OCCT's feature extends it): the prism ends on it (on a
+                # curved face, as it curves), the pieces from the profile up to it. (Where it
+                # does not cut across, to the depth of the face's centre.)
+                towards = n if (upToFace.Center() - face.Center()).dot(n) >= 0 else -n
+                size = 2.0 * (reach + face.BoundingBox().DiagonalLength + (upToFace.Center() - face.Center()).Length)
+                far = Shape.cast(native.extrude(face.wrapped, (towards * size).toTuple()))
+                until = Shape.cast(native.extended_face(upToFace.wrapped, size))
+                pieces = [p for p in _split_pieces(far, [until]) if p.Solids()]
+                tol = 1e-6 * (1.0 + size)
+                start = [p for p in pieces if p.distance(face) <= tol]
+                if len(pieces) > 1 and start:
+                    prism = (start[0] if len(start) == 1 else Compound.makeCompound(start)).wrapped
+                else:
+                    prism = native.extrude(face.wrapped, (n * (upToFace.Center() - face.Center()).dot(n)).toTuple())
             elif thruAll or depth is None:
                 d = n * (reach + face.BoundingBox().DiagonalLength)
                 prism = native.extrude(face.moved(Location(-d)).wrapped, (d * 2).toTuple())
