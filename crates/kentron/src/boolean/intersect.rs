@@ -685,7 +685,17 @@ impl Traced {
             let (x0, x1, y0, y1) = surface.bounds();
             past(x, x0, x1, surface.is_u_periodic()) || past(y, y0, y1, surface.is_v_periodic())
         };
-        off(&self.base, at(&self.uv)) || off(&self.other, at(st))
+        let (uv, st) = (at(&self.uv), at(st));
+        if !(off(&self.base, uv) || off(&self.other, st)) {
+            return false;
+        }
+        // (Between samples past the same bound, the curve may come back inside: a section
+        // leaving a face's edge and meeting it again, its samples, only at its ends, each a
+        // hair past it. Where the point found on both surfaces from there is not.)
+        match self.on_both_with(uv, st) {
+            Some((uv, st)) => off(&self.base, uv) || off(&self.other, st),
+            None => true,
+        }
     }
 
     /// The other surface's point and derivatives at `(s, t)`; beyond its bounds carried on
@@ -754,7 +764,12 @@ impl Traced {
     }
 
     /// [`Self::on_both`] from `(s, t)` on the other surface.
-    fn on_both_from(&self, (mut u, mut v): (f64, f64), (mut s, mut t): (f64, f64)) -> Option<(f64, f64)> {
+    fn on_both_from(&self, uv: (f64, f64), st: (f64, f64)) -> Option<(f64, f64)> {
+        self.on_both_with(uv, st).map(|(uv, _)| uv)
+    }
+
+    /// [`Self::on_both_from`], with the other surface's parameters there too.
+    fn on_both_with(&self, (mut u, mut v): (f64, f64), (mut s, mut t): (f64, f64)) -> Option<((f64, f64), (f64, f64))> {
         use crate::geometry::ParametricSurface;
         let (bu0, bu1, bv0, bv1) = self.base.bounds();
         // (u, v) weighed against (s, t): steps of the other's parameters a million times
@@ -765,7 +780,7 @@ impl Traced {
             let (q, qs, qt) = self.other_extended(s, t);
             let f = p - q;
             if f.length() <= 1e-12 * (1.0 + (p - Point::ORIGIN).length()) {
-                return Some((u, v));
+                return Some(((u, v), (s, t)));
             }
             // J = [pu pv -qs -qt], the step -W J^T (J W J^T)^-1 f with W = diag(1, 1, FREE, FREE).
             let m = |a: Vector, b: Vector| a.x * b.x + a.y * b.y + a.z * b.z;
@@ -2594,6 +2609,10 @@ impl Graph {
         let (lo, hi) = section.range();
         let span = hi - lo;
         let reach = 10.0 * on_tol();
+        // (Where they touch tangent, a trace may stop anywhere in the band in which the
+        // surfaces are within the tolerances of each other (as wide as the root of the
+        // tolerance times their radius): some way short of the edge, met all the same.)
+        let tangent_reach = 1e3 * on_tol();
         let mut out: Vec<(usize, f64, f64, Point)> = Vec::new();
         for (end, a, b) in [(lo, lo, lo + 0.1 * span), (hi, hi - 0.1 * span, hi)] {
             let at_end = section.point(end);
@@ -2602,7 +2621,7 @@ impl Graph {
                 for bound in self.faces[f].boundary.iter().filter(|b| b.bounds) {
                     let e = &self.edges[bound.edge];
                     let Some(c) = &e.curve else { continue };
-                    if geom::project(c, e.first, e.last, at_end).1 > far + reach {
+                    if geom::project(c, e.first, e.last, at_end).1 > far + tangent_reach {
                         continue;
                     }
                     // (Only an edge lying on the other face's surface too.)
@@ -2624,7 +2643,7 @@ impl Graph {
                         if gap(p) < gap(q) { y = q } else { x = p }
                     }
                     let t = 0.5 * (x + y);
-                    if gap(t) > reach {
+                    if gap(t) > tangent_reach {
                         continue;
                     }
                     let (s, _) = geom::project(c, e.first, e.last, section.point(t));
@@ -2633,7 +2652,8 @@ impl Graph {
                     // (Only where the surfaces touch there, nearly tangent: elsewhere a section
                     // crossing the edge is found where the edge crosses the face.)
                     let (n1, n2) = (geom::normal_at_point(&traced.base, q), geom::normal_at_point(&traced.other, q));
-                    if n1.cross(n2).length() >= TANGENT_SINE * n1.length() * n2.length() {
+                    let sine = n1.cross(n2).length() / (n1.length() * n2.length()).max(1e-300);
+                    if sine >= TANGENT_SINE || (gap(t) > reach && sine > 1e-3) {
                         continue;
                     }
                     if q.distance(self.vertices.points[e.start]) <= reach || q.distance(self.vertices.points[e.end]) <= reach {

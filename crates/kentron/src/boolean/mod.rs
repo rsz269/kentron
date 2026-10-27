@@ -1189,6 +1189,31 @@ mod tests {
         assert!((v - volume).abs() <= 1e-4 * volume, "volume {v} != {volume}");
     }
 
+    /// Two triangular bars twisted 40° either way from one triangle (a knurl's): where they
+    /// part, each one's faces meet the other's from a corner of the triangle to where the
+    /// bars' edges cross, along curves leaving and rejoining the edges they end on (found
+    /// past them a hair at both ends, inside between): the overlap they bound closes, and
+    /// the overlap and the rest of each make it up.
+    #[test]
+    fn twisted_bars_from_one_start() {
+        let mut model = Model::new();
+        let mut read = |text: &str| crate::io::brep::read(&mut model, &mut text.as_bytes()).unwrap();
+        let a = read(include_str!("tests/twisted_bars_from_one_start_a.brep"));
+        let b = read(include_str!("tests/twisted_bars_from_one_start_b.brep"));
+        let whole = properties::volume(&model, a).mass;
+        let common = intersection(&mut model, a, b).unwrap();
+        let cut = difference(&mut model, a, b).unwrap();
+        let fused = union(&mut model, a, b).unwrap();
+        for r in [common, cut, fused] {
+            assert!(validity::check(&model, r).is_valid(), "{:?}", validity::check(&model, r));
+        }
+        let (c, d, u) = (properties::volume(&model, common).mass, properties::volume(&model, cut).mass, properties::volume(&model, fused).mass);
+        assert!((c + d - whole).abs() <= 1e-6 * whole, "{c} + {d} != {whole}");
+        assert!((u - (2.0 * whole - c)).abs() <= 1e-6 * u, "{u}");
+        // (OCCT's union.)
+        assert!((u - 2.5821).abs() <= 1e-3, "{u}");
+    }
+
     /// The top of a threaded container (a cylinder face whose band winds round four times
     /// up its thread, in one face) halved by a block through its axis, the block's face
     /// meeting the cylinder along its seam: the lines on the band where the block's face
