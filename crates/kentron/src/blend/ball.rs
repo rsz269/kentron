@@ -921,8 +921,8 @@ fn section(sides: &[Side; 2], o: Point, tangent: Vector, r: f64, side: f64, near
         let start = o + (offset - tangent * offset.dot(tangent));
         let solved = newton_damped(start, conditions, characteristic);
         if let Ok(center) = solved {
-            let contacts = [sides[0].distance(center)?.1, sides[1].distance(center)?.1];
-            let contact_uv = [sides[0].uv(center)?, sides[1].uv(center)?];
+            let [(c0, uv0), (c1, uv1)] = [contact(&sides[0], center, o)?, contact(&sides[1], center, o)?];
+            let (contacts, contact_uv) = ([c0, c1], [uv0, uv1]);
             return Ok(Section { t: 0.0, center, contacts, contact_uv, radius: r, straight: false });
         }
     }
@@ -944,9 +944,26 @@ fn section(sides: &[Side; 2], o: Point, tangent: Vector, r: f64, side: f64, near
     let half = 0.5 * into[0].dot(into[1]).clamp(-1.0, 1.0).acos();
     let start = o + sum.normalized() * (r / half.sin());
     let center = newton_damped(start, conditions, characteristic)?;
-    let contacts = [sides[0].distance(center)?.1, sides[1].distance(center)?.1];
-    let contact_uv = [sides[0].uv(center)?, sides[1].uv(center)?];
-    Ok(Section { t: 0.0, center, contacts, contact_uv, radius: r, straight: false })
+    let [(c0, uv0), (c1, uv1)] = [contact(&sides[0], center, o)?, contact(&sides[1], center, o)?];
+    Ok(Section { t: 0.0, center, contacts: [c0, c1], contact_uv: [uv0, uv1], radius: r, straight: false })
+}
+
+/// The ball's contact with a side and its parameters: the foot of its centre, or, where the
+/// centre is on the surface's axis (the surface all round it as near, as for a ball as
+/// wide as the arc of a rounded corner), the foot on the way from it to `o`.
+fn contact(side: &Side, center: Point, o: Point) -> Result<(Point, Point2)> {
+    let foot = side.distance(center)?.1;
+    let toward = o - center;
+    // (Only a surface with a closed-form inverse has an axis; feet a hair to either side
+    // of the centre, that way, are then far apart.)
+    if side.surface.parameters(center).is_some() && toward.length() > 0.0 {
+        let step = toward * (1e-9 * (1.0 + (center - Point::ORIGIN).length()) / toward.length());
+        let ahead = side.distance(center + step)?.1;
+        if ahead.distance(side.distance(center - step)?.1) > 0.5 * foot.distance(center) {
+            return Ok((ahead, side.uv(center + step)?));
+        }
+    }
+    Ok((foot, side.uv(center)?))
 }
 
 /// The chamfer's section in the plane through `o` square to `tangent`: on each face the

@@ -3216,6 +3216,51 @@ mod tests {
             .unwrap();
         check_ball(&mut model, l, edge, 0.25, 3.0 + 0.25 * 0.25 * (1.0 - PI / 4.0));
     }
+
+    /// A slot whose ends are half circles of radius 0.75 between bulging B-spline sides,
+    /// its top rim rounded with radius 0.75: along the ends the ball's centre stands on the
+    /// half circles' axes, the cylinders all round it as near, and its contacts with them
+    /// are where its section is (the fillet there a piece of a sphere), as for a radius a
+    /// hair smaller.
+    #[test]
+    fn rims_round_with_balls_as_wide_as_their_arcs() {
+        use crate::geometry::curve::{BSplineCurve, Circle, Curve};
+        let slot = |model: &mut Model| -> Shape {
+            let r = 0.75;
+            let side = |y: f64| {
+                let poles = [(0.0, 0.0), (1.0, 0.0), (2.0, 0.75), (3.0, 0.0), (4.0, 0.0)].map(|(x, b)| Point::new(x, y.signum() * (r + b), 0.0)).to_vec();
+                Curve::BSpline(BSplineCurve::new(poles, vec![0.0, 0.5, 1.0], vec![4, 1, 4], 3))
+            };
+            let end = |model: &mut Model, x: f64, from: f64| {
+                let circle = Circle::new(Frame::from_z(Point::new(x, 0.0, 0.0), Direction::Z), r);
+                crate::make::edge_from_curve_range(model, Curve::Circle(circle), from, from + PI).unwrap()
+            };
+            let edges = [
+                crate::make::edge_from_curve(model, side(-1.0)).unwrap(),
+                end(model, 4.0, -0.5 * PI),
+                crate::make::edge_from_curve(model, side(1.0)).unwrap().reversed(),
+                end(model, 0.0, 0.5 * PI),
+            ];
+            let wire = crate::make::wire(model, &edges).unwrap();
+            let face = crate::make::planar_face(model, wire).unwrap();
+            crate::sweep::extrude(model, face, Vector::new(0.0, 0.0, 2.0)).unwrap().shape
+        };
+        let rounded = |radius: f64| {
+            let mut model = Model::new();
+            let solid = slot(&mut model);
+            let rim: Vec<Shape> = model.unique_subshapes(solid, NodeKind::Edge).into_iter().filter(|&e| {
+                let (a, b) = model.edge_vertices(e);
+                model.point(a).z > 1.99 && model.point(b).z > 1.99
+            }).collect();
+            assert_eq!(rim.len(), 4);
+            let result = fillet(&mut model, solid, &rim, radius).unwrap();
+            assert!(validity::check(&model, result).is_valid());
+            properties::volume(&model, result).mass
+        };
+        let (wide, narrower) = (rounded(0.75), rounded(0.7499));
+        assert!((wide - narrower).abs() <= 1e-3, "{wide} against {narrower}");
+    }
+
 }
 
 #[cfg(test)]
