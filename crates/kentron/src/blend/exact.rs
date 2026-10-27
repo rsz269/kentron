@@ -22,6 +22,8 @@ pub(super) struct Undo {
     pcurves: Vec<(CoEdgeId, Curve2, f64, f64)>,
     /// Its wires and its uses in shells, turned round (the exact surface facing the other way).
     turned: Vec<(Shape, Shape)>,
+    /// Edges whose tolerance was raised to cover their new pcurves, with their old ones.
+    tolerances: Vec<(crate::topology::EdgeId, f64)>,
 }
 
 /// What made an edge exact, to undo it.
@@ -89,6 +91,9 @@ pub(super) fn undo(model: &mut Model, done: Done) {
         }
     }
     for undo in done.faces.into_iter().rev() {
+        for &(edge, old) in undo.tolerances.iter().rev() {
+            let _ = model.set_edge_tolerance(edge, old);
+        }
         for (parent, turned) in undo.turned.iter().rev() {
             let _ = model.replace_child(*parent, *turned, turned.reversed());
         }
@@ -206,6 +211,7 @@ fn make_exact(model: &mut Model, shape: Shape, face: Shape) -> Option<Undo> {
     let mut edges_seen = HashSet::new();
     let mut new_pcurves = Vec::with_capacity(coedges.len());
     let mut old_pcurves = Vec::with_capacity(coedges.len());
+    let mut raise = Vec::new();
     let periods = [exact.u_period(), exact.v_period()];
     let (mu, mv) = exact.parameters(surface.point(0.5 * (bounds.0 + bounds.1), 0.5 * (bounds.2 + bounds.3)))?;
     for &c in &coedges {
@@ -223,14 +229,15 @@ fn make_exact(model: &mut Model, shape: Shape, face: Shape) -> Option<Undo> {
         let shift = |period: Option<f64>, target: f64, at: f64| period.map_or(0.0, |p| ((target - at) / p).round() * p);
         let (du, dv) = (shift(periods[0], mu, mid.x), shift(periods[1], mv, mid.y));
         let pcurve = if du != 0.0 || dv != 0.0 { pcurve.transformed(&Transform2::translation(Vector2::new(du, dv))) } else { pcurve };
-        // (On the edge, at the edge's own parameters.)
-        let gap = (0..=8).map(|i| {
-            let t = first + (last - first) * i as f64 / 8.0;
-            let uv = pcurve.point(t);
-            exact.point(uv.x, uv.y).distance(curve.point(t))
-        });
-        if gap.fold(0.0, f64::max) > tol.max(model.tolerance(Shape::from(edge))) {
+        // (On the edge, at the edge's own parameters: within its tolerance, or a little more,
+        // the tolerance raised to it, as OCCT's same-parameter fixing does.)
+        let gap = dense_gap(&pcurve, &exact, &curve, first, last);
+        let edge_tolerance = model.tolerance(Shape::from(edge));
+        if gap > tol.max(edge_tolerance).max(1e-6 * size) {
             return None;
+        }
+        if gap * 1.5 > edge_tolerance {
+            raise.push((edge, edge_tolerance, gap * 1.5));
         }
         let (old, a, b) = model.effective_pcurve(c)?;
         old_pcurves.push((c, old, a, b));
@@ -260,7 +267,12 @@ fn make_exact(model: &mut Model, shape: Shape, face: Shape) -> Option<Undo> {
     for (c, p, a, b) in new_pcurves {
         model.set_pcurve_with_range(c, p, a, b).ok()?;
     }
-    Some(Undo { face, surface, tolerance, pcurves: old_pcurves, turned })
+    let mut tolerances = Vec::new();
+    for (edge, old, new) in raise {
+        model.set_edge_tolerance(edge, new).ok()?;
+        tolerances.push((edge, old));
+    }
+    Some(Undo { face, surface, tolerance, pcurves: old_pcurves, turned, tolerances })
 }
 
 /// `edge` (of `shape`), a B-spline on a straight line or a circle to within its tolerance,
@@ -277,6 +289,10 @@ fn exact_edge(model: &mut Model, shape: Shape, edge: Shape) -> Option<EdgeUndo> 
     let (start, end) = (samples[0], samples[N]);
     let length: f64 = samples.windows(2).map(|w| w[0].distance(w[1])).sum();
     let tol = tolerance.max(crate::tolerance::LINEAR).min(1e-6 * length.max(1.0));
+    // (Not an edge too short to tell what it is.)
+    if length <= 10.0 * tol.max(tolerance) {
+        return None;
+    }
     // A straight line from start to end, or the circle through start, middle and end, with
     // the new parameter at each sample (increasing along the edge).
     let (exact, params): (Curve, Vec<f64>) = {
@@ -326,6 +342,7 @@ fn exact_edge(model: &mut Model, shape: Shape, edge: Shape) -> Option<EdgeUndo> 
     // Its pcurves on its faces, at the new parameters, each where the old one was (in the
     // surface's periods).
     let edge_id = crate::topology::EdgeId::try_from(edge.node).ok()?;
+    let mut worst: f64 = 0.0;
     let mut new_pcurves = Vec::new();
     let mut old_pcurves = Vec::new();
     for face in model.unique_subshapes(shape, NodeKind::Face) {
@@ -347,14 +364,11 @@ fn exact_edge(model: &mut Model, shape: Shape, edge: Shape) -> Option<EdgeUndo> 
             let (du, dv) = (shift(surface.u_period(), target.x, mid.x), shift(surface.v_period(), target.y, mid.y));
             let pcurve = if du != 0.0 || dv != 0.0 { pcurve.transformed(&Transform2::translation(Vector2::new(du, dv))) } else { pcurve };
             // (On the new curve, and where the old pcurve ran: its ends at the old ones'.)
-            let off = (0..=8).map(|i| {
-                let t = a + (b - a) * i as f64 / 8.0;
-                let uv = pcurve.point(t);
-                surface.point(uv.x, uv.y).distance(exact.point(t))
-            });
-            if off.fold(0.0, f64::max) > tol.max(tolerance) {
+            let off = dense_gap(&pcurve, &surface, &exact, a, b);
+            if off > tol.max(tolerance).max(1e-6 * length) {
                 return None;
             }
+            worst = worst.max(off);
             for (t_new, t_old) in [(a, oa), (b, ob)] {
                 let (p, q) = (pcurve.point(t_new), old.point(t_old));
                 if surface.point(p.x, p.y).distance(surface.point(q.x, q.y)) > 10.0 * tol.max(tolerance) || (p - q).length() > 0.5 * surface.u_period().unwrap_or(f64::INFINITY) {
@@ -368,10 +382,23 @@ fn exact_edge(model: &mut Model, shape: Shape, edge: Shape) -> Option<EdgeUndo> 
     if new_pcurves.is_empty() {
         return None;
     }
-    model.set_edge_curve(edge, exact, tolerance).ok()?;
+    // (Its tolerance covering its pcurves, as OCCT's same-parameter fixing raises it.)
+    model.set_edge_curve(edge, exact, tolerance.max(1.5 * worst)).ok()?;
     model.set_edge_range(edge, a, b).ok()?;
     for (c, p) in new_pcurves {
         model.set_pcurve_with_range(c, p, a, b).ok()?;
     }
     Some(EdgeUndo { edge, curve, range: (first, last), tolerance, pcurves: old_pcurves })
+}
+
+/// The largest distance between `pcurve` on `surface` and `curve` at equal parameters over
+/// `[first, last]`, at 33 points.
+fn dense_gap(pcurve: &Curve2, surface: &Surface, curve: &Curve, first: f64, last: f64) -> f64 {
+    (0..=32)
+        .map(|i| {
+            let t = first + (last - first) * i as f64 / 32.0;
+            let uv = pcurve.point(t);
+            surface.point(uv.x, uv.y).distance(curve.point(t))
+        })
+        .fold(0.0, f64::max)
 }
