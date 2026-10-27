@@ -1249,6 +1249,11 @@ fn near_face(surface: Surface, u_range: (f64, f64), v_range: (f64, f64)) -> Surf
         ((a - m).max(lo), (c + m).min(hi))
     };
     let ((u0, u1), (v0, v1)) = (widened(u_range, (bu0, bu1)), widened(v_range, (bv0, bv1)));
+    // (Not for a face of no width either way: nothing would be left.)
+    let room = 2.0 * crate::tolerance::PARAMETRIC;
+    if !(u1 - u0 > room && v1 - v0 > room) {
+        return surface;
+    }
     let far = |(a, c): (f64, f64), (lo, hi): (f64, f64)| c > a && hi - lo > 3.0 * (c - a);
     if !(far((u0, u1), (bu0, bu1)) || far((v0, v1), (bv0, bv1))) {
         return surface;
