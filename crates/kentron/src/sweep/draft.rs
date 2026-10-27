@@ -98,6 +98,16 @@ pub fn extrude_drafted(model: &mut Model, profile: Shape, v: Vector, angle: f64)
         pieces.push(Piece { start, end, tangent_start, tangent_end, kind });
     }
     let n = pieces.len();
+    // A circle: a cone, ending at its apex where the draft closes it before the top (as
+    // OCCT's drafted prism stops there).
+    if let [Piece { kind: Kind::Arc { circle, center, radius, .. }, start, end, .. }] = &pieces[..] {
+        if start.distance(*end) <= tolerance::LINEAR {
+            let top = radius - d;
+            let (top, height) = if top > tolerance::LINEAR { (top, height) } else { (0.0, radius / angle.tan()) };
+            let frame = crate::math::Frame::new(*center, z, circle.frame().x());
+            return crate::primitives::Cone::new(*radius, top, height).with_frame(frame).build(model);
+        }
+    }
     if n < 2 || pieces[n - 1].end.distance(pieces[0].start) > tolerance::LINEAR {
         return Err(Error::InvalidInput("a drafted extrusion of an open outline".into()));
     }
@@ -240,6 +250,31 @@ mod tests {
         }
         let wire = make::wire(model, &edges).unwrap();
         make::planar_face(model, wire).unwrap()
+    }
+
+    /// A disc drafted further than the draft takes to close it: a cone to its apex, as OCCT's
+    /// drafted prism (a drill bit's point, its depth given generously); drafted less, a
+    /// frustum.
+    #[test]
+    fn a_disc_drafted_past_its_apex_is_a_cone() {
+        use std::f64::consts::PI;
+        let mut model = Model::new();
+        let circle = Curve::Circle(Circle::new(Frame::from_z(Point::ORIGIN, Direction::Z), 10.0));
+        let edge = make::edge_from_curve_range(&mut model, circle, 0.0, 2.0 * PI).unwrap();
+        let wire = make::wire(&mut model, &[edge]).unwrap();
+        let disc = make::planar_face(&mut model, wire).unwrap();
+        let angle = 58f64.to_radians();
+        let cone = extrude_drafted(&mut model, disc, Vector::new(0.0, 0.0, -26.0), angle).unwrap();
+        assert!(validity::check(&model, cone).is_valid());
+        let apex = 10.0 / angle.tan();
+        let volume = properties::volume(&model, cone).mass;
+        assert!((volume - PI * 100.0 * apex / 3.0).abs() < 1e-9 * volume, "{volume}");
+        let lowest = model.unique_subshapes(cone, NodeKind::Vertex).iter().map(|&v| model.point(v).z).fold(f64::INFINITY, f64::min);
+        assert!((lowest + apex).abs() < 1e-9, "{lowest}");
+        let frustum = extrude_drafted(&mut model, disc, Vector::new(0.0, 0.0, 5.0), angle).unwrap();
+        let top = 10.0 - 5.0 * angle.tan();
+        let volume = properties::volume(&model, frustum).mass;
+        assert!((volume - PI * 5.0 / 3.0 * (100.0 + 10.0 * top + top * top)).abs() < 1e-9 * volume, "{volume}");
     }
 
     #[test]

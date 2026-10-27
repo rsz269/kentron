@@ -292,7 +292,8 @@ class Shape:
 
     def clean(self) -> "Shape":
         """Faces on the same surfaces, and edges on the same curves, merged."""
-        return self._new(native.unify_same_domain(self.wrapped))
+        # (Placed as this one: a move baked into it stays baked, as CadQuery's moves are.)
+        return self._with_baked(self._new(native.unify_same_domain(self.wrapped)))
 
     def fix(self) -> "Shape":
         return self
@@ -1531,10 +1532,25 @@ def _round_corners(wire: Wire, size: float, vertices, corner_edge) -> Wire:
         pa, e, pb = made
         ends[i], starts[j] = pa, pb
         inserts[i] = e
+    # (Corners taking more of a straight edge than it has: they do not fit, as OCCT finds.)
+    for i in range(n):
+        if edges[i].geomType() == "LINE" and (ends[i] - starts[i]).dot(edges[i].endPoint() - edges[i].startPoint()) < -1e-9:
+            raise ValueError("the corners do not fit on the edge between them")
+    # (A straight edge's ends the corners leave where they were keep their vertices, as OCCT's
+    # 2D fillets keep the vertices they do not round, which a sketch's selection from before
+    # them finds.)
+    def vertex_at(edge, p):
+        v = next((v for v in edge.Vertices() if (Vector(v.toTuple()) - p).Length <= 1e-12), None)
+        return v.wrapped if v is not None else native.make_vertex(_tuple(p))
+    def line(i):
+        try:
+            return Shape.cast(native.make_line_between(vertex_at(edges[i], starts[i]), vertex_at(edges[i], ends[i])))
+        except ValueError:
+            return Edge.makeLine(starts[i], ends[i])
     out = []
     for i in range(n):
         if (starts[i] - ends[i]).Length > 1e-9:
-            out.append(Edge.makeLine(starts[i], ends[i]) if edges[i].geomType() == "LINE" else edges[i])
+            out.append(line(i) if edges[i].geomType() == "LINE" else edges[i])
         if i in inserts:
             out.append(inserts[i])
     return Wire.assembleEdges(out)
@@ -1721,7 +1737,15 @@ class Face(Shape):
         vertices = list(vertices)
         wires = []
         for w in self.Wires():
-            mine = [v for v in vertices if any(v.isSame(x) for x in w.Vertices())]
+            # (The wire's own vertices: those given, or at their places, as given from the face
+            # before an earlier rounding (a sketch's tagged face), which OCCT's rounding keeps
+            # where it did not round them and kentron's makes anew.)
+            own = w.Vertices()
+            mine = []
+            for v in vertices:
+                x = next((x for x in own if v.isSame(x)), None) or next((x for x in own if (Vector(x.toTuple()) - Vector(v.toTuple())).Length <= 1e-7), None)
+                if x is not None and not any(x.isSame(m) for m in mine):
+                    mine.append(x)
             if not mine:
                 wires.append(w)
                 continue

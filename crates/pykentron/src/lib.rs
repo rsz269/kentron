@@ -427,6 +427,15 @@ fn make_line(a: Xyz, b: Xyz) -> PyResult<Handle> {
     with_model(|m| make::edge_between(m, point(a), point(b))).map(handle)
 }
 
+/// A straight edge between two existing vertices (unplaced ones: their own points).
+#[pyfunction]
+fn make_line_between(a: Handle, b: Handle) -> PyResult<Handle> {
+    if a.shape.placement != kentron::math::Transform::IDENTITY || b.shape.placement != kentron::math::Transform::IDENTITY {
+        return Err(PyValueError::new_err("an edge between placed vertices"));
+    }
+    with_model(|m| make::edge(m, a.shape, b.shape)).map(handle)
+}
+
 /// A circular edge (an arc from `angle1` to `angle2` degrees, measured from the frame's X).
 #[pyfunction]
 #[pyo3(signature = (radius, centre, normal, angle1=0.0, angle2=360.0, x=None))]
@@ -1326,6 +1335,7 @@ fn _kentron(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(make_torus, m)?)?;
     m.add_function(wrap_pyfunction!(make_vertex, m)?)?;
     m.add_function(wrap_pyfunction!(make_line, m)?)?;
+    m.add_function(wrap_pyfunction!(make_line_between, m)?)?;
     m.add_function(wrap_pyfunction!(make_circle, m)?)?;
     m.add_function(wrap_pyfunction!(make_three_point_arc, m)?)?;
     m.add_function(wrap_pyfunction!(make_wire, m)?)?;
