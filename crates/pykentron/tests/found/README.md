@@ -42,21 +42,26 @@ On 2026-10-27:
 | left out: CadQuery itself fails | 0 |
 | compared | 495 |
 | build as on CadQuery | 432 |
-| differ where CadQuery's result is wrong (below) | 8 |
-| differ | 46 |
+| differ where CadQuery's result is wrong (below) | 14 |
+| differ | 40 |
 | fail on pykentron | 9 |
-| **pykentron's failures** | **55** |
+| **pykentron's failures** | **49** |
 
 Of the 191 scripts that failed or built differently when found, 122 now build as on
-CadQuery, and 8 more differ only where CadQuery's result is wrong.
+CadQuery, and 14 more differ only where CadQuery's result is wrong.
 
 Some differences are not pykentron's:
 
-- **CadQuery's result is wrong.** OCCT's volume of its own thread solids (the contrib thread,
-  cq_warehouse's threaded parts: meshed, they enclose what pykentron's do); a fillet OCCT
+- **CadQuery's result is wrong**, by a measure independent of both kernels or by OCCT's own
+  answer to the same question asked another way: OCCT's volume of its own thread solids (the
+  contrib thread, a threaded adapter: meshed, they enclose what pykentron's do); a fillet OCCT
   makes off the rolling ball (cadquery-models' lid fixer: its face is 24.05 where the exact
-  surface's is 22.96); a loft inside out (negative volume); dovetails dropped by
-  `union(glue=True)`, which assumes shapes only touch; a fuzzy union coming out empty (the
+  surface's is 22.96); unions OCCT makes a fifth too small (the Sabrent hub stands: Monte
+  Carlo sampling of the operands agrees with pykentron); a union of a compound whose own
+  solids overlap or touch, which OCCT leaves as separate solids, counting the overlaps twice
+  (cqterrain's buildings, helmecke's exercise 005: given the solids as arguments of their
+  own, OCCT makes pykentron's result); a loft inside out (negative volume); dovetails dropped
+  by `union(glue=True)`, which assumes shapes only touch; a fuzzy union coming out empty (the
   spindle vacuum shroud); a fillet that fails on OCCT inside a script's `try`, so that
   CadQuery's result lacks it.
 - **The script depends on face or edge order**, which OCCT does not define and kentron does
@@ -65,8 +70,6 @@ Some differences are not pykentron's:
   over a set of shapes. Neither kernel is wrong; these are left out of the comparison, and
   where the rest of the model is worth comparing, [`derived/`](derived) has it with the
   order-dependent step made explicit (as OCCT takes it).
-- **CadQuery behaves otherwise by design:** a union of a compound leaves the compound's own
-  solids unfused (cqterrain's buildings: 14 to 22 touching storeys, one solid on pykentron).
 
 ## How they were collected
 
