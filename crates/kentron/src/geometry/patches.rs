@@ -49,19 +49,6 @@ impl<T> Shared<T> {
     pub(super) fn get(&self, make: impl FnOnce() -> Option<T>) -> Option<&T> {
         self.0.get_or_init(make).as_ref()
     }
-
-    /// The cache of a transformed curve or surface: what is made so far, mapped by `f`
-    /// (cheaper than making it again).
-    pub(super) fn mapped(&self, f: impl FnOnce(&T) -> T) -> Shared<T> {
-        match self.0.get() {
-            Some(value) => {
-                let lock = OnceLock::new();
-                let _ = lock.set(value.as_ref().map(f));
-                Shared(Arc::new(lock))
-            }
-            None => Shared::default(),
-        }
-    }
 }
 
 /// Which surfaces share a patch cache (clones of one surface, unchanged): a key for other
@@ -153,19 +140,6 @@ impl Patches {
         }
         let rational = points.iter().any(|q| q[3] != 1.0);
         Some(Patches { u_breaks, v_breaks, u_degree: pu, v_degree: pv, points, rational, hints: Hint::default() })
-    }
-
-    /// The same patches with each control point `(w P, w)` mapped by `f`.
-    pub(super) fn map_points(&self, f: impl Fn([f64; 4]) -> [f64; 4]) -> Patches {
-        Patches {
-            u_breaks: self.u_breaks.clone(),
-            v_breaks: self.v_breaks.clone(),
-            u_degree: self.u_degree,
-            v_degree: self.v_degree,
-            points: self.points.iter().map(|&q| f(q)).collect(),
-            rational: self.rational,
-            hints: Hint::default(),
-        }
     }
 
     /// The parameter bounds `(u0, u1, v0, v1)`.
@@ -512,18 +486,6 @@ impl Segments {
         Some(Segments { breaks, degree, points, rational, period, hint: Hint::default() })
     }
 
-    /// The same segments with each control point `(w P, w)` mapped by `f`.
-    pub(super) fn map_points(&self, f: impl Fn([f64; 4]) -> [f64; 4]) -> Segments {
-        Segments {
-            breaks: self.breaks.clone(),
-            degree: self.degree,
-            points: self.points.iter().map(|&q| f(q)).collect(),
-            rational: self.rational,
-            period: self.period,
-            hint: Hint::default(),
-        }
-    }
-
     /// The point and its derivatives up to `order` (at most 2) at `t` as coordinates;
     /// `None` above degree 25, and outside the range of a curve that is not periodic (as for
     /// patches).
@@ -598,17 +560,6 @@ impl Segments {
         }
         out
     }
-}
-
-/// A control point `(w P, w)` with `P` mapped by `f` (exact for weights of 1).
-pub(super) fn map_homogeneous(q: [f64; 4], f: impl Fn([f64; 3]) -> [f64; 3]) -> [f64; 4] {
-    let w = q[3];
-    if w == 1.0 {
-        let p = f([q[0], q[1], q[2]]);
-        return [p[0], p[1], p[2], 1.0];
-    }
-    let p = f([q[0] / w, q[1] / w, q[2] / w]);
-    [p[0] * w, p[1] * w, p[2] * w, w]
 }
 
 /// A point of a surface and its derivatives (those not asked for are zero).

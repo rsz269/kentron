@@ -1287,17 +1287,16 @@ impl<P: ControlPoint> ParametricCurve for BSplineCurve<P> {
     }
 }
 
-// (The transformed curves and surfaces keep the Bézier pieces made so far, transformed:
-// cheaper than making them again.)
+// (The transformed curves and surfaces make their Bézier pieces again, from their own
+// poles: the same however much of them was made before, which mapping them would not be,
+// to the last bit.)
 
 impl Transformable for BSplineCurve<Point> {
     fn transformed(&self, t: &Transform) -> Self {
         if *t == Transform::IDENTITY {
             return self.clone();
         }
-        let map = |c: [f64; 3]| Point::new(c[0], c[1], c[2]).transformed(t).coords();
-        let segments = self.segments.mapped(|s| s.map_points(|q| super::patches::map_homogeneous(q, map)));
-        Self { poles: self.poles.iter().map(|p| p.transformed(t)).collect(), segments, ..self.clone() }
+        Self { poles: self.poles.iter().map(|p| p.transformed(t)).collect(), segments: Default::default(), ..self.clone() }
     }
 }
 
@@ -1306,18 +1305,14 @@ impl Transformable2 for BSplineCurve<Point2> {
         if *t == Transform2::IDENTITY {
             return self.clone();
         }
-        let map = |c: [f64; 3]| Point2::new(c[0], c[1]).transformed(t).coords();
-        let segments = self.segments.mapped(|s| s.map_points(|q| super::patches::map_homogeneous(q, map)));
-        Self { poles: self.poles.iter().map(|p| p.transformed(t)).collect(), segments, ..self.clone() }
+        Self { poles: self.poles.iter().map(|p| p.transformed(t)).collect(), segments: Default::default(), ..self.clone() }
     }
 }
 
 impl AffineTransformable for BSplineCurve<Point> {
     fn affine_transformed(&self, t: &AffineTransform) -> Self {
         // Affine maps commute with (rational) B-spline evaluation: map the poles.
-        let map = |c: [f64; 3]| Point::new(c[0], c[1], c[2]).affine_transformed(t).coords();
-        let segments = self.segments.mapped(|s| s.map_points(|q| super::patches::map_homogeneous(q, map)));
-        Self { poles: self.poles.iter().map(|p| p.affine_transformed(t)).collect(), segments, ..self.clone() }
+        Self { poles: self.poles.iter().map(|p| p.affine_transformed(t)).collect(), segments: Default::default(), ..self.clone() }
     }
 }
 
@@ -2595,9 +2590,7 @@ impl Transformable for BSplineSurface {
             return self.clone();
         }
         let poles = self.poles.iter().map(|row| row.iter().map(|p| p.transformed(t)).collect()).collect();
-        let map = |c: [f64; 3]| Point::new(c[0], c[1], c[2]).transformed(t).coords();
-        let patches = self.patches.mapped(|s| s.map_points(|q| super::patches::map_homogeneous(q, map)));
-        BSplineSurface { poles, weights: self.weights.clone(), u: self.u.clone(), v: self.v.clone(), patches, unrolled: Default::default(), flat_knots: Default::default() }
+        BSplineSurface { poles, weights: self.weights.clone(), u: self.u.clone(), v: self.v.clone(), patches: Default::default(), unrolled: Default::default(), flat_knots: Default::default() }
     }
 }
 
