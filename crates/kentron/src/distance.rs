@@ -431,8 +431,9 @@ impl Triangles {
                 }
                 let local = Shape { orientation: Orientation::Forward, placement: Transform::IDENTITY, ..edge };
                 let (true, Some(polyline)) = (model.has_edge_curve(edge), model.edge_polyline(local)) else { continue };
-                let points = polyline.nodes().iter().map(|p| p.transformed(&edge.placement)).collect();
-                out.edges.push((Lazy::new(Source::Edge(edge)), points, polyline.deflection()));
+                let points: Vec<Point> = polyline.nodes().iter().map(|p| p.transformed(&edge.placement)).collect();
+                let deviation = sag(model, edge, &points).min(polyline.deflection());
+                out.edges.push((Lazy::new(Source::Edge(edge)), points, deviation));
                 seen.push((edge.placement, out.edges.len() - 1));
                 boundary.push(out.edges.len() - 1);
             }
@@ -524,6 +525,26 @@ impl Triangles {
 }
 
 /// The distance from `p` to a polyline.
+/// How far an edge's curve strays from its polyline `points` (placed as the edge), as the
+/// middles of its segments are from the curve, with a margin: the deflection a polyline
+/// records is the one asked for, which a line's (exact) or a gentle curve's is well within,
+/// and a point inside a face by its boundary is left to the boundary's edges only within
+/// what they stray.
+fn sag(model: &Model, edge: Shape, points: &[Point]) -> f64 {
+    let Some((curve, first, last)) = model.edge_curve(edge) else { return f64::INFINITY };
+    if matches!(curve, Curve::Line(_)) {
+        return 0.0;
+    }
+    let most = points
+        .windows(2)
+        .map(|w| {
+            let middle = w[0] + (w[1] - w[0]) * 0.5;
+            crate::geometry::extrema::nearest_on_curve(middle, &curve, first, last).distance
+        })
+        .fold(0.0, f64::max);
+    1.5 * most
+}
+
 fn polyline_distance(points: &[Point], p: Point) -> f64 {
     if points.len() == 1 {
         return points[0].distance(p);
@@ -648,6 +669,28 @@ mod tests {
     use crate::math::{Direction, Frame};
     use crate::primitives::{Cuboid, Cylinder, Sphere};
 
+    /// Points inside a face 10.4 x 40.1, by its edges (as a hole's corner just inside the
+    /// outline it is cut from): on the face, at no distance; by its corner outside, as far
+    /// as the corner.
+    #[test]
+    fn points_inside_a_face_by_its_edges() {
+        let mut model = Model::new();
+        let corners = [(-5.2, -20.05), (5.2, -20.05), (5.2, 20.05), (-5.2, 20.05)];
+        let edges: Vec<Shape> = (0..4)
+            .map(|i| {
+                let (a, b) = (corners[i], corners[(i + 1) % 4]);
+                crate::make::edge_between(&mut model, Point::new(a.0, a.1, 0.0), Point::new(b.0, b.1, 0.0)).unwrap()
+            })
+            .collect();
+        let wire = crate::make::wire(&mut model, &edges).unwrap();
+        let face = crate::make::planar_face(&mut model, wire).unwrap();
+        for (x, y, expected) in [(4.0, 20.0, 0.0), (0.0, 20.04, 0.0), (5.19, -20.0, 0.0), (5.3, 20.15, 0.02f64.sqrt())] {
+            let v = crate::make::vertex(&mut model, Point::new(x, y, 0.0));
+            let d = distance(&mut model, face, v).unwrap().value;
+            assert!((d - expected).abs() <= 1e-9, "({x}, {y}): {d} != {expected}");
+        }
+    }
+
     #[test]
     fn distances_between_simple_solids() {
         let mut model = Model::new();
@@ -704,3 +747,4 @@ mod tests {
         assert!((distance(&mut model, edge, outside).unwrap().value - (100.0f64 + 49.0).sqrt()).abs() < 1e-9);
     }
 }
+
