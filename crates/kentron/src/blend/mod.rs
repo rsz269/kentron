@@ -1,6 +1,7 @@
 //! Rounding and bevelling edges of solids: fillets and chamfers.
 
 mod ball;
+mod exact;
 mod corner2d;
 mod runover;
 
@@ -232,6 +233,27 @@ fn sharp<T: Copy>(model: &Model, shape: Shape, edges: &[T], edge: impl Fn(&T) ->
 
 /// [`fillet_edges`] of a shape with solids.
 fn fillet_solid_edges(model: &mut Model, shape: Shape, edges: &[(Shape, f64)]) -> Result<Shape> {
+    let before: std::collections::HashSet<NodeId> = model.unique_subshapes(shape, NodeKind::Face).into_iter().map(|f| f.node).collect();
+    let before_edges: std::collections::HashSet<NodeId> = model.unique_subshapes(shape, NodeKind::Edge).into_iter().map(|e| e.node).collect();
+    let rounded = fillet_solid_edges_inner(model, shape, edges)?;
+    // The rolled fillets that are cylinders, tori or spheres made so (as OCCT's are), where
+    // that leaves the solid as sound as they found it.
+    // (Nor changing what they enclose more than their surfaces moved, within the faces'
+    // tolerance: a face turned the wrong way round would.)
+    let faults = fault_kinds(model, rounded);
+    let (volume, area) = (crate::properties::volume(model, rounded).mass, crate::properties::area(model, rounded).mass);
+    let done = exact::exact_faces(model, rounded, &before, &before_edges);
+    if !done.is_empty() {
+        let moved = (crate::properties::volume(model, rounded).mass - volume).abs();
+        if !fault_kinds(model, rounded).is_subset(&faults) || moved > 1e-6 * volume.abs().max(1.0) + 1e-5 * area {
+            exact::undo(model, done);
+        }
+    }
+    Ok(rounded)
+}
+
+/// [`fillet_solid_edges`] with the fillets as they are rolled.
+fn fillet_solid_edges_inner(model: &mut Model, shape: Shape, edges: &[(Shape, f64)]) -> Result<Shape> {
     // Where three of the edges meet at a vertex, one convex and two concave or one concave
     // and two convex, the odd one rounded first: the other two then go on into each other
     // smoothly round its fillet's end, as OCCT rounds them (by a torus round a straight
@@ -3435,7 +3457,8 @@ mod tests {
     /// A block with a blind round hole, and a slot from its front face into the hole above
     /// the hole's bottom, the slot's floor and upright edges rounded: the floor's concave
     /// fillets first, the convex ones then going on round their ends (on the front face and
-    /// on the hole's wall), as OCCT rounds them (58370.6698).
+    /// on the hole's wall), as OCCT rounds them (58370.6698), as cylinders and tori where
+    /// they are.
     #[test]
     fn slot_into_a_hole_rounded_round_its_floors_fillets() {
         let mut model = Model::new();
@@ -3457,6 +3480,11 @@ mod tests {
         let v = properties::volume(&model, rounded).mass;
         assert!((v - 58370.6698).abs() <= 1e-5 * 58370.6698, "{v}");
         assert!(model.explore(rounded, NodeKind::Face).count() <= 25);
+        // (The fillets cylinders and tori where they are, as OCCT's: B-splines only round the
+        // hole's corners, where the fillet runs along the curve the floor's fillet meets the
+        // hole in.)
+        let free = model.unique_subshapes(rounded, NodeKind::Face).iter().filter(|&&f| matches!(model.surface(f), Some(crate::geometry::surface::Surface::BSpline(_)))).count();
+        assert_eq!(free, 2);
     }
 
     /// A plate 90 x 6 x 132 with its four short vertical edges rounded: up to radius 3 the
