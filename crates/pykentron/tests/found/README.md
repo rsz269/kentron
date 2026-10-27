@@ -3,7 +3,7 @@
 Scripts from public CadQuery projects on GitHub (2026-10-18 and 2026-10-19) that pykentron
 fails on, builds differently from CadQuery 2.8, or builds substantially slower. Each
 project's scripts keep its licence, copied beside them (`<project>/LICENSE`). Scripts under
-other licences than MIT, Apache, BSD and the Unlicense, or none, are not copied: their
+other licences than MIT, Apache, BSD, ISC, the Unlicense and CC0, or none, are not copied: their
 cases are only listed.
 
 The source of every case and what went wrong is in `cases.tsv`:
@@ -40,6 +40,23 @@ A second round (2026-10-19) took 57 more projects from GitHub's repository searc
 A third round (2026-10-20) took 10 more projects from the search (`cadquery` with 3d print, parametric, stl, design and the like): 61 scripts, of which CadQuery built 44. pykentron built 29 of those as CadQuery does; 14 of the others are the last cases in `cases.tsv` (one more imports `random`, unused, and is left out). For these, the runner stands in for the VS Code viewer's module (`ocp_vscode`) as it does for CQ-editor's `show_object`.
 
 A fourth round (2026-10-23) took the 400 most-starred Python projects of a wider search (1,959 repositories mentioning CadQuery; lists, CadQuery itself, its editors and build123d left out) and ran up to 30 scripts of each (none calling OCCT's bindings or unseeded randomness, none a copy of a script found before or vendoring another project's examples): CadQuery built about 530. Of those, 149 were taken, at most 15 a project, to bring the corpus to 500: 49 that pykentron fails or builds differently, 15 where it is slower or less than 3× faster (CadQuery at least 0.1 s; timed again one at a time, the slowest taken), and 85 at random among those it builds alike. The first two kinds are the last 64 rows of `cases.tsv`, the others the last 85 of `passing.tsv`; 79 of the scripts are copied, from the 33 projects under permissive licences (licences from GitHub, or read from the project's licence file where GitHub gives none).
+
+## Derived scripts
+
+`derived/` holds scripts derived from corpus scripts whose results depend on the order in
+which a kernel lists faces or edges (an asymmetric chamfer measuring its first length on an
+edge's "first" face, a workplane taking the first of several faces' normal, an edge picked
+by index): the originals are left out of the corpus counts, since neither kernel is wrong
+there. Each derived script makes the order-dependent step explicit, as OCCT takes it (OCCT's
+result is unchanged), so the rest of the model still compares the kernels. They are not
+among the corpus's 500. `derived/derived.tsv` lists each with its original, source commit,
+licence and change; each file says how it was derived and carries its original's licence.
+Originals without a licence are not copied or derived here.
+
+- the contrib 3D printer extruder support: the hexagonal cutout's workplane from its faces
+  facing up only; builds as on CadQuery.
+- gridfinity-cadquery's walking foot holder: the asymmetric chamfer cut as the wedge OCCT's
+  chamfer cuts; builds as on CadQuery.
 
 ## Scripts that build as on CadQuery
 

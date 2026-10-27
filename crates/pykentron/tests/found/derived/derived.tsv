@@ -1,0 +1,3 @@
+file	project	script	source	licence	change
+extruder_support_hex_cutout.py	cadquery-contrib	examples/3D_Printer_Extruder_Support.py	CadQuery/cadquery-contrib@3543aef	MIT	the hex cutout's workplane from the coplanar faces facing up only (faces(">Z[1]").faces("+Z"))
+walking_foot_holder_wedge.py	gridfinity-cadquery	examples/walking_foot_holder.py	kmeisthax/gridfinity-cadquery@637a5c4	MIT	the asymmetric chamfer cut as the wedge OCCT's chamfer cuts

@@ -163,3 +163,10 @@ code they come from:
   (`crates/pykentron/python/pykentron/cadquery_shim/cadquery` and
   `crates/pykentron/python/pykentron/occ_impl/exporters`, each with its
   `LICENSE.CadQuery` and a list of the files copied in `VENDORED.txt`): Apache-2.0.
+- The CadQuery scripts in `crates/pykentron/tests/found`, collected from public projects
+  on GitHub to test pykentron against CadQuery, and the scripts derived from them in
+  `found/derived`: each keeps its original project's permissive licence (MIT, Apache-2.0,
+  BSD-3-Clause, ISC, the Unlicense or CC0-1.0), copied beside the project's scripts
+  (`found/<project>/LICENSE`) or, for a derived script, in its header. Scripts under other
+  licences, or none, are not included;
+  `found/cases.tsv` and `found/passing.tsv` give every script's source and licence.
