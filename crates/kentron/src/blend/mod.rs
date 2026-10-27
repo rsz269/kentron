@@ -3253,6 +3253,40 @@ mod tests {
         check_ball(&mut model, l, edge, 0.25, 3.0 + 0.25 * 0.25 * (1.0 - PI / 4.0));
     }
 
+    /// An octagonal prism 8 high, its top edges rounded with radius 1 and then its vertical
+    /// edges with radius 1 too: each vertical fillet goes on up the edge where the two top
+    /// fillets of its corner meet, between cylinders as wide as its ball, whose centre stands
+    /// still where their axes meet (the corner a sphere): OCCT's volume.
+    #[test]
+    fn corners_rounded_with_balls_as_wide_as_the_top_fillets() {
+        let mut model = Model::new();
+        let corners = [(-1.5, 0.0), (-4.5, 3.0), (-4.5, 35.0), (-1.5, 39.0), (1.5, 39.0), (4.5, 35.0), (4.5, 3.0), (1.5, 0.0)];
+        let edges: Vec<Shape> = (0..8)
+            .map(|i| {
+                let (a, b) = (corners[i], corners[(i + 1) % 8]);
+                make::edge_between(&mut model, Point::new(a.0, a.1, 0.0), Point::new(b.0, b.1, 0.0)).unwrap()
+            })
+            .collect();
+        let wire = make::wire(&mut model, &edges).unwrap();
+        let face = make::planar_face(&mut model, wire).unwrap();
+        let prism = sweep::extrude(&mut model, face, Vector::new(0.0, 0.0, 8.0)).unwrap().shape;
+        let top: Vec<Shape> = model.unique_subshapes(prism, NodeKind::Edge).into_iter().filter(|&e| {
+            let (a, b) = model.edge_vertices(e);
+            model.point(a).z > 7.9 && model.point(b).z > 7.9
+        }).collect();
+        let rounded = fillet(&mut model, prism, &top, 1.0).unwrap();
+        let vertical: Vec<Shape> = model.unique_subshapes(rounded, NodeKind::Edge).into_iter().filter(|&e| {
+            let (a, b) = model.edge_vertices(e);
+            let (p, q) = (model.point(a), model.point(b));
+            (p.x - q.x).abs() < 1e-9 && (p.y - q.y).abs() < 1e-9 && (p.z - q.z).abs() > 1.0
+        }).collect();
+        assert_eq!(vertical.len(), 8);
+        let result = fillet(&mut model, rounded, &vertical, 1.0).unwrap();
+        assert!(validity::check(&model, result).is_valid());
+        let v = properties::volume(&model, result).mass;
+        assert!((v - 2619.9342).abs() <= 1e-4 * 2619.9342, "{v}");
+    }
+
     /// A plate 90 x 6 x 132 with its four short vertical edges rounded: up to radius 3 the
     /// two fillets across each 6 wide end leave it (at 3 meeting, the end rounded right
     /// across); beyond, they would pass each other there, and no fillet is made (as OCCT

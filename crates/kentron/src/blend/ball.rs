@@ -943,9 +943,48 @@ fn section(sides: &[Side; 2], o: Point, tangent: Vector, r: f64, side: f64, near
     let into: Vec<Vector> = into.into_iter().map(|v| v.normalized()).collect();
     let half = 0.5 * into[0].dot(into[1]).clamp(-1.0, 1.0).acos();
     let start = o + sum.normalized() * (r / half.sin());
-    let center = newton_damped(start, conditions, characteristic)?;
+    let center = match newton_damped(start, conditions, characteristic) {
+        Ok(center) => center,
+        Err(e) => pinned_center(sides, r).ok_or(e)?,
+    };
     let [(c0, uv0), (c1, uv1)] = [contact(&sides[0], center, o)?, contact(&sides[1], center, o)?];
     Ok(Section { t: 0.0, center, contacts: [c0, c1], contact_uv: [uv0, uv1], radius: r, straight: false })
+}
+
+/// Where a ball of radius `r` between two cylinders of that radius has its centre: on both
+/// axes, where they meet (as rolling along the edge where two fillets of a corner's sides
+/// meet, the vertical one of the same radius carried on up it: the ball stands still there,
+/// rounding the corner as a sphere). `None` unless both sides are such cylinders, their
+/// axes meeting.
+fn pinned_center(sides: &[Side; 2], r: f64) -> Option<Point> {
+    let axis = |side: &Side| -> Option<crate::math::Axis> {
+        let Surface::Cylinder(c) = untrimmed_surface(&side.surface) else { return None };
+        if (c.radius() - r).abs() > crate::tolerance::LINEAR {
+            return None;
+        }
+        let f = c.frame();
+        let z = Vector::from(f.x()).cross(Vector::from(f.y()));
+        Some(crate::math::Axis::new(f.origin(), crate::math::Direction::new(z.x, z.y, z.z)))
+    };
+    let (a, b) = (axis(&sides[0])?, axis(&sides[1])?);
+    let (da, db) = (Vector::from(a.direction), Vector::from(b.direction));
+    let w = a.origin - b.origin;
+    let (aa, ab, bb, aw, bw) = (da.dot(da), da.dot(db), db.dot(db), da.dot(w), db.dot(w));
+    let det = aa * bb - ab * ab;
+    if det.abs() <= 1e-12 {
+        return None;
+    }
+    let (s, t) = ((ab * bw - bb * aw) / det, (aa * bw - ab * aw) / det);
+    let (p, q) = (a.origin + da * s, b.origin + db * t);
+    (p.distance(q) <= crate::tolerance::LINEAR).then(|| p + (q - p) * 0.5)
+}
+
+/// A surface without the trimming of a trimmed one.
+fn untrimmed_surface(surface: &Surface) -> &Surface {
+    match surface {
+        Surface::Trimmed(t) => untrimmed_surface(t.basis()),
+        s => s,
+    }
 }
 
 /// The ball's contact with a side and its parameters: the foot of its centre, or, where the
