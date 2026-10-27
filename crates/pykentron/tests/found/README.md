@@ -41,13 +41,13 @@ On 2026-10-27:
 | left out: the result depends on face order (below) | 6 |
 | left out: CadQuery itself fails | 0 |
 | compared | 495 |
-| build as on CadQuery | 432 |
+| build as on CadQuery | 433 |
 | differ where CadQuery's result is wrong (below) | 14 |
-| differ | 40 |
+| differ | 39 |
 | fail on pykentron | 9 |
-| **pykentron's failures** | **49** |
+| **pykentron's failures** | **48** |
 
-Of the 191 scripts that failed or built differently when found, 122 now build as on
+Of the 191 scripts that failed or built differently when found, 123 now build as on
 CadQuery, and 14 more differ only where CadQuery's result is wrong.
 
 Some differences are not pykentron's:
@@ -101,7 +101,8 @@ OCCT's tight one (its default is grown by tolerances and control polygons).
 
 A script differs if pykentron raises where CadQuery does not; a volume or area differs by
 more than 0.1%, or a bounding box by more than 1% of its size; the solid count differs; or
-pykentron's result is invalid where CadQuery's is valid. It is slower if pykentron takes
+pykentron's result is invalid where CadQuery's is valid. (Exports to temporary files, named
+at random, are matched by their order.) It is slower if pykentron takes
 more than twice as long and 0.5 s more.
 
 ## Running them

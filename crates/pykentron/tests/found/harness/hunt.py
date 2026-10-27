@@ -56,6 +56,20 @@ def compare(k, c):
         return ['cadquery failed']
     if k['status'] != 'ok':
         return [f"kentron {k['status']}: {k.get('error', '')[:200]}"]
+    # (Exports to temporary files are named at random (`tempfile`'s tmpXXXXXXXX): matched by
+    # their place among them.)
+    temp = re.compile(r'^(export:.*?)tmp[a-z0-9_]{8}(\.\w+)$')
+    def untemp(objects):
+        out, seen = {}, {}
+        for name, o in objects.items():
+            m = temp.match(name)
+            if m:
+                stem = f'{m.group(1)}tmp*{m.group(2)}'
+                seen[stem] = seen.get(stem, 0) + 1
+                name = f'{stem}#{seen[stem]}'
+            out[name] = o
+        return out
+    k, c = dict(k, objects=untemp(k['objects'])), dict(c, objects=untemp(c['objects']))
     for name, co in c['objects'].items():
         ko = k['objects'].get(name)
         if ko is None:

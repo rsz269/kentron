@@ -77,7 +77,7 @@ conversation's context, read back from the cache).
 - **44 CadQuery models from a private project** build on pykentron; for the 42 that return
   their parts, every part is valid and within 0.1% of CadQuery's volume.
 - **501 CadQuery scripts from 113 public projects**: of the 495 whose results don't depend
-  on the order a kernel lists faces in, pykentron builds 432 as CadQuery does, and 14 more
+  on the order a kernel lists faces in, pykentron builds 433 as CadQuery does, and 14 more
   differ only where CadQuery's result is wrong (2026-10-27). Timed on 2026-10-23, on the 389
   it then built alike, it took 136 s in all against CadQuery's 666 s, and was faster on 371.
   The scripts, what they found and where they stand:
