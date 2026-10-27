@@ -657,10 +657,18 @@ fn clean_components(graph: &Graph, pieces: &[split::Piece], arcs_of: &[Vec<split
         by_rep.entry(p.rep).or_default().insert(graph.edges[p.edge].operand);
     }
     let on_other: HashSet<usize> = graph.faces.iter().flat_map(|f| f.on_edges.iter().chain(&f.sections).copied()).collect();
+    // (And pieces of edges only partly on the other's faces, taken as arcs on them.)
+    let arcs_on_other: HashSet<usize> = arcs_of
+        .iter()
+        .enumerate()
+        .flat_map(|(fi, arcs)| arcs.iter().map(move |a| (fi, a.piece)))
+        .filter(|&(fi, pi)| graph.edges[pieces[pi].edge].operand == Some(1 - graph.faces[fi].operand))
+        .map(|(_, pi)| pieces[pi].rep)
+        .collect();
     let clean = |piece: usize, operand: usize| {
         let p = &pieces[piece];
         let e = &graph.edges[p.edge];
-        e.operand == Some(operand) && e.curve.is_some() && !on_other.contains(&p.edge) && by_rep.get(&p.rep).is_some_and(|ops| ops.len() == 1)
+        e.operand == Some(operand) && e.curve.is_some() && !on_other.contains(&p.edge) && !arcs_on_other.contains(&p.rep) && by_rep.get(&p.rep).is_some_and(|ops| ops.len() == 1)
     };
     // The face of the other operand a piece lies on (where its edge does only in part, so
     // not found as on it): the regions on its two sides may lie on the two sides of that
@@ -1179,6 +1187,24 @@ mod tests {
         let volume = 5.0 * (12.5 + 0.75 * 12.0 / PI * (5.0 * PI / 6.0).sin());
         let v = properties::volume(&model, result).mass;
         assert!((v - volume).abs() <= 1e-4 * volume, "volume {v} != {volume}");
+    }
+
+    /// A slot's end, its rounded corners (cylinders of radius 0.5) chamfered at the rim, cut
+    /// by a longer slot of the same width: the second's side is tangent to the first's
+    /// corners along their lines, and the chamfer's edge on a corner leaves that line within
+    /// tolerance of the side for a while, met where it leaves; that stretch of it closes the
+    /// line the side is split along, and the regions of the first's faces either side of it
+    /// lie on either side of the second (OCCT's volume).
+    #[test]
+    fn slot_cut_past_a_rounded_slot_end() {
+        let mut model = Model::new();
+        let mut read = |text: &str| crate::io::brep::read(&mut model, &mut text.as_bytes()).unwrap();
+        let part = read(include_str!("tests/slot_past_a_rounded_end_a.brep"));
+        let slot = read(include_str!("tests/slot_past_a_rounded_end_b.brep"));
+        let result = difference(&mut model, part, slot).unwrap();
+        assert!(validity::check(&model, result).is_valid(), "{:?}", validity::check(&model, result));
+        let v = properties::volume(&model, result).mass;
+        assert!((v - 12.481824).abs() <= 1e-5 * 12.481824, "volume {v}");
     }
 
     /// A box and a slab under a wave (a B-spline) rising just through the box's top, by 2e-5

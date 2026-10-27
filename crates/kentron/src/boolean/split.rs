@@ -286,7 +286,8 @@ impl Graph {
     }
 
     /// Adds to the arcs of face `fi` the pieces of the other operand's edges from an end
-    /// left open (that of a section stopping inside the face, met by no other arc) to a vertex of its other arcs,
+    /// left open (that of a section stopping inside the face, met by no other arc) to a vertex of its other arcs
+    /// (its boundary's, sections', or those of the other operand's edges on it),
     /// lying on its surface: where an edge crosses the band in which a surface the face meets
     /// nearly tangent is within tolerance of it (as a rim crossing the line where a fillet
     /// meets the face it rolls on), the sections of both stop where the band begins, and the
@@ -310,19 +311,13 @@ impl Graph {
         if open.is_empty() {
             return;
         }
-        let bounding: HashSet<usize> = arcs
-            .iter()
-            .map(|a| &pieces[a.piece])
-            .filter(|p| self.edges[p.edge].operand == Some(face.operand))
-            .flat_map(|p| [p.start, p.end])
-            .collect();
         let mut found = Vec::new();
         for (pi, p) in pieces.iter().enumerate() {
             let e = &self.edges[p.edge];
             if e.operand != Some(1 - face.operand) || e.curve.is_none() || p.start == p.end || reps.contains(&p.rep) {
                 continue;
             }
-            if !(open.contains(&p.start) && bounding.contains(&p.end) || open.contains(&p.end) && bounding.contains(&p.start)) {
+            if !(open.contains(&p.start) && ends.contains_key(&p.end) || open.contains(&p.end) && ends.contains_key(&p.start)) {
                 continue;
             }
             // (Not a piece a few tolerances long: points the merging of vertices missed, not a
