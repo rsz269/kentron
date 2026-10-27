@@ -1196,10 +1196,24 @@ mod tests {
     /// the overlap and the rest of each make it up.
     #[test]
     fn twisted_bars_from_one_start() {
+        twisted_bars(include_str!("tests/twisted_bars_from_one_start_a.brep"), include_str!("tests/twisted_bars_from_one_start_b.brep"), 2.5821);
+    }
+
+    /// [`twisted_bars_from_one_start`], the bars 14 long (the knurl's, twisting more
+    /// slowly): the curve from a corner to where the edges cross is a step long, and is
+    /// followed up to the faces' bounds in shorter ones.
+    #[test]
+    fn long_twisted_bars_from_one_start() {
+        twisted_bars(include_str!("tests/twisted_bars_long_a.brep"), include_str!("tests/twisted_bars_long_b.brep"), 12.0498);
+    }
+
+    /// Two bars meeting where they start: the overlap, the rest of the first and the union
+    /// sound, adding up, the union as OCCT's (`occt`).
+    fn twisted_bars(a: &str, b: &str, occt: f64) {
         let mut model = Model::new();
         let mut read = |text: &str| crate::io::brep::read(&mut model, &mut text.as_bytes()).unwrap();
-        let a = read(include_str!("tests/twisted_bars_from_one_start_a.brep"));
-        let b = read(include_str!("tests/twisted_bars_from_one_start_b.brep"));
+        let a = read(a);
+        let b = read(b);
         let whole = properties::volume(&model, a).mass;
         let common = intersection(&mut model, a, b).unwrap();
         let cut = difference(&mut model, a, b).unwrap();
@@ -1210,8 +1224,7 @@ mod tests {
         let (c, d, u) = (properties::volume(&model, common).mass, properties::volume(&model, cut).mass, properties::volume(&model, fused).mass);
         assert!((c + d - whole).abs() <= 1e-6 * whole, "{c} + {d} != {whole}");
         assert!((u - (2.0 * whole - c)).abs() <= 1e-6 * u, "{u}");
-        // (OCCT's union.)
-        assert!((u - 2.5821).abs() <= 1e-3, "{u}");
+        assert!((u - occt).abs() <= 2e-4 * occt, "{u}");
     }
 
     /// The top of a threaded container (a cylinder face whose band winds round four times

@@ -881,8 +881,16 @@ impl Tracer<'_> {
             // shorter than a step, as a narrow face's, the step lands far off and the bound
             // found may be the one behind.)
             if !self.range.holds(next.u, next.v) || !self.bounds.holds(next.s, next.t) {
-                if let Some(end) = self.exit(&at, &next, dir, h).filter(|end| (end.p - at.p).dot(dir) >= 0.0) {
-                    out.push(end);
+                // (Where no bound is found ahead between them, up to it in shorter steps: a
+                // long one may leap from a face too narrow for it, across the curve's whole
+                // run on it.)
+                match self.exit(&at, &next, dir, h).filter(|end| (end.p - at.p).dot(dir) >= 0.0) {
+                    Some(end) => out.push(end),
+                    None if h > 1e-2 * self.step => {
+                        h *= 0.5;
+                        continue;
+                    }
+                    None => {}
                 }
                 return (out, false);
             }
