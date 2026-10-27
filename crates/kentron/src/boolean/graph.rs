@@ -1217,6 +1217,10 @@ pub(super) fn sample_face(surface: &Surface, boundary: &[(&Curve2, f64, f64)]) -
         // helix: else the grid's points a period apart fall on the same few places.)
         let per_period = |period: Option<f64>, (lo, hi): (f64, f64)| period.map_or(12, |p| (12.0 * ((hi - lo) / p).ceil()).clamp(12.0, 512.0) as usize);
         let mut n = (per_period(surface.u_period(), u_range), per_period(surface.v_period(), v_range));
+        // (And as many as a surface winding round many times along a parameter needs, as a
+        // thread's flank or crest: else points a turn apart, alike, leave the box lopsided.)
+        let (wu, wv) = crate::geometry::extrema::windings_from(surface, 2.0);
+        n = (n.0.max(wu), n.1.max(wv));
         let mut points = grid(n);
         // (On a B-spline turning far between those points, as a thread's flank winding many
         // times round, whose points a turn apart are alike: the box missing much of its
