@@ -206,6 +206,10 @@ impl Graph {
         // copies of a point in several: the arc goes where its middle is inside the face.)
         let wider = |period: Option<f64>, (lo, hi): (f64, f64)| period.is_some_and(|p| hi - lo > p * (1.0 + 1e-9));
         if wider(face.u_period, face.u_range) || wider(face.v_period, face.v_range) {
+            // (Between its middle samples: of an arc of two, its ends are on the face's
+            // boundary, in none of the copies.)
+            let k = uv.len() / 2;
+            let mid = if uv.len() % 2 == 0 { [0.5 * (uv[k - 1][0] + uv[k][0]), 0.5 * (uv[k - 1][1] + uv[k][1])] } else { mid };
             if let Some(q) = face.representatives(mid).find(|&q| face.inside_polylines(q)) {
                 shift = [q[0] - mid[0], q[1] - mid[1]];
             }

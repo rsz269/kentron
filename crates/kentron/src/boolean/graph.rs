@@ -413,27 +413,27 @@ impl Face {
 
 /// The copies of `(u, v)` by whole periods that fall within a face's parameter ranges
 /// (a face winding round more than once, as a band round a cylinder, holds several).
-/// (At most four each way, in a fixed array: asked for every point located.)
+/// (Made as they are asked for: asked for every point located.)
 pub(super) fn representatives([u, v]: Uv, periods: [Option<f64>; 2], u_range: (f64, f64), v_range: (f64, f64)) -> impl Iterator<Item = Uv> {
-    let copies = |x: f64, period: Option<f64>, (lo, hi): (f64, f64)| -> ([f64; 4], usize) {
+    // (From the lowest copy in the range up, as many as there are: a face winding round
+    // many times, as a thread's band, holds many.)
+    let copies = |x: f64, period: Option<f64>, (lo, hi): (f64, f64)| -> (f64, f64, usize) {
         match period {
             Some(p) => {
-                let mut out = ([0.0; 4], 0);
-                // (From the lowest copy in the range up.)
-                let mut y = x + ((lo - 1e-9 - x) / p).ceil() * p;
-                while y <= hi + 1e-9 && out.1 < 4 {
-                    out.0[out.1] = y;
-                    out.1 += 1;
+                let first = x + ((lo - 1e-9 - x) / p).ceil() * p;
+                let (mut y, mut n) = (first, 0);
+                while y <= hi + 1e-9 && n < 4096 {
+                    n += 1;
                     y += p;
                 }
-                out
+                (first, p, n)
             }
-            None => ([x, 0.0, 0.0, 0.0], 1),
+            None => (x, 0.0, 1),
         }
     };
-    let (us, nu) = copies(u, periods[0], u_range);
-    let (vs, nv) = copies(v, periods[1], v_range);
-    us.into_iter().take(nu).flat_map(move |u| vs.into_iter().take(nv).map(move |v| [u, v]))
+    let ((u0, pu, nu), (v0, pv, nv)) = (copies(u, periods[0], u_range), copies(v, periods[1], v_range));
+    let along = |first: f64, p: f64, n: usize| std::iter::successors(Some(first), move |y| Some(y + p)).take(n);
+    along(u0, pu, nu).flat_map(move |u| along(v0, pv, nv).map(move |v| [u, v]))
 }
 
 /// The surface of revolution of the torus's meridian circle (at u = 0), parametrized like

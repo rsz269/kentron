@@ -1189,6 +1189,27 @@ mod tests {
         assert!((v - volume).abs() <= 1e-4 * volume, "volume {v} != {volume}");
     }
 
+    /// The top of a threaded container (a cylinder face whose band winds round four times
+    /// up its thread, in one face) halved by a block through its axis, the block's face
+    /// meeting the cylinder along its seam: the lines on the band where the block's face
+    /// meets it go each in its own turn, so the halves part (half the part either side).
+    #[test]
+    fn thread_band_halved_through_its_seam() {
+        let mut model = Model::new();
+        let mut read = |text: &str| crate::io::brep::read(&mut model, &mut text.as_bytes()).unwrap();
+        let part = read(include_str!("tests/thread_band_halved_a.brep"));
+        let block = read(include_str!("tests/thread_band_halved_b.brep"));
+        let whole = properties::volume(&model, part).mass;
+        let cut = difference(&mut model, part, block).unwrap();
+        let common = intersection(&mut model, part, block).unwrap();
+        for half in [cut, common] {
+            assert!(validity::check(&model, half).is_valid(), "{:?}", validity::check(&model, half));
+        }
+        let (a, b) = (properties::volume(&model, cut).mass, properties::volume(&model, common).mass);
+        assert!((a + b - whole).abs() <= 1e-6 * whole, "{a} + {b} != {whole}");
+        assert!((a - b).abs() <= 1e-3 * whole, "{a} against {b}");
+    }
+
     /// A slot's end, its rounded corners (cylinders of radius 0.5) chamfered at the rim, cut
     /// by a longer slot of the same width: the second's side is tangent to the first's
     /// corners along their lines, and the chamfer's edge on a corner leaves that line within
