@@ -209,3 +209,4 @@ CadQuery_Scripts	keyboard_flat_grid.py	lewisaronmilne/CadQuery_Scripts@4dfd6e4	n
 cadquery_tests	completed/sawppy_wheel_nema_17_test.py	Roger-random/cadquery_tests@56a7be5	MIT	slower	performance: fillets and chamfers	0.07	0.12	0.07s vs 0.12s
 cadquery_tests	completed/pvc_sch_40_cap.py	Roger-random/cadquery_tests@56a7be5	MIT	slower	performance: sweeps and lofts	0.14	0.27	0.14s vs 0.27s
 cadquery_tests	completed/thin_wall_experiments.py	Roger-random/cadquery_tests@56a7be5	MIT	slower	performance: offsets and shells	0.10	0.22	0.10s vs 0.22s
+cadquery_plaground	screw_cap_container.py	mryndzionek/cadquery_plaground@8169dde	MIT	fails	booleans	2.95	6.12	ValueError: invalid input: no pcurve for a section edge

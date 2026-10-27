@@ -1,4 +1,4 @@
-# Derived script: not one of the hunted corpus's 500 (see derived.tsv and ../README.md).
+# Derived script: not one of the hunted corpus's 501 (see derived.tsv and ../README.md).
 #
 # Derived from: https://github.com/kmeisthax/gridfinity-cadquery at 637a5c4,
 #   examples/walking_foot_holder.py, MIT License, Copyright ©2022-2024 kmeisthax and

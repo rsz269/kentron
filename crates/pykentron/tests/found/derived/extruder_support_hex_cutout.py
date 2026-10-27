@@ -1,4 +1,4 @@
-# Derived script: not one of the hunted corpus's 500 (see derived.tsv and ../README.md).
+# Derived script: not one of the hunted corpus's 501 (see derived.tsv and ../README.md).
 #
 # Derived from: https://github.com/CadQuery/cadquery-contrib at 3543aef,
 #   examples/3D_Printer_Extruder_Support.py, MIT License, Copyright (c) 2018 Dave Cowden (the
