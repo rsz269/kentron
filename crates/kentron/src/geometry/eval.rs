@@ -376,17 +376,20 @@ impl ParametricCurve for Line2 {
 
 // --- circles --------------------------------------------------------------------------------
 
-/// `t.sin_cos()` at each of the evenly spaced `params`: every 8th afresh, those between
-/// from the last by the rotation of one step (agreeing to a few units in the last place).
+/// `t.sin_cos()` at each of `params`: every 8th afresh, and any not a mean step on from the
+/// one before; those between from the last by the rotation of one step (agreeing to a few
+/// units in the last place).
 fn sin_cos_along(params: &[f64]) -> Vec<(f64, f64)> {
     let n = params.len();
     if n < 3 {
         return params.iter().map(|t| t.sin_cos()).collect();
     }
-    let (sin_h, cos_h) = ((params[n - 1] - params[0]) / (n - 1) as f64).sin_cos();
+    let h = (params[n - 1] - params[0]) / (n - 1) as f64;
+    let (sin_h, cos_h) = h.sin_cos();
+    let even = |i: usize| ((params[i] - params[i - 1]) - h).abs() <= 1e-12 * (1.0 + params[i].abs());
     let mut out: Vec<(f64, f64)> = Vec::with_capacity(n);
     for (i, t) in params.iter().enumerate() {
-        out.push(if i % 8 == 0 {
+        out.push(if i % 8 == 0 || !even(i) {
             t.sin_cos()
         } else {
             let (s, c) = out[i - 1];
@@ -397,8 +400,8 @@ fn sin_cos_along(params: &[f64]) -> Vec<(f64, f64)> {
 }
 
 impl Curve {
-    /// The points at evenly spaced `params` (as `point` at each, a circle's and an
-    /// ellipse's to a few units in the last place, for fewer sines and cosines).
+    /// The points at `params` (as `point` at each, a circle's and an ellipse's to a few
+    /// units in the last place, for fewer sines and cosines where they are evenly spaced).
     pub(crate) fn points_along(&self, params: &[f64]) -> Vec<Point> {
         match self {
             Curve::Circle(c) => sin_cos_along(params).into_iter().map(|sc| c.point_of(sc)).collect(),
