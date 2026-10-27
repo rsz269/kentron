@@ -280,6 +280,42 @@ fn fillet_solid_edges_as(model: &mut Model, shape: Shape, edges: &[(Shape, f64)]
         let corner = Corner::of(model, shape, edge, false)?.filter(|_| elementary && elementary_around(model, shape, edge));
         classified.push((edge, radius, corner));
     }
+    // Fillets of parallel straight edges across one planar face, apart, whose contacts on
+    // it pass each other (as round both long edges of a strip narrower than twice the
+    // radius): no fillet there leaves the face between them, as OCCT finds. (Contacts
+    // meeting, a strip rounded right across, are a fillet each still.)
+    let straight: Vec<(Corner, f64)> = classified
+        .iter()
+        .filter_map(|&(edge, radius, _)| Corner::of(model, shape, edge, false).ok().flatten().filter(|c| matches!(c.path, Path::Line { .. }) && c.convex).map(|c| (c, radius)))
+        .collect();
+    for (i, (a, ra)) in straight.iter().enumerate() {
+        for (b, rb) in &straight[i + 1..] {
+            if a.tangent.cross(b.tangent).length() > 1e-9 * a.tangent.length() * b.tangent.length() {
+                continue;
+            }
+            for (ka, fa) in a.faces.iter().enumerate() {
+                let Some(kb) = b.faces.iter().position(|fb| fb.0 == fa.0) else { continue };
+                if !matches!(fa.1, Surface::Plane(_)) {
+                    continue;
+                }
+                // How far each contact lies from its edge across the face, and the edges
+                // apart across it (the second into the face from the first).
+                let reach = |c: &Corner, r: f64| {
+                    let half = 0.5 * c.into[0].angle(c.into[1]);
+                    r / half.tan()
+                };
+                let apart = (b.origin - a.origin).dot(a.into[ka]);
+                let facing = (a.origin - b.origin).dot(b.into[kb]) > tolerance::LINEAR;
+                // (Side by side along the edges, not one on past the other's end.)
+                let along = |p: Point| (p - a.origin).dot(a.tangent) / a.tangent.length();
+                let (lo, hi) = (along(b.origin).min(along(b.end)), along(b.origin).max(along(b.end)));
+                let beside = hi > tolerance::LINEAR && lo < a.origin.distance(a.end) - tolerance::LINEAR;
+                if apart > tolerance::LINEAR && facing && beside && reach(a, *ra) + reach(b, *rb) > apart + tolerance::LINEAR {
+                    return Err(Error::InvalidInput("two fillets passing each other across a face".into()));
+                }
+            }
+        }
+    }
     // The edges meeting at their ends, in groups. A group with a rolling-ball edge is
     // rounded edge by edge, each fillet ending on the faces (and fillets) at its ends, where
     // that succeeds; otherwise, and for groups of cylinder and torus fillets, the fillets
@@ -3215,6 +3251,27 @@ mod tests {
             })
             .unwrap();
         check_ball(&mut model, l, edge, 0.25, 3.0 + 0.25 * 0.25 * (1.0 - PI / 4.0));
+    }
+
+    /// A plate 90 x 6 x 132 with its four short vertical edges rounded: up to radius 3 the
+    /// two fillets across each 6 wide end leave it (at 3 meeting, the end rounded right
+    /// across); beyond, they would pass each other there, and no fillet is made (as OCCT
+    /// makes none).
+    #[test]
+    fn fillets_passing_each_other_across_a_narrow_face() {
+        for (radius, rounds) in [(2.9, true), (3.0, true), (3.1, false), (6.0, false)] {
+            let mut model = Model::new();
+            let plate = Cuboid::from_corners(Point::new(-45.0, -3.0, 0.0), Point::new(45.0, 3.0, 132.0)).build(&mut model).unwrap();
+            let vertical: Vec<Shape> = model.unique_subshapes(plate, NodeKind::Edge).into_iter().filter(|&e| {
+                let (a, b) = model.edge_vertices(e);
+                (model.point(a).z - model.point(b).z).abs() > 1.0
+            }).collect();
+            let result = fillet(&mut model, plate, &vertical, radius);
+            assert_eq!(result.is_ok(), rounds, "radius {radius}: {result:?}");
+            if let Ok(r) = result {
+                assert!(validity::check(&model, r).is_valid());
+            }
+        }
     }
 
     /// A slot whose ends are half circles of radius 0.75 between bulging B-spline sides,
