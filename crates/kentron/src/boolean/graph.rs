@@ -416,13 +416,15 @@ impl Face {
 /// (Made as they are asked for: asked for every point located.)
 pub(super) fn representatives([u, v]: Uv, periods: [Option<f64>; 2], u_range: (f64, f64), v_range: (f64, f64)) -> impl Iterator<Item = Uv> {
     // (From the lowest copy in the range up, as many as there are: a face winding round
-    // many times, as a thread's band, holds many.)
+    // many times, as a thread's band, holds many. At most MOST: a face whose pcurves wander
+    // over hundreds of periods (a failed fit's) would be taken as holding points everywhere.)
+    const MOST: usize = 64;
     let copies = |x: f64, period: Option<f64>, (lo, hi): (f64, f64)| -> (f64, f64, usize) {
         match period {
             Some(p) => {
                 let first = x + ((lo - 1e-9 - x) / p).ceil() * p;
                 let (mut y, mut n) = (first, 0);
-                while y <= hi + 1e-9 && n < 4096 {
+                while y <= hi + 1e-9 && n < MOST {
                     n += 1;
                     y += p;
                 }
