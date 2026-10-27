@@ -471,7 +471,7 @@ fn merge_group(model: &Model, specs: &[Spec], group: &[usize], internal: &HashSe
                     let (pcurve, first, last) = match analytic_pcurve(&curve, &surface) {
                         Some(p) => (p, first, last),
                         None if spec.surface == surface => (u.pcurve.clone()?, u.first, u.last),
-                        None => return None,
+                        None => (u.pcurve.as_ref()?.transformed(&reparametrization(&spec.surface, &surface)?), u.first, u.last),
                     };
                     chain.push(Use { edge: u.edge, orientation: in_shell.compose(orientation), pcurve: Some(pcurve), first, last });
                     // The next use, across edges between the group's faces.
@@ -498,6 +498,30 @@ fn merge_group(model: &Model, specs: &[Spec], group: &[usize], internal: &HashSe
     gather(&mut loops, &surface);
     let tolerance = group.iter().map(|&i| specs[i].tolerance).fold(0.0, f64::max);
     Some(Spec { original: None, orientation, surface, tolerance, loops })
+}
+
+/// The map from `from`'s parameters to `to`'s, for a plane or cylinder on the very same
+/// point set, framed otherwise.
+fn reparametrization(from: &Surface, to: &Surface) -> Option<Transform2> {
+    match (from, to) {
+        (Surface::Plane(a), Surface::Plane(b)) => {
+            let (a, b) = (a.frame(), b.frame());
+            let (x, y) = (Vector::from(b.x()), Vector::from(b.y()));
+            let (ax, ay) = (Vector::from(a.x()), Vector::from(a.y()));
+            let o = a.origin() - b.origin();
+            Some(Transform2::orthogonal([[ax.dot(x), ay.dot(x)], [ax.dot(y), ay.dot(y)]], Vector2::new(o.dot(x), o.dot(y))))
+        }
+        (Surface::Cylinder(a), Surface::Cylinder(b)) => {
+            let (a, b) = (a.frame(), b.frame());
+            let (x, y, z) = (Vector::from(b.x()), Vector::from(b.y()), Vector::from(b.z()));
+            // (Round the same way about the axis, or the other way where it points the other
+            // way, from the angle of the one's start round the other.)
+            let s = Vector::from(a.z()).dot(z).signum();
+            let turn = Vector::from(a.x()).dot(y).atan2(Vector::from(a.x()).dot(x));
+            Some(Transform2::orthogonal([[s, 0.0], [0.0, s]], Vector2::new(turn, (a.origin() - b.origin()).dot(z))))
+        }
+        _ => None,
+    }
 }
 
 /// Shifts loops by whole periods into the span of the largest one (each aligned from its own

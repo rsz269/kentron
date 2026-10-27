@@ -232,6 +232,82 @@ fn sharp<T: Copy>(model: &Model, shape: Shape, edges: &[T], edge: impl Fn(&T) ->
 
 /// [`fillet_edges`] of a shape with solids.
 fn fillet_solid_edges(model: &mut Model, shape: Shape, edges: &[(Shape, f64)]) -> Result<Shape> {
+    // Where three of the edges meet at a vertex, one convex and two concave or one concave
+    // and two convex, the odd one rounded first: the other two then go on into each other
+    // smoothly round its fillet's end, as OCCT rounds them (by a torus round a straight
+    // fillet's end).
+    if let Some((first, then)) = mixed_corner_stages(model, shape, edges) {
+        let before = fault_kinds(model, shape);
+        let staged = fillet_solid_edges_unstaged(model, shape, &first).and_then(|rounded| {
+            // (The first fillets' tools end on faces they leave split where they meet them,
+            // as on a hole's wall: one face again, for the others to go on along the edges
+            // the first fillets left.)
+            let rounded = crate::unify::unify_same_domain(model, rounded)?;
+            let mut found = Vec::with_capacity(then.len());
+            for (curve, a, b, radius) in &then {
+                let edge = find_edge(model, rounded, curve, *a, *b).ok_or_else(|| Error::Failed("a filleted edge was lost by another fillet".into()))?;
+                found.push((edge, *radius));
+            }
+            fillet_solid_edges_unstaged(model, rounded, &found)
+        });
+        if let Ok(rounded) = staged.and_then(|r| sound(model, &before, r)) {
+            return Ok(rounded);
+        }
+    }
+    fillet_solid_edges_unstaged(model, shape, edges)
+}
+
+/// The edges (with the edges going on from them tangentially) to round first and those to
+/// round after, found again by their curves and ranges, where three meet at a vertex with
+/// one of them convex and the others concave, or the other way round ([`fillet_solid_edges`]);
+/// `None` where there is no such vertex, or an edge rounded first at one would be rounded
+/// after at another.
+#[allow(clippy::type_complexity)]
+fn mixed_corner_stages(model: &Model, shape: Shape, edges: &[(Shape, f64)]) -> Option<(Vec<(Shape, f64)>, Vec<(Curve, f64, f64, f64)>)> {
+    let edges = tangent_chains(model, shape, edges, 0.0);
+    let convex: Vec<Option<bool>> = edges.iter().map(|&(e, _)| Corner::of(model, shape, e, false).ok().flatten().map(|c| c.convex)).collect();
+    let mut at: Vec<(NodeId, Vec<usize>)> = Vec::new();
+    for (i, &(edge, _)) in edges.iter().enumerate() {
+        let (a, b) = model.edge_vertices(edge);
+        if a.node == b.node {
+            continue;
+        }
+        for v in [a.node, b.node] {
+            match at.iter_mut().find(|(w, _)| *w == v) {
+                Some((_, here)) => here.push(i),
+                None => at.push((v, vec![i])),
+            }
+        }
+    }
+    let (mut odd, mut paired) = (Vec::new(), Vec::new());
+    for (_, here) in &at {
+        let Ok(three) = <[usize; 3]>::try_from(here.clone()) else { continue };
+        let [Some(x), Some(y), Some(z)] = three.map(|i| convex[i]) else { continue };
+        let (i, others) = match (x == y, y == z, x == z) {
+            (true, true, _) => continue,
+            (true, false, _) => (here[2], [here[0], here[1]]),
+            (false, true, _) => (here[0], [here[1], here[2]]),
+            _ => (here[1], [here[0], here[2]]),
+        };
+        odd.push(i);
+        paired.extend(others);
+    }
+    if odd.is_empty() || odd.iter().any(|i| paired.contains(i)) {
+        return None;
+    }
+    let first: Vec<(Shape, f64)> = edges.iter().enumerate().filter(|(i, _)| odd.contains(i)).map(|(_, &e)| e).collect();
+    let mut then = Vec::new();
+    for (i, &(edge, radius)) in edges.iter().enumerate() {
+        if !odd.contains(&i) {
+            let (curve, a, b) = model.edge_curve(Shape { orientation: Orientation::Forward, ..edge })?;
+            then.push((curve, a, b, radius));
+        }
+    }
+    Some((first, then))
+}
+
+/// [`fillet_solid_edges`] all at once.
+fn fillet_solid_edges_unstaged(model: &mut Model, shape: Shape, edges: &[(Shape, f64)]) -> Result<Shape> {
     let before = fault_kinds(model, shape);
     // (Where the edges go on at a slight kink between faces as nearly tangent, as between the
     // faces of a loft through rounded outlines, the fillets carried on over it first: ending
@@ -462,9 +538,13 @@ fn fillet_solid_edges_as(model: &mut Model, shape: Shape, edges: &[(Shape, f64)]
         Ok(result)
     };
     let mitred = mitres(&corners);
-    for (((corner, radius), extend), mitre) in corners.iter().zip(extensions(model, shape, &corners)).zip(&mitred) {
+    for (i, (((corner, radius), extend), mitre)) in corners.iter().zip(extensions(model, shape, &corners)).zip(&mitred).enumerate() {
+        let (extend, beyond) = if corner.convex { (extend, Vec::new()) } else { concave_ends(model, shape, &corners, i)? };
         let tool = corner.tool(model, *radius, mitre_runs(corner, *radius, extend, mitre))?;
-        let tool = mitred_tool(model, tool, mitre)?;
+        let mut tool = mitred_tool(model, tool, mitre)?;
+        for (solid, keep_inside) in beyond {
+            tool = if keep_inside { boolean::intersection(model, tool, solid)? } else { boolean::difference(model, tool, solid)? };
+        }
         result = if corner.convex { boolean::difference(model, result, tool)? } else { boolean::union(model, result, tool)? };
         result = keep(model, result)?;
     }
@@ -826,6 +906,71 @@ fn extensions(model: &Model, shape: Shape, corners: &[(Corner, f64)]) -> Vec<[f6
         .zip(&joints)
         .map(|((corner, size), joint)| [if joint[0] { 0.0 } else { run(corner, *size, false) }, if joint[1] { 0.0 } else { run(corner, *size, true) }])
         .collect()
+}
+
+/// For the tool of concave fillet `corners[i]` (added material, which stops square at the
+/// edge's ends): at each end where no other fillet meets it and the edge ends on one other
+/// face, a cylinder or a plane not square to it, facing on past the end, how far to run the
+/// tool on past it, and the solid to take from the tool then (with true where the tool is
+/// to keep what lies inside that solid instead): the fillet ending on that face, as a slot's
+/// floor rounded on into a round hole.
+#[allow(clippy::type_complexity)]
+fn concave_ends(model: &mut Model, shape: Shape, corners: &[(Corner, f64)], i: usize) -> Result<([f64; 2], Vec<(Shape, bool)>)> {
+    let (corner, radius) = &corners[i];
+    let mut run = [0.0; 2];
+    let mut beyond = Vec::new();
+    let reach = 4.0 * radius
+        + match corner.path {
+            Path::Line { length } => length,
+            Path::Arc { radius, .. } => 2.0 * radius,
+        };
+    for (k, p) in [corner.origin, corner.end].into_iter().enumerate() {
+        if corner.ends().is_empty() || corners.iter().enumerate().any(|(j, (other, _))| j != i && other.ends().iter().any(|q| q.distance(p) <= tolerance::LINEAR)) {
+            continue;
+        }
+        let mut faces: Vec<Shape> = Vec::new();
+        for face in model.explore(shape, NodeKind::Face) {
+            if corner.faces.iter().any(|f| f.0 == face.node) || faces.iter().any(|f| f.node == face.node) {
+                continue;
+            }
+            if model.explore(face, NodeKind::Vertex).any(|v| model.point(v).distance(p) <= tolerance::LINEAR) {
+                faces.push(face);
+            }
+        }
+        let [face] = faces[..] else { continue };
+        let Some(surface) = model.surface(face).map(|s| untrimmed(s).transformed(&face.placement)) else { continue };
+        let Some((u, v)) = surface.parameters(p) else { continue };
+        let (_, du, dv) = surface.d1(u, v);
+        let n = du.cross(dv).normalized() * if face.orientation == Orientation::Reversed { -1.0 } else { 1.0 };
+        // (On past the end: along the edge out of it.)
+        let out = corner.direction_at(p) * if k == 0 { -1.0 } else { 1.0 };
+        let facing = n.dot(out);
+        if !(facing > tolerance::ANGULAR.sqrt()) {
+            continue;
+        }
+        let solid = match &surface {
+            Surface::Plane(_) if facing >= 1.0 - tolerance::ANGULAR => continue,
+            Surface::Plane(_) => {
+                let x = perpendicular(n);
+                let y = n.cross(x);
+                let frame = Frame::new(p - x * reach - y * reach, Direction::from_vector(n), Direction::from_vector(x));
+                (crate::primitives::Cuboid::new(2.0 * reach, 2.0 * reach, reach).with_frame(frame).build(model)?, false)
+            }
+            Surface::Cylinder(c) => {
+                let axis = surface_axis(&surface);
+                let z = Vector::from(axis.direction);
+                let foot = foot(axis, p);
+                // (Facing its axis, a hole: the tool less the cylinder; else the tool within it.)
+                let inward = n.dot(foot - p) > 0.0;
+                let frame = Frame::new(foot - z * reach, axis.direction, Direction::from_vector(perpendicular(z)));
+                (crate::primitives::Cylinder::new(c.radius(), 2.0 * reach).with_frame(frame).build(model)?, !inward)
+            }
+            _ => continue,
+        };
+        run[k] = 2.0 * radius;
+        beyond.push(solid);
+    }
+    Ok((run, beyond))
 }
 
 /// An edge to chamfer, with how far: measured from `face` (one of the two faces at the edge;
@@ -3285,6 +3430,33 @@ mod tests {
         assert!(validity::check(&model, result).is_valid());
         let v = properties::volume(&model, result).mass;
         assert!((v - 2619.9342).abs() <= 1e-4 * 2619.9342, "{v}");
+    }
+
+    /// A block with a blind round hole, and a slot from its front face into the hole above
+    /// the hole's bottom, the slot's floor and upright edges rounded: the floor's concave
+    /// fillets first, the convex ones then going on round their ends (on the front face and
+    /// on the hole's wall), as OCCT rounds them (58370.6698).
+    #[test]
+    fn slot_into_a_hole_rounded_round_its_floors_fillets() {
+        let mut model = Model::new();
+        let block = Cuboid::from_corners(Point::new(-30.0, -20.0, 0.0), Point::new(30.0, 20.0, 30.0)).build(&mut model).unwrap();
+        let hole = crate::primitives::Cylinder::new(12.0, 30.0).with_frame(Frame::from_z(Point::new(0.0, 10.0, 5.0), Direction::Z)).build(&mut model).unwrap();
+        let slot = Cuboid::from_corners(Point::new(-5.0, -20.0, 15.0), Point::new(5.0, 10.0, 35.0)).build(&mut model).unwrap();
+        let holed = boolean::difference(&mut model, block, hole).unwrap();
+        let shape = boolean::difference(&mut model, holed, slot).unwrap();
+        let edges: Vec<Shape> = model.unique_subshapes(shape, NodeKind::Edge).into_iter().filter(|&e| {
+            let (a, b) = model.edge_vertices(e);
+            let (p, q) = (model.point(a), model.point(b));
+            let floor = (p.z - 15.0).abs() < 1e-9 && (q.z - 15.0).abs() < 1e-9;
+            let upright = (p.x - q.x).abs() < 1e-9 && (p.y - q.y).abs() < 1e-9 && (p.x.abs() - 5.0).abs() < 1e-9 && p.z.min(q.z) > 14.9;
+            floor || upright
+        }).collect();
+        assert_eq!(edges.len(), 8);
+        let rounded = fillet(&mut model, shape, &edges, 2.0).unwrap();
+        assert!(validity::check(&model, rounded).is_valid());
+        let v = properties::volume(&model, rounded).mass;
+        assert!((v - 58370.6698).abs() <= 1e-5 * 58370.6698, "{v}");
+        assert!(model.explore(rounded, NodeKind::Face).count() <= 25);
     }
 
     /// A plate 90 x 6 x 132 with its four short vertical edges rounded: up to radius 3 the

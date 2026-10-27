@@ -270,6 +270,12 @@ impl Transform2 {
         Transform2 { translation: v, ..Self::IDENTITY }
     }
 
+    /// The transformation with orthogonal linear part `matrix` (row-major; a rotation or a
+    /// reflection) followed by `translation`.
+    pub(crate) fn orthogonal(matrix: [[f64; 2]; 2], translation: Vector2) -> Self {
+        Transform2 { matrix, scale: 1.0, translation }
+    }
+
     /// The transformation with linear part `matrix` (orthogonal) and `scale`, keeping
     /// `center` fixed.
     fn about(center: Point2, matrix: [[f64; 2]; 2], scale: f64) -> Self {
