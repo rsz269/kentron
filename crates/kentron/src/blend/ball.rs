@@ -790,7 +790,7 @@ pub(super) fn rolling_tool(model: &mut Model, shape: Shape, edge: Shape, radius:
         ];
         wires.push(crate::make::wire(model, &edges)?);
     }
-    let options = crate::loft::LoftOptions { solid: true, ruled: false, ..Default::default() };
+    let options = crate::loft::LoftOptions { solid: true, ruled: false, spacing: crate::loft::Spacing::ByMeanDistance, ..Default::default() };
     // (Its arcs exact, rational across, not resampled, where they are clear of the segments
     // closing the sections.)
     let loft = |model: &mut Model, wires: &[Shape]| if clear { crate::loft::loft_exact_arcs(model, wires, &options) } else { crate::loft::loft(model, wires, &options) };

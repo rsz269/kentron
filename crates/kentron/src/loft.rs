@@ -56,10 +56,13 @@ pub struct LoftOptions {
 #[doc(alias = "Approx_ParametrizationType")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Spacing {
-    /// Spaced as the sections are apart (by the mean distance between their points), as
-    /// OCCT's lofts are by default.
+    /// Spaced as the sections are apart, as OCCT's lofts are by default: by the distance
+    /// between their poles made alike, all together.
     #[default]
     ByDistance,
+    /// Spaced by the mean distance between their points sampled alike (as fillets' tools
+    /// through many ball sections are lofted).
+    ByMeanDistance,
     /// By the square roots of those distances.
     ByRootDistance,
     /// Evenly, whatever the distances (as CadQuery's lofts ask for).
@@ -823,7 +826,7 @@ impl Grid {
         let edges = sections.iter().find_map(|s| if let Section::Wire(w) = s { Some(w.pieces.len()) } else { None }).expect("a wire");
         let mut curves: Vec<Vec<BSplineCurve>> = Vec::with_capacity(edges);
         let mut exact = vec![false; edges];
-        // (The rows the spacing across is measured on: the sampled ones also where the
+        // (The rows a mean spacing across is measured on: the sampled ones also where the
         // surface has exact rows, which have far fewer poles.)
         let mut measured: Vec<Option<Vec<BSplineCurve>>> = Vec::with_capacity(edges);
         for i in 0..edges {
@@ -882,22 +885,30 @@ impl Grid {
                 }
             }
         }
-        // Across: by the mean distance between consecutive sections' points (or as `spacing`
-        // says otherwise).
+        // Across: by the distance between consecutive sections taken all together (or as
+        // `spacing` says otherwise), as OCCT's chord lengths: the root of the sum of the
+        // squares of the distances between the poles of the sections made alike (see
+        // [`section_poles`]).
+        let poles = if spacing == Spacing::ByMeanDistance { Vec::new() } else { section_poles(sections, edges) };
         let mut across = vec![0.0];
         for k in 1..sections.len() {
-            let mut sum = 0.0;
-            let mut count = 0;
-            for (row, sampled) in curves.iter().zip(&measured) {
-                let row = sampled.as_ref().unwrap_or(row);
-                for j in 0..row[k].poles().len() {
-                    sum += row[k].poles()[j].distance(row[k - 1].poles()[j]);
-                    count += 1;
+            let distance = if spacing == Spacing::ByMeanDistance {
+                // (The sampled rows: where the surface has exact rows, as many points.)
+                let (mut sum, mut count) = (0.0, 0);
+                for (row, sampled) in curves.iter().zip(&measured) {
+                    let row = sampled.as_ref().unwrap_or(row);
+                    for j in 0..row[k].poles().len() {
+                        sum += row[k].poles()[j].distance(row[k - 1].poles()[j]);
+                        count += 1;
+                    }
                 }
+                sum / count as f64
+            } else {
+                poles[k].iter().zip(&poles[k - 1]).map(|(a, b)| a.distance(*b).powi(2)).sum::<f64>().sqrt()
             }
-            let distance = (sum / count as f64).max(1e-9);
+            .max(1e-9);
             let step = match spacing {
-                Spacing::ByDistance => distance,
+                Spacing::ByDistance | Spacing::ByMeanDistance => distance,
                 Spacing::ByRootDistance => distance.sqrt(),
                 Spacing::Even => 1.0,
             };
@@ -979,6 +990,123 @@ impl Grid {
         let ends = [0, count - 1].map(|j| columns[j].clone());
         (surface, ends.to_vec())
     }
+}
+
+/// The poles of each section as OCCT's loft makes them alike before passing a surface
+/// through them: each edge a polynomial of the least degree (at most 14) within 1e-7 of it
+/// in as few spans as that takes (a line's of degree one), the degree then raised to the
+/// greatest among all edges and sections and every section's edge in as many spans as the
+/// most any has; the edges' poles in turn, where they meet once. (Fitted by least squares
+/// to points along each edge: the poles of OCCT's approximation within the tolerance.)
+fn section_poles(sections: &[Section], edges: usize) -> Vec<Vec<Point>> {
+    const TOLERANCE: f64 = 1e-7;
+    const MOST: usize = 14;
+    const SAMPLES: usize = 64;
+    let bernstein = |n: usize, t: f64| -> Vec<f64> {
+        let mut b = vec![0.0; n + 1];
+        b[0] = 1.0;
+        for j in 1..=n {
+            let mut saved = 0.0;
+            for k in 0..j {
+                let temp = b[k];
+                b[k] = saved + (1.0 - t) * temp;
+                saved = t * temp;
+            }
+            b[j] = saved;
+        }
+        b
+    };
+    // The least-squares Bezier poles of degree `n` through `points` at even parameters, and
+    // how far it strays from them.
+    let fit = |points: &[Point], n: usize| -> (Vec<Point>, f64) {
+        let m = points.len();
+        let rows: Vec<Vec<f64>> = (0..m).map(|j| bernstein(n, j as f64 / (m - 1) as f64)).collect();
+        let mut a = vec![vec![0.0; n + 1]; n + 1];
+        let mut rhs = vec![Vector::new(0.0, 0.0, 0.0); n + 1];
+        for (row, p) in rows.iter().zip(points) {
+            for r in 0..=n {
+                for c in 0..=n {
+                    a[r][c] += row[r] * row[c];
+                }
+                rhs[r] = rhs[r] + (*p - Point::ORIGIN) * row[r];
+            }
+        }
+        // (Gaussian elimination: the normal equations are small and positive definite.)
+        for col in 0..=n {
+            let pivot = a[col][col];
+            for r in col + 1..=n {
+                let f = a[r][col] / pivot;
+                for c in col..=n {
+                    a[r][c] -= f * a[col][c];
+                }
+                rhs[r] = rhs[r] - rhs[col] * f;
+            }
+        }
+        let mut x = vec![Vector::new(0.0, 0.0, 0.0); n + 1];
+        for r in (0..=n).rev() {
+            let mut v = rhs[r];
+            for c in r + 1..=n {
+                v = v - x[c] * a[r][c];
+            }
+            x[r] = v * (1.0 / a[r][r]);
+        }
+        let poles: Vec<Point> = x.iter().map(|&v| Point::ORIGIN + v).collect();
+        let strays = rows.iter().zip(points).map(|(row, p)| {
+            let q = row.iter().zip(&poles).fold(Vector::new(0.0, 0.0, 0.0), |acc, (w, pole)| acc + (*pole - Point::ORIGIN) * *w);
+            (Point::ORIGIN + q).distance(*p)
+        }).fold(0.0, f64::max);
+        (poles, strays)
+    };
+    let span_points = |piece: &Piece, spans: usize, k: usize| -> Vec<Point> {
+        let (a, b) = (k as f64 / spans as f64, (k + 1) as f64 / spans as f64);
+        (0..SAMPLES).map(|j| piece.at(a + (b - a) * j as f64 / (SAMPLES - 1) as f64)).collect()
+    };
+    // Each section's edge: its degree and spans.
+    let shape = |piece: &Piece| -> (usize, usize) {
+        if piece.straight() {
+            return (1, 1);
+        }
+        let mut spans = 1;
+        loop {
+            for n in 1..=MOST {
+                if (0..spans).all(|k| fit(&span_points(piece, spans, k), n).1 <= TOLERANCE) {
+                    return (n, spans);
+                }
+            }
+            if spans >= 16 {
+                return (MOST, spans);
+            }
+            spans *= 2;
+        }
+    };
+    let mut degree = 1;
+    let mut spans = vec![1; edges];
+    for s in sections {
+        if let Section::Wire(w) = s {
+            for (i, piece) in w.pieces.iter().enumerate() {
+                let (n, k) = shape(piece);
+                degree = degree.max(n);
+                spans[i] = spans[i].max(k);
+            }
+        }
+    }
+    let count: usize = spans.iter().map(|k| k * degree).sum::<usize>() + 1;
+    sections
+        .iter()
+        .map(|s| match s {
+            Section::Wire(w) => {
+                let mut out: Vec<Point> = Vec::with_capacity(count);
+                for (i, piece) in w.pieces.iter().enumerate() {
+                    for k in 0..spans[i] {
+                        let (poles, _) = fit(&span_points(piece, spans[i], k), degree);
+                        out.extend(poles.into_iter().skip(if out.is_empty() { 0 } else { 1 }));
+                    }
+                }
+                out
+            }
+            Section::Point(p, _) => vec![*p; count],
+        })
+        .collect()
 }
 
 /// Edge `i` of each section as its circle arc exactly, a rational B-spline over [0, 1] from
@@ -1442,6 +1570,37 @@ mod tests {
         let even = volume(&mut model, Spacing::Even);
         assert!((even - 1011.593).abs() < 1e-3, "{even}");
         assert!(volume(&mut model, Spacing::ByDistance) > even + 100.0);
+    }
+
+    /// A stand's profile (a block with a U cut out of its top by a circle arc) lofted through
+    /// four sections whose arc dips far deeper in some: spaced by the distances between the
+    /// sections' poles as OCCT makes them (each edge alike, an arc's no more than a line's),
+    /// within 0.2% of OCCT's volume (163456.6); by the mean distance between points sampled
+    /// along them (an arc's many), 8% more.
+    #[test]
+    fn sections_spaced_by_their_poles_distances_as_occt() {
+        let mut model = Model::new();
+        let profile = |model: &mut Model, z: f64, under: f64, valley: f64| {
+            let p = |x: f64, y: f64| Point::new(x, y, z);
+            let arc = Curve::Trimmed(Circle::arc_through(p(62.0, 50.0), p(0.0, valley), p(-62.0, 50.0)).unwrap());
+            let mut edges = vec![
+                make::edge_between(model, p(-70.0, under), p(70.0, under)).unwrap(),
+                make::edge_between(model, p(70.0, under), p(70.0, 50.0)).unwrap(),
+                make::edge_between(model, p(70.0, 50.0), p(62.0, 50.0)).unwrap(),
+            ];
+            edges.push(make::edge_from_curve(model, arc).unwrap());
+            edges.push(make::edge_between(model, p(-62.0, 50.0), p(-70.0, 50.0)).unwrap());
+            edges.push(make::edge_between(model, p(-70.0, 50.0), p(-70.0, under)).unwrap());
+            make::wire(model, &edges).unwrap()
+        };
+        let sections: Vec<Shape> = [(0.0, 0.0, 35.0), (25.0, 7.0, 15.0), (37.0, 9.0, 42.0), (45.0, 10.0, 42.0)].iter().map(|&(z, u, v)| profile(&mut model, z, u, v)).collect();
+        let volume = |model: &mut Model, spacing: Spacing| {
+            let solid = loft(model, &sections, &LoftOptions { solid: true, spacing, ..Default::default() }).unwrap().shape;
+            properties::volume(model, solid).mass
+        };
+        let occt = volume(&mut model, Spacing::ByDistance);
+        assert!((occt - 163456.6).abs() <= 2e-3 * 163456.6, "{occt}");
+        assert!(volume(&mut model, Spacing::ByMeanDistance) > 1.07 * 163456.6);
     }
 
     /// A loft from a circle up to a rectangle through a smaller circle: the bottom circle's

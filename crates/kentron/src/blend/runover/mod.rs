@@ -583,7 +583,7 @@ pub(super) fn fillet_along(model: &mut Model, shape: Shape, edge: Shape, law: &d
     }
     // (Both the same way: then the chords are the same faces in both, and their edges along
     // the contacts lie on the faces there.)
-    let options = loft::LoftOptions { solid: !closed, ruled: !curved, ..Default::default() };
+    let options = loft::LoftOptions { solid: !closed, ruled: !curved, spacing: loft::Spacing::ByMeanDistance, ..Default::default() };
     let solid = |model: &mut Model, wires: &[Shape], what: &str| -> Result<Shape> {
         let lofted = loft::loft_breaking(model, wires, &options, &breaks).map_err(|e| Error::Failed(format!("lofting the {what}: {e}")))?;
         if !closed {
@@ -626,7 +626,7 @@ pub(super) fn fillet_along(model: &mut Model, shape: Shape, edge: Shape, law: &d
         // At a concave edge, what the wedge takes away is for the ball's arc to bound (the
         // wedge lies within the solid but for its part in the ball): the solid's faces as
         // the wedge trims them, and the arc, sewn.
-        let arcs = loft::loft_breaking(model, &lens_wires, &loft::LoftOptions { solid: false, ruled: !curved, ..Default::default() }, &breaks).map_err(|e| Error::Failed(format!("lofting the fillet: {e}")))?;
+        let arcs = loft::loft_breaking(model, &lens_wires, &loft::LoftOptions { solid: false, ruled: !curved, spacing: loft::Spacing::ByMeanDistance, ..Default::default() }, &breaks).map_err(|e| Error::Failed(format!("lofting the fillet: {e}")))?;
         let walls: Vec<Surface> = model.unique_subshapes(wedge, NodeKind::Face).iter().filter_map(|&f| model.surface(f).map(|s| s.transformed(&f.placement))).collect();
         let mut faces = keep(model, cut, &walls);
         faces.extend(model.unique_subshapes(arcs, NodeKind::Face));
