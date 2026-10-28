@@ -2242,8 +2242,15 @@ impl Graph {
                             .map(|t| (t, curve.point(t)))
                             .filter_map(|(t, p)| {
                                 let location = face.locate(p, &self.edges, &self.vertices);
+                                // (Inside, but met at a shallow angle (the edge lying nearly
+                                // along the surface, as where a face tangent to the edge's own
+                                // meets it), so found only roughly along the edge: where a
+                                // boundary edge passes within the tolerances that near, the
+                                // edge meets the face there, on its boundary (one vertex with
+                                // its meeting the face across that edge).)
                                 if location == Location::Inside {
-                                    return Some((t, p, None));
+                                    let snapped = self.meeting_at_boundary(curve, edge.first, edge.last, t, face, 0.0).filter(|m| m.2.is_none() && m.1.distance(p) <= 1e3 * on_tol());
+                                    return Some(snapped.unwrap_or((t, p, None)));
                                 }
                                 // (On its boundary, or near it: a boundary edge passing within
                                 // the tolerances is met there too; on a free-form face at any
