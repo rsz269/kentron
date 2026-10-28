@@ -757,9 +757,14 @@ pub(super) fn rolling_chamfer(model: &mut Model, shape: Shape, edge: Shape, prof
 pub(super) fn rolling_tool(model: &mut Model, shape: Shape, edge: Shape, radius: &dyn Fn(f64) -> f64, filleted: &[Shape], loose: bool) -> Result<(Shape, bool)> {
     use crate::geometry::curve::Circle;
     use crate::math::{Direction, Frame};
-    // (On the faces' own surfaces: the tool goes on past the edge's ends, where a boolean
-    // meets it with the faces as they are.)
-    let Rolling { sections, convex, closed, t0, t1, .. } = rolling_on(model, shape, edge, &Profile::Ball(radius), 1, false)?;
+    // (On an open shell, on the faces' own surfaces: the tool goes on past the edge's ends,
+    // where a boolean meets it with the faces as they are. On a solid, on their surfaces
+    // carried on past their patches: at an end where a patch ends, a contact found on the
+    // patch itself is held at its bound, the ball's distance to it measured to the bound,
+    // and the section there strays off the other face, the tool's contact edge with it, by
+    // more than the fillet's depth where the faces are near flat.)
+    let solid = !loose && model.explore(shape, NodeKind::Solid).next().is_some() && crate::boolean::closed_shells(model, shape);
+    let Rolling { sections, convex, closed, t0, t1, .. } = rolling_on(model, shape, edge, &Profile::Ball(radius), 1, solid)?;
     let span = (t1 - t0).abs() * 1e-9;
     // (Not past an end where another edge carries this one on smoothly, as the next of a
     // chain filleted with it: the faces' intersection followed on may curl back into the
@@ -774,7 +779,6 @@ pub(super) fn rolling_tool(model: &mut Model, shape: Shape, edge: Shape, radius:
     // or the next feature, and the tool cut into it. On an open shell, as there is no
     // material beyond the faces to cut, it runs on past both, for the faces there to trim
     // it.)
-    let solid = !loose && model.explore(shape, NodeKind::Solid).next().is_some() && crate::boolean::closed_shells(model, shape);
     let (va, vb) = model.edge_vertices(Shape { orientation: Orientation::Forward, ..edge });
     let meets = |v: crate::topology::NodeId| {
         filleted.iter().any(|&e| e.node != edge.node && {
@@ -785,7 +789,13 @@ pub(super) fn rolling_tool(model: &mut Model, shape: Shape, edge: Shape, radius:
     let past = [va, vb].map(|v| v.node).map(|v| !solid || meets(v));
     let past = [0, 1].map(|k| convex && !smooth[k] && past[k]);
     let (below, above) = if t0 <= t1 { (past[0], past[1]) } else { (past[1], past[0]) };
-    let kept: Vec<&Section> = sections.iter().filter(|s| if s.t < lo { below } else if s.t > hi { above } else { true }).collect();
+    // (On a solid, past an end only while the contacts stay on the ball: beyond, a face's
+    // contact is held where its surface ends, and the section's wedge swings round to lie
+    // along the faces, cutting what no fillet takes.)
+    let on_ball = |s: &Section| !solid || s.contacts.iter().all(|&c| (c.distance(s.center) - s.radius).abs() <= 1e-3 * s.radius);
+    let first_off_above = sections.iter().filter(|s| s.t > hi && !on_ball(s)).map(|s| s.t).fold(f64::INFINITY, f64::min);
+    let last_off_below = sections.iter().filter(|s| s.t < lo && !on_ball(s)).map(|s| s.t).fold(f64::NEG_INFINITY, f64::max);
+    let kept: Vec<&Section> = sections.iter().filter(|s| if s.t < lo { below && s.t > last_off_below } else if s.t > hi { above && s.t < first_off_above } else { true }).collect();
     let mut wires = Vec::with_capacity(kept.len());
     let kept_radius = kept.iter().map(|s| s.radius).fold(0.0, f64::max);
     let mut clear = true;
