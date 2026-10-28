@@ -749,8 +749,8 @@ pub(super) fn rolling_chamfer(model: &mut Model, shape: Shape, edge: Shape, prof
 /// concave one), for a boolean operation, with whether it is convex: in each section the
 /// region between the ball's arc and the edge, bounded by the rays from the ball's centre
 /// through the contacts (carried well past the edge) and closed across beyond it. A convex
-/// tool runs on past the edge's ends, for the faces there to trim it; a concave one stops
-/// at them.
+/// tool runs on past the edge's ends, for the faces there to trim it, but where another edge
+/// carries it on smoothly; a concave one stops at them.
 pub(super) fn rolling_tool(model: &mut Model, shape: Shape, edge: Shape, radius: &dyn Fn(f64) -> f64) -> Result<(Shape, bool)> {
     use crate::geometry::curve::Circle;
     use crate::math::{Direction, Frame};
@@ -758,7 +758,14 @@ pub(super) fn rolling_tool(model: &mut Model, shape: Shape, edge: Shape, radius:
     // meets it with the faces as they are.)
     let Rolling { sections, convex, closed, t0, t1, .. } = rolling_on(model, shape, edge, &Profile::Ball(radius), 1, false)?;
     let span = (t1 - t0).abs() * 1e-9;
-    let kept: Vec<&Section> = sections.iter().filter(|s| convex || (s.t >= t0.min(t1) - span && s.t <= t0.max(t1) + span)).collect();
+    // (Not past an end where another edge carries this one on smoothly, as the next of a
+    // chain filleted with it: the faces' intersection followed on may curl back into the
+    // solid there, a rounded corner's arc into its straight sides, and the next edge's own
+    // tool takes over.)
+    let smooth = smooth_ends(model, shape, edge);
+    let (lo, hi) = (t0.min(t1) - span, t0.max(t1) + span);
+    let (below, above) = if t0 <= t1 { (smooth[0], smooth[1]) } else { (smooth[1], smooth[0]) };
+    let kept: Vec<&Section> = sections.iter().filter(|s| if s.t < lo { convex && !below } else if s.t > hi { convex && !above } else { true }).collect();
     let mut wires = Vec::with_capacity(kept.len());
     let kept_radius = kept.iter().map(|s| s.radius).fold(0.0, f64::max);
     let mut clear = true;
@@ -816,6 +823,27 @@ pub(super) fn rolling_tool(model: &mut Model, shape: Shape, edge: Shape, radius:
     let reach = 0.05 * kept_radius;
     cover_sides(model, tool, shape, edge, reach)?;
     Ok((tool, convex))
+}
+
+/// Whether another edge of `shape` carries `edge` on smoothly at its start and at its end
+/// (leaving the vertex the way `edge` arrives, within about 1/2000 rad).
+fn smooth_ends(model: &Model, shape: Shape, edge: Shape) -> [bool; 2] {
+    let forward = Shape { orientation: Orientation::Forward, ..edge };
+    // (Each edge's ends with its direction out of the vertex along it.)
+    let ends = |e: Shape| -> Vec<(crate::topology::NodeId, Vector)> {
+        let Some((curve, first, last)) = model.edge_curve(e) else { return Vec::new() };
+        let (a, b) = model.edge_vertices(e);
+        vec![(a.node, curve.d1(first).1.normalized()), (b.node, -curve.d1(last).1.normalized())]
+    };
+    let mine = ends(forward);
+    if mine.len() < 2 || mine[0].0 == mine[1].0 {
+        return [false; 2];
+    }
+    let others: Vec<Vec<(crate::topology::NodeId, Vector)>> = model.unique_subshapes(shape, NodeKind::Edge).into_iter().filter(|e| e.node != edge.node).map(|e| ends(Shape { orientation: Orientation::Forward, ..e })).collect();
+    [0, 1].map(|k| {
+        let (v, d) = mine[k];
+        others.iter().flatten().any(|&(w, e)| w == v && -d.dot(e) >= 1.0 - 1e5 * crate::tolerance::ANGULAR)
+    })
 }
 
 /// Raises the tolerance of each edge of `tool` (and its vertices') lying on one of the faces
