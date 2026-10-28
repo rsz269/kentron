@@ -966,6 +966,13 @@ fn sides_of(model: &Model, shape: Shape, id: EdgeId, carry: Option<f64>) -> Resu
                     continue;
                 }
                 let surface = model.surface(face).ok_or_else(|| Error::InvalidInput("a face without a surface".into()))?.clone();
+                // (A trimmed plane, cylinder, cone, sphere or torus as its whole surface: the
+                // same where the face is, and going on past the trim as the face's own geometry
+                // does, where the contacts past the edge's ends would stop at the trim.)
+                let surface = match surface {
+                    Surface::Trimmed(t) if matches!(t.basis(), Surface::Plane(_) | Surface::Cylinder(_) | Surface::Cone(_) | Surface::Sphere(_) | Surface::Torus(_)) => t.basis().clone(),
+                    other => other,
+                };
                 // (A patch carried on past its bounds, the same over them: the
                 // sections past the edge's ends then follow the faces on smoothly, as
                 // projected onto the patch itself they would stop at its bounds.)
