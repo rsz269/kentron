@@ -385,8 +385,9 @@ fn run_with_sections(model: &mut Model, a: Shape, b: Shape, operation: Operation
     // (A union or an intersection the other way round, the same operation: where the
     // operands meet in pieces about as small as the tolerance (walls of plates nearly
     // touching at a corner), which of them is traced first may decide whether the pieces
-    // close up. Taken where its shells close.)
-    if matches!(operation, Operation::Union | Operation::Intersection) {
+    // close up. Taken where its shells close. Only where the first was built, its shells
+    // left open: one that failed outright may take far longer the other way round.)
+    if matches!(operation, Operation::Union | Operation::Intersection) && first.is_ok() {
         if let Ok((r, s, true)) = run_tolerant(model, b, a, operation) {
             return Ok((r, s));
         }
