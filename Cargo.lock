@@ -250,7 +250,7 @@ checksum = "a6cb138bb79a146c1bd460005623e142ef0181e3d0219cb493e02f7d08a35695"
 
 [[package]]
 name = "kentron"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "rayon",
  "ttf-parser",
@@ -368,7 +368,7 @@ dependencies = [
 
 [[package]]
 name = "occt-tests"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "kentron",
  "libc",
@@ -409,7 +409,7 @@ dependencies = [
 
 [[package]]
 name = "pykentron"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "kentron",
  "mimalloc",
