@@ -418,7 +418,16 @@ fn replace_surfaces(
         })
         .collect::<Result<_>>()?;
     let tolerance = 1e-7 * scale.max(1.0);
-    let new_vertices: Vec<VertexId> = new_points.iter().map(|&p| model.add_vertex(p, tolerance)).collect();
+    // (Each vertex's tolerance covering how far it lies from the faces round it: where more
+    // than three faces' offsets would meet, they meet in no one point.)
+    let new_vertices: Vec<VertexId> = new_points
+        .iter()
+        .enumerate()
+        .map(|(v, &p)| {
+            let off = around[v].iter().map(|&(f, uv)| p.distance(foot_on(&faces[f].offset, p, uv, faces[f].nappe).1)).fold(0.0, f64::max);
+            model.add_vertex(p, tolerance.max(off * (1.0 + 1e-6)))
+        })
+        .collect();
     // The new edges, with their pcurves on the faces using them.
     let mut new_edges: Vec<(EdgeId, Vec<(Curve2, f64, f64)>)> = Vec::with_capacity(edges.len());
     for edge in &edges {
@@ -923,7 +932,7 @@ fn trace_edge(
     }
     model.set_edge_curve(id.into(), curve3, tolerance)?;
     model.set_edge_range(id.into(), first, last)?;
-    let pcurves = uvs
+    let pcurves: Vec<(Curve2, f64, f64)> = uvs
         .into_iter()
         .map(|uv| {
             let pcurve = if uv.len() == 2 {
@@ -934,6 +943,27 @@ fn trace_edge(
             (pcurve, first, last)
         })
         .collect();
+    // (The edge's tolerance covering how far its pcurves on their surfaces lie from it: at a
+    // vertex where more than three faces' offsets would meet, they meet in no one point, and
+    // the vertex lies only near each, each pcurve ending at its foot there.)
+    let curve3 = model.edge_curve(Shape::from(id)).map(|(c, _, _)| c).expect("the curve just set");
+    let curve3 = &curve3;
+    let gap = edge
+        .uses
+        .iter()
+        .zip(&pcurves)
+        .flat_map(|(u, (pcurve, a, b))| {
+            let surface = &faces[u.face].offset;
+            (0..=8).map(move |k| {
+                let t = a + (b - a) * k as f64 / 8.0;
+                let uv = pcurve.point(t);
+                surface.point(uv.x, uv.y).distance(curve3.point(t))
+            })
+        })
+        .fold(0.0, f64::max);
+    if gap > tolerance {
+        model.set_edge_tolerance(id, gap * (1.0 + 1e-6))?;
+    }
     Ok((id, pcurves))
 }
 
