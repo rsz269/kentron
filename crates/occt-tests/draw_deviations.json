@@ -1785,12 +1785,6 @@
       "reason": "Where a mitred corner's two sweeps have faces in one plane (the profile's edges square to the arc's axis, swept along the arc and along the line), the plane's region where they overlap goes to one of them in kentron's join (split along the arc's edge) and is divided at the joint in OCCT's trimming: 5 more vertices and edges at each of the two corners. Checked against OCCT's own result (BRepOffsetAPI_MakePipeShell): the same solid (volume 1772810.7196 in both, 34 faces each), only that region's edges differ. Expected values are kentron's: 44 vertices, 78 edges."
     }
   ],
-  "tests/bugs/modalg_2/bug474": [
-    {
-      "timeout": 5,
-      "reason": "Known to fail: a 100 fillet on an edge whose narrow triangular face is half the ball's width, ending at a vertex of five faces where one side carries on over a smooth (coplanar) edge. OCCT closes it with a second rolling stripe past the edge's end (its contacts switching faces until they meet on an edge); kentron's run-over fillets do not roll past an edge's end yet (work in progress on branch fillet-obstacle-ends), and the boolean fallback runs about 150 s on the fillet's tangential contacts before failing. Limited to 5 s so the failure costs no more."
-    }
-  ],
   "tests/boolean/volumemaker/G1": {
     "skip": "Known to fail: the volume maker's union of these faces fails after about 45 s (a section edge left without a pcurve), and the test then runs about 90 s in all; not converted until the faces' union succeeds."
   },

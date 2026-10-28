@@ -517,8 +517,10 @@ fn fillet_solid_edges_as(model: &mut Model, shape: Shape, edges: &[(Shape, f64)]
                     match corner {
                         Some(c) => corners.push((c.clone(), *radius)),
                         None => {
-                            let (tool, convex) = ball::rolling_tool(model, Shape { placement: Transform::IDENTITY, ..shape }, Shape { placement: Transform::IDENTITY, ..*edge }, &|_| radius * unscale)?;
-                            rolling_tools.push((tool.moved(&placement), convex));
+                            let filleted: Vec<Shape> = classified.iter().map(|(e, _, _)| Shape { placement: Transform::IDENTITY, ..*e }).collect();
+                            let (local_shape, local_edge) = (Shape { placement: Transform::IDENTITY, ..shape }, Shape { placement: Transform::IDENTITY, ..*edge });
+                            let (tool, convex) = ball::rolling_tool(model, local_shape, local_edge, &|_| radius * unscale, &filleted, false)?;
+                            rolling_tools.push((tool.moved(&placement), convex, local_shape, local_edge, radius * unscale, filleted));
                         }
                     }
                 }
@@ -570,9 +572,34 @@ fn fillet_solid_edges_as(model: &mut Model, shape: Shape, edges: &[(Shape, f64)]
         result = if corner.convex { boolean::difference(model, result, tool)? } else { boolean::union(model, result, tool)? };
         result = keep(model, result)?;
     }
-    for (tool, convex) in rolling_tools {
-        result = if convex { boolean::difference(model, result, tool)? } else { boolean::union(model, result, tool)? };
-        result = keep(model, result)?;
+    for (tool, convex, local_shape, edge, radius, filleted) in rolling_tools {
+        // (Where the close tool leaves the boolean taking it failed, or the solid unsound
+        // where it was sound, the loose one instead; neither leaving a sound solid sound,
+        // the fillet fails.)
+        let take = |model: &mut Model, tool: Shape| -> Result<Shape> {
+            let taken = if convex { boolean::difference(model, result, tool)? } else { boolean::union(model, result, tool)? };
+            keep(model, taken)
+        };
+        // (On an open shell, as it is: the tools are the same.)
+        if !(model.explore(local_shape, NodeKind::Solid).next().is_some() && boolean::closed_shells(model, local_shape)) {
+            result = take(model, tool)?;
+            continue;
+        }
+        let sound_before = crate::validity::check(model, result).is_valid();
+        let sound = |model: &Model, r: &Result<Shape>| r.as_ref().is_ok_and(|&r| !sound_before || crate::validity::check(model, r).is_valid());
+        let first = take(model, tool);
+        result = if sound(model, &first) {
+            first?
+        } else {
+            let second = ball::rolling_tool(model, local_shape, edge, &|_| radius, &filleted, true).and_then(|(loose, _)| take(model, loose.moved(&placement)));
+            match (first, second) {
+                (_, Ok(r)) if !sound_before || crate::validity::check(model, r).is_valid() => r,
+                (Ok(_), Ok(_)) => return Err(Error::Failed("a fillet's tool left the solid unsound".into())),
+                (Err(e), Err(_)) => return Err(e),
+                (Ok(r), Err(_)) | (Err(_), Ok(r)) if !sound_before => r,
+                (Err(e), _) | (_, Err(e)) => return Err(e),
+            }
+        };
     }
     for patch in patches {
         let tool = patch.tool(model)?;
@@ -1659,9 +1686,33 @@ fn fillet_solid_evolving(model: &mut Model, shape: Shape, edges: &[(Shape, Vec<(
             Err(_) => {
                 let original = result;
                 let mut rounded = result;
+                let filleted: Vec<Shape> = edges.iter().map(|e| Shape { placement: Transform::IDENTITY, ..e.0 }).collect();
                 for &(edge, law) in &group_edges {
-                    let (tool, convex) = ball::rolling_tool(model, original, edge, law)?;
-                    rounded = if convex { boolean::difference(model, rounded, tool)? } else { boolean::union(model, rounded, tool)? };
+                    // (The loose tool where the close one leaves the boolean failed, or the
+                    // solid unsound where it was sound; neither leaving a sound solid sound,
+                    // the fillet fails.)
+                    let (tool, convex) = ball::rolling_tool(model, original, edge, law, &filleted, false)?;
+                    let take = |model: &mut Model, tool: Shape| if convex { boolean::difference(model, rounded, tool) } else { boolean::union(model, rounded, tool) };
+                    // (On an open shell, as it is: the tools are the same.)
+                    if !(model.explore(original, NodeKind::Solid).next().is_some() && boolean::closed_shells(model, original)) {
+                        rounded = take(model, tool)?;
+                        continue;
+                    }
+                    let sound_before = crate::validity::check(model, rounded).is_valid();
+                    let sound = |model: &Model, r: &Result<Shape>| r.as_ref().is_ok_and(|&r| !sound_before || crate::validity::check(model, r).is_valid());
+                    let first = take(model, tool);
+                    rounded = if sound(model, &first) {
+                        first?
+                    } else {
+                        let second = ball::rolling_tool(model, original, edge, law, &filleted, true).and_then(|(loose, _)| take(model, loose));
+                        match (first, second) {
+                            (_, Ok(r)) if !sound_before || crate::validity::check(model, r).is_valid() => r,
+                            (Ok(_), Ok(_)) => return Err(Error::Failed("a fillet's tool left the solid unsound".into())),
+                            (Err(e), Err(_)) => return Err(e),
+                            (Ok(r), Err(_)) | (Err(_), Ok(r)) if !sound_before => r,
+                            (Err(e), _) | (_, Err(e)) => return Err(e),
+                        }
+                    };
                 }
                 rounded
             }

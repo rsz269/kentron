@@ -2191,11 +2191,8 @@ ported_from:
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/bugs/modalg_2/bug474
 notes:
-  - "kentron deviation: Known to fail: a 100 fillet on an edge whose narrow triangular face is half the ball's width, ending at a vertex of five faces where one side carries on over a smooth (coplanar) edge. OCCT closes it with a second rolling stripe past the edge's end (its contacts switching faces until they meet on an edge); kentron's run-over fillets do not roll past an edge's end yet (work in progress on branch fillet-obstacle-ends), and the boolean fallback runs about 150 s on the fillet's tangential contacts before failing. Limited to 5 s so the failure costs no more."
   - "OCCT TODO OCC24156 (MacOS): Tcl Exception"
   - "OCCT TODO OCC24156 (MacOS): TEST INCOMPLETE"
-timeout: 5
-expect: not_done
 build:
   - s: {load: {brep: "OCC474.brep"}}
   - s_16: {select: {of: s, edge: [525.0, -72.1687836487, -125.0], length: 292.973263854}}

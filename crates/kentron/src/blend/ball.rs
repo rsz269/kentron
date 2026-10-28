@@ -748,10 +748,13 @@ pub(super) fn rolling_chamfer(model: &mut Model, shape: Shape, edge: Shape, prof
 /// The solid a rolling-ball fillet of `edge` takes away (at a convex edge) or adds (at a
 /// concave one), for a boolean operation, with whether it is convex: in each section the
 /// region between the ball's arc and the edge, bounded by the rays from the ball's centre
-/// through the contacts (carried well past the edge) and closed across beyond it. A convex
-/// tool runs on past the edge's ends (but where another edge carries it on smoothly), cut
-/// back to the end face where the solid carries on beyond it; a concave one stops at them.
-pub(super) fn rolling_tool(model: &mut Model, shape: Shape, edge: Shape, radius: &dyn Fn(f64) -> f64) -> Result<(Shape, bool)> {
+/// through the contacts (carried just past the edge's corner) and closed across beyond it,
+/// between the edge's ends; a convex one runs on past an end where another of `filleted`
+/// meets it there at an angle (and on an open shell past both), but where another edge
+/// carries it on smoothly. `loose`: as on an open shell, its rays carried farther, past
+/// both ends (where the close tool on a solid leaves the boolean taking it unsound, this
+/// one may not).
+pub(super) fn rolling_tool(model: &mut Model, shape: Shape, edge: Shape, radius: &dyn Fn(f64) -> f64, filleted: &[Shape], loose: bool) -> Result<(Shape, bool)> {
     use crate::geometry::curve::Circle;
     use crate::math::{Direction, Frame};
     // (On the faces' own surfaces: the tool goes on past the edge's ends, where a boolean
@@ -764,8 +767,25 @@ pub(super) fn rolling_tool(model: &mut Model, shape: Shape, edge: Shape, radius:
     // tool takes over.)
     let smooth = smooth_ends(model, shape, edge);
     let (lo, hi) = (t0.min(t1) - span, t0.max(t1) + span);
-    let (below, above) = if t0 <= t1 { (smooth[0], smooth[1]) } else { (smooth[1], smooth[0]) };
-    let kept: Vec<&Section> = sections.iter().filter(|s| if s.t < lo { convex && !below } else if s.t > hi { convex && !above } else { true }).collect();
+    // (On a solid, past an end only where another edge filleted with it meets it there,
+    // at an angle: the two tools overlap round the vertex, and taken away one after the
+    // other they leave the fillets mitred. Elsewhere, beyond the end, the faces'
+    // intersection runs on into whatever the solid holds there, a wall the edge runs into
+    // or the next feature, and the tool cut into it. On an open shell, as there is no
+    // material beyond the faces to cut, it runs on past both, for the faces there to trim
+    // it.)
+    let solid = !loose && model.explore(shape, NodeKind::Solid).next().is_some() && crate::boolean::closed_shells(model, shape);
+    let (va, vb) = model.edge_vertices(Shape { orientation: Orientation::Forward, ..edge });
+    let meets = |v: crate::topology::NodeId| {
+        filleted.iter().any(|&e| e.node != edge.node && {
+            let (a, b) = model.edge_vertices(e);
+            a.node == v || b.node == v
+        })
+    };
+    let past = [va, vb].map(|v| v.node).map(|v| !solid || meets(v));
+    let past = [0, 1].map(|k| convex && !smooth[k] && past[k]);
+    let (below, above) = if t0 <= t1 { (past[0], past[1]) } else { (past[1], past[0]) };
+    let kept: Vec<&Section> = sections.iter().filter(|s| if s.t < lo { below } else if s.t > hi { above } else { true }).collect();
     let mut wires = Vec::with_capacity(kept.len());
     let kept_radius = kept.iter().map(|s| s.radius).fold(0.0, f64::max);
     let mut clear = true;
@@ -777,8 +797,15 @@ pub(super) fn rolling_tool(model: &mut Model, shape: Shape, edge: Shape, radius:
             continue;
         }
         // Far enough along the rays for the closing segment to pass beyond the edge's
-        // corner (which lies within the wedge, at r / sin(half) from the centre).
-        let reach = (s.radius / half.sin().max(1e-3) + 0.5 * s.radius) / half.cos().max(1e-3);
+        // corner (which lies within the wedge, on its bisector at r / cos(half) from the
+        // centre, the faces' tangents at the contacts meeting there), by a twentieth of the
+        // radius: no farther, where a thin solid's other side lies beyond. (On an open
+        // shell as before, farther, a ray's length r / sin(half) and half the radius on.)
+        let reach = if solid {
+            (s.radius / half.cos().max(1e-3) + 0.05 * s.radius) / half.cos().max(1e-3)
+        } else {
+            (s.radius / half.sin().max(1e-3) + 0.5 * s.radius) / half.cos().max(1e-3)
+        };
         // (Where the contacts lie further out than that, the segment may cut the arc: the
         // tool is then left as the booleans have met it, its arcs sampled.)
         clear &= reach * half.cos() > a.length().max(b.length());
@@ -820,84 +847,9 @@ pub(super) fn rolling_tool(model: &mut Model, shape: Shape, edge: Shape, radius:
     } else {
         loft(model, &wires)?.shape
     };
-    // (Past an end, only on the edge's side of the end face: where the solid carries on
-    // beyond the end, a wall the edge runs into, the tool would cut into it.)
-    let tool = if convex && !closed {
-        // (Each end's ball centre, from the section nearest it.)
-        let near = |t: f64| sections.iter().min_by(|a, b| (a.t - t).abs().total_cmp(&(b.t - t).abs())).map(|s| s.center);
-        let (Some(ca), Some(cb)) = (near(t0), near(t1)) else { return Err(Error::Failed("a rolling-ball tool without sections".into())) };
-        let trimmed = trimmed_at_ends(model, shape, edge, tool, [!smooth[0], !smooth[1]], [ca, cb])?;
-        // (Kept where it is sound and takes from the solid soundly: its cut on a wall the
-        // edge runs into, on the wall's face, may leave the boolean's result open.)
-        let sound = |model: &mut Model, s: Shape| crate::validity::check(model, s).is_valid();
-        if trimmed != tool && !(sound(model, trimmed) && crate::boolean::difference(model, shape, trimmed).is_ok_and(|r| sound(model, r))) {
-            tool
-        } else {
-            trimmed
-        }
-    } else {
-        tool
-    };
     let reach = 0.05 * kept_radius;
     cover_sides(model, tool, shape, edge, reach)?;
     Ok((tool, convex))
-}
-
-/// `tool` (along `edge`, run on past its ends, the ball's centre at them `centers`) cut back,
-/// at its start and its end where `which` has it and the solid carries on past the end (a
-/// wall the edge runs into), to the side of the end face that the edge is on, by the face's
-/// tangent plane at the vertex; only where the vertex has three faces, the end face one.
-/// (Not where the edge ends in the open, at a corner: nothing is cut beyond the end there,
-/// and a cut face on the end face's would only trouble the boolean taking the tool away.)
-fn trimmed_at_ends(model: &mut Model, shape: Shape, edge: Shape, tool: Shape, which: [bool; 2], centers: [Point; 2]) -> Result<Shape> {
-    use crate::math::{Direction, Frame};
-    let forward = Shape { orientation: Orientation::Forward, ..edge };
-    let Some((curve, first, last)) = model.edge_curve(forward) else { return Ok(tool) };
-    let (va, vb) = model.edge_vertices(forward);
-    let faces: Vec<Shape> = model.unique_subshapes(shape, NodeKind::Face);
-    let has = |model: &Model, f: Shape, node: crate::topology::NodeId, kind: NodeKind| model.unique_subshapes(f, kind).iter().any(|x| x.node == node);
-    let own: Vec<crate::topology::NodeId> = faces.iter().filter(|&&f| has(model, f, edge.node, NodeKind::Edge)).map(|f| f.node).collect();
-    let b = crate::properties::bounding_box(model, tool);
-    let big = 4.0 * b.min.distance(b.max);
-    let mut tool = tool;
-    for (k, (v, t, inward)) in [(va, first, last), (vb, last, first)].into_iter().enumerate() {
-        if !which[k] {
-            continue;
-        }
-        let p = model.point(v);
-        // (Whether the corner the fillet takes away carries on past the end in the solid: a
-        // point a quarter of the way to the ball's centre from the end, as far on past it
-        // the way the edge leaves it.)
-        let to_center = centers[k] - p;
-        let out = curve.d1(t).1.normalized() * if k == 0 { -1.0 } else { 1.0 };
-        let probe = p + to_center * 0.25 + out * (0.25 * to_center.length());
-        if crate::boolean::classify_point(model, shape, probe)? != crate::boolean::PointLocation::Inside {
-            continue;
-        }
-        // (A point of the edge a little in from the end: the side to keep.)
-        let inner = curve.point(t + 0.1 * (inward - t));
-        let ends: Vec<crate::topology::NodeId> = faces.iter().filter(|&&f| !own.contains(&f.node) && has(model, f, v.node, NodeKind::Vertex)).map(|f| f.node).collect();
-        let [end] = ends[..] else { continue };
-        let Some(n) = super::normal_at(model, shape, end, p) else { continue };
-        let side = n.dot(inner - p);
-        // (Not a face the edge runs along.)
-        if side.abs() <= 1e-6 * inner.distance(p) {
-            continue;
-        }
-        // (Facing away from the edge: the box kept lies behind the plane.)
-        let n = if side > 0.0 { -n } else { n };
-        let z = Direction::from_vector(-n);
-        let x = if n.x.abs() < 0.9 { Direction::X } else { Direction::Y };
-        let frame = Frame::new(p, z, x);
-        let origin = p - Vector::from(frame.x()) * big - Vector::from(frame.y()) * big;
-        let keep = crate::primitives::Cuboid::new(2.0 * big, 2.0 * big, big).with_frame(Frame::new(origin, z, x)).build(model)?;
-        // (Kept as it was unless it is one solid still.)
-        let cut = crate::boolean::intersection(model, tool, keep)?;
-        if let [solid] = model.unique_subshapes(cut, NodeKind::Solid)[..] {
-            tool = solid;
-        }
-    }
-    Ok(tool)
 }
 
 /// Whether another edge of `shape` carries `edge` on smoothly at its start and at its end
