@@ -100,8 +100,8 @@ CadQuery 2.8 (OCCT), median of 5 runs:
 | CadQuery 2.8 / OCCT | 38.5 s | 121.7 s | 1,086 MB |
 
 With the default `fast` profile, that is 10× faster than CadQuery, with 24× less CPU time and 2.5×
-less memory. A second complex model from the same project builds in 3.8 s (5.1 s of CPU time,
-506 MB) on pykentron's `fast` profile, against 4.3 s (5.5 s, 389 MB) on CadQuery.
+less memory. A second complex model from the same project builds in 3.9 s (5.3 s of CPU time,
+509 MB) on pykentron's `fast` profile, against 40.3 s (125.1 s, 1,118 MB) on CadQuery.
 
 pykentron frees shapes that Python no longer refers to, with the data cached for them. Which
 allocator it uses is chosen with `PYKENTRON_PROFILE`:
