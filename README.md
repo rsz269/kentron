@@ -56,8 +56,8 @@ it honest. Every change is checked against the test sources below before it is c
 and no change may make a passing test fail.
 
 <!-- effort -->
-So far (2026-09-25 to 2026-10-28): about 236 hours of the agent's active work, 16.0 million
-tokens written by it, and 9.2 billion tokens processed in all (nearly all of them its
+So far (2026-09-25 to 2026-10-28): about 242 hours of the agent's active work, 16.4 million
+tokens written by it, and 9.3 billion tokens processed in all (nearly all of them its
 conversation's context, read back from the cache).
 <!-- /effort -->
 
@@ -71,7 +71,7 @@ conversation's context, read back from the cache).
 - **OCCT's GTests:** the computational-geometry and topology toolkits, translated by hand.
 - **BRL-CAD:** NIST's MBE PMI test parts and other STEP files from its source tree, with
   OCCT's reading of them as the reference, plus its `libbg` geometry tests.
-- **CadQuery's own test suite** (v2.8.0), run unchanged against pykentron: 579 of 727 tests
+- **CadQuery's own test suite** (v2.8.0), run unchanged against pykentron: 588 of 727 tests
   pass. Most of the rest exercise OCCT's document formats (OCAF/XDE), exporters kentron
   lacks (glTF, VRML, VTK), or OCCT-specific behaviour.
 - **44 CadQuery models from a private project** build on pykentron; for the 42 that return
@@ -79,7 +79,7 @@ conversation's context, read back from the cache).
 - **501 CadQuery scripts from 113 public projects**: of the 494 whose results don't depend
   on the order a kernel lists faces in, pykentron builds 438 as CadQuery does, and 16 more
   differ only where CadQuery's result is wrong (2026-10-27). Timed on 2026-10-28, on the 436
-  it then built alike, it took 183 s in all against CadQuery's 712 s, and was faster on 400.
+  it then built alike, it took 169 s in all against CadQuery's 719 s, and was faster on 403.
   The scripts, what they found and where they stand:
   [`crates/pykentron/tests/found`](crates/pykentron/tests/found/README.md).
 
@@ -96,12 +96,12 @@ CadQuery 2.8 (OCCT), median of 5 runs:
 | | wall time | CPU time | peak memory |
 |---|---|---|---|
 | pykentron, `fast` profile (default) | 3.4 s | 4.0 s | 408 MB |
-| pykentron, `low-memory` profile | 3.9 s | 4.6 s | 304 MB |
-| CadQuery 2.8 / OCCT | 38.9 s | 121.8 s | 1,085 MB |
+| pykentron, `low-memory` profile | 4.0 s | 4.6 s | 308 MB |
+| CadQuery 2.8 / OCCT | 37.8 s | 120.8 s | 1,090 MB |
 
 With the default `fast` profile, that is 11× faster than CadQuery, with 30× less CPU time and 2.7×
-less memory. A second complex model from the same project builds in 3.4 s (4.0 s of CPU time,
-473 MB) on pykentron's `fast` profile, against 39.0 s (122.2 s, 1,118 MB) on CadQuery.
+less memory. A second complex model from the same project builds in 3.6 s (4.2 s of CPU time,
+465 MB) on pykentron's `fast` profile, against 37.8 s (120.4 s, 1,112 MB) on CadQuery.
 
 pykentron frees shapes that Python no longer refers to, with the data cached for them. Which
 allocator it uses is chosen with `PYKENTRON_PROFILE`:
@@ -133,10 +133,10 @@ An existing CadQuery script runs unchanged with `pykentron-run script.py`, or af
   older x86-64 CPU, build with an empty `RUSTFLAGS=`.
 - `cargo test` runs everything. Most of OCCT's converted tests read its test dataset, an
   external download: see [`crates/occt-tests/README.md`](crates/occt-tests/README.md). Without it those tests fail.
-- [`tools/run_tests.py`](tools/run_tests.py) runs the same tests with every test binary at once (about 55 s on 16
-  threads, against about 67 s for `cargo test --release`, which runs them one after
+- [`tools/run_tests.py`](tools/run_tests.py) runs the same tests with every test binary at once (about 34 s on 16
+  threads, against about 46 s for `cargo test --release`, which runs them one after
   another; the slowest tests expected to fail take most of it). `--quick` leaves out the
-  tests expected to fail (about 13 s); a fix that makes one pass
+  tests expected to fail (about 12 s); a fix that makes one pass
   then goes unnoticed.
 - pykentron from source: `python3 crates/pykentron/build.py` (see
   [`crates/pykentron/README.md`](crates/pykentron/README.md)).
