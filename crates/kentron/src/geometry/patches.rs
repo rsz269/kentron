@@ -62,6 +62,14 @@ impl PartialEq for SurfaceId {
     }
 }
 
+impl Eq for SurfaceId {}
+
+impl std::hash::Hash for SurfaceId {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        Arc::as_ptr(&self.0).hash(state)
+    }
+}
+
 impl PatchCache {
     pub(super) fn id(&self) -> SurfaceId {
         SurfaceId(self.0.clone())

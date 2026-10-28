@@ -1032,7 +1032,7 @@ pub(super) fn interior_point_among(polylines: &[Vec<Uv>], obstacles: &Obstacles)
     let size = (region_box.1[0] - region_box.0[0]).hypot(region_box.1[1] - region_box.0[1]);
     let mut best = ([0.0, lo], -1.0);
     let (mut xs, mut cuts_all, mut cuts) = (Vec::new(), Vec::new(), Vec::new());
-    let mut try_line = |y: f64, best: &mut (Uv, f64)| {
+    let mut try_line = |boundary: &[(Uv, Uv)], blocking: &[(Uv, Uv)], y: f64, best: &mut (Uv, f64)| {
         crossings(boundary, y, &mut xs);
         crossings(blocking, y, &mut cuts_all);
         for c in xs.chunks_exact(2) {
@@ -1062,7 +1062,7 @@ pub(super) fn interior_point_among(polylines: &[Vec<Uv>], obstacles: &Obstacles)
     // heights) are needed only for narrow ones.
     for k in 1..32u32 {
         let i = k.reverse_bits() >> 27;
-        try_line(lo + (hi - lo) * (i as f64 + 0.123_456_7) / 32.0, &mut best);
+        try_line(boundary, blocking, lo + (hi - lo) * (i as f64 + 0.123_456_7) / 32.0, &mut best);
         if best.1 >= 0.05 * size {
             return best.0;
         }
@@ -1074,8 +1074,28 @@ pub(super) fn interior_point_among(polylines: &[Vec<Uv>], obstacles: &Obstacles)
     ys.extend(obstacles.iter().flat_map(|o| o.iter().map(|p| p[1])));
     ys.sort_by(f64::total_cmp);
     ys.dedup();
+    // (Line after line upwards, each against only the segments across its height: those
+    // starting below it, kept while they end above. A narrow region of many points has
+    // few at any height.)
+    let low = |s: &(Uv, Uv)| s.0[1].min(s.1[1]);
+    let high = |s: &(Uv, Uv)| s.0[1].max(s.1[1]);
+    let by_low = |list: &[(Uv, Uv)]| {
+        let mut list = list.to_vec();
+        list.sort_by(|p, q| low(p).total_cmp(&low(q)));
+        list
+    };
+    let (boundary, blocking) = (by_low(boundary), by_low(blocking));
+    let (mut next, mut across) = ([0usize; 2], [Vec::new(), Vec::new()]);
     for w in ys.windows(2) {
-        try_line(0.5 * (w[0] + w[1]), &mut best);
+        let y = 0.5 * (w[0] + w[1]);
+        for (k, list) in [&boundary, &blocking].into_iter().enumerate() {
+            while next[k] < list.len() && low(&list[next[k]]) <= y {
+                across[k].push(list[next[k]]);
+                next[k] += 1;
+            }
+            across[k].retain(|s| high(s) > y);
+        }
+        try_line(&across[0], &across[1], y, &mut best);
     }
     best.0
 }

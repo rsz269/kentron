@@ -458,8 +458,22 @@ impl Bvh {
     /// The pairs `(i, j)` of a box of `self` and a box of `other` that overlap.
     pub fn overlapping_pairs(&self, other: &Bvh) -> Vec<(usize, usize)> {
         let mut out = Vec::new();
+        self.walk_pairs(other, |i, j| {
+            out.push((i, j));
+            false
+        });
+        out
+    }
+
+    /// Whether a box of `self` and a box of `other` overlap (the walk stopped at the first).
+    pub fn overlaps(&self, other: &Bvh) -> bool {
+        self.walk_pairs(other, |_, _| true)
+    }
+
+    /// Calls `found` on the overlapping pairs of boxes until it returns true; whether it did.
+    fn walk_pairs(&self, other: &Bvh, mut found: impl FnMut(usize, usize) -> bool) -> bool {
         if self.nodes.is_empty() || other.nodes.is_empty() {
-            return out;
+            return false;
         }
         let mut stack = vec![(0usize, 0usize)];
         while let Some((a, b)) = stack.pop() {
@@ -471,8 +485,8 @@ impl Bvh {
                 (true, true) => {
                     for &i in &self.order[na.first..na.first + na.count] {
                         for &j in &other.order[nb.first..nb.first + nb.count] {
-                            if overlap(&self.boxes[i], &other.boxes[j]) {
-                                out.push((i, j));
+                            if overlap(&self.boxes[i], &other.boxes[j]) && found(i, j) {
+                                return true;
                             }
                         }
                     }
@@ -490,7 +504,7 @@ impl Bvh {
                 }
             }
         }
-        out
+        false
     }
 }
 

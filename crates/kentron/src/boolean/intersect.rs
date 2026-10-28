@@ -46,7 +46,7 @@ fn clear_of_face(face: &super::graph::Face, curve: &Curve, first: f64, last: f64
 /// Whether two faces keep clear of each other: no box of one's grid (see [`face_cells`])
 /// meets a box of the other's.
 fn faces_clear(a: &Face, b: &Face) -> bool {
-    face_cells(a).overlapping_pairs(face_cells(b)).is_empty()
+    !face_cells(a).overlaps(face_cells(b))
 }
 
 /// The boxes of the cells of a grid over `face`'s range, each grown by the largest cell's
