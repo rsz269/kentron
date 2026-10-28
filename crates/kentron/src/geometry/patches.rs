@@ -14,8 +14,32 @@ use crate::math::{Point, Vector};
 /// way and agrees with the others to the last bit.)
 pub(super) struct Shared<T>(Arc<OnceLock<Option<T>>>);
 
-/// The Bézier patches of a surface.
-pub(super) type PatchCache = Shared<Patches>;
+/// The Bézier patches of a surface, with what else is found from it once: clones share
+/// them (until changed).
+#[derive(Clone, Default)]
+pub(super) struct PatchCache(Arc<SurfaceShared>);
+
+/// What a surface's clones share: its patches, and how it turns along its middle iso-lines
+/// (see `geometry::extrema`).
+#[derive(Default)]
+pub(crate) struct SurfaceShared {
+    patches: OnceLock<Option<Patches>>,
+    pub(crate) turning: OnceLock<((f64, bool), (f64, bool))>,
+    pub(crate) close_samples: OnceLock<(usize, usize)>,
+}
+
+impl PartialEq for PatchCache {
+    /// (What the surface is, not the cache, makes them equal.)
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl std::fmt::Debug for PatchCache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Shared")
+    }
+}
 /// The Bézier segments of a curve.
 pub(super) type SegmentCache = Shared<Segments>;
 
@@ -54,7 +78,7 @@ impl<T> Shared<T> {
 /// Which surfaces share a patch cache (clones of one surface, unchanged): a key for other
 /// caches of what is computed from a surface, holding on to it so that it stays unique.
 #[derive(Clone)]
-pub(crate) struct SurfaceId(Arc<OnceLock<Option<Patches>>>);
+pub(crate) struct SurfaceId(Arc<SurfaceShared>);
 
 impl PartialEq for SurfaceId {
     fn eq(&self, other: &Self) -> bool {
@@ -73,6 +97,15 @@ impl std::hash::Hash for SurfaceId {
 impl PatchCache {
     pub(super) fn id(&self) -> SurfaceId {
         SurfaceId(self.0.clone())
+    }
+
+    /// The patches `make` makes the first time (`None`: too many to keep).
+    pub(super) fn get(&self, make: impl FnOnce() -> Option<Patches>) -> Option<&Patches> {
+        self.0.patches.get_or_init(make).as_ref()
+    }
+
+    pub(super) fn shared(&self) -> &SurfaceShared {
+        &self.0
     }
 }
 

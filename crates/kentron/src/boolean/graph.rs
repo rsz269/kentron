@@ -257,7 +257,7 @@ pub(super) struct Face {
     /// Boxes of the cells of a grid over its surface's range, each grown by the grid's
     /// spacing, indexed: what passes none is clear of the surface there (made on first use,
     /// for free-form faces).
-    pub cells: std::sync::OnceLock<crate::math::Bvh>,
+    pub cells: std::sync::OnceLock<super::intersect::CellPyramid>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1164,6 +1164,10 @@ pub(super) fn align_wires(wires: &mut [Vec<(Curve2, f64, f64, bool)>], periods: 
         }
     }
     let Some((first, rest)) = wires.split_first_mut() else { return };
+    // (The first's loop sampled only where there are others to place in it.)
+    if rest.iter().all(Vec::is_empty) {
+        return;
+    }
     let middle = |(c, a, z, _): &(Curve2, f64, f64, bool)| c.point(0.5 * (a + z));
     let mut outer: Vec<Uv> = Vec::new();
     for (c, a, z, along) in first.iter() {

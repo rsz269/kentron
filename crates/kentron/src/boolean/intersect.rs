@@ -39,7 +39,7 @@ fn clear_of_face(face: &super::graph::Face, curve: &Curve, first: f64, last: f64
         let mut b = BoundingBox::EMPTY;
         b.add_point(w[0]);
         b.add_point(w[1]);
-        cells.overlapping(&b.enlarged(w[0].distance(w[1]) + tolerance + on_tol())).is_empty()
+        !cells.meets(&b.enlarged(w[0].distance(w[1]) + tolerance + on_tol()))
     })
 }
 
@@ -52,8 +52,8 @@ fn faces_clear(a: &Face, b: &Face) -> bool {
 /// The boxes of the cells of a grid over `face`'s range, each grown by the largest cell's
 /// size (the surface between a cell's corners stays within that of them) and the face's
 /// tolerance, indexed (made on first use).
-fn face_cells(face: &Face) -> &crate::math::Bvh {
-    use crate::math::{BoundingBox, Bvh};
+fn face_cells(face: &Face) -> &CellPyramid {
+    use crate::math::BoundingBox;
     face.cells.get_or_init(|| {
         const N: usize = 32;
         let ((u0, u1), (v0, v1)) = (face.u_range, face.v_range);
@@ -75,8 +75,84 @@ fn face_cells(face: &Face) -> &crate::math::Bvh {
         let spacing = boxes.iter().map(|b| b.min.distance(b.max)).fold(0.0, f64::max);
         let margin = spacing + face.drift + on_tol();
         let boxes: Vec<BoundingBox> = boxes.into_iter().map(|b| b.enlarged(margin)).collect();
-        Bvh::new(&boxes)
+        CellPyramid::new(N, boxes)
     })
+}
+
+/// The boxes of a square grid's cells, row by row, and above them level by level those of
+/// blocks of two by two of the level below (fewer at an odd width's end): whether one of
+/// the cells meets a box, or one of another grid's, looked for only within the blocks that
+/// do. (The same answers as any tree over the cells' boxes.)
+pub(super) struct CellPyramid {
+    /// Each level's width and boxes, the cells' first, the whole grid's last.
+    levels: Vec<(usize, Vec<crate::math::BoundingBox>)>,
+}
+
+impl CellPyramid {
+    fn new(width: usize, cells: Vec<crate::math::BoundingBox>) -> CellPyramid {
+        use crate::math::BoundingBox;
+        let mut levels = vec![(width, cells)];
+        while levels.last().unwrap().0 > 1 {
+            let (w, below) = levels.last().unwrap();
+            let (w, up) = (*w, (*w + 1) / 2);
+            let mut boxes = vec![BoundingBox::EMPTY; up * up];
+            for j in 0..w {
+                for i in 0..w {
+                    boxes[(j / 2) * up + i / 2].add_box(&below[j * w + i]);
+                }
+            }
+            levels.push((up, boxes));
+        }
+        CellPyramid { levels }
+    }
+
+    /// The blocks of `level` - 1 within block `(i, j)` of `level`.
+    fn below(&self, level: usize, (i, j): (usize, usize)) -> impl Iterator<Item = (usize, usize)> {
+        let w = self.levels[level - 1].0;
+        (2 * j..(2 * j + 2).min(w)).flat_map(move |y| (2 * i..(2 * i + 2).min(w)).map(move |x| (x, y)))
+    }
+
+    fn at(&self, level: usize, (i, j): (usize, usize)) -> &crate::math::BoundingBox {
+        let (w, boxes) = &self.levels[level];
+        &boxes[j * w + i]
+    }
+
+    /// Whether a cell's box meets `query`.
+    fn meets(&self, query: &crate::math::BoundingBox) -> bool {
+        let mut stack = vec![(self.levels.len() - 1, (0, 0))];
+        while let Some((level, block)) = stack.pop() {
+            if !boxes_meet(self.at(level, block), query) {
+                continue;
+            }
+            if level == 0 {
+                return true;
+            }
+            stack.extend(self.below(level, block).map(|b| (level - 1, b)));
+        }
+        false
+    }
+
+    /// Whether a cell's box meets one of `other`'s.
+    fn overlaps(&self, other: &CellPyramid) -> bool {
+        let mut stack = vec![((self.levels.len() - 1, (0, 0)), (other.levels.len() - 1, (0, 0)))];
+        while let Some(((la, a), (lb, b))) = stack.pop() {
+            if !boxes_meet(self.at(la, a), other.at(lb, b)) {
+                continue;
+            }
+            match (la, lb) {
+                (0, 0) => return true,
+                // (Down the higher of the two.)
+                _ if la >= lb => stack.extend(self.below(la, a).map(|a| ((la - 1, a), (lb, b)))),
+                _ => stack.extend(other.below(lb, b).map(|b| ((la, a), (lb - 1, b)))),
+            }
+        }
+        false
+    }
+}
+
+/// Whether two boxes meet (touching counts).
+fn boxes_meet(a: &crate::math::BoundingBox, b: &crate::math::BoundingBox) -> bool {
+    a.min.x <= b.max.x && b.min.x <= a.max.x && a.min.y <= b.max.y && b.min.y <= a.max.y && a.min.z <= b.max.z && b.min.z <= a.max.z
 }
 
 /// The signed distances found lately from points of curves to free-form surfaces (by the

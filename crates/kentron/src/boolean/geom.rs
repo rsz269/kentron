@@ -280,7 +280,7 @@ pub(super) fn freeform(surface: &Surface) -> bool {
 
 /// Grids of points of the free-form surfaces met lately, to start point inversions from
 /// (shared by the threads of an operation).
-static SAMPLES: std::sync::Mutex<Vec<(crate::geometry::extrema::SurfaceKey, std::sync::Arc<SampleGrid>)>> = std::sync::Mutex::new(Vec::new());
+static SAMPLES: std::sync::RwLock<Option<crate::hashing::FastMap<crate::geometry::extrema::SurfaceKey, std::sync::Arc<SampleGrid>>>> = std::sync::RwLock::new(None);
 
 /// A surface's sample grid: its points `(u, v, p)`, row by row along u, and their
 /// coordinates again in arrays of their own, for scans of all of them.
@@ -411,21 +411,19 @@ pub(super) fn winding_samples(surface: &Surface) -> usize {
 
 /// Runs `f` on the surface's sample grid (points `(u, v, p)`, row by row along u), cached.
 fn with_samples<R>(surface: &Surface, f: impl FnOnce(&SampleGrid) -> R) -> R {
-    let lock = || SAMPLES.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let key = crate::geometry::extrema::SurfaceKey::of(surface);
-    let found = lock().iter().find(|(k, _)| *k == key).map(|(_, grid)| grid.clone());
+    let found = SAMPLES.read().unwrap_or_else(|poisoned| poisoned.into_inner()).as_ref().and_then(|cache| cache.get(&key).cloned());
     let grid = match found {
         Some(grid) => grid,
         None => {
             // (Made outside the lock; another thread may make it too.)
             let grid = std::sync::Arc::new(SampleGrid::new(sample_grid(surface)));
-            let mut cache = lock();
-            if !cache.iter().any(|(k, _)| *k == key) {
-                if cache.len() >= 64 {
-                    cache.remove(0);
-                }
-                cache.push((key, grid.clone()));
+            let mut cache = SAMPLES.write().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let cache = cache.get_or_insert_with(Default::default);
+            if cache.len() >= 512 {
+                cache.clear();
             }
+            cache.entry(key).or_insert_with(|| grid.clone());
             grid
         }
     };

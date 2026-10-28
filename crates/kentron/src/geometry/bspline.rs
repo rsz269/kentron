@@ -1430,6 +1430,11 @@ impl BSplineSurface {
         self.patches.id()
     }
 
+    /// What the surface's clones share (until it changes).
+    pub(crate) fn shared(&self) -> &super::patches::SurfaceShared {
+        self.patches.shared()
+    }
+
     /// The surface as Bézier patches (made on first use); `None` for one with too many.
     fn patches(&self) -> Option<&super::patches::Patches> {
         self.patches.get(|| {

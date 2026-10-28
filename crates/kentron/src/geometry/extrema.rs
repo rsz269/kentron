@@ -5,7 +5,6 @@ use std::fmt;
 use std::ops::Index;
 
 use crate::math::{Point, Point2};
-use crate::hashing::FastMap;
 
 use super::curve::Curve;
 use super::control::ControlPoint;
@@ -1350,56 +1349,57 @@ pub(crate) fn windings_from(surface: &Surface, turns: f64) -> (usize, usize) {
 /// of the way along or more, within a twelfth of its length), samples enough that way for two in each gap between its turns (at most 512);
 /// else 0. Kept for the surface.
 pub(crate) fn close_samples(surface: &Surface) -> (usize, usize) {
-    static FOUND: std::sync::Mutex<Option<FastMap<SurfaceKey, (usize, usize)>>> = std::sync::Mutex::new(None);
     use super::parametric::ParametricSurface;
-    let Surface::BSpline(_) = surface else { return (0, 0) };
-    let key = SurfaceKey::of(surface);
-    let lock = || FOUND.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    if let Some(&found) = lock().get_or_insert_with(Default::default).get(&key) {
-        return found;
-    }
-    let (u0, u1, v0, v1) = surface.bounds();
-    let samples = |points: Vec<Point>| -> usize {
-        let n = points.len() - 1;
-        let length: f64 = points.windows(2).map(|w| w[0].distance(w[1])).sum();
-        // (Only those within a twelfth of the length matter: the others' distances are
-        // taken as no nearer, the gap so found as far below a twelfth as it is.)
-        let near = candidates(&points, length / 12.0);
-        // Each point's nearest of those apart from it along the line by a sixth or more,
-        // either way round (a closed line's ends are one point); the largest of those of three
-        // quarters of the points: most of the line near another part of it, as a thread's
-        // turns are, not only some of it (a line pinched to a pole, or passing near itself
-        // once, as a fillet along curves crossing nearly).
-        let mut nearest: Vec<f64> = (0..=n)
-            .map(|i| {
-                near.of(i)
+    let Surface::BSpline(b) = surface else { return (0, 0) };
+    *b.shared().close_samples.get_or_init(|| {
+        let (u0, u1, v0, v1) = surface.bounds();
+        let samples = |points: Vec<Point>| -> usize {
+            let n = points.len() - 1;
+            let length: f64 = points.windows(2).map(|w| w[0].distance(w[1])).sum();
+            // (Only those within a twelfth of the length matter: the others' distances are
+            // taken as no nearer, the gap so found as far below a twelfth as it is.)
+            let near = candidates(&points, length / 12.0);
+            // Each point's nearest of those apart from it along the line by a sixth or more,
+            // either way round (a closed line's ends are one point); the largest of those of three
+            // quarters of the points: most of the line near another part of it, as a thread's
+            // turns are, not only some of it (a line pinched to a pole, or passing near itself
+            // once, as a fillet along curves crossing nearly).
+            // (Given up once more than a quarter of the points have none within a twelfth of
+            // the length: the gap is no nearer then.)
+            if !(length > 0.0) {
+                return 0;
+            }
+            let (mut nearest, mut far) = (Vec::with_capacity(n + 1), 0);
+            for i in 0..=n {
+                let d = near
+                    .of(i)
                     .filter(|&j| {
                         let apart = i.abs_diff(j);
                         apart >= n / 6 && n - apart >= n / 6
                     })
                     .map(|j| points[i].distance(points[j]))
-                    .fold(f64::INFINITY, f64::min)
-            })
-            .collect();
-        nearest.sort_by(f64::total_cmp);
-        let gap = nearest[3 * n / 4];
-        if !(length > 0.0) || !(gap < length / 12.0) {
-            return 0;
-        }
-        ((2.0 * length / gap.max(1e-300)).ceil() as usize).min(512)
-    };
-    let n = 128;
-    let found = (
-        samples((0..=n).map(|i| surface.point(u0 + (u1 - u0) * i as f64 / n as f64, 0.5 * (v0 + v1))).collect()),
-        samples((0..=n).map(|j| surface.point(0.5 * (u0 + u1), v0 + (v1 - v0) * j as f64 / n as f64)).collect()),
-    );
-    let mut cache = lock();
-    let cache = cache.get_or_insert_with(Default::default);
-    if cache.len() >= 512 {
-        cache.clear();
-    }
-    cache.insert(key, found);
-    found
+                    .fold(f64::INFINITY, f64::min);
+                if !(d < length / 12.0) {
+                    far += 1;
+                    if far > n - 3 * n / 4 {
+                        return 0;
+                    }
+                }
+                nearest.push(d);
+            }
+            nearest.sort_by(f64::total_cmp);
+            let gap = nearest[3 * n / 4];
+            if !(gap < length / 12.0) {
+                return 0;
+            }
+            ((2.0 * length / gap.max(1e-300)).ceil() as usize).min(512)
+        };
+        let n = 128;
+        (
+            samples((0..=n).map(|i| surface.point(u0 + (u1 - u0) * i as f64 / n as f64, 0.5 * (v0 + v1))).collect()),
+            samples((0..=n).map(|j| surface.point(0.5 * (u0 + u1), v0 + (v1 - v0) * j as f64 / n as f64)).collect()),
+        )
+    })
 }
 
 /// How far a B-spline surface turns (in radians) along its middle iso-lines in u and in v,
@@ -1408,65 +1408,60 @@ pub(crate) fn close_samples(surface: &Surface) -> (usize, usize) {
 /// overlapping, as a fillet's carried past the ends of a closed edge); none for others.
 /// Kept for the surface.
 fn turning(surface: &Surface) -> ((f64, bool), (f64, bool)) {
-    static FOUND: std::sync::Mutex<Option<FastMap<SurfaceKey, ((f64, bool), (f64, bool))>>> = std::sync::Mutex::new(None);
     use super::parametric::ParametricSurface;
     use crate::math::Vector;
-    let Surface::BSpline(_) = surface else { return ((0.0, false), (0.0, false)) };
-    let key = SurfaceKey::of(surface);
-    let lock = || FOUND.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    if let Some(&found) = lock().get_or_insert_with(Default::default).get(&key) {
-        return found;
-    }
-    let (u0, u1, v0, v1) = surface.bounds();
-    let angle = |x: Vector, y: Vector| {
-        let (lx, ly) = (x.length(), y.length());
-        if lx > 0.0 && ly > 0.0 { (x.dot(y) / (lx * ly)).clamp(-1.0, 1.0).acos() } else { 0.0 }
-    };
-    let turned = |points: Vec<Point>| {
-        let turn = points.windows(3).map(|w| angle(w[1] - w[0], w[2] - w[1])).sum::<f64>();
-        let n = points.len();
-        let chord = points.windows(2).map(|w| w[0].distance(w[1])).sum::<f64>() / (n - 1) as f64;
-        let near = candidates(&points, 4.0 * chord);
-        // (Counted only until the half is reached, or can no longer be.)
-        let mut returns = 0;
-        for i in 0..n {
-            if 2 * returns >= n || 2 * (returns + n - i) < n {
-                break;
+    let Surface::BSpline(b) = surface else { return ((0.0, false), (0.0, false)) };
+    *b.shared().turning.get_or_init(|| {
+        let (u0, u1, v0, v1) = surface.bounds();
+        let angle = |x: Vector, y: Vector| {
+            let (lx, ly) = (x.length(), y.length());
+            if lx > 0.0 && ly > 0.0 { (x.dot(y) / (lx * ly)).clamp(-1.0, 1.0).acos() } else { 0.0 }
+        };
+        let turned = |points: Vec<Point>| {
+            let turn = points.windows(3).map(|w| angle(w[1] - w[0], w[2] - w[1])).sum::<f64>();
+            let n = points.len();
+            let chord = points.windows(2).map(|w| w[0].distance(w[1])).sum::<f64>() / (n - 1) as f64;
+            let near = candidates(&points, 4.0 * chord);
+            // (Counted only until the half is reached, or can no longer be.)
+            let mut returns = 0;
+            for i in 0..n {
+                if 2 * returns >= n || 2 * (returns + n - i) < n {
+                    break;
+                }
+                if near.of(i).any(|j| i.abs_diff(j) >= n / 6 && points[i].distance(points[j]) <= 4.0 * chord) {
+                    returns += 1;
+                }
             }
-            if near.of(i).any(|j| i.abs_diff(j) >= n / 6 && points[i].distance(points[j]) <= 4.0 * chord) {
-                returns += 1;
-            }
-        }
-        let close = 2 * returns >= n;
-        (turn, close)
-    };
-    // (Over chords long enough that a fitted surface's ripples between its knots do not
-    // add up: up to some forty turns told.)
-    let (nu, nv) = (128, 128);
-    let u_turn = turned((0..=nu).map(|i| surface.point(u0 + (u1 - u0) * i as f64 / nu as f64, 0.5 * (v0 + v1))).collect());
-    let v_turn = turned((0..=nv).map(|j| surface.point(0.5 * (u0 + u1), v0 + (v1 - v0) * j as f64 / nv as f64)).collect());
-    let found = (u_turn, v_turn);
-    let mut cache = lock();
-    let cache = cache.get_or_insert_with(Default::default);
-    if cache.len() >= 512 {
-        cache.clear();
-    }
-    cache.insert(key, found);
-    found
+            let close = 2 * returns >= n;
+            (turn, close)
+        };
+        // (Over chords long enough that a fitted surface's ripples between its knots do not
+        // add up: up to some forty turns told.)
+        let (nu, nv) = (128, 128);
+        let u_turn = turned((0..=nu).map(|i| surface.point(u0 + (u1 - u0) * i as f64 / nu as f64, 0.5 * (v0 + v1))).collect());
+        let v_turn = turned((0..=nv).map(|j| surface.point(0.5 * (u0 + u1), v0 + (v1 - v0) * j as f64 / nv as f64)).collect());
+        (u_turn, v_turn)
+    })
 }
 
-/// Points sorted along x, for each point's neighbours within `reach`: those whose x is
-/// within it of its own (and some farther). All of them where `reach` is no positive finite
-/// length, or a point's x is not finite.
+/// Points sorted along the axis they spread farthest along, for each point's neighbours
+/// within `reach`: those within it of its own along that axis (and some farther). All of
+/// them where `reach` is no positive finite length, or a point's coordinate not finite.
 struct Candidates {
-    /// The points' indices by x, and their x in that order; none for all.
+    /// The points' indices along the axis, and their coordinates in that order; none for all.
     by_x: Option<(Vec<usize>, Vec<f64>)>,
     xs: Vec<f64>,
     reach: f64,
 }
 
 fn candidates(points: &[Point], reach: f64) -> Candidates {
-    let xs: Vec<f64> = points.iter().map(|p| p.x).collect();
+    let spread = |c: fn(&Point) -> f64| {
+        let (lo, hi) = points.iter().map(c).fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), x| (lo.min(x), hi.max(x)));
+        hi - lo
+    };
+    let axes: [fn(&Point) -> f64; 3] = [|p| p.x, |p| p.y, |p| p.z];
+    let axis = axes.into_iter().max_by(|&a, &b| spread(a).total_cmp(&spread(b))).unwrap();
+    let xs: Vec<f64> = points.iter().map(axis).collect();
     if !(reach > 0.0 && reach.is_finite()) || !xs.iter().all(|x| x.is_finite()) {
         return Candidates { by_x: None, xs, reach };
     }
