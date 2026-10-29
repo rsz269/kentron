@@ -166,7 +166,7 @@ impl Output {
     /// piece it stands for.
     pub fn record(&self, model: crate::topology::ModelUid, graph: &Graph, pieces: &[Piece], kept: &[Kept], faces: &[Shape]) {
         for (k, face) in kept.iter().zip(faces) {
-            let source = if k.far { Some(graph.far[k.face].face) } else { graph.faces[k.face].regions_key };
+            let source = if k.far { Some(graph.far[k.face].face) } else { graph.faces[k.face].source };
             if let Some(source) = source {
                 super::record(model, source.into(), face.node);
             }

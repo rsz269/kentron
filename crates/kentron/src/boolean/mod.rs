@@ -1916,6 +1916,27 @@ mod tests {
         assert!(history.contains(&(top.node, top.node)) || images(top) == 1);
     }
 
+    /// Faces a cut keeps whole are recorded too, those of surfaces it takes as simpler ones
+    /// (a sweep's planar B-spline sides, seen as planes) as well.
+    #[test]
+    fn a_cut_records_the_faces_it_keeps_whole() {
+        let mut model = Model::new();
+        let spine = crate::make::edge_between(&mut model, Point::ORIGIN, Point::new(0.0, 0.0, 1.0)).unwrap();
+        let p = [(-0.5, -0.5), (0.5, -0.5), (0.5, 0.5), (-0.5, 0.5)].map(|(x, y)| Point::new(x, y, 0.0));
+        let edges: Vec<Shape> = (0..4).map(|i| crate::make::edge_between(&mut model, p[i], p[(i + 1) % 4]).unwrap()).collect();
+        let square = crate::make::wire(&mut model, &edges).unwrap();
+        let prism = crate::sweep::pipe_through(&mut model, &[(square, Default::default())], spine, true).unwrap();
+        let hole = cuboid(&mut model, (-0.1, -0.1, -1.0), (0.2, 0.2, 3.0));
+        let sides: Vec<Shape> = model.explore(prism, NodeKind::Face).filter(|&f| properties::area(&model, f).center_of_mass.z.abs() > 0.4 && properties::area(&model, f).center_of_mass.z < 0.6).collect();
+        assert_eq!(sides.len(), 4);
+        record_begin(&model);
+        let result = difference(&mut model, prism, hole).unwrap();
+        let history = record_end(&model, result);
+        for side in sides {
+            assert_eq!(history.iter().filter(|(from, _)| *from == side.node).count(), 1);
+        }
+    }
+
     #[test]
     fn extruded_ellipse() {
         // An elliptic prism (semi-axes 10 and 5, height 30): volume π a b h, and half of it

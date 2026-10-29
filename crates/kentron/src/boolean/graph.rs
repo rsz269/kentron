@@ -242,6 +242,8 @@ pub(super) struct Face {
     pub origin: Option<FaceId>,
     /// The operand's face whose regions (when untouched) it may keep with it, however placed.
     pub regions_key: Option<FaceId>,
+    /// The operand's face it is (for the history [`super::record_end`] gives).
+    pub source: Option<FaceId>,
     /// Its place among the operands' faces (far ones included).
     pub seq: usize,
     /// How far its edges may stray from its surface (their tolerances, read from a file).
@@ -942,6 +944,7 @@ impl Graph {
             added.origin = origin;
             // (Its regions, in its own parameters, are the same wherever it is placed.)
             added.regions_key = FaceId::try_from(face.node).ok().filter(|_| recognized.is_none());
+            added.source = FaceId::try_from(face.node).ok();
             added.seq = self.seq;
             self.seq += 1;
             let extent = BoundingBox::new(added.extent.0, added.extent.1);
@@ -1112,6 +1115,7 @@ impl Graph {
             on_edges: Vec::new(),
             origin: None,
             regions_key: None,
+            source: None,
             seq: 0,
             drift: 0.0,
             samples: Default::default(),

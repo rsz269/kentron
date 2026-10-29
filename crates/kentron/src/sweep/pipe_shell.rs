@@ -12,7 +12,7 @@ use crate::geometry::ParametricCurve;
 use crate::math::{Direction2, Point, Point2, Transform, Transformable};
 use crate::properties;
 use crate::tolerance;
-use crate::topology::{EdgeId, Model, NodeKind, Orientation, Shape, VertexId};
+use crate::topology::{EdgeId, Model, NodeId, NodeKind, Orientation, Shape, VertexId};
 
 use super::pipe::{motions, section_placement, PieceMotion, SpinePiece};
 use super::PipeOptions;
@@ -79,7 +79,7 @@ fn blend(at: &[(f64, Point)], g: f64) -> Point {
 
 /// Sweeps `sections` (wires of as many edges, or vertices) along the spine's `pieces`:
 /// a shell, or with `solid` a solid closed by planar faces at the ends.
-pub(super) fn pipe_shell(model: &mut Model, sections: &[(Shape, PipeOptions)], pieces: &[SpinePiece], solid: bool) -> Result<Shape> {
+pub(super) fn pipe_shell(model: &mut Model, sections: &[(Shape, PipeOptions)], pieces: &[SpinePiece], solid: bool) -> Result<super::Sweep> {
     if sections.is_empty() || pieces.is_empty() {
         return Err(Error::InvalidInput("a sweep needs a spine and sections".into()));
     }
@@ -95,19 +95,28 @@ pub(super) fn pipe_shell(model: &mut Model, sections: &[(Shape, PipeOptions)], p
         placed.push((k as f64 + s, section, at_anchor[0].transforms[0]));
     }
     placed.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let first_section = placed[0].1.node;
     // The sections seen from the spine's start (all in one plane there), then made alike as a
     // loft's: turned the same way, started at matching vertices, split to match.
+    // (Each section's edges, by node, with the input's edge they are or are part of.)
+    let mut sources: Vec<HashMap<NodeId, NodeId>> = Vec::with_capacity(placed.len());
     for p in placed.iter_mut() {
+        let original: Vec<NodeId> = model.explore(p.1, NodeKind::Edge).map(|e| e.node).collect();
         p.1 = crate::modify::transform(model, p.1, &p.2, crate::modify::TransformOptions::default())?;
         p.2 = Transform::IDENTITY;
+        sources.push(model.explore(p.1, NodeKind::Edge).map(|e| e.node).zip(original).collect());
     }
     if placed.iter().filter(|(_, s, _)| s.kind() == NodeKind::Wire).count() > 1 {
         let shapes: Vec<Shape> = placed.iter().map(|(_, s, _)| *s).collect();
         let matched = crate::loft::compatible_sections(model, &shapes, crate::loft::Matching::ByRays)?;
-        for (p, m) in placed.iter_mut().zip(matched) {
+        for ((p, (m, pieces)), sources) in placed.iter_mut().zip(matched).zip(sources.iter_mut()) {
             p.1 = m;
+            *sources = pieces.into_iter().filter_map(|(edge, copy)| sources.get(&copy).map(|&source| (edge, source))).collect();
         }
     }
+    let edge_sources: Vec<Vec<Option<NodeId>>> =
+        placed.iter().zip(&sources).map(|((_, s, _), sources)| model.explore(*s, NodeKind::Edge).map(|e| sources.get(&e.node).copied()).collect()).collect();
+    let mut generated: Vec<(NodeId, Vec<Shape>)> = Vec::new();
     // The sections' edges fitted alike (enough points for the closest fit).
     let mut n = 32;
     let poles = loop {
@@ -207,11 +216,18 @@ pub(super) fn pipe_shell(model: &mut Model, sections: &[(Shape, PipeOptions)], p
             let wire = builder.model.add_wire(&coedges)?;
             builder.model.add(face, wire.into())?;
             builder.model.add(shell, face)?;
+            for source in edge_sources.iter().filter_map(|s| s.get(e).copied().flatten()) {
+                match generated.iter_mut().find(|(n, _)| *n == source) {
+                    Some((_, faces)) => faces.push(face),
+                    None => generated.push((source, vec![face])),
+                }
+            }
         }
     }
     if !solid {
-        return Ok(shell);
+        return Ok(super::Sweep { shape: shell, generated, ends: Vec::new(), copies: Vec::new() });
     }
+    let mut caps = Vec::new();
     // Closed by planar faces at the ends (none where the sweep ends in a point).
     for j in [0, m] {
         let edges: Vec<Shape> = (0..edge_count).filter_map(|e| builder.edges.get(&(e, j)).copied().flatten()).map(Shape::from).collect();
@@ -226,11 +242,17 @@ pub(super) fn pipe_shell(model: &mut Model, sections: &[(Shape, PipeOptions)], p
         let along = builder.model.explore(cap, NodeKind::Edge).find(|e| e.node == first).is_some_and(|e| e.orientation == Orientation::Forward);
         let cap = if along == (j == 0) { cap.reversed() } else { cap };
         builder.model.add(shell, cap)?;
+        caps.push((j, cap));
     }
     let volume = properties::closed_shell_volume(builder.model, shell);
     let result = builder.model.new_empty(NodeKind::Solid);
     builder.model.add(result, if volume < 0.0 { shell.reversed() } else { shell })?;
-    Ok(result)
+    // (The first section's caps: its first and last faces.)
+    let ends = match caps[..] {
+        [(0, first), (_, last)] => vec![(first_section, first, last)],
+        _ => Vec::new(),
+    };
+    Ok(super::Sweep { shape: result, generated, ends, copies: Vec::new() })
 }
 
 /// The curve through `poles` as fitted (the knots of a fit through `n + 1` points).

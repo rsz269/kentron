@@ -524,6 +524,21 @@ pub fn pipe_through(sections: Vec<Handle>, spine: Handle, solid: bool, contact: 
     with_model(|m| sweep::pipe_through(m, &sections, spine.shape, solid)).map(handle)
 }
 
+/// [`pipe_through`], with its history: each section edge (by node) with the faces it swept,
+/// and the first section's first and last faces (the caps of a solid).
+#[pyfunction]
+#[pyo3(signature = (sections, spine, solid=true))]
+#[allow(clippy::type_complexity)]
+pub fn pipe_through_recorded(sections: Vec<Handle>, spine: Handle, solid: bool) -> PyResult<(Handle, Vec<(Handle, Vec<Handle>)>, Vec<(Handle, Handle, Handle)>)> {
+    let sections: Vec<(Shape, sweep::PipeOptions)> = sections.iter().map(|h| (h.shape, Default::default())).collect();
+    with_model(|m| {
+        let swept = sweep::pipe_through_with(m, &sections, spine.shape, solid)?;
+        let generated = swept.history().iter().map(|(n, s)| (handle(Shape::from(*n)), s.iter().map(|&x| handle(x)).collect())).collect();
+        let ends = swept.ends().iter().map(|&(n, a, b)| (handle(Shape::from(n)), handle(a), handle(b))).collect();
+        Ok((handle(swept.shape), generated, ends))
+    })
+}
+
 /// The matrix of inertia (rows) about the centre of mass, of the volume, area or length
 /// of `shape` (`dimension` 3, 2 or 1).
 #[pyfunction]
@@ -717,6 +732,7 @@ pub fn record_end(result: Handle) -> PyResult<Vec<(Handle, Handle)>> {
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(record_begin, m)?)?;
     m.add_function(wrap_pyfunction!(pipe_recorded, m)?)?;
+    m.add_function(wrap_pyfunction!(pipe_through_recorded, m)?)?;
     m.add_function(wrap_pyfunction!(record_end, m)?)?;
     m.add_function(wrap_pyfunction!(cells, m)?)?;
     m.add_function(wrap_pyfunction!(fillet_wire_2d, m)?)?;

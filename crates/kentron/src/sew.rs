@@ -85,6 +85,8 @@ struct Edge {
     cuts: Vec<(f64, usize)>,
     /// Its pieces, in increasing parameter.
     sections: Vec<usize>,
+    /// The input edge it is.
+    source: crate::topology::NodeId,
 }
 
 impl Edge {
@@ -174,7 +176,7 @@ impl Input {
                                     None => (None, 0.0, 0.0),
                                 };
                                 let tolerance = model.tolerance(edge_shape);
-                                input.edges.push(Edge { curve, first, last, start, end, tolerance, uses: 0, cuts: Vec::new(), sections: Vec::new() });
+                                input.edges.push(Edge { curve, first, last, start, end, tolerance, uses: 0, cuts: Vec::new(), sections: Vec::new(), source: edge_id.into() });
                                 edge_of.insert(&edge_shape, input.edges.len() - 1);
                                 input.edges.len() - 1
                             }
@@ -440,8 +442,12 @@ impl Input {
                 }
             }
             for other in 0..self.sections.len() {
-                if other != s && self.sections[other].rep == s {
-                    tolerance = tolerance.max(self.edges[self.sections[other].edge].tolerance);
+                if self.sections[other].rep == s {
+                    if other != s {
+                        tolerance = tolerance.max(self.edges[self.sections[other].edge].tolerance);
+                    }
+                    // (Each input edge sewn into it, or a piece of one, made it.)
+                    crate::boolean::record(model.uid(), self.edges[self.sections[other].edge].source, id.into());
                 }
             }
             out_edge.insert(s, (id, tolerance));
@@ -777,5 +783,27 @@ mod tests {
         // 4 + 4 + 4 edges, less the 3 shared, the big face's top edge being cut in two.
         assert_eq!(model.unique_subshapes(shell, NodeKind::Edge).len(), 10);
         assert!(crate::validity::check(&model, shell).errors().next().is_none());
+    }
+
+    /// Sewing records where its edges come from: the long edge both its pieces, each short
+    /// edge the one it is sewn into with a piece of it.
+    #[test]
+    fn sewing_records_its_edges() {
+        let mut model = Model::new();
+        let c = |x: f64, y: f64, z: f64| [x, y, z];
+        let big = square(&mut model, [c(0., 0., 0.), c(2., 0., 0.), c(2., 1., 0.), c(0., 1., 0.)], 0.0);
+        let left = square(&mut model, [c(0., 1., 0.), c(1., 1., 0.), c(1., 2., 0.), c(0., 2., 0.)], 0.0);
+        let right = square(&mut model, [c(1., 1., 0.), c(2., 1., 0.), c(2., 2., 0.), c(1., 2., 0.)], 0.0);
+        let on_y1 = |model: &Model, f: Shape| {
+            model.explore(f, NodeKind::Edge).find(|&e| { let (a, b) = model.edge_vertices(e); model.point(a).y == 1.0 && model.point(b).y == 1.0 }).unwrap()
+        };
+        let (long, short) = (on_y1(&model, big), on_y1(&model, left));
+        crate::boolean::record_begin(&model);
+        let shell = sew(&mut model, &[big, left, right], &SewOptions::default()).unwrap();
+        let history = crate::boolean::record_end(&model, shell);
+        let images = |e: Shape| history.iter().filter(|(from, _)| *from == e.node).map(|(_, to)| *to).collect::<Vec<_>>();
+        assert_eq!(images(long).len(), 2);
+        assert_eq!(images(short).len(), 1);
+        assert!(images(long).contains(&images(short)[0]));
     }
 }

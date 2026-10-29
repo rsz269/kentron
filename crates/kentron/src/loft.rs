@@ -147,8 +147,9 @@ pub(crate) fn loft_breaking(model: &mut Model, sections: &[Shape], options: &Lof
 
 /// `sections` (wires, or vertices first and last) made to match as a loft matches them:
 /// wires of as many edges, split where `matching` says, turned and started alike. Vertex
-/// sections as they are.
-pub(crate) fn compatible_sections(model: &mut Model, sections: &[Shape], matching: Matching) -> Result<Vec<Shape>> {
+/// sections as they are. With each, its edges' sources: (edge made, the section's edge it is
+/// or is part of).
+pub(crate) fn compatible_sections(model: &mut Model, sections: &[Shape], matching: Matching) -> Result<Vec<(Shape, Vec<(NodeId, NodeId)>)>> {
     let mut marks = Marks::default();
     let mut parsed = sections.iter().map(|&s| Section::read(model, s, &mut marks)).collect::<Result<Vec<_>>>()?;
     let closed = parsed.iter().find_map(|s| if let Section::Wire(w) = s { Some(w.closed) } else { None }).unwrap_or(false);
@@ -159,14 +160,19 @@ pub(crate) fn compatible_sections(model: &mut Model, sections: &[Shape], matchin
     let mut out = Vec::with_capacity(sections.len());
     for (section, &original) in parsed.iter().zip(sections) {
         match section {
-            Section::Point(..) => out.push(original),
+            Section::Point(..) => out.push((original, Vec::new())),
             Section::Wire(w) => {
                 let mut edges = Vec::with_capacity(w.pieces.len());
+                let mut sources = Vec::new();
                 for piece in &w.pieces {
                     let (curve, first, last) = piece.forward();
-                    edges.push(crate::make::edge_from_curve_range(model, curve, first, last)?);
+                    let edge = crate::make::edge_from_curve_range(model, curve, first, last)?;
+                    if let Some(source) = piece.edge {
+                        sources.push((edge.node, source));
+                    }
+                    edges.push(edge);
                 }
-                out.push(crate::make::wire_within(model, &edges, 1e3 * crate::tolerance::LINEAR)?);
+                out.push((crate::make::wire_within(model, &edges, 1e3 * crate::tolerance::LINEAR)?, sources));
             }
         }
     }

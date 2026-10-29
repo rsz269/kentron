@@ -16,7 +16,7 @@ from typing import Iterable, List, Literal, Optional, Sequence, Tuple, Union
 from .. import _kentron as native
 from ..geom import Location, Plane, Vector, VectorLike  # noqa: F401
 from ..shapes import *  # noqa: F401,F403
-from ..shapes import Compound, Edge, Face, Shape, Shell, Solid, Vertex, Wire, _cut_solid_by_solid, _edges_to_wires, _split_pieces, _tuple
+from ..shapes import Compound, Edge, Face, Shape, Shell, Solid, Vertex, Wire, _UNPLACED, _cut_solid_by_solid, _edges_to_wires, _split_pieces, _thickened, _tuple
 
 Shapes = Literal["Vertex", "Edge", "Wire", "Face", "Shell", "Solid", "CompSolid", "Compound"]
 Real = Union[int, float]
@@ -598,45 +598,49 @@ def offset(s: Shape, t: float, cap: bool = True, both: bool = False, tol: float 
                 out.append(f.thicken(t))
         return out
 
-    if history is not None and all(f.geomType() == "PLANE" for f in s.Faces()) and not any(el.ShapeType() == "Shell" and el.Closed() for el in _get(s, ("Face", "Shell"))):
-        return _offset_planes_recorded(s, t, both, history, name)
+    if history is not None:
+        return _offset_recorded(s, t, both, history, name)
     if both:
         pos, neg = one(t), one(-t)
         both_ = [a.fuse(b) for a, b in zip(pos, neg)]
-        result = both_[0] if len(both_) == 1 else Compound.makeCompound(both_)
-    else:
-        result = _compound_or_shape(one(t))
-    if history is not None:
-        offsets = (1, -1) if both else (1,)
-        _record(history, name, [s], result, moved=[(f, [f.normalAt() * (k * t) for k in offsets]) for f in s.Faces()])
-    return result
+        return both_[0] if len(both_) == 1 else Compound.makeCompound(both_)
+    return _compound_or_shape(one(t))
 
 
-def _offset_planes_recorded(s: Shape, t: float, both: bool, history, name) -> Shape:
-    """`offset` of planar faces, with its history as kentron's extrusions keep it: each face
-    extruded along its normal by `t` (and by `-t`, fused, with `both`), the face's offsets
-    the extrusions' end faces, its edges' the copies of its edges there."""
+def _offset_recorded(s: Shape, t: float, both: bool, history, name) -> Shape:
+    """`offset`, with its history as kentron keeps it: each face's offsets (by `t`, and by
+    `-t` with `both`, fused) the faces it generated, its edges' the edges they did (a closed
+    shell's, those of the solid between it and its offset)."""
+    def one(el, t, made):
+        if el.ShapeType() == "Shell" and el.Closed():
+            native.record_begin()
+            result = None
+            try:
+                solid = Shape.cast(native.make_solid([el.wrapped]))
+                result = Shape.cast(native.thick_solid(solid.wrapped, [], t, "intersection"))
+            finally:
+                pairs = native.record_end(result.wrapped if result is not None else el.wrapped)
+            for source, image in pairs:
+                if _node(source) != _node(image):
+                    made.setdefault(_node(source), []).append(image)
+            return [result]
+        return [_thickened(f, t, made) for f in el.Faces()]
+
     results, offsets = [], {}
-    for f in s.Faces():
+    for el in _get(s, ("Face", "Shell")):
         made = {}
-        parts = []
-        for k in ((1, -1) if both else (1,)):
-            shape, _, ends, copies = native.extrude_recorded(f.wrapped, (f.normalAt() * (k * t)).toTuple())
-            parts.append(Shape.cast(shape))
-            for source, _, last in ends:
-                made.setdefault(_node(source), []).append(last)
-            for source, copy in copies:
-                made.setdefault(_node(source), []).append(copy)
-        if len(parts) == 2:
+        pos = one(el, t, made)
+        if both:
+            neg = one(el, -t, made)
             native.record_begin()
             fused = None
             try:
-                fused = parts[0].fuse(parts[1])
+                fused = [a.fuse(b) for a, b in zip(pos, neg)]
             finally:
-                pairs = native.record_end(fused.wrapped if fused is not None else parts[0].wrapped)
-            made = _through(pairs, made)
-            parts = [fused]
-        results.append(parts[0])
+                pairs = native.record_end(Compound.makeCompound(fused).wrapped if fused is not None else el.wrapped)
+            made = _through(pairs, made, Compound.makeCompound(fused))
+            pos = fused
+        results.extend(pos)
         for k, v in made.items():
             offsets.setdefault(k, []).extend(v)
     result = results[0] if len(results) == 1 else Compound.makeCompound(results)
@@ -647,7 +651,8 @@ def _offset_planes_recorded(s: Shape, t: float, both: bool, history, name) -> Sh
     op._tracked.update(s.Edges())
     op._tracked.update(s.Vertices())
     for sub in list(s.Faces()) + list(s.Edges()):
-        images = [placed[_node(h)] for h in offsets.get(_node(sub.wrapped), []) if _node(h) in placed]
+        kind = sub.ShapeType()
+        images = [placed[n] for n in dict.fromkeys(_node(h) for h in offsets.get(_node(sub.wrapped), [])) if n in placed and placed[n].ShapeType() == kind]
         if images:
             op._generated[sub] = _normalize(compound(images))
     return result
@@ -673,28 +678,93 @@ def fillet2D(s: Shape, verts: Shape, r: float) -> Shape:
 def sweep(s, path: Shape, aux=None, cap: bool = False, transition: str = "transformed", history=None, name=None) -> Shape:
     """Edges, wires or faces swept along `path` (several sections, of matching wires or
     faces, blended along it)."""
-    if history is not None and not isinstance(s, (list, tuple)) and aux is None and transition == "transformed" and s.Faces():
-        # (One profile's faces: with the history kentron's pipe keeps.)
-        spine = _get_one_wire(path)
-        results, generated, ends = [], {}, []
-        for f in s.Faces():
-            shape, swept, firsts_lasts = native.pipe_recorded(f.wrapped, spine.wrapped)
-            results.append(Shape.cast(shape))
-            for source, made in swept:
-                generated.setdefault(_node(source), []).extend(Shape.cast(m) for m in made)
-            ends.extend((_node(source), Shape.cast(a), Shape.cast(b)) for source, a, b in firsts_lasts)
-        result = _compound_or_shape(results)
-        _swept_op(history, name, [s, path], s, generated, ends)
-        return result
-    result = _sweep(s, path, aux, cap, transition)
-    if history is not None:
-        # (Sections blended along the spine are made alike, split to match, before they are
-        # swept: their history is found from where the result's faces lie.)
-        if isinstance(s, (list, tuple)):
-            first, last = s[0], s[-1]
-            _record(history, name, [*s, path], result, firsts=[(f, f) for f in first.Faces()], lasts=[(f, f) for f in last.Faces()], sections=first.Edges())
+    if history is not None and aux is None:
+        return _sweep_recorded(s, path, cap, history, name)
+    return _sweep(s, path, aux, cap, transition)
+
+
+def _sweep_recorded(s, path: Shape, cap: bool, history, name) -> Shape:
+    """`sweep` with its history as kentron's sweeps keep it: what each profile (or section)
+    edge and vertex swept, and the first and last faces of each profile face (of the first
+    section's, through several), carried through the cuts making the holes of sections with
+    holes."""
+    spine = _get_one_wire(path)
+    results, current, ends = [], {}, []
+    def add(made):
+        for source, images in made:
+            here.setdefault(_node(source), []).extend(images)
+    if isinstance(s, (list, tuple)):
+        sections = list(s)
+        lists = [[f for f in el.Faces()] for el in s]
+        if all(lists) and all(len(l) == len(lists[0]) for l in lists):
+            for k in range(len(lists[0])):
+                faces = [l[k] for l in lists]
+                here = {}
+                shape, made, firsts_lasts = native.pipe_through_recorded([f.outerWire().wrapped for f in faces], spine.wrapped, True)
+                add(made)
+                for _, first, last in firsts_lasts:
+                    here[("first", k)], here[("last", k)] = [first], [last]
+                result = Shape.cast(shape)
+                for j in range(len(faces[0].innerWires())):
+                    hole, hole_made, _ = native.pipe_through_recorded([f.innerWires()[j].wrapped for f in faces], spine.wrapped, True)
+                    add(hole_made)
+                    result, here = _cut_recorded(result, Shape.cast(hole), here)
+                results.append(result)
+                ends.append((faces[0], k))
+                for key, v in here.items():
+                    current.setdefault(key, []).extend(v)
         else:
-            _record(history, name, [s, path], result, firsts=[(f, f) for f in s.Faces()], sections=s.Edges(), last_rest=s)
+            wire_lists = [list(_get_wires(el)) for el in s]
+            for k in range(len(wire_lists[0])):
+                here = {}
+                shape, made, _ = native.pipe_through_recorded([wl[k].wrapped for wl in wire_lists], spine.wrapped, cap)
+                add(made)
+                results.append(Shape.cast(shape))
+                for key, v in here.items():
+                    current.setdefault(key, []).extend(v)
+    else:
+        sections = [s]
+        faces = s.Faces()
+        profiles = list(faces) if faces else [Face.makeFromWires(w) if cap else w for w in _get_wires(s)]
+        for k, profile in enumerate(profiles):
+            here = {}
+            shape, made, firsts_lasts = native.pipe_recorded(profile.wrapped, spine.wrapped)
+            add(made)
+            for _, first, last in firsts_lasts:
+                here[("first", k)], here[("last", k)] = [first], [last]
+            results.append(Shape.cast(shape))
+            if faces:
+                ends.append((profile, k))
+            for key, v in here.items():
+                current.setdefault(key, []).extend(v)
+    result = _compound_or_shape(results)
+    placed = {_node(x.wrapped): x for x in list(result.Faces()) + list(result.Edges())}
+    def found(handles):
+        return [placed[n] for n in dict.fromkeys(_node(h) for h in handles) if n in placed]
+    op = Op(name)
+    history.append(op, name)
+    for shape in sections + [path]:
+        op._tracked.update(shape.Faces())
+        op._tracked.update(shape.Edges())
+        op._tracked.update(shape.Vertices())
+    for section in sections:
+        for sub in list(section.Edges()) + list(section.Vertices()):
+            images = found(current.get(_node(sub.wrapped), []))
+            if images:
+                op._generated[sub] = _normalize(compound(images))
+    # (The ends: of each profile face; of a capped wire's, the sweep's alone.)
+    keys = {k for key in current if isinstance(key, tuple) for k in key[1:]}
+    for k in sorted(keys):
+        first, last = found(current.get(("first", k), [])), found(current.get(("last", k), []))
+        for f, at in ends:
+            if at == k and first:
+                op._first[f] = _normalize(compound(first))
+            if at == k and last:
+                op._last[f] = _normalize(compound(last))
+        if first:
+            op._first_shape = op._first_shape | _normalize(compound(first))
+        if last:
+            op._last_shape = op._last_shape | _normalize(compound(last))
     return result
 
 
@@ -753,13 +823,15 @@ def loft(*s, cap: bool = False, ruled: bool = False, continuity: str = "C2", par
     return _compound_or_shape(results)
 
 
-def _through(pairs, current):
+def _through(pairs, current, result: Optional[Shape] = None):
     """`current` (node to handles) carried through a recorded boolean's `pairs`: each handle
-    replaced by the faces and edges the boolean made from it (none where it is gone)."""
+    replaced by the faces and edges the boolean made from it (none where it is gone), or,
+    one `result` keeps as it is, itself."""
     made = {}
     for source, image in pairs:
         made.setdefault(_node(source), []).append(image)
-    return {k: [m for h in v for m in made.get(_node(h), [])] for k, v in current.items()}
+    kept = {_node(x.wrapped) for x in list(result.Faces()) + list(result.Edges())} if result is not None else set()
+    return {k: [m for h in v for m in made.get(_node(h), [h] if _node(h) in kept else [])] for k, v in current.items()}
 
 
 def _cut_recorded(shape: Shape, tool: Shape, current):
@@ -770,7 +842,7 @@ def _cut_recorded(shape: Shape, tool: Shape, current):
         result = shape.cut(tool)
     finally:
         pairs = native.record_end(result.wrapped if result is not None else shape.wrapped)
-    return result, _through(pairs, current)
+    return result, _through(pairs, current, result)
 
 
 def _loft_recorded(s, cap: bool, ruled: bool, parametrization: str, history, name) -> Shape:
@@ -991,72 +1063,10 @@ class History:
             self.opDict[name] = op
 
 
-def _alike(a: Shape, b: Shape, tol: float = 1e-6) -> bool:
-    """Whether two faces or edges lie in one place (the same kind, size and centre)."""
-    if a.ShapeType() != b.ShapeType():
-        return False
-    measure = (lambda s: s.Area()) if a.ShapeType() == "Face" else (lambda s: s.Length())
-    size = max(measure(a), measure(b))
-    reach = tol * (1.0 + a.BoundingBox().DiagonalLength)
-    return abs(measure(a) - measure(b)) <= tol * (1.0 + size) and (a.Center() - b.Center()).Length <= reach
-
-
-def _record(history, name, inputs, result: Shape, firsts=(), lasts=(), sections=(), moved=(), last_rest=None) -> None:
-    """A step of `history` for `result`, made from `inputs` (all their faces, edges and
-    vertices tracked), found from where the result's faces and edges lie: its first and last
-    faces, those alike `firsts` and `lasts` (each also recorded as the first and last of
-    the input it came from); each edge of `sections` (the profile's) generating the result's
-    faces running from an edge alike it, other than the first and last; and for each
-    `(input, offsets)` of `moved`, the input face (and its edges) generating the result's
-    faces (edges) alike it moved by each offset; with `last_rest` (the profile), the faces
-    left over (neither first nor generated) its last (a sweep's end, moved along the path)."""
-    if history is None:
-        return
-    op = Op(name)
-    history.append(op, name)
-    for shape in inputs:
-        op._tracked.update(shape.Faces())
-        op._tracked.update(shape.Edges())
-        op._tracked.update(shape.Vertices())
-    faces = result.Faces()
-    def found(target):
-        return [f for f in faces if _alike(f, target)]
-    ends = []
-    for which, targets, shapes, per in (("first", firsts, "_first_shape", op._first), ("last", lasts, "_last_shape", op._last)):
-        for source, target in targets:
-            for f in found(target):
-                setattr(op, shapes, getattr(op, shapes) | f)
-                per[source] = f if source not in per else per[source] | f
-                ends.append(f)
-    generated = []
-    for e in sections:
-        sides = [f for f in faces if f not in ends and any(_alike(x, e) for x in f.Edges())]
-        if sides:
-            op._generated[e] = _normalize(compound(sides))
-            generated.extend(sides)
-    if last_rest is not None:
-        rest = [f for f in faces if f not in ends and f not in generated]
-        if rest:
-            op._last_shape = op._last_shape | _normalize(compound(rest))
-            op._last[last_rest] = _normalize(compound(rest))
-    for source, offsets in moved:
-        made = [f for off in offsets for f in faces if _alike(f, source.moved(Location(off)))]
-        if made:
-            op._generated[source] = _normalize(compound(made))
-        edges = result.Edges()
-        for e in source.Edges():
-            images = [x for off in offsets for x in edges if _alike(x, e.moved(Location(off)))]
-            if images:
-                op._generated[e] = _normalize(compound(images))
-
-
 def _lies_on(piece: Shape, face: Shape, tol: float = 1e-6) -> bool:
     """Whether a result's face lies on an input's face: of its kind, its centre on it."""
     c = piece.Center()
     return piece.geomType() == face.geomType() and face.distance(Vertex.makeVertex(c.x, c.y, c.z)) <= tol * (1.0 + face.BoundingBox().DiagonalLength)
-
-
-_UNPLACED = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]]
 
 
 def _node(s) -> int:

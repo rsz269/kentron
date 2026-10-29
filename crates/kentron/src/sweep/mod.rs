@@ -271,6 +271,13 @@ pub fn pipe_cornered(model: &mut Model, profile: Shape, spine: Shape, options: &
 /// planar faces at the ends.
 #[doc(alias = "BRepOffsetAPI_MakePipeShell")]
 pub fn pipe_through(model: &mut Model, sections: &[(Shape, PipeOptions)], spine: Shape, solid: bool) -> Result<Shape> {
+    pipe_through_with(model, sections, spine, solid).map(|s| s.shape)
+}
+
+/// [`pipe_through`], with its history: the faces each section edge swept (or part of one,
+/// where sections were split to match), and the first section's (as a profile face's) first
+/// and last faces, the caps of a solid.
+pub fn pipe_through_with(model: &mut Model, sections: &[(Shape, PipeOptions)], spine: Shape, solid: bool) -> Result<Sweep> {
     let pieces = spine_pieces(model, spine)?;
     pipe_shell::pipe_shell(model, sections, &pieces, solid)
 }
@@ -1077,6 +1084,33 @@ mod tests {
         assert!(report.is_valid(), "{report:?}");
         let volume = properties::volume(&model, solid).mass;
         assert!((volume - 10.0 * PI).abs() < 1e-6 * volume, "{volume}");
+    }
+
+    /// A square swept through to a larger one: each edge of either sweeps one side, the
+    /// first section's caps its first and last faces.
+    #[test]
+    fn sweeps_through_sections_record_their_sides_and_caps() {
+        let mut model = Model::new();
+        let spine = make::edge_between(&mut model, Point::ORIGIN, Point::new(0.0, 0.0, 1.0)).unwrap();
+        let square = |model: &mut Model, h: f64, z: f64| {
+            let p = [(-h, -h), (h, -h), (h, h), (-h, h)].map(|(x, y)| Point::new(x, y, z));
+            let edges: Vec<Shape> = (0..4).map(|i| make::edge_between(model, p[i], p[(i + 1) % 4]).unwrap()).collect();
+            make::wire(model, &edges).unwrap()
+        };
+        let (small, large) = (square(&mut model, 0.5, 0.0), square(&mut model, 1.0, 1.0));
+        let swept = pipe_through_with(&mut model, &[(small, PipeOptions::default()), (large, PipeOptions::default())], spine, true).unwrap();
+        let faces = model.unique_subshapes(swept.shape, NodeKind::Face);
+        assert_eq!(faces.len(), 6);
+        for (a, b) in model.unique_subshapes(small, NodeKind::Edge).into_iter().zip(model.unique_subshapes(large, NodeKind::Edge)) {
+            let (sa, sb) = (swept.generated(a), swept.generated(b));
+            assert_eq!(sa.len(), 1);
+            assert_eq!(sa, sb);
+            assert!(faces.iter().any(|f| f.node == sa[0].node));
+        }
+        let &(source, first, last) = swept.ends().first().unwrap();
+        assert_eq!(source, small.node);
+        assert!((properties::area(&model, first).mass - 1.0).abs() < 1e-9);
+        assert!((properties::area(&model, last).mass - 4.0).abs() < 1e-9);
     }
 
     #[test]

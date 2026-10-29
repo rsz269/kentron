@@ -2167,14 +2167,33 @@ for _cls in _KINDS.values():
 del _cls, _name, _attr
 
 
-def _thickened(face: "Face", thickness: float) -> "Solid":
+# (The placement of a handle taken as it is, unmoved: kentron's histories key their faces and
+# edges by node, whatever their placement.)
+_UNPLACED = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]]
+
+
+def _thickened(face: "Face", thickness: float, made: Optional[dict] = None) -> "Solid":
     """The solid between `face` and its offset by `thickness` along its normal (what
-    `Face.thicken` makes, kept apart from it: extensions replace that method)."""
+    `Face.thicken` makes, kept apart from it: extensions replace that method); with `made`,
+    each of the face's own faces and edges (by node) mapped there to its offsets in the
+    solid, as kentron recorded them."""
     if face.geomType() == "PLANE":
-        return Shape.cast(native.extrude(face.wrapped, (face.normalAt() * thickness).toTuple()))
+        if made is None:
+            return Shape.cast(native.extrude(face.wrapped, (face.normalAt() * thickness).toTuple()))
+        shape, _, ends, copies = native.extrude_recorded(face.wrapped, (face.normalAt() * thickness).toTuple())
+        for source, image in [(source, last) for source, _, last in ends] + list(copies):
+            made.setdefault(source.located(_UNPLACED).node_hash(), []).append(image)
+        return Shape.cast(shape)
     # The face, its offset, and a ruled wall between each edge of its boundary and that
     # edge's offset (none at a seam, where the face meets itself), sewn.
-    moved = Shape.cast(native.offset_shape(face.wrapped, thickness, "intersection"))
+    if made is not None:
+        native.record_begin()
+    moved = None
+    try:
+        moved = Shape.cast(native.offset_shape(face.wrapped, thickness, "intersection"))
+    finally:
+        if made is not None:
+            offsets = native.record_end(moved.wrapped if moved is not None else face.wrapped)
 
     def boundary(f):
         uses = [e for w in f.Wires() for e in w.Edges()]
@@ -2193,5 +2212,21 @@ def _thickened(face: "Face", thickness: float) -> "Solid":
         if (g.startPoint() - a).Length + (g.endPoint() - b).Length > (g.endPoint() - a).Length + (g.startPoint() - b).Length:
             g = Shape.cast(g.wrapped.Reversed())
         walls.append(native.make_loft([native.make_wire([e.wrapped]), native.make_wire([g.wrapped])], False, True))
-    shell = Shape.cast(native.sew([face.wrapped, moved.wrapped] + walls, 1e-6))
-    return Shape.cast(native.make_solid([s.wrapped for s in shell.Shells()]))
+    if made is None:
+        shell = Shape.cast(native.sew([face.wrapped, moved.wrapped] + walls, 1e-6))
+        return Shape.cast(native.make_solid([s.wrapped for s in shell.Shells()]))
+    # (The offsets carried through the sewing.)
+    native.record_begin()
+    solid = None
+    try:
+        shell = Shape.cast(native.sew([face.wrapped, moved.wrapped] + walls, 1e-6))
+        solid = Shape.cast(native.make_solid([s.wrapped for s in shell.Shells()]))
+    finally:
+        sewn = native.record_end(solid.wrapped if solid is not None else face.wrapped)
+    images = {}
+    for source, image in sewn:
+        images.setdefault(source.located(_UNPLACED).node_hash(), []).append(image)
+    for source, image in offsets:
+        if source.located(_UNPLACED).node_hash() != image.located(_UNPLACED).node_hash():
+            made.setdefault(source.located(_UNPLACED).node_hash(), []).extend(images.get(image.located(_UNPLACED).node_hash(), []))
+    return solid
