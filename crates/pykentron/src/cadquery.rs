@@ -684,7 +684,23 @@ pub fn cells(shapes: Vec<Handle>) -> PyResult<Vec<(Vec<bool>, Handle)>> {
     with_model(|m| Ok(boolean::cells(m, &shapes)?.into_iter().map(|c| (c.inside, handle(c.shape))).collect()))
 }
 
+/// Starts recording where the booleans' result faces and edges come from.
+#[pyfunction]
+pub fn record_begin() {
+    boolean::record_begin();
+}
+
+/// Stops recording: each operand face or edge (as a handle on its node, unplaced) with a
+/// face or edge of `result` made from it since `record_begin` (one the result keeps as it
+/// is, itself).
+#[pyfunction]
+pub fn record_end(result: Handle) -> PyResult<Vec<(Handle, Handle)>> {
+    with_model(|m| Ok(boolean::record_end(m, result.shape).into_iter().map(|(s, r)| (handle(Shape::from(s)), handle(Shape::from(r)))).collect()))
+}
+
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(record_begin, m)?)?;
+    m.add_function(wrap_pyfunction!(record_end, m)?)?;
     m.add_function(wrap_pyfunction!(cells, m)?)?;
     m.add_function(wrap_pyfunction!(fillet_wire_2d, m)?)?;
     m.add_function(wrap_pyfunction!(ordered_edges, m)?)?;

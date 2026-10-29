@@ -161,6 +161,23 @@ impl Output {
         Ok(if same { shape } else { shape.reversed() })
     }
 
+    /// Each made face's and edge's operand face or edge, for [`super::record_end`]: a kept
+    /// region's face from its operand's face, a result edge from each operand edge with a
+    /// piece it stands for.
+    pub fn record(&self, graph: &Graph, pieces: &[Piece], kept: &[Kept], faces: &[Shape]) {
+        for (k, face) in kept.iter().zip(faces) {
+            let source = if k.far { Some(graph.far[k.face].face) } else { graph.faces[k.face].regions_key };
+            if let Some(source) = source {
+                super::record(source.into(), face.node);
+            }
+        }
+        for piece in pieces {
+            if let (Some(out), Some(source)) = (self.edges.get(&piece.rep), graph.edges[piece.edge].source) {
+                super::record(source.into(), out.id.into());
+            }
+        }
+    }
+
     /// The vertex standing for the graph's vertex `v`.
     pub fn vertex(&mut self, model: &mut Model, graph: &Graph, v: usize) -> VertexId {
         *self.vertices.entry(v).or_insert_with(|| result_vertex(model, graph, v))
@@ -318,6 +335,7 @@ impl Output {
             }
             faces.push(if sign > 0.0 { face } else { face.reversed() });
         }
+        self.record(graph, pieces, kept, &faces);
         Ok(faces)
     }
 

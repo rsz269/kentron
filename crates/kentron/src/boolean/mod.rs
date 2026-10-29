@@ -188,6 +188,44 @@ pub fn intersection(model: &mut Model, a: Shape, b: Shape) -> Result<Shape> {
     run(model, a, b, Operation::Intersection)
 }
 
+/// While recording ([`record_begin`] to [`record_end`]): each operand face and edge, with a
+/// result face or edge made from it (by every build, retries and pieces of a split operation
+/// included). (Shared by threads: builds may run on any.)
+static RECORDING: std::sync::Mutex<Option<Vec<(crate::topology::NodeId, crate::topology::NodeId)>>> = std::sync::Mutex::new(None);
+
+/// Whether [`RECORDING`] is on (checked first: off, recording costs nothing).
+static RECORDING_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Records a made result face or edge's source, while recording.
+pub(super) fn record(source: crate::topology::NodeId, made: crate::topology::NodeId) {
+    if !RECORDING_ON.load(std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
+    if let Some(list) = RECORDING.lock().unwrap_or_else(|p| p.into_inner()).as_mut() {
+        list.push((source, made));
+    }
+}
+
+/// Starts recording where the booleans' result faces and edges come from (for
+/// [`record_end`]).
+pub fn record_begin() {
+    *RECORDING.lock().unwrap_or_else(|p| p.into_inner()) = Some(Vec::new());
+    RECORDING_ON.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Stops recording: each operand face or edge (unplaced, by node) and a face or edge of
+/// `result` made from it since [`record_begin`] (an operand's face or edge the result keeps
+/// as it is maps to itself). Only what `result` has: what an attempt that was not kept, or
+/// a step after the boolean, made is left out.
+#[doc(alias = "BRepAlgoAPI_BuilderAlgo::Modified")]
+pub fn record_end(model: &Model, result: Shape) -> Vec<(crate::topology::NodeId, crate::topology::NodeId)> {
+    RECORDING_ON.store(false, std::sync::atomic::Ordering::Relaxed);
+    let list = RECORDING.lock().unwrap_or_else(|p| p.into_inner()).take().unwrap_or_default();
+    let present: crate::hashing::FastSet<crate::topology::NodeId> = [crate::topology::NodeKind::Face, crate::topology::NodeKind::Edge].into_iter().flat_map(|k| model.explore(result, k).map(|s| s.node).collect::<Vec<_>>()).collect();
+    let mut seen = crate::hashing::FastSet::default();
+    list.into_iter().filter(|&(_, made)| present.contains(&made)).filter(|pair| seen.insert(*pair)).collect()
+}
+
 /// The edges where `a` and `b` meet: where their faces cross, and pieces of edges of either
 /// lying on the other; and the points where they touch elsewhere.
 #[doc(alias = "BRepAlgoAPI_Section")]
@@ -1816,6 +1854,28 @@ mod tests {
         assert!(report.problems.is_empty(), "{report:?}");
         let v = properties::volume(&model, joined).mass;
         assert!((v - (300.0 + 60.0)).abs() < 1e-8 * 360.0, "{v}");
+    }
+
+    /// A unit cube cut by a slab across the middle of its bottom (CadQuery's history test):
+    /// recorded, the cube's bottom face makes the two strips the cut leaves of it, an edge
+    /// across the slab's two pieces, and the slab's bottom face (on the cube's, taken away)
+    /// nothing; an untouched face is kept as itself.
+    #[test]
+    fn a_cut_records_where_its_faces_come_from() {
+        let mut model = Model::new();
+        let cube = cuboid(&mut model, (-0.5, -0.5, 0.0), (1.0, 1.0, 1.0));
+        let slab = cuboid(&mut model, (-0.5, -0.25, 0.0), (1.0, 0.5, 0.1));
+        let at = |model: &Model, shape: Shape, z: f64| model.explore(shape, NodeKind::Face).find(|&f| (properties::area(model, f).center_of_mass.z - z).abs() < 1e-9).unwrap();
+        let (bottom, top, slab_bottom) = (at(&model, cube, 0.0), at(&model, cube, 1.0), at(&model, slab, 0.0));
+        let side_edge = model.explore(bottom, NodeKind::Edge).find(|&e| { let (a, b) = model.edge_vertices(e); model.point(a).x > 0.49 && model.point(b).x > 0.49 }).unwrap();
+        record_begin();
+        let result = difference(&mut model, cube, slab).unwrap();
+        let history = record_end(&model, result);
+        let images = |s: Shape| history.iter().filter(|(from, _)| *from == s.node).count();
+        assert_eq!(images(bottom), 2);
+        assert_eq!(images(side_edge), 2);
+        assert_eq!(images(slab_bottom), 0);
+        assert!(history.contains(&(top.node, top.node)) || images(top) == 1);
     }
 
     #[test]

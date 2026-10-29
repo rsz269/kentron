@@ -434,24 +434,20 @@ def setThreads(n: int) -> None:
 
 
 def fuse(s1: Shape, s2: Shape, *shapes: Shape, tol: float = 0.0, glue=None, history=None, name=None) -> Shape:
-    result = s1
-    for s in (s2,) + shapes:
-        result = Shape.cast(native.union(result.wrapped, s.wrapped))
-    result = _compound_or_shape(result)
-    _record_bool(history, name, [s1, s2, *shapes], result)
-    return result
+    def run():
+        result = s1
+        for s in (s2,) + shapes:
+            result = Shape.cast(native.union(result.wrapped, s.wrapped))
+        return _compound_or_shape(result)
+    return _recorded(history, name, [s1, s2, *shapes], run)
 
 
 def cut(s1: Shape, s2: Shape, tol: float = 0.0, glue=None, history=None, name=None) -> Shape:
-    result = _compound_or_shape(Shape.cast(_cut_solid_by_solid(s1.wrapped, s2.wrapped)))
-    _record_bool(history, name, [s1, s2], result)
-    return result
+    return _recorded(history, name, [s1, s2], lambda: _compound_or_shape(Shape.cast(_cut_solid_by_solid(s1.wrapped, s2.wrapped))))
 
 
 def intersect(s1: Shape, s2: Shape, tol: float = 0.0, glue=None, history=None, name=None) -> Shape:
-    result = _compound_or_shape(Shape.cast(native.intersection(s1.wrapped, s2.wrapped)))
-    _record_bool(history, name, [s1, s2], result)
-    return result
+    return _recorded(history, name, [s1, s2], lambda: _compound_or_shape(Shape.cast(native.intersection(s1.wrapped, s2.wrapped))))
 
 
 def split(s1: Shape, s2: Shape, tol: float = 0.0, history=None, name=None) -> Shape:
@@ -461,9 +457,7 @@ def split(s1: Shape, s2: Shape, tol: float = 0.0, history=None, name=None) -> Sh
 
 def imprint(*shapes: Shape, tol: float = 0.0, glue="full", history=None, name=None) -> Shape:
     """The shapes split by one another (OCCT's general fuse): all the pieces."""
-    result = _compound_or_shape([Shape.cast(h) for _, h in native.cells([s.wrapped for s in shapes])])
-    _record_bool(history, name, list(shapes), result, images=True)
-    return result
+    return _recorded(history, name, list(shapes), lambda: _compound_or_shape([Shape.cast(h) for _, h in native.cells([s.wrapped for s in shapes])]), images=True)
 
 
 def clean(s: Shape) -> Shape:
@@ -871,40 +865,54 @@ def _lies_on(piece: Shape, face: Shape, tol: float = 1e-6) -> bool:
     return piece.geomType() == face.geomType() and face.distance(Vertex.makeVertex(c.x, c.y, c.z)) <= tol * (1.0 + face.BoundingBox().DiagonalLength)
 
 
-def _record_bool(history, name, operands, result: Shape, images: bool = False) -> None:
-    """A step of `history` for a boolean of `operands` making `result`, as OCCT's builders
-    record one: each face and edge split by the other operands modified into its pieces the
-    result keeps (lying on its faces or edges); each face no face of the result lies on
-    deleted; with `images` (an imprint), each face's images the result's faces on it."""
+_UNPLACED = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]]
+
+
+def _node(s) -> int:
+    """A handle's node, whatever its placement (the key kentron's history records)."""
+    return s.located(_UNPLACED).node_hash()
+
+
+def _recorded(history, name, operands, run, images: bool = False) -> Shape:
+    """`run()`'s result, a step of `history` recorded for it as kentron's booleans made it
+    (each result face and edge from the operand faces and edges it came from): each operand
+    face or edge modified into the result's ones made from it (where those are not itself,
+    kept as it is), each face with none deleted; with `images` (an imprint), each face's
+    images, itself included."""
     if history is None:
-        return
+        return run()
+    native.record_begin()
+    result = None
+    try:
+        result = run()
+    finally:
+        pairs = native.record_end(result.wrapped if result is not None else operands[0].wrapped)
+    made = {}
+    for source, image in pairs:
+        made.setdefault(_node(source), []).append(_node(image))
+    placed = {_node(x.wrapped): x for x in list(result.Faces()) + list(result.Edges())}
     op = Op(name)
     history.append(op, name)
-    faces, edges = result.Faces(), result.Edges()
-    def kept(piece: Shape) -> bool:
-        c = piece.Center()
-        at = Vertex.makeVertex(c.x, c.y, c.z)
-        reach = 1e-6 * (1.0 + piece.BoundingBox().DiagonalLength)
-        return any(x.distance(at) <= reach for x in (faces if piece.ShapeType() == "Face" else edges))
-    for i, operand in enumerate(operands):
-        others = [o for j, o in enumerate(operands) if j != i]
+    for operand in operands:
         op._tracked.update(operand.Faces())
         op._tracked.update(operand.Edges())
         op._tracked.update(operand.Vertices())
         for sub in list(operand.Faces()) + list(operand.Edges()):
-            # (A piece lying on a face of the other operand comes as a cell of each: once.)
-            pieces = []
-            for piece in _split_pieces(sub, others):
-                if kept(piece) and not any(_alike(piece, q) for q in pieces):
-                    pieces.append(piece)
-            if len(pieces) > 1:
-                op._modified[sub] = _normalize(compound(pieces))
-        for f in operand.Faces():
-            on = [r for r in faces if _lies_on(r, f)]
-            if not on:
-                op._deleted.append(f)
-            elif images:
-                op._images[f] = _normalize(compound(on))
+            key = _node(sub.wrapped)
+            found = [placed[n] for n in dict.fromkeys(made.get(key, [])) if n in placed]
+            # (A face lying on one of the other operand's is kept once, as that one: the
+            # result's faces lying on it are its images too.)
+            if not found and sub.ShapeType() == "Face":
+                found = [r for r in result.Faces() if _lies_on(r, sub)]
+            if not found:
+                if sub.ShapeType() == "Face":
+                    op._deleted.append(sub)
+                continue
+            if images and sub.ShapeType() == "Face":
+                op._images[sub] = _normalize(compound(found))
+            if not (len(found) == 1 and _node(found[0].wrapped) == key):
+                op._modified[sub] = _normalize(compound(found))
+    return result
 
 
 def isSubshape(s1: Shape, s2: Shape) -> bool:
