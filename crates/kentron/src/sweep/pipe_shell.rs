@@ -181,7 +181,10 @@ pub(super) fn pipe_shell(model: &mut Model, sections: &[(Shape, PipeOptions)], p
             let paths = crate::geometry::fit::approximate_alike(&samples, &motion.params, 3, 1e-8)?;
             let v = KnotVector::new(paths[0].knots().to_vec(), paths[0].multiplicities().to_vec(), paths[0].degree());
             let u = KnotVector::new(u_knots.knots().to_vec(), u_knots.multiplicities().to_vec(), u_knots.degree());
-            let surface = Surface::BSpline(BSplineSurface::try_new(paths.iter().map(|p| p.poles().to_vec()).collect(), u, v)?);
+            let swept = BSplineSurface::try_new(paths.iter().map(|p| p.poles().to_vec()).collect(), u, v)?;
+            // (Planar where it lies in a plane, its edges' pcurves found from it.)
+            let planar = super::pipe::planar_surface(&swept);
+            let surface = planar.clone().map(Surface::Plane).unwrap_or(Surface::BSpline(swept));
             let bottom = builder.junction_edge(e, k, v0, v1, &junction(k), &|i| law(e, i), pole_count, n, &vertex_law)?;
             let top = builder.junction_edge(e, k + 1, v0, v1, &junction(k + 1), &|i| law(e, i), pole_count, n, &vertex_law)?;
             let right = builder.vertex_path(v1, k, motion, &vertex_law(v1), &junction, &vertex_law)?;
@@ -211,7 +214,9 @@ pub(super) fn pipe_shell(model: &mut Model, sections: &[(Shape, PipeOptions)], p
             let mut coedges = Vec::with_capacity(4);
             for (edge, orientation, pcurve) in uses {
                 let coedge = builder.model.add_coedge(edge, orientation)?;
-                builder.model.set_pcurve_with_range(coedge, pcurve, 0.0, 1.0)?;
+                if planar.is_none() {
+                    builder.model.set_pcurve_with_range(coedge, pcurve, 0.0, 1.0)?;
+                }
                 coedges.push(coedge);
             }
             let wire = builder.model.add_wire(&coedges)?;

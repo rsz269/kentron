@@ -481,7 +481,10 @@ impl Piper<'_> {
             let rows = paths[0].poles().len();
             swept = swept.with_weights(w.iter().map(|&wi| vec![wi; rows]).collect());
         }
-        let surface = Surface::BSpline(swept);
+        // (A swept surface lying in a plane, as a straight edge carried in its plane by
+        // translations sweeps: that plane, its edges' pcurves found from it.)
+        let planar = planar_surface(&swept);
+        let surface = planar.clone().map(Surface::Plane).unwrap_or(Surface::BSpline(swept));
         let (u0, u1) = (a, b);
         let (start, end) = self.edge_vertices(e);
         let (start_path, end_path) = (self.vertex_path(start, k)?, self.vertex_path(end, k)?);
@@ -501,7 +504,9 @@ impl Piper<'_> {
         let mut coedges = Vec::with_capacity(4);
         for (edge, orientation, pcurve, first, last) in uses {
             let coedge = self.model.add_coedge(edge, orientation)?;
-            self.model.set_pcurve_with_range(coedge, pcurve, first, last)?;
+            if planar.is_none() {
+                self.model.set_pcurve_with_range(coedge, pcurve, first, last)?;
+            }
             coedges.push(coedge);
         }
         let wire = self.model.add_wire(&coedges)?;
@@ -794,6 +799,27 @@ pub(super) fn profile_axis(model: &Model, profile: Shape) -> (Point, Option<Vect
     let vertices: Vec<Point> = model.explore(profile, NodeKind::Vertex).map(|v| model.point(v)).collect();
     let n = vertices.len().max(1) as f64;
     (vertices.iter().fold(Point::ORIGIN, |acc, p| acc + (*p - Point::ORIGIN) * (1.0 / n)), None)
+}
+
+/// The plane a swept surface lies in (all its poles within a hair of it), facing as the
+/// surface does; `None` if it is not planar.
+pub(super) fn planar_surface(surface: &BSplineSurface) -> Option<crate::geometry::surface::Plane> {
+    use crate::geometry::ParametricSurface;
+    let poles: Vec<Point> = surface.poles().iter().flatten().copied().collect();
+    let (center, normal) = plane_of_inertia(&poles)?;
+    let size = poles.iter().map(|p| p.distance(center)).fold(0.0, f64::max);
+    if poles.iter().any(|p| (*p - center).dot(normal).abs() > 1e-10 * size.max(1.0)) {
+        return None;
+    }
+    // (Facing as the surface does, where its derivatives give it a normal.)
+    let (u0, u1, v0, v1) = surface.bounds();
+    let facing = (1..4).flat_map(|i| (1..4).map(move |j| (i, j))).find_map(|(i, j)| {
+        let (_, du, dv) = surface.d1(u0 + (u1 - u0) * i as f64 / 4.0, v0 + (v1 - v0) * j as f64 / 4.0);
+        let n = du.cross(dv);
+        (n.length() > 1e-12 * du.length() * dv.length()).then_some(n)
+    })?;
+    let normal = if facing.dot(normal) < 0.0 { -normal } else { normal };
+    Some(crate::geometry::surface::Plane::new(center, Direction::from_vector(normal)))
 }
 
 /// The plane through the points' centroid with the least spread across it (the normal

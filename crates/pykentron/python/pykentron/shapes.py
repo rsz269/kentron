@@ -2027,10 +2027,13 @@ class Solid(Shape, Mixin3D):
         # (Only where the spine has corners: elsewhere every transition is the same sweep.)
         corner = transition if transition in ("right", "round") and _has_corners(spine) else "transformed"
         if makeSolid:
-            # (Holes of one face swept at once where the inner wires lie within the outer one;
-            # otherwise as CadQuery: each wire swept, the inner ones cut from the outer.)
+            # (Holes of one face swept at once where the inner wires lie within the outer one,
+            # clear of one another; otherwise as CadQuery: each wire swept, the inner ones cut
+            # from the outer.)
             box = outer.BoundingBox()
-            if all(_box_within(w.BoundingBox(), box) for w in inners):
+            boxes = [w.BoundingBox() for w in inners]
+            apart = lambda a, b: a.xmax < b.xmin or b.xmax < a.xmin or a.ymax < b.ymin or b.ymax < a.ymin or a.zmax < b.zmin or b.zmax < a.zmin
+            if all(_box_within(b, box) for b in boxes) and all(apart(boxes[i], boxes[j]) for i in range(len(boxes)) for j in range(i)):
                 profile = Face.makeFromWires(outer, inners)
                 return Shape.cast(native.pipe(profile.wrapped, spine.wrapped, corner=corner, frenet=isFrenet, **guide))
             solids = [Shape.cast(native.pipe(Face.makeFromWires(w).wrapped, spine.wrapped, corner=corner, frenet=isFrenet, **guide)) for w in [outer] + inners]

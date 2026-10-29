@@ -170,12 +170,22 @@ fn pipe_framed(model: &mut Model, profile: Shape, spine: Shape, options: &PipeOp
     let framing = framing(model, &pieces, options)?;
     if let ([piece], pipe::Framing::Minimal | pipe::Framing::Frenet) = (&pieces[..], &framing) {
         let (curve, first, last) = (&piece.curve, piece.first, piece.last);
+        // (From the profile carried back to the spine's start from where it stands on it,
+        // as the pipe carries it: by OCCT's placement an end, or another point along it.)
+        let at = || -> Result<f64> {
+            let (_, s) = pipe::section_placement(model, profile, &pieces)?;
+            Ok(first + (last - first) * s)
+        };
         match curve {
-            Curve::Line(_) => return extrude(model, profile, curve.point(last) - curve.point(first)),
+            Curve::Line(_) => {
+                let back = curve.point(first) - curve.point(at()?);
+                return extrude(model, profile.moved(&Transform::translation(back)), curve.point(last) - curve.point(first));
+            }
             Curve::Circle(c) => {
                 let axis = c.frame().z_axis();
                 let axis = if last >= first { axis } else { Axis::new(axis.origin, -axis.direction) };
-                return revolve(model, profile, axis, (last - first).abs());
+                let back = Transform::rotation(axis, -(at()? - first).abs());
+                return revolve(model, profile.moved(&back), axis, (last - first).abs());
             }
             _ => {}
         }
@@ -284,8 +294,7 @@ pub enum Corner {
     /// bisecting the corner.
     #[doc(alias = "BRepBuilderAPI_RightCorner")]
     Mitred,
-    /// The profile turns with the spine, turned about the corner to fill its outside. Not
-    /// made yet.
+    /// The profile turns with the spine, turned about the corner to fill its outside.
     #[doc(alias = "BRepBuilderAPI_RoundCorner")]
     Rounded,
 }
@@ -1190,6 +1199,21 @@ mod tests {
                 assert!(n.dot(Direction::X).abs() > 1.0 - 1e-9, "{n:?}");
             }
         }
+        // (The sides swept by the edges along Z lie in the planes y = ±0.25: planes.)
+        assert_eq!(surfaces(&model, swept.shape).iter().filter(|s| **s == "plane").count(), 4);
+    }
+
+    /// A profile off a straight spine, its plane meeting the spine's end: it stands there,
+    /// and sweeps back from it (the spine's start carrying it below its plane).
+    #[test]
+    fn a_profile_standing_at_the_spine_end_sweeps_back() {
+        let mut model = Model::new();
+        let square = polygon_xy(&mut model, &[(4.0, 4.0), (5.0, 4.0), (5.0, 5.0), (4.0, 5.0)]);
+        let spine = make::edge_between(&mut model, Point::new(0.0, -3.0, -3.0), Point::ORIGIN).unwrap();
+        let swept = pipe(&mut model, square, spine).unwrap();
+        let b = properties::bounding_box(&model, swept.shape);
+        assert!((b.min.z + 3.0).abs() < 1e-6 && b.max.z.abs() < 1e-6, "{b:?}");
+        assert!((b.min.y - 1.0).abs() < 1e-6 && (b.max.y - 5.0).abs() < 1e-6, "{b:?}");
     }
 
     /// A square swept through to a larger one: each edge of either sweeps one side, the
