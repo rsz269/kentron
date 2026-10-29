@@ -535,7 +535,7 @@ def extrude(s: Shape, d, both: bool = False, history=None, name=None) -> Shape:
             results.append(Shape.cast(native.extrude(profile.wrapped, by.toTuple())))
             continue
         # (With its history as kentron's extrusion keeps it.)
-        shape, swept, firsts_lasts = native.extrude_recorded(profile.wrapped, by.toTuple())
+        shape, swept, firsts_lasts, _ = native.extrude_recorded(profile.wrapped, by.toTuple())
         results.append(Shape.cast(shape))
         for source, made in swept:
             generated.setdefault(_node(source), []).extend(Shape.cast(m) for m in made)
@@ -587,6 +587,8 @@ def offset(s: Shape, t: float, cap: bool = True, both: bool = False, tol: float 
                 out.append(f.thicken(t))
         return out
 
+    if history is not None and all(f.geomType() == "PLANE" for f in s.Faces()) and not any(el.ShapeType() == "Shell" and el.Closed() for el in _get(s, ("Face", "Shell"))):
+        return _offset_planes_recorded(s, t, both, history, name)
     if both:
         pos, neg = one(t), one(-t)
         both_ = [a.fuse(b) for a, b in zip(pos, neg)]
@@ -596,6 +598,47 @@ def offset(s: Shape, t: float, cap: bool = True, both: bool = False, tol: float 
     if history is not None:
         offsets = (1, -1) if both else (1,)
         _record(history, name, [s], result, moved=[(f, [f.normalAt() * (k * t) for k in offsets]) for f in s.Faces()])
+    return result
+
+
+def _offset_planes_recorded(s: Shape, t: float, both: bool, history, name) -> Shape:
+    """`offset` of planar faces, with its history as kentron's extrusions keep it: each face
+    extruded along its normal by `t` (and by `-t`, fused, with `both`), the face's offsets
+    the extrusions' end faces, its edges' the copies of its edges there."""
+    results, offsets = [], {}
+    for f in s.Faces():
+        made = {}
+        parts = []
+        for k in ((1, -1) if both else (1,)):
+            shape, _, ends, copies = native.extrude_recorded(f.wrapped, (f.normalAt() * (k * t)).toTuple())
+            parts.append(Shape.cast(shape))
+            for source, _, last in ends:
+                made.setdefault(_node(source), []).append(last)
+            for source, copy in copies:
+                made.setdefault(_node(source), []).append(copy)
+        if len(parts) == 2:
+            native.record_begin()
+            fused = None
+            try:
+                fused = parts[0].fuse(parts[1])
+            finally:
+                pairs = native.record_end(fused.wrapped if fused is not None else parts[0].wrapped)
+            made = _through(pairs, made)
+            parts = [fused]
+        results.append(parts[0])
+        for k, v in made.items():
+            offsets.setdefault(k, []).extend(v)
+    result = results[0] if len(results) == 1 else Compound.makeCompound(results)
+    placed = {_node(x.wrapped): x for x in list(result.Faces()) + list(result.Edges())}
+    op = Op(name)
+    history.append(op, name)
+    op._tracked.update(s.Faces())
+    op._tracked.update(s.Edges())
+    op._tracked.update(s.Vertices())
+    for sub in list(s.Faces()) + list(s.Edges()):
+        images = [placed[_node(h)] for h in offsets.get(_node(sub.wrapped), []) if _node(h) in placed]
+        if images:
+            op._generated[sub] = _normalize(compound(images))
     return result
 
 

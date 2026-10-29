@@ -593,17 +593,19 @@ fn face_normal(m: &Model, face: Shape) -> Vector {
 /// `profile` (a face or wire) swept along `v`: a prism's faces in CadQuery's order (OCCT's),
 /// those swept from the profile's edges first and its ends last, which is what an
 /// asymmetric chamfer's first face, and indexing into its faces, go by.
-/// [`extrude`], with its history: each profile sub-shape (by node) with what it swept, and
-/// each profile face's first and last faces in the result.
+/// [`extrude`], with its history: each profile sub-shape (by node) with what it swept, each
+/// profile face's first and last faces in the result, and each profile edge's and vertex's
+/// copy at the end.
 #[pyfunction]
 #[allow(clippy::type_complexity)]
-fn extrude_recorded(profile: Handle, v: Xyz) -> PyResult<(Handle, Vec<(Handle, Vec<Handle>)>, Vec<(Handle, Handle, Handle)>)> {
+fn extrude_recorded(profile: Handle, v: Xyz) -> PyResult<(Handle, Vec<(Handle, Vec<Handle>)>, Vec<(Handle, Handle, Handle)>, Vec<(Handle, Handle)>)> {
     with_model(|m| {
         let swept = sweep::extrude(m, profile.shape, vector(v))?;
         let generated = swept.history().iter().map(|(n, s)| (handle(Shape::from(*n)), s.iter().map(|&x| handle(x)).collect())).collect();
         let ends = swept.ends().iter().map(|&(n, a, b)| (handle(Shape::from(n)), handle(a), handle(b))).collect();
+        let copies = swept.copies().iter().map(|&(n, c)| (handle(Shape::from(n)), handle(c))).collect();
         // (As `extrude` gives it: the sides first; the faces are the same.)
-        Ok((handle(sides_first(m, &swept, profile.shape)?), generated, ends))
+        Ok((handle(sides_first(m, &swept, profile.shape)?), generated, ends, copies))
     })
 }
 

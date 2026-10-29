@@ -574,7 +574,7 @@ pub(super) fn pipe_along(model: &mut Model, profile: Shape, pieces: &[SpinePiece
     };
     let generated = std::mem::take(&mut piper.generated);
     let ends = std::mem::take(&mut piper.ends);
-    Ok(Sweep { shape, generated, ends })
+    Ok(Sweep { shape, generated, ends, copies: Vec::new() })
 }
 
 /// Where along the spine the profile stands, as OCCT places it (GeomFill_SectionPlacement):
