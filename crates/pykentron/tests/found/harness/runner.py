@@ -43,7 +43,8 @@ builtins.cq = cq
 def recording(f, at=0):
     def wrapped(*args, **kw):
         try:
-            obj, path = args[at], args[at + 1] if len(args) > at + 1 else kw.get('fname', kw.get('path', 'export'))
+            obj = args[at] if len(args) > at else kw.get('w', kw.get('shape'))
+            path = args[at + 1] if len(args) > at + 1 else kw.get('fname', kw.get('path', kw.get('fileName', 'export')))
             show_object(obj, name='export:' + os.path.basename(str(path)))
         except Exception:
             pass
@@ -53,7 +54,7 @@ try:
     cq.exporters.export = recording(cq.exporters.export)
 except Exception:
     pass
-for cls, names in ((cq.Shape, ('exportStl', 'exportStep', 'exportBrep')), (cq.Assembly, ('save', 'export')), (cq.Workplane, ('export',))):
+for cls, names in ((cq.Shape, ('export', 'exportStl', 'exportStep', 'exportBrep')), (cq.Assembly, ('save', 'export')), (cq.Workplane, ('export',))):
     for n in names:
         if hasattr(cls, n):
             setattr(cls, n, recording(getattr(cls, n)))
