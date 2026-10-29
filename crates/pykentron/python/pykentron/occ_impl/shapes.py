@@ -461,7 +461,18 @@ def clean(s: Shape) -> Shape:
 
 
 def fill(s: Shape, constraints=()) -> Shape:
-    raise NotImplementedError("filling surfaces")
+    """The face spanning `s`'s edges (a closed loop), through `constraints`: points, and
+    curves (their edges, which the face passes along, sampled as points it passes through),
+    as OCCT's filling."""
+    points = []
+    for c in constraints:
+        if isinstance(c, Shape):
+            for e in _get_edges(c):
+                points.extend(_tuple(e.positionAt(k / 16)) for k in range(17))
+        else:
+            points.append(_tuple(Vector(c)))
+    edges = [e.wrapped for e in _get_edges(s)]
+    return _compound_or_shape(Shape.cast(native.make_filling(edges, points, 3, 15)))
 
 
 def cap(s: Shape, ctx: Shape, constraints=()) -> Shape:
@@ -606,12 +617,65 @@ def hollow(s: Shape, *args, tol: float = 1e-3, kind: str = "intersection", histo
     return _compound_or_shape(target.hollow(faces.Faces() if faces else None, t, tol, kind))
 
 
-def prism(*args, **kwargs) -> Shape:
-    raise NotImplementedError("prismatic features")
+def prism(ctx: Shape, base, faces: Shape, t, *args, history=None, name=None, **kwargs) -> Shape:
+    """A prismatic feature, as CadQuery's (OCCT's BRepFeat_MakePrism and MakeDPrism): each of
+    `faces` swept, fused with `ctx` (or, not `additive`, cut from it), as far as `t` (a
+    length), up to its face (a shape), from and up to a pair of faces, or (None) through
+    all; along a direction, `prism(ctx, base, faces, t, dir, additive)`, or along each
+    face's normal, tapered by an angle in degrees, `prism(ctx, base, faces, t, angle,
+    additive)`. (The base face, OCCT's sketch face, is not needed.)"""
+    if history is not None:
+        raise NotImplementedError("histories of operations")
+    rest = list(args)
+    direction, angle = None, 0.0
+    if rest and not isinstance(rest[0], bool) and isinstance(rest[0], (int, float)):
+        angle = float(rest.pop(0))
+    elif rest and not isinstance(rest[0], bool):
+        direction = Vector(rest.pop(0))
+    if "angle" in kwargs:
+        angle = float(kwargs.pop("angle"))
+    if "dir" in kwargs:
+        direction = Vector(kwargs.pop("dir"))
+    additive = bool(rest.pop(0)) if rest else bool(kwargs.pop("additive", True))
+    extent = {}
+    if isinstance(t, Shape):
+        extent["until"] = t.face().wrapped
+    elif isinstance(t, tuple):
+        extent["start"], extent["until"] = t[0].face().wrapped, t[1].face().wrapped
+    elif t is not None:
+        extent["length"] = float(t)
+    result = ctx
+    for f in _get_faces(faces):
+        along = direction if direction is not None else f.normalAt()
+        result = Shape.cast(native.feature_prism(result.wrapped, f.wrapped, _tuple(along), math.radians(angle), additive, **extent))
+    return _compound_or_shape(result)
 
 
-def draft(*args, **kwargs) -> Shape:
-    raise NotImplementedError("drafts")
+def draft(ctx: Shape, base: Shape, faces: Shape, *args, history=None, name=None) -> Shape:
+    """`ctx` with `faces` drafted by an angle (degrees) about where they meet `base`'s
+    plane, against its normal or a given direction: `draft(ctx, base, faces, angle)` or
+    `draft(ctx, base, faces, dir, angle)`, as CadQuery's (OCCT's draft angle)."""
+    if history is not None:
+        raise NotImplementedError("histories of operations")
+    if len(args) == 1:
+        direction, angle = None, args[0]
+    elif len(args) == 2:
+        direction, angle = args
+    else:
+        raise TypeError("draft(ctx, base, faces, [dir,] angle)")
+    base_face = base.face() if hasattr(base, "face") else base
+    normal = base_face.normalAt()
+    pull = Vector(direction) if direction is not None else normal
+    drafted = list(_get_faces(faces))
+    # (OCCT drafts planes, cylinders and cones: other faces cannot be drafted.)
+    for f in drafted:
+        if f.geomType() not in ("PLANE", "CYLINDER", "CONE"):
+            raise ValueError(f"Face {f} cannot be used in a draft operation.")
+    try:
+        result = native.draft_faces(ctx.wrapped, [f.wrapped for f in drafted], _tuple(pull), math.radians(angle), _tuple(base_face.Center()), _tuple(normal))
+    except ValueError as e:
+        raise ValueError(f"the faces cannot be drafted: {e}") from e
+    return _compound_or_shape(Shape.cast(result))
 
 
 def check(s: Shape, results=None, tol: Optional[float] = None, verbose: bool = True) -> bool:

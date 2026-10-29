@@ -362,6 +362,43 @@ pub fn make_filling(edges: Vec<Handle>, points: Vec<Xyz>, order: usize, points_p
     with_model(|m| kentron::fill::n_sided(m, &edges, &options)).map(handle)
 }
 
+/// `shape` with `faces` drafted by `angle` (radians) against the pull `direction`, each
+/// turned about where it meets the neutral plane through `origin` with `normal` (OCCT's
+/// draft angle; the faces tangent to them drafted alike).
+#[pyfunction]
+pub fn draft_faces(shape: Handle, faces: Vec<Handle>, direction_: Xyz, angle: f64, origin: Xyz, normal: Xyz) -> PyResult<Handle> {
+    let pull = direction(direction_)?;
+    let neutral = Plane::new(point(origin), direction(normal)?);
+    let faces: Vec<kentron::draft::DraftedFace> = faces.iter().map(|h| kentron::draft::DraftedFace { face: h.shape, angle, neutral }).collect();
+    with_model(|m| kentron::draft::draft(m, shape.shape, pull, &faces)).map(handle)
+}
+
+/// A prism feature (OCCT's BRepFeat_MakePrism, or MakeDPrism with an `angle`): `profile`
+/// swept along `direction` (or, with a taper `angle` in radians, its normal), fused with
+/// `base` (`additive`) or cut from it; as far as `length`, up to the face `until` (from the
+/// face `start`), or, with neither, through all of `base`.
+#[pyfunction]
+#[pyo3(signature = (base, profile, direction=None, angle=0.0, additive=true, length=None, until=None, start=None))]
+#[allow(clippy::too_many_arguments)]
+pub fn feature_prism(base: Handle, profile: Handle, direction: Option<Xyz>, angle: f64, additive: bool, length: Option<f64>, until: Option<Handle>, start: Option<Handle>) -> PyResult<Handle> {
+    use kentron::feature::{FeatureExtent, FeatureMode, FeatureSweep};
+    let sweep = if angle != 0.0 {
+        FeatureSweep::DraftedPrism(angle)
+    } else {
+        let d = direction.ok_or_else(|| pyo3::exceptions::PyValueError::new_err("a prism feature without a direction"))?;
+        FeatureSweep::Prism(super::direction(d)?)
+    };
+    let extent = match (length, until, start) {
+        (Some(l), None, None) => FeatureExtent::Length(l),
+        (None, Some(u), None) => FeatureExtent::Until(u.shape),
+        (None, Some(u), Some(s)) => FeatureExtent::FromUntil(s.shape, u.shape),
+        (None, None, None) => FeatureExtent::ThruAll,
+        _ => return Err(pyo3::exceptions::PyValueError::new_err("a prism feature's extent: a length, a face up to, or faces from and up to")),
+    };
+    let mode = if additive { FeatureMode::Add } else { FeatureMode::Remove };
+    with_model(|m| kentron::feature::feature(m, base.shape, profile.shape, sweep, mode, extent)).map(handle)
+}
+
 /// `face` with the closed wires `holes` (on its surface, within it) cut out.
 #[pyfunction]
 pub fn face_with_holes(face: Handle, holes: Vec<Handle>) -> PyResult<Handle> {
@@ -671,6 +708,8 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(make_spline_approx, m)?)?;
     m.add_function(wrap_pyfunction!(make_spline_surface_approx, m)?)?;
     m.add_function(wrap_pyfunction!(make_filling, m)?)?;
+    m.add_function(wrap_pyfunction!(draft_faces, m)?)?;
+    m.add_function(wrap_pyfunction!(feature_prism, m)?)?;
     m.add_function(wrap_pyfunction!(face_with_holes, m)?)?;
     m.add_function(wrap_pyfunction!(line_intersections, m)?)?;
     m.add_function(wrap_pyfunction!(make_bezier, m)?)?;

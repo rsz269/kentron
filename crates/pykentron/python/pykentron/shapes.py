@@ -200,6 +200,9 @@ class Shape:
         return self._with_baked(self._copy_with(self.wrapped.located(_compose(loc.rows, self._baked_rows()))))
 
     def move(self, *args, **kwargs) -> "Shape":
+        # (Another shape: its first location, CadQuery's `move(s.toLocs()[0])`.)
+        if len(args) == 1 and not kwargs and isinstance(args[0], Shape):
+            return self.move(args[0].toLocs()[0])
         loc = _location_of(*args, **kwargs)
         self.wrapped = self.wrapped.moved(loc.rows)
         self.__dict__.pop("_boxes", None)
@@ -1771,6 +1774,14 @@ class Face(Shape):
 
     def isoline(self, param: float, direction: str = "v") -> Edge:
         raise NotImplementedError("isolines")
+
+    def extend(self, d: float, umin: bool = True, umax: bool = True, vmin: bool = True, vmax: bool = True) -> "Face":
+        """The face's surface over its range of parameters widened by `d` each way (OCCT's
+        BRepLib::ExtendFace, which bounds the result by that box). Planes only, extended
+        every way (their parameters are lengths)."""
+        if self.geomType() != "PLANE" or not (umin and umax and vmin and vmax):
+            raise NotImplementedError("extending faces other than planes, or not every way")
+        return Face(native.extended_face(self.wrapped, float(d)))
 
     def addHole(self, *inner) -> "Face":
         wires = [w if w.ShapeType() == "Wire" else Wire.assembleEdges([w]) for w in inner]
