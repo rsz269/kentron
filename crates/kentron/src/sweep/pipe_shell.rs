@@ -14,7 +14,7 @@ use crate::properties;
 use crate::tolerance;
 use crate::topology::{EdgeId, Model, NodeId, NodeKind, Orientation, Shape, VertexId};
 
-use super::pipe::{motions, section_placement, PieceMotion, SpinePiece};
+use super::pipe::{motions, section_placement, Framing, PieceMotion, SpinePiece};
 use super::PipeOptions;
 
 /// Samples per spine piece for the frames and the swept surfaces.
@@ -79,19 +79,20 @@ fn blend(at: &[(f64, Point)], g: f64) -> Point {
 
 /// Sweeps `sections` (wires of as many edges, or vertices) along the spine's `pieces`:
 /// a shell, or with `solid` a solid closed by planar faces at the ends.
-pub(super) fn pipe_shell(model: &mut Model, sections: &[(Shape, PipeOptions)], pieces: &[SpinePiece], solid: bool) -> Result<super::Sweep> {
+pub(super) fn pipe_shell(model: &mut Model, sections: &[(Shape, PipeOptions)], pieces: &[SpinePiece], solid: bool, framing: &Framing) -> Result<super::Sweep> {
     if sections.is_empty() || pieces.is_empty() {
         return Err(Error::InvalidInput("a sweep needs a spine and sections".into()));
     }
-    let (reference, _) = motions(pieces, SAMPLES, (0, 0.0), false)?;
+    let (reference, _) = motions(pieces, SAMPLES, (0, 0.0), framing)?;
     // Each section: where it stands (as a global spine position) and its motion into the
     // frame at the spine's start.
     let mut placed: Vec<(f64, Shape, Transform)> = Vec::with_capacity(sections.len());
     for &(section, options) in sections {
+        // (Where it stands found before it is placed, as OCCT finds it.)
+        let (k, s) = section_placement(model, section, pieces)?;
         let placing = super::placing(model, section, pieces, &options)?;
         let section = section.moved(&placing);
-        let (k, s) = section_placement(model, section, pieces)?;
-        let (at_anchor, _) = motions(pieces, SAMPLES, (k, s), false)?;
+        let (at_anchor, _) = motions(pieces, SAMPLES, (k, s), framing)?;
         placed.push((k as f64 + s, section, at_anchor[0].transforms[0]));
     }
     placed.sort_by(|a, b| a.0.total_cmp(&b.0));

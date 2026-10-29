@@ -16,7 +16,7 @@ from typing import Iterable, List, Literal, Optional, Sequence, Tuple, Union
 from .. import _kentron as native
 from ..geom import Location, Plane, Vector, VectorLike  # noqa: F401
 from ..shapes import *  # noqa: F401,F403
-from ..shapes import Compound, Edge, Face, Shape, Shell, Solid, Vertex, Wire, _UNPLACED, _cut_solid_by_solid, _edges_to_wires, _split_pieces, _thickened, _tuple
+from ..shapes import Compound, Edge, Face, Shape, Shell, Solid, Vertex, Wire, _UNPLACED, _cut_solid_by_solid, _guide, _edges_to_wires, _split_pieces, _thickened, _tuple
 
 Shapes = Literal["Vertex", "Edge", "Wire", "Face", "Shell", "Solid", "CompSolid", "Compound"]
 Real = Union[int, float]
@@ -678,17 +678,18 @@ def fillet2D(s: Shape, verts: Shape, r: float) -> Shape:
 def sweep(s, path: Shape, aux=None, cap: bool = False, transition: str = "transformed", history=None, name=None) -> Shape:
     """Edges, wires or faces swept along `path` (several sections, of matching wires or
     faces, blended along it)."""
-    if history is not None and aux is None:
-        return _sweep_recorded(s, path, cap, history, name)
+    if history is not None:
+        return _sweep_recorded(s, path, aux, cap, history, name)
     return _sweep(s, path, aux, cap, transition)
 
 
-def _sweep_recorded(s, path: Shape, cap: bool, history, name) -> Shape:
+def _sweep_recorded(s, path: Shape, aux, cap: bool, history, name) -> Shape:
     """`sweep` with its history as kentron's sweeps keep it: what each profile (or section)
     edge and vertex swept, and the first and last faces of each profile face (of the first
     section's, through several), carried through the cuts making the holes of sections with
     holes."""
     spine = _get_one_wire(path)
+    guide = _guide(_get_one_wire(aux)) if aux is not None else {}
     results, current, ends = [], {}, []
     def add(made):
         for source, images in made:
@@ -700,13 +701,13 @@ def _sweep_recorded(s, path: Shape, cap: bool, history, name) -> Shape:
             for k in range(len(lists[0])):
                 faces = [l[k] for l in lists]
                 here = {}
-                shape, made, firsts_lasts = native.pipe_through_recorded([f.outerWire().wrapped for f in faces], spine.wrapped, True)
+                shape, made, firsts_lasts = native.pipe_through_recorded([f.outerWire().wrapped for f in faces], spine.wrapped, True, **guide)
                 add(made)
                 for _, first, last in firsts_lasts:
                     here[("first", k)], here[("last", k)] = [first], [last]
                 result = Shape.cast(shape)
                 for j in range(len(faces[0].innerWires())):
-                    hole, hole_made, _ = native.pipe_through_recorded([f.innerWires()[j].wrapped for f in faces], spine.wrapped, True)
+                    hole, hole_made, _ = native.pipe_through_recorded([f.innerWires()[j].wrapped for f in faces], spine.wrapped, True, **guide)
                     add(hole_made)
                     result, here = _cut_recorded(result, Shape.cast(hole), here)
                 results.append(result)
@@ -717,7 +718,7 @@ def _sweep_recorded(s, path: Shape, cap: bool, history, name) -> Shape:
             wire_lists = [list(_get_wires(el)) for el in s]
             for k in range(len(wire_lists[0])):
                 here = {}
-                shape, made, _ = native.pipe_through_recorded([wl[k].wrapped for wl in wire_lists], spine.wrapped, cap)
+                shape, made, _ = native.pipe_through_recorded([wl[k].wrapped for wl in wire_lists], spine.wrapped, cap, **guide)
                 add(made)
                 results.append(Shape.cast(shape))
                 for key, v in here.items():
@@ -728,7 +729,7 @@ def _sweep_recorded(s, path: Shape, cap: bool, history, name) -> Shape:
         profiles = list(faces) if faces else [Face.makeFromWires(w) if cap else w for w in _get_wires(s)]
         for k, profile in enumerate(profiles):
             here = {}
-            shape, made, firsts_lasts = native.pipe_recorded(profile.wrapped, spine.wrapped)
+            shape, made, firsts_lasts = native.pipe_recorded(profile.wrapped, spine.wrapped, **guide)
             add(made)
             for _, first, last in firsts_lasts:
                 here[("first", k)], here[("last", k)] = [first], [last]
@@ -769,31 +770,30 @@ def _sweep_recorded(s, path: Shape, cap: bool, history, name) -> Shape:
 
 
 def _sweep(s, path: Shape, aux, cap: bool, transition: str) -> Shape:
-    if aux is not None:
-        raise NotImplementedError("sweeps guided by an auxiliary spine")
     spine = _get_one_wire(path)
+    guide = _guide(_get_one_wire(aux)) if aux is not None else {}
     if isinstance(s, (list, tuple)):
         lists = [[f for f in el.Faces()] for el in s]
         if all(lists) and all(len(l) == len(lists[0]) for l in lists):
             results = []
             for k in range(len(lists[0])):
                 sections = [l[k] for l in lists]
-                outer = Shape.cast(native.pipe_through([f.outerWire().wrapped for f in sections], spine.wrapped, True))
+                outer = Shape.cast(native.pipe_through([f.outerWire().wrapped for f in sections], spine.wrapped, True, **guide))
                 for j in range(len(sections[0].innerWires())):
-                    hole = Shape.cast(native.pipe_through([f.innerWires()[j].wrapped for f in sections], spine.wrapped, True))
+                    hole = Shape.cast(native.pipe_through([f.innerWires()[j].wrapped for f in sections], spine.wrapped, True, **guide))
                     outer = outer.cut(hole)
                 results.append(outer)
             return _compound_or_shape(results)
         wire_lists = [list(_get_wires(el)) for el in s]
-        results = [Shape.cast(native.pipe_through([wl[k].wrapped for wl in wire_lists], spine.wrapped, cap)) for k in range(len(wire_lists[0]))]
+        results = [Shape.cast(native.pipe_through([wl[k].wrapped for wl in wire_lists], spine.wrapped, cap, **guide)) for k in range(len(wire_lists[0]))]
         return _compound_or_shape(results)
     faces = s.Faces()
     if faces:
-        return _compound_or_shape([Shape.cast(native.pipe(f.wrapped, spine.wrapped)) for f in faces])
+        return _compound_or_shape([Shape.cast(native.pipe(f.wrapped, spine.wrapped, **guide)) for f in faces])
     results = []
     for w in _get_wires(s):
         profile = Face.makeFromWires(w) if cap else w
-        results.append(Shape.cast(native.pipe(profile.wrapped, spine.wrapped)))
+        results.append(Shape.cast(native.pipe(profile.wrapped, spine.wrapped, **guide)))
     return _compound_or_shape(results)
 
 
@@ -967,7 +967,22 @@ def draft(ctx: Shape, base: Shape, faces: Shape, *args, history=None, name=None)
         except ValueError as e:
             raise ValueError(f"the faces cannot be drafted: {e}") from e
         return _compound_or_shape(Shape.cast(result))
-    return _recorded(history, name, [ctx], run)
+    result = _recorded(history, name, [ctx], run)
+    if history is not None:
+        # (As OCCT's draft tells it: each drafted face generated its new one, the faces
+        # bordering them modified, the others, and the edges, left as they were.)
+        op = history[-1]
+        ours = {_node(f.wrapped) for f in drafted}
+        bordering = {_node(e.wrapped) for f in drafted for e in f.Edges()}
+        for sub in list(op._modified):
+            images = op._modified.pop(sub)
+            if sub.ShapeType() != "Face":
+                continue
+            if _node(sub.wrapped) in ours:
+                op._generated[sub] = images
+            elif any(_node(e.wrapped) in bordering for e in sub.Edges()):
+                op._modified[sub] = images
+    return result
 
 
 def check(s: Shape, results=None, tol: Optional[float] = None, verbose: bool = True) -> bool:

@@ -2020,8 +2020,7 @@ class Solid(Shape, Mixin3D):
         makeSolid = options[0] if rest else makeSolid
         if mode is None and len(rest) > 2:
             mode = rest[2]
-        if mode is not None:
-            raise NotImplementedError("sweeps guided by an auxiliary spine or binormal")
+        guide = _guide(mode)
         spine = cls._toWire(path)
         transition = options[3] if len(rest) > 3 and options[3] else transitionMode
         isFrenet = bool(options[1]) if len(rest) > 1 else isFrenet
@@ -2033,18 +2032,16 @@ class Solid(Shape, Mixin3D):
             box = outer.BoundingBox()
             if all(_box_within(w.BoundingBox(), box) for w in inners):
                 profile = Face.makeFromWires(outer, inners)
-                return Shape.cast(native.pipe(profile.wrapped, spine.wrapped, corner=corner, frenet=isFrenet))
-            solids = [Shape.cast(native.pipe(Face.makeFromWires(w).wrapped, spine.wrapped, corner=corner, frenet=isFrenet)) for w in [outer] + inners]
+                return Shape.cast(native.pipe(profile.wrapped, spine.wrapped, corner=corner, frenet=isFrenet, **guide))
+            solids = [Shape.cast(native.pipe(Face.makeFromWires(w).wrapped, spine.wrapped, corner=corner, frenet=isFrenet, **guide)) for w in [outer] + inners]
             return solids[0].cut(*solids[1:])
-        shapes = [Shape.cast(native.pipe(w.wrapped, spine.wrapped, corner=corner, frenet=isFrenet)) for w in [outer] + inners]
+        shapes = [Shape.cast(native.pipe(w.wrapped, spine.wrapped, corner=corner, frenet=isFrenet, **guide)) for w in [outer] + inners]
         return shapes[0] if len(shapes) == 1 else Compound.makeCompound(shapes)
 
     @classmethod
     def sweep_multi(cls, profiles, path, makeSolid: bool = True, isFrenet: bool = False, mode=None) -> "Shape":
-        if mode is not None:
-            raise NotImplementedError("sweeps guided by an auxiliary spine or binormal")
         wires = [p if p.ShapeType() == "Wire" else p.outerWire() for p in profiles]
-        return Shape.cast(native.pipe_through([w.wrapped for w in wires], cls._toWire(path).wrapped, makeSolid))
+        return Shape.cast(native.pipe_through([w.wrapped for w in wires], cls._toWire(path).wrapped, makeSolid, **_guide(mode)))
 
     def outerShell(self) -> Shell:
         return self.Shells()[0]
@@ -2165,6 +2162,21 @@ for _cls in _KINDS.values():
         if isinstance(_attr, classmethod) and (_name.startswith("make") or _name in ("assembleEdges", "combine", "extrudeLinear", "revolve", "sweep", "loft")):
             setattr(_cls, _name, _made_as(_name, _attr))
 del _cls, _name, _attr
+
+
+def _guide(mode, curvilinear: bool = True) -> dict:
+    """The keywords of kentron's pipes for a sweep's `mode` (CadQuery's): a wire or edge the
+    profile keeps facing (its points matched by the fraction of its length, with
+    `curvilinear`), or a direction (the profile turned square to it, then carried
+    unturned: OCCT's fixed trihedron, the section corrected)."""
+    if mode is None or mode is False or mode is True:
+        return {}
+    if isinstance(mode, (Wire, Edge)):
+        wire = Wire.assembleEdges([mode]) if mode.ShapeType() == "Edge" else mode
+        return {"aux": wire.wrapped, "curvilinear": curvilinear}
+    if isinstance(mode, Shape):
+        raise ValueError("an auxiliary spine is a wire or an edge")
+    return {"fixed": Vector(mode).toTuple(), "correction": True}
 
 
 # (The placement of a handle taken as it is, unmoved: kentron's histories key their faces and

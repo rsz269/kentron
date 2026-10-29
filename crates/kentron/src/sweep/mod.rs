@@ -158,16 +158,17 @@ pub fn extrude(model: &mut Model, profile: Shape, v: Vector) -> Result<Sweep> {
 /// faces sweep B-spline surfaces.
 #[doc(alias = "BRepOffsetAPI_MakePipe")]
 pub fn pipe(model: &mut Model, profile: Shape, spine: Shape) -> Result<Sweep> {
-    pipe_framed(model, profile, spine, false)
+    pipe_framed(model, profile, spine, &PipeOptions::default())
 }
 
-/// [`pipe`], the profile carried in the spine's Frenet frame where `frenet` (turning with
-/// its principal normal, as about a helix's axis; where the spine runs straight, turning
-/// no more than its tangent).
-fn pipe_framed(model: &mut Model, profile: Shape, spine: Shape, frenet: bool) -> Result<Sweep> {
+/// [`pipe`], the profile carried in the spine's Frenet frame where `options.frenet` (turning
+/// with its principal normal, as about a helix's axis; where the spine runs straight,
+/// turning no more than its tangent), or as `options.guide` turns it.
+fn pipe_framed(model: &mut Model, profile: Shape, spine: Shape, options: &PipeOptions) -> Result<Sweep> {
     use crate::geometry::ParametricCurve;
     let pieces = spine_pieces(model, spine)?;
-    if let [piece] = &pieces[..] {
+    let framing = framing(model, &pieces, options)?;
+    if let ([piece], pipe::Framing::Minimal | pipe::Framing::Frenet) = (&pieces[..], &framing) {
         let (curve, first, last) = (&piece.curve, piece.first, piece.last);
         match curve {
             Curve::Line(_) => return extrude(model, profile, curve.point(last) - curve.point(first)),
@@ -183,10 +184,22 @@ fn pipe_framed(model: &mut Model, profile: Shape, spine: Shape, frenet: bool) ->
         // Sweep the shape where it is defined, then place the result like the profile.
         let inverse = profile.placement.inverse();
         let local: Vec<pipe::SpinePiece> = pieces.iter().map(|p| pipe::SpinePiece { curve: p.curve.transformed(&inverse), first: p.first, last: p.last }).collect();
-        let sweep = pipe::pipe_along(model, Shape { placement: Transform::IDENTITY, ..profile }, &local, frenet)?;
+        let local_options = PipeOptions { guide: options.guide.map(|g| g.moved(&inverse)), ..*options };
+        let framing = self::framing(model, &local, &local_options)?;
+        let sweep = pipe::pipe_along(model, Shape { placement: Transform::IDENTITY, ..profile }, &local, &framing)?;
         return Ok(sweep.moved(&profile.placement));
     }
-    pipe::pipe_along(model, profile, &pieces, frenet)
+    pipe::pipe_along(model, profile, &pieces, &framing)
+}
+
+/// The frames `options` carry a profile in along the spine's `pieces`.
+fn framing(model: &Model, pieces: &[pipe::SpinePiece], options: &PipeOptions) -> Result<pipe::Framing> {
+    Ok(match options.guide {
+        Some(Guide::Wire { wire, curvilinear }) => pipe::Framing::Guide(pipe::GuideLaw::new(pieces, &spine_pieces(model, wire)?, curvilinear)?),
+        Some(Guide::Fixed(d)) => pipe::Framing::Fixed(Vector::from(d)),
+        None if options.frenet => pipe::Framing::Frenet,
+        None => pipe::Framing::Minimal,
+    })
 }
 
 /// The edges of a pipe's spine, in order, each run in the direction the spine takes it.
@@ -205,8 +218,33 @@ fn spine_pieces(model: &Model, spine: Shape) -> Result<Vec<pipe::SpinePiece>> {
     Ok(pieces)
 }
 
+/// What turns a pipe's profile about its spine, in place of the spine alone.
+#[doc(alias = "BRepOffsetAPI_MakePipeShell::SetMode")]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Guide {
+    /// A wire (or edge) the profile keeps facing: the frame's second axis points from the
+    /// spine's point to the guide's point dividing its length as the spine's point divides
+    /// the spine's (`curvilinear`), else where the plane square to the spine there meets
+    /// the guide.
+    #[doc(alias = "GeomFill_GuideTrihedronAC")]
+    Wire { wire: Shape, curvilinear: bool },
+    /// No turning at all: the profile carried along the spine by translations alone, the
+    /// frame's first axis this direction (what `correction` turns the profile square to).
+    #[doc(alias = "GeomFill_Fixed")]
+    Fixed(Direction),
+}
+
+impl Guide {
+    fn moved(self, t: &Transform) -> Guide {
+        match self {
+            Guide::Wire { wire, curvilinear } => Guide::Wire { wire: wire.moved(t), curvilinear },
+            Guide::Fixed(d) => Guide::Fixed(d.transformed(t)),
+        }
+    }
+}
+
 /// How a pipe places its profile on the spine, beyond keeping it where it is.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct PipeOptions {
     /// Moves the profile onto the spine: its point nearest the spine's start to where the
     /// profile stands on the spine.
@@ -218,17 +256,19 @@ pub struct PipeOptions {
     /// Carries the profile in the spine's Frenet frame (see [`pipe`]'s frame otherwise).
     #[doc(alias = "BRepOffsetAPI_MakePipeShell::SetMode")]
     pub frenet: bool,
+    /// What else turns the profile (in place of `frenet`).
+    pub guide: Option<Guide>,
 }
 
 /// [`pipe`], the profile first placed on the spine as `options` say.
 #[doc(alias = "BRepOffsetAPI_MakePipeShell")]
 pub fn pipe_with(model: &mut Model, profile: Shape, spine: Shape, options: &PipeOptions) -> Result<Sweep> {
     if !options.contact && !options.correction {
-        return pipe_framed(model, profile, spine, options.frenet);
+        return pipe_framed(model, profile, spine, options);
     }
     let pieces = spine_pieces(model, spine)?;
     let placing = placing(model, profile, &pieces, options)?;
-    pipe_framed(model, profile.moved(&placing), spine, options.frenet)
+    pipe_framed(model, profile.moved(&placing), spine, options)
 }
 
 /// How a pipe goes round a corner of its spine (where the tangent jumps).
@@ -271,15 +311,18 @@ pub fn pipe_cornered(model: &mut Model, profile: Shape, spine: Shape, options: &
 /// planar faces at the ends.
 #[doc(alias = "BRepOffsetAPI_MakePipeShell")]
 pub fn pipe_through(model: &mut Model, sections: &[(Shape, PipeOptions)], spine: Shape, solid: bool) -> Result<Shape> {
-    pipe_through_with(model, sections, spine, solid).map(|s| s.shape)
+    pipe_through_with(model, sections, spine, solid, None).map(|s| s.shape)
 }
 
-/// [`pipe_through`], with its history: the faces each section edge swept (or part of one,
-/// where sections were split to match), and the first section's (as a profile face's) first
-/// and last faces, the caps of a solid.
-pub fn pipe_through_with(model: &mut Model, sections: &[(Shape, PipeOptions)], spine: Shape, solid: bool) -> Result<Sweep> {
+/// [`pipe_through`], the frames turned by `guide` (if any), with its history: the faces
+/// each section edge swept (or part of one, where sections were split to match), and the
+/// first section's (as a profile face's) first and last faces, the caps of a solid.
+pub fn pipe_through_with(model: &mut Model, sections: &[(Shape, PipeOptions)], spine: Shape, solid: bool, guide: Option<Guide>) -> Result<Sweep> {
     let pieces = spine_pieces(model, spine)?;
-    pipe_shell::pipe_shell(model, sections, &pieces, solid)
+    let framing = framing(model, &pieces, &PipeOptions { guide, ..Default::default() })?;
+    // (Each section corrected square to the guide's fixed direction, where it has one.)
+    let sections: Vec<(Shape, PipeOptions)> = sections.iter().map(|&(s, o)| (s, PipeOptions { guide: guide.or(o.guide), ..o })).collect();
+    pipe_shell::pipe_shell(model, &sections, &pieces, solid, &framing)
 }
 
 /// The motion placing `profile` on the spine as `options` say (contact, correction).
@@ -293,7 +336,12 @@ fn placing(model: &Model, profile: Shape, pieces: &[pipe::SpinePiece], options: 
     let piece = &pieces[k];
     let t = piece.first + (piece.last - piece.first) * s;
     let (at, d) = piece.curve.d1(t);
-    let tangent = if piece.last < piece.first { -d } else { d };
+    // (Square to a fixed frame's direction where the frame is fixed.)
+    let tangent = match options.guide {
+        Some(Guide::Fixed(d)) => Vector::from(d),
+        _ if piece.last < piece.first => -d,
+        _ => d,
+    };
     let tangent = tangent * (1.0 / tangent.length());
     let (center, normal) = pipe::profile_axis(model, profile);
     if options.correction {
@@ -1086,6 +1134,64 @@ mod tests {
         assert!((volume - 10.0 * PI).abs() < 1e-6 * volume, "{volume}");
     }
 
+    /// The face of the polygon through `points` (in the XY plane).
+    fn polygon_xy(model: &mut Model, points: &[(f64, f64)]) -> Shape {
+        let p: Vec<Point> = points.iter().map(|&(x, y)| Point::new(x, y, 0.0)).collect();
+        let edges: Vec<Shape> = (0..p.len()).map(|i| make::edge_between(model, p[i], p[(i + 1) % p.len()]).unwrap()).collect();
+        let wire = make::wire(model, &edges).unwrap();
+        make::planar_face(model, wire).unwrap()
+    }
+
+    /// A square along a straight spine, its frames pointing at a guide that turns a quarter
+    /// round the spine: the square turns with it (a twisted prism, of the square's volume
+    /// all the same), its corner at (1, 0) ending at (0, 1).
+    #[test]
+    fn a_guide_turns_the_profile() {
+        let mut model = Model::new();
+        let square = polygon_xy(&mut model, &[(1.0, 0.0), (0.0, 1.0), (-1.0, 0.0), (0.0, -1.0)]);
+        let spine = make::edge_between(&mut model, Point::ORIGIN, Point::new(0.0, 0.0, 10.0)).unwrap();
+        // (A quarter turn of a helix about the spine, as a B-spline.)
+        let points: Vec<Point> = (0..=32).map(|i| { let a = FRAC_PI_2 * i as f64 / 32.0; Point::new(2.0 * a.cos(), 2.0 * a.sin(), 10.0 * i as f64 / 32.0) }).collect();
+        let helix = crate::geometry::fit::interpolate(&points, false, 1e-9).unwrap();
+        let guide = make::edge_from_curve(&mut model, Curve::BSpline(helix)).unwrap();
+        let options = PipeOptions { guide: Some(Guide::Wire { wire: guide, curvilinear: true }), ..Default::default() };
+        let swept = pipe_with(&mut model, square, spine, &options).unwrap();
+        assert!(validity::check(&model, swept.shape).is_valid());
+        let volume = properties::volume(&model, swept.shape).mass;
+        assert!((volume - 20.0).abs() < 1e-3 * 20.0, "{volume}");
+        let &(_, _, last) = swept.ends().first().unwrap();
+        let corner = model.explore(last, NodeKind::Vertex).map(|v| model.point(v)).min_by(|a, b| a.distance(Point::new(0.0, 1.0, 10.0)).total_cmp(&b.distance(Point::new(0.0, 1.0, 10.0)))).unwrap();
+        assert!(corner.distance(Point::new(0.0, 1.0, 10.0)) < 1e-4, "{corner:?}");
+    }
+
+    /// A fixed frame carries a rectangle by translations alone, corrected square to the
+    /// frame's direction first: along an arc, the rectangle turned to face X sweeps its area
+    /// times how far the arc goes along X.
+    #[test]
+    fn a_fixed_frame_translates_the_profile() {
+        let mut model = Model::new();
+        let rect = polygon_xy(&mut model, &[(-0.5, -0.25), (0.5, -0.25), (0.5, 0.25), (-0.5, 0.25)]);
+        let arc = Curve::Circle(Circle::new(Frame::new(Point::new(2.0, 0.0, 0.0), -Direction::Y, Direction::X), 2.0));
+        let spine = make::edge_from_curve_range(&mut model, arc, PI / 2.0, PI).unwrap();
+        let spine = make::wire(&mut model, &[spine]).unwrap();
+        let options = PipeOptions { correction: true, guide: Some(Guide::Fixed(Direction::X)), ..Default::default() };
+        let swept = pipe_with(&mut model, rect, spine, &options).unwrap();
+        assert!(validity::check(&model, swept.shape).is_valid());
+        let (a, b) = {
+            let (a, b) = model.edge_vertices(model.explore(spine, NodeKind::Edge).next().unwrap());
+            (model.point(a), model.point(b))
+        };
+        let volume = properties::volume(&model, swept.shape).mass;
+        let expected = 0.5 * (b.x - a.x).abs();
+        assert!((volume - expected).abs() < 1e-4 * expected, "{volume} {expected}");
+        for (_, first, last) in swept.ends() {
+            for f in [first, last] {
+                let n = match model.surface(*f).unwrap().transformed(&f.placement) { Surface::Plane(p) => p.normal(), other => panic!("{other:?}") };
+                assert!(n.dot(Direction::X).abs() > 1.0 - 1e-9, "{n:?}");
+            }
+        }
+    }
+
     /// A square swept through to a larger one: each edge of either sweeps one side, the
     /// first section's caps its first and last faces.
     #[test]
@@ -1098,7 +1204,7 @@ mod tests {
             make::wire(model, &edges).unwrap()
         };
         let (small, large) = (square(&mut model, 0.5, 0.0), square(&mut model, 1.0, 1.0));
-        let swept = pipe_through_with(&mut model, &[(small, PipeOptions::default()), (large, PipeOptions::default())], spine, true).unwrap();
+        let swept = pipe_through_with(&mut model, &[(small, PipeOptions::default()), (large, PipeOptions::default())], spine, true, None).unwrap();
         let faces = model.unique_subshapes(swept.shape, NodeKind::Face);
         assert_eq!(faces.len(), 6);
         for (a, b) in model.unique_subshapes(small, NodeKind::Edge).into_iter().zip(model.unique_subshapes(large, NodeKind::Edge)) {

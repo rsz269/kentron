@@ -404,7 +404,7 @@ fn carried(piece: &SpinePiece, from: f64, to: f64) -> Result<Transform> {
         Curve::Circle(c) => Ok(Transform::rotation(c.frame().z_axis(), at(to) - at(from))),
         _ => {
             let single = [SpinePiece { curve: piece.curve.clone(), first: piece.first, last: piece.last }];
-            let (motions, _) = super::pipe::motions(&single, 16, (0, from), false)?;
+            let (motions, _) = super::pipe::motions(&single, 16, (0, from), &super::pipe::Framing::Minimal)?;
             let transforms = &motions[0].transforms;
             Ok(if to <= 0.0 { transforms[0] } else { *transforms.last().expect("samples") })
         }

@@ -48,13 +48,113 @@ pub(super) struct PieceMotion {
     pub transforms: Vec<Transform>,
 }
 
+/// How the frames carrying a pipe's profile turn about the spine.
+pub(super) enum Framing {
+    /// Turning no more than the tangent does (rotation-minimizing).
+    Minimal,
+    /// The second axis the spine's principal normal, where the spine curves.
+    Frenet,
+    /// The second axis pointing at a point of a guide.
+    Guide(GuideLaw),
+    /// Not turning at all, the first axis this direction.
+    Fixed(Vector),
+}
+
+/// Samples per piece of a guide and of the spine, for the points matched on the guide.
+const GUIDE_SAMPLES: usize = 2048;
+
+/// Where a guide wire's points stand for the spine's: at the point dividing the guide's
+/// length as the spine's point divides the spine's (`curvilinear`), else where the plane
+/// square to the spine there meets the guide.
+pub(super) struct GuideLaw {
+    /// Along each spine piece, at evenly spread fractions: the fraction of the spine's
+    /// length up to there.
+    spine: Vec<Vec<f64>>,
+    /// The guide's points (evenly spread in its pieces' parameters), each with the fraction
+    /// of its length up to it.
+    points: Vec<(f64, Point)>,
+    curvilinear: bool,
+}
+
+impl GuideLaw {
+    pub(super) fn new(spine: &[SpinePiece], guide: &[SpinePiece], curvilinear: bool) -> Result<GuideLaw> {
+        let sampled = |piece: &SpinePiece| -> Vec<Point> { (0..=GUIDE_SAMPLES).map(|i| piece.curve.point(piece.at(i as f64 / GUIDE_SAMPLES as f64))).collect() };
+        let mut along = 0.0;
+        let mut spine_at = Vec::with_capacity(spine.len());
+        for piece in spine {
+            let points = sampled(piece);
+            let mut here = vec![along];
+            for w in points.windows(2) {
+                along += w[0].distance(w[1]);
+                here.push(along);
+            }
+            spine_at.push(here);
+        }
+        let mut points: Vec<(f64, Point)> = Vec::new();
+        let mut length = 0.0;
+        for piece in guide {
+            for p in sampled(piece) {
+                if let Some(&(_, q)) = points.last() {
+                    length += q.distance(p);
+                }
+                points.push((length, p));
+            }
+        }
+        if !(along > 0.0) || !(length > 0.0) {
+            return Err(Error::InvalidInput("a pipe's spine or guide of no length".into()));
+        }
+        for here in spine_at.iter_mut() {
+            here.iter_mut().for_each(|a| *a /= along);
+        }
+        points.iter_mut().for_each(|(a, _)| *a /= length);
+        Ok(GuideLaw { spine: spine_at, points, curvilinear })
+    }
+
+    /// The direction from `p` (at fraction `s` of spine piece `k`, the spine's tangent `t`
+    /// there) to the guide's point for it; `None` where they meet.
+    fn towards(&self, k: usize, s: f64, p: Point, t: Vector) -> Option<Vector> {
+        let q = if self.curvilinear {
+            let here = &self.spine[k];
+            let x = s.clamp(0.0, 1.0) * GUIDE_SAMPLES as f64;
+            let i = (x.floor() as usize).min(GUIDE_SAMPLES - 1);
+            let at = here[i] + (here[i + 1] - here[i]) * (x - i as f64);
+            let j = self.points.partition_point(|(a, _)| *a < at).clamp(1, self.points.len() - 1);
+            let ((a0, q0), (a1, q1)) = (self.points[j - 1], self.points[j]);
+            let f = if a1 > a0 { ((at - a0) / (a1 - a0)).clamp(0.0, 1.0) } else { 0.0 };
+            q0 + (q1 - q0) * f
+        } else {
+            // Where the guide crosses the plane square to the spine, the crossing nearest
+            // `p` (the guide's point nearest the plane where it crosses none).
+            let side = |q: Point| (q - p).dot(t);
+            let mut best: Option<(f64, Point)> = None;
+            for w in self.points.windows(2) {
+                let (d0, d1) = (side(w[0].1), side(w[1].1));
+                if (d0 <= 0.0) != (d1 <= 0.0) || d0 == 0.0 {
+                    let f = if d0 != d1 { d0 / (d0 - d1) } else { 0.0 };
+                    let q = w[0].1 + (w[1].1 - w[0].1) * f;
+                    if best.is_none_or(|(d, _)| q.distance(p) < d) {
+                        best = Some((q.distance(p), q));
+                    }
+                }
+            }
+            match best {
+                Some((_, q)) => q,
+                None => self.points.iter().map(|&(_, q)| q).min_by(|a, b| side(*a).abs().total_cmp(&side(*b).abs()))?,
+            }
+        };
+        let n = q - p;
+        (n.length() > 1e-300).then(|| n * (1.0 / n.length()))
+    }
+}
+
 /// Rotation-minimizing frames along the pieces (double reflection, Wang et al. 2008),
 /// carried on from piece to piece and sampled finely: the motions taking the frame at
 /// `anchor` (piece, fraction) to those at `samples` points per piece, and to the points
 /// halfway between them (to check fits).
-/// With `frenet`, the frames' second axis is the spine's principal normal instead, where
-/// the spine curves (its sign kept from sample to sample).
-pub(super) fn motions(pieces: &[SpinePiece], samples: usize, anchor: (usize, f64), frenet: bool) -> Result<(Vec<PieceMotion>, Vec<Vec<Transform>>)> {
+/// Framed otherwise as `framing` says: with the frames' second axis the spine's principal
+/// normal where the spine curves (its sign kept from sample to sample), pointing at a
+/// guide, or fixed.
+pub(super) fn motions(pieces: &[SpinePiece], samples: usize, anchor: (usize, f64), framing: &Framing) -> Result<(Vec<PieceMotion>, Vec<Vec<Transform>>)> {
     const FINE: usize = 16;
     let (p0, t0) = pieces[0].point_tangent(0.0)?;
     let r0 = {
@@ -62,21 +162,43 @@ pub(super) fn motions(pieces: &[SpinePiece], samples: usize, anchor: (usize, f64
         let r = a - t0 * a.dot(t0);
         r * (1.0 / r.length())
     };
-    // The principal normal at fraction `s` of a piece, signed as `r`; or `r` where the
-    // spine runs straight.
-    let normal_or = |piece: &SpinePiece, s: f64, t: Vector, r: Vector| -> Vector {
-        if !frenet {
-            return r;
+    // The principal normal at fraction `s` of piece `k`, signed as `r`, with `frenet`; or
+    // `r`, carried on.
+    let normal_or = |k: usize, s: f64, t: Vector, r: Vector| -> Vector {
+        match framing {
+            Framing::Frenet => {
+                let piece = &pieces[k];
+                let (_, _, d2) = piece.curve.d2(piece.at(s));
+                let n = d2 - t * d2.dot(t);
+                if !(n.length() > 1e-9 * d2.length().max(1e-300)) {
+                    return r;
+                }
+                let n = n * (1.0 / n.length());
+                if n.dot(r) < 0.0 { -n } else { n }
+            }
+            _ => r,
         }
-        let (_, _, d2) = piece.curve.d2(piece.at(s));
-        let n = d2 - t * d2.dot(t);
-        if !(n.length() > 1e-9 * d2.length().max(1e-300)) {
-            return r;
-        }
-        let n = n * (1.0 / n.length());
-        if n.dot(r) < 0.0 { -n } else { n }
     };
-    let r0 = if frenet { normal_or(&pieces[0], 0.0, t0, r0) } else { r0 };
+    // A guide's frame at fraction `s` of piece `k` (at `x`, tangent `t`), as OCCT's trihedron
+    // makes it: the second axis towards the guide's point, the first the tangent turned
+    // square to it; or the world's axes, fixed. None for the others, or where the guide meets
+    // the spine.
+    let fixed = |k: usize, s: f64, x: Point, t: Vector| -> Option<(Vector, Vector)> {
+        let unit = |v: Vector| (v.length() > 1e-12).then(|| v * (1.0 / v.length()));
+        match framing {
+            Framing::Guide(law) => {
+                let n = law.towards(k, s, x, t)?;
+                Some((unit(t - n * t.dot(n))?, n))
+            }
+            Framing::Fixed(d) => {
+                let d = unit(*d)?;
+                let a = if d.x.abs() < 0.9 { Vector::new(1.0, 0.0, 0.0) } else { Vector::new(0.0, 1.0, 0.0) };
+                Some((d, unit(a - d * a.dot(d))?))
+            }
+            _ => None,
+        }
+    };
+    let r0 = normal_or(0, 0.0, t0, r0);
     let frame = |p: Point, t: Vector, r: Vector| -> Frame { Frame::new(p, Direction::from_vector(t), Direction::from_vector(r)) };
     // One double reflection from (x, t, r) to the point x1 with tangent t1: the new r.
     let reflect = |x: Point, t: Vector, r: Vector, x1: Point, t1: Vector| -> Vector {
@@ -119,26 +241,30 @@ pub(super) fn motions(pieces: &[SpinePiece], samples: usize, anchor: (usize, f64
             correction = Correction::between((t, r), (ct, cr));
         }
         x = p;
-        let framed = |correction: &Correction, x: Point, t: Vector, r: Vector| frame(x, correction.apply(t), correction.apply(r));
+        // (A guide's or fixed frames as they say, the others turned by the correction.)
+        let framed = |correction: &Correction, s: f64, x: Point, t: Vector, r: Vector| match fixed(k, s, x, t) {
+            Some((ft, fr)) => frame(x, ft, fr),
+            None => frame(x, correction.apply(t), correction.apply(r)),
+        };
         if anchor.0 == k && anchor.1 <= 0.0 {
-            anchor_frame = Some(framed(&correction, x, t, r));
+            anchor_frame = Some(framed(&correction, 0.0, x, t, r));
         }
         let n = samples * 2 * FINE;
-        let (mut params, mut frames, mut half) = (vec![0.0], vec![framed(&correction, x, t, r)], Vec::with_capacity(samples));
+        let (mut params, mut frames, mut half) = (vec![0.0], vec![framed(&correction, 0.0, x, t, r)], Vec::with_capacity(samples));
         for i in 1..=n {
             let (s0, s) = ((i - 1) as f64 / n as f64, i as f64 / n as f64);
             if anchor.0 == k && anchor_frame.is_none() && anchor.1 > s0 && anchor.1 <= s {
                 let (xa, ta) = piece.point_tangent(anchor.1)?;
-                anchor_frame = Some(framed(&correction, xa, ta, normal_or(piece, anchor.1, ta, reflect(x, t, r, xa, ta))));
+                anchor_frame = Some(framed(&correction, anchor.1, xa, ta, normal_or(k, anchor.1, ta, reflect(x, t, r, xa, ta))));
             }
             let (x1, t1) = piece.point_tangent(s)?;
-            r = normal_or(piece, s, t1, reflect(x, t, r, x1, t1));
+            r = normal_or(k, s, t1, reflect(x, t, r, x1, t1));
             (x, t) = (x1, t1);
             if i % (2 * FINE) == 0 {
                 params.push(s);
-                frames.push(framed(&correction, x, t, r));
+                frames.push(framed(&correction, s, x, t, r));
             } else if i % (2 * FINE) == FINE {
-                half.push(framed(&correction, x, t, r));
+                half.push(framed(&correction, s, x, t, r));
             }
         }
         sampled.push((params, frames, half));
@@ -464,7 +590,7 @@ impl Piper<'_> {
 }
 
 /// Sweeps `profile` (unplaced) along the spine's `pieces`, in order.
-pub(super) fn pipe_along(model: &mut Model, profile: Shape, pieces: &[SpinePiece], frenet: bool) -> Result<Sweep> {
+pub(super) fn pipe_along(model: &mut Model, profile: Shape, pieces: &[SpinePiece], framing: &Framing) -> Result<Sweep> {
     if pieces.is_empty() {
         return Err(Error::InvalidInput("a pipe needs a spine".into()));
     }
@@ -484,7 +610,7 @@ pub(super) fn pipe_along(model: &mut Model, profile: Shape, pieces: &[SpinePiece
     let anchor = section_placement(model, profile, pieces)?;
     let mut samples = 16;
     let motions = loop {
-        let (motions, halves) = motions(pieces, samples, anchor, frenet)?;
+        let (motions, halves) = motions(pieces, samples, anchor, framing)?;
         let mut error = 0.0f64;
         for (motion, half) in motions.iter().zip(&halves) {
             for &p in &probes {
