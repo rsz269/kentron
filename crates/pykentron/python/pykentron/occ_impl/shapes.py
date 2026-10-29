@@ -3,7 +3,9 @@ module functions (CadQuery's free-function API, `cadquery.func`).
 
 The functions take and return shapes as CadQuery's do: results of one piece are that piece
 (a shell of one open face that face, a compound of one shape that shape), several a
-compound. `history` and `name` (CadQuery's operation history) are accepted and ignored.
+compound. `history` and `name` record an operation's history (CadQuery's `History`)
+for extrusions, lofts, sweeps and offsets, found from where the result's faces and edges
+lie (kentron's operations do not keep one); elsewhere they are accepted and ignored.
 """
 
 from __future__ import annotations
@@ -435,15 +437,21 @@ def fuse(s1: Shape, s2: Shape, *shapes: Shape, tol: float = 0.0, glue=None, hist
     result = s1
     for s in (s2,) + shapes:
         result = Shape.cast(native.union(result.wrapped, s.wrapped))
-    return _compound_or_shape(result)
+    result = _compound_or_shape(result)
+    _record_bool(history, name, [s1, s2, *shapes], result)
+    return result
 
 
 def cut(s1: Shape, s2: Shape, tol: float = 0.0, glue=None, history=None, name=None) -> Shape:
-    return _compound_or_shape(Shape.cast(_cut_solid_by_solid(s1.wrapped, s2.wrapped)))
+    result = _compound_or_shape(Shape.cast(_cut_solid_by_solid(s1.wrapped, s2.wrapped)))
+    _record_bool(history, name, [s1, s2], result)
+    return result
 
 
 def intersect(s1: Shape, s2: Shape, tol: float = 0.0, glue=None, history=None, name=None) -> Shape:
-    return _compound_or_shape(Shape.cast(native.intersection(s1.wrapped, s2.wrapped)))
+    result = _compound_or_shape(Shape.cast(native.intersection(s1.wrapped, s2.wrapped)))
+    _record_bool(history, name, [s1, s2], result)
+    return result
 
 
 def split(s1: Shape, s2: Shape, tol: float = 0.0, history=None, name=None) -> Shape:
@@ -453,7 +461,9 @@ def split(s1: Shape, s2: Shape, tol: float = 0.0, history=None, name=None) -> Sh
 
 def imprint(*shapes: Shape, tol: float = 0.0, glue="full", history=None, name=None) -> Shape:
     """The shapes split by one another (OCCT's general fuse): all the pieces."""
-    return _compound_or_shape([Shape.cast(h) for _, h in native.cells([s.wrapped for s in shapes])])
+    result = _compound_or_shape([Shape.cast(h) for _, h in native.cells([s.wrapped for s in shapes])])
+    _record_bool(history, name, list(shapes), result, images=True)
+    return result
 
 
 def clean(s: Shape) -> Shape:
@@ -500,7 +510,12 @@ def extrude(s: Shape, d, both: bool = False, history=None, name=None) -> Shape:
             results.append(Shape.cast(native.extrude(el.moved(-d).wrapped, (d * 2).toTuple())))
         else:
             results.append(Shape.cast(native.extrude(el.wrapped, d.toTuple())))
-    return _compound_or_shape(results)
+    result = _compound_or_shape(results)
+    if history is not None:
+        start, end = (-d, d) if both else (Vector(), d)
+        profiles = s.Faces()
+        _record(history, name, [s], result, firsts=[(f, f.moved(Location(start))) for f in profiles], lasts=[(f, f.moved(Location(end))) for f in profiles], sections=[e.moved(Location(start)) if both else e for e in s.Edges()])
+    return result
 
 
 def revolve(s: Shape, p, d, a: float = 360, history=None, name=None) -> Shape:
@@ -526,8 +541,13 @@ def offset(s: Shape, t: float, cap: bool = True, both: bool = False, tol: float 
     if both:
         pos, neg = one(t), one(-t)
         both_ = [a.fuse(b) for a, b in zip(pos, neg)]
-        return both_[0] if len(both_) == 1 else Compound.makeCompound(both_)
-    return _compound_or_shape(one(t))
+        result = both_[0] if len(both_) == 1 else Compound.makeCompound(both_)
+    else:
+        result = _compound_or_shape(one(t))
+    if history is not None:
+        offsets = (1, -1) if both else (1,)
+        _record(history, name, [s], result, moved=[(f, [f.normalAt() * (k * t) for k in offsets]) for f in s.Faces()])
+    return result
 
 
 def offset2D(s: Shape, t: float, ctx=None, kind: str = "arc", closed: bool = True) -> Shape:
@@ -550,6 +570,17 @@ def fillet2D(s: Shape, verts: Shape, r: float) -> Shape:
 def sweep(s, path: Shape, aux=None, cap: bool = False, transition: str = "transformed", history=None, name=None) -> Shape:
     """Edges, wires or faces swept along `path` (several sections, of matching wires or
     faces, blended along it)."""
+    result = _sweep(s, path, aux, cap, transition)
+    if history is not None:
+        if isinstance(s, (list, tuple)):
+            first, last = s[0], s[-1]
+            _record(history, name, [*s, path], result, firsts=[(f, f) for f in first.Faces()], lasts=[(f, f) for f in last.Faces()], sections=first.Edges())
+        else:
+            _record(history, name, [s, path], result, firsts=[(f, f) for f in s.Faces()], sections=s.Edges(), last_rest=s)
+    return result
+
+
+def _sweep(s, path: Shape, aux, cap: bool, transition: str) -> Shape:
     if aux is not None:
         raise NotImplementedError("sweeps guided by an auxiliary spine")
     spine = _get_one_wire(path)
@@ -599,7 +630,11 @@ def loft(*s, cap: bool = False, ruled: bool = False, continuity: str = "C2", par
     else:
         for el in _get_wire_lists(s):
             results.append(Shape.cast(native.make_loft([w.wrapped for w in el], cap, ruled, parametrization)))
-    return _compound_or_shape(results)
+    result = _compound_or_shape(results)
+    if history is not None:
+        first, last = s[0], s[-1]
+        _record(history, name, list(s), result, firsts=[(f, f) for f in first.Faces()], lasts=[(f, f) for f in last.Faces()], sections=first.Edges())
+    return result
 
 
 def project(s: Shape, base: Shape, *args, **kwargs) -> Shape:
@@ -685,6 +720,191 @@ def check(s: Shape, results=None, tol: Optional[float] = None, verbose: bool = T
         results.clear()
         results.extend(([s], p) for p in problems)
     return not problems
+
+
+# --- operation history ----------------------------------------------------------------
+
+
+class Op:
+    """One step of an operation history (CadQuery's): the shapes it tracked, deleted,
+    modified and generated, and its first and last shapes (bottom and top of a sweep)."""
+
+    def __init__(self, name: Optional[str] = None) -> None:
+        self._name = name if name else None
+        self._tracked = set()
+        self._deleted = []
+        self._modified = {}
+        self._generated = {}
+        self._images = {}
+        self._first = {}
+        self._last = {}
+        self._first_shape = compound()
+        self._last_shape = compound()
+
+    def _get(self, d, k: Shape) -> Shape:
+        if k.ShapeType() == "Compound":
+            tmp = []
+            for el in k:
+                val = d[el]
+                if val.ShapeType() == "Compound":
+                    tmp.extend(val)
+                else:
+                    tmp.append(val)
+            return _normalize(compound(tmp))
+        return _normalize(d[k])
+
+    def modified(self, s: Optional[Shape] = None) -> Shape:
+        """Shapes modified from s."""
+        return self._get(self._modified, s) if s else _normalize(compound(*self._modified.values()))
+
+    def generated(self, s: Optional[Shape] = None) -> Shape:
+        """Shapes generated from s."""
+        return self._get(self._generated, s) if s else _normalize(compound(*self._generated.values()))
+
+    def deleted(self) -> Shape:
+        """Deleted shapes."""
+        return _normalize(compound(self._deleted))
+
+    def images(self, s: Shape) -> Shape:
+        """Images of s."""
+        return self._get(self._images, s)
+
+    def first(self, s: Optional[Shape] = None) -> Shape:
+        """First shape (e.g. bottom face) or first shape generated from s."""
+        return self._get(self._first, s) if s else _normalize(self._first_shape)
+
+    def last(self, s: Optional[Shape] = None) -> Shape:
+        """Last shape (e.g. top face) or last shape generated from s."""
+        return self._get(self._last, s) if s else _normalize(self._last_shape)
+
+
+def _combine_hist_dict(d1, *ds) -> None:
+    """History dicts combined into `d1`: a key in both maps to the compound of both values."""
+    for d in ds:
+        for k in d1.keys() & d.keys():
+            d1[k] |= d[k]
+        for k in d.keys() - d1.keys():
+            d1[k] = d[k]
+
+
+class History:
+    """An operation history: its steps in order, and by name."""
+
+    def __init__(self) -> None:
+        self.ops = []
+        self.opDict = dict()
+
+    def __getitem__(self, ix):
+        return self.opDict[ix] if isinstance(ix, str) else self.ops[ix]
+
+    def pop(self) -> Op:
+        return self.ops.pop()
+
+    def append(self, op: Op, name: Optional[str] = None) -> None:
+        self.ops.append(op)
+        if name:
+            self.opDict[name] = op
+
+
+def _alike(a: Shape, b: Shape, tol: float = 1e-6) -> bool:
+    """Whether two faces or edges lie in one place (the same kind, size and centre)."""
+    if a.ShapeType() != b.ShapeType():
+        return False
+    measure = (lambda s: s.Area()) if a.ShapeType() == "Face" else (lambda s: s.Length())
+    size = max(measure(a), measure(b))
+    reach = tol * (1.0 + a.BoundingBox().DiagonalLength)
+    return abs(measure(a) - measure(b)) <= tol * (1.0 + size) and (a.Center() - b.Center()).Length <= reach
+
+
+def _record(history, name, inputs, result: Shape, firsts=(), lasts=(), sections=(), moved=(), last_rest=None) -> None:
+    """A step of `history` for `result`, made from `inputs` (all their faces, edges and
+    vertices tracked), found from where the result's faces and edges lie: its first and last
+    faces, those alike `firsts` and `lasts` (each also recorded as the first and last of
+    the input it came from); each edge of `sections` (the profile's) generating the result's
+    faces running from an edge alike it, other than the first and last; and for each
+    `(input, offsets)` of `moved`, the input face (and its edges) generating the result's
+    faces (edges) alike it moved by each offset; with `last_rest` (the profile), the faces
+    left over (neither first nor generated) its last (a sweep's end, moved along the path)."""
+    if history is None:
+        return
+    op = Op(name)
+    history.append(op, name)
+    for shape in inputs:
+        op._tracked.update(shape.Faces())
+        op._tracked.update(shape.Edges())
+        op._tracked.update(shape.Vertices())
+    faces = result.Faces()
+    def found(target):
+        return [f for f in faces if _alike(f, target)]
+    ends = []
+    for which, targets, shapes, per in (("first", firsts, "_first_shape", op._first), ("last", lasts, "_last_shape", op._last)):
+        for source, target in targets:
+            for f in found(target):
+                setattr(op, shapes, getattr(op, shapes) | f)
+                per[source] = f if source not in per else per[source] | f
+                ends.append(f)
+    generated = []
+    for e in sections:
+        sides = [f for f in faces if f not in ends and any(_alike(x, e) for x in f.Edges())]
+        if sides:
+            op._generated[e] = _normalize(compound(sides))
+            generated.extend(sides)
+    if last_rest is not None:
+        rest = [f for f in faces if f not in ends and f not in generated]
+        if rest:
+            op._last_shape = op._last_shape | _normalize(compound(rest))
+            op._last[last_rest] = _normalize(compound(rest))
+    for source, offsets in moved:
+        made = [f for off in offsets for f in faces if _alike(f, source.moved(Location(off)))]
+        if made:
+            op._generated[source] = _normalize(compound(made))
+        edges = result.Edges()
+        for e in source.Edges():
+            images = [x for off in offsets for x in edges if _alike(x, e.moved(Location(off)))]
+            if images:
+                op._generated[e] = _normalize(compound(images))
+
+
+def _lies_on(piece: Shape, face: Shape, tol: float = 1e-6) -> bool:
+    """Whether a result's face lies on an input's face: of its kind, its centre on it."""
+    c = piece.Center()
+    return piece.geomType() == face.geomType() and face.distance(Vertex.makeVertex(c.x, c.y, c.z)) <= tol * (1.0 + face.BoundingBox().DiagonalLength)
+
+
+def _record_bool(history, name, operands, result: Shape, images: bool = False) -> None:
+    """A step of `history` for a boolean of `operands` making `result`, as OCCT's builders
+    record one: each face and edge split by the other operands modified into its pieces the
+    result keeps (lying on its faces or edges); each face no face of the result lies on
+    deleted; with `images` (an imprint), each face's images the result's faces on it."""
+    if history is None:
+        return
+    op = Op(name)
+    history.append(op, name)
+    faces, edges = result.Faces(), result.Edges()
+    def kept(piece: Shape) -> bool:
+        c = piece.Center()
+        at = Vertex.makeVertex(c.x, c.y, c.z)
+        reach = 1e-6 * (1.0 + piece.BoundingBox().DiagonalLength)
+        return any(x.distance(at) <= reach for x in (faces if piece.ShapeType() == "Face" else edges))
+    for i, operand in enumerate(operands):
+        others = [o for j, o in enumerate(operands) if j != i]
+        op._tracked.update(operand.Faces())
+        op._tracked.update(operand.Edges())
+        op._tracked.update(operand.Vertices())
+        for sub in list(operand.Faces()) + list(operand.Edges()):
+            # (A piece lying on a face of the other operand comes as a cell of each: once.)
+            pieces = []
+            for piece in _split_pieces(sub, others):
+                if kept(piece) and not any(_alike(piece, q) for q in pieces):
+                    pieces.append(piece)
+            if len(pieces) > 1:
+                op._modified[sub] = _normalize(compound(pieces))
+        for f in operand.Faces():
+            on = [r for r in faces if _lies_on(r, f)]
+            if not on:
+                op._deleted.append(f)
+            elif images:
+                op._images[f] = _normalize(compound(on))
 
 
 def isSubshape(s1: Shape, s2: Shape) -> bool:
