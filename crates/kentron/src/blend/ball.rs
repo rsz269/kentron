@@ -1017,7 +1017,14 @@ fn section(sides: &[Side; 2], o: Point, tangent: Vector, r: f64, side: f64, near
     let start = o + sum.normalized() * (r / half.sin());
     let center = match newton_damped(start, conditions, characteristic) {
         Ok(center) => center,
-        Err(e) => pinned_center(sides, r).ok_or(e)?,
+        Err(e) => match pinned_center(sides, r) {
+            Some(center) => center,
+            None => {
+                let (center, toward) = pinned_on_axis(sides, o, r, side).ok_or(e)?;
+                let [(c0, uv0), (c1, uv1)] = [contact(&sides[0], center, toward)?, contact(&sides[1], center, toward)?];
+                return Ok(Section { t: 0.0, center, contacts: [c0, c1], contact_uv: [uv0, uv1], radius: r, straight: false });
+            }
+        },
     };
     let [(c0, uv0), (c1, uv1)] = [contact(&sides[0], center, o)?, contact(&sides[1], center, o)?];
     Ok(Section { t: 0.0, center, contacts: [c0, c1], contact_uv: [uv0, uv1], radius: r, straight: false })
@@ -1049,6 +1056,61 @@ fn pinned_center(sides: &[Side; 2], r: f64) -> Option<Point> {
     let (s, t) = ((ab * bw - bb * aw) / det, (aa * bw - ab * aw) / det);
     let (p, q) = (a.origin + da * s, b.origin + db * t);
     (p.distance(q) <= crate::tolerance::LINEAR).then(|| p + (q - p) * 0.5)
+}
+
+/// Where a ball of radius `r` between a cylinder of that radius and another face has its
+/// centre: on the cylinder's axis, `r` from the other face on the ball's `side` (as rounding a
+/// rim whose corner is a fillet of the same radius, the corner's axis slanting to the rim's
+/// face: the ball stands still there, as a sphere, where sections square to the rim find no
+/// centre). The axis's point nearest `o` found so, within the ball's reach of `o`, with a
+/// point the way from it to the ball's contact with the cylinder: square to the axis, in the
+/// plane through `o` square to both contacts' normals (the section's plane as the radius
+/// closes in on the cylinder's); `None` unless one side is such a cylinder.
+fn pinned_on_axis(sides: &[Side; 2], o: Point, r: f64, side: f64) -> Option<(Point, Point)> {
+    for (i, other) in [(0, 1), (1, 0)] {
+        let Surface::Cylinder(c) = untrimmed_surface(&sides[i].surface) else { continue };
+        if (c.radius() - r).abs() > crate::tolerance::LINEAR {
+            continue;
+        }
+        let f = c.frame();
+        let d = Vector::from(f.x()).cross(Vector::from(f.y())).normalized();
+        let at = |s: f64| f.origin() + d * s;
+        let off = |s: f64| sides[other].distance(at(s)).ok().map(|x| x.0 - side * r);
+        // (The other face's offset met along the axis by secants, from the axis's point
+        // level with `o`.)
+        let s0 = (o - f.origin()).dot(d);
+        let (mut a, mut b) = (s0, s0 + r);
+        let (mut fa, mut fb) = (off(a)?, off(b)?);
+        for _ in 0..60 {
+            if fb.abs() <= 1e-12 * (1.0 + r) || fb == fa {
+                break;
+            }
+            let next = b - fb * (b - a) / (fb - fa);
+            if !next.is_finite() {
+                return None;
+            }
+            (a, fa) = (b, fb);
+            b = next;
+            fb = off(b)?;
+        }
+        let center = at(b);
+        if fb.abs() > 1e-9 * (1.0 + r) || center.distance(o) > 2.0 * r {
+            continue;
+        }
+        // (On the cylinder's own side too: the ball inside it, as wide as it.)
+        if (sides[i].distance(center).ok()?.0 - side * r).abs() > 1e-6 * (1.0 + r) {
+            continue;
+        }
+        let n = sides[other].distance(center).ok()?.2;
+        let way = d.cross((center - o).cross(n));
+        if !(way.length() > 1e-12) {
+            continue;
+        }
+        // (Of the two ways, the one towards `o`.)
+        let way = way.normalized() * way.dot(o - center).signum();
+        return Some((center, center + way * r));
+    }
+    None
 }
 
 /// A surface without the trimming of a trimmed one.

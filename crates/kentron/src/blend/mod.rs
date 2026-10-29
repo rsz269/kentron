@@ -3384,6 +3384,38 @@ mod tests {
         assert!((v - expected).abs() <= 1e-6 * expected, "{v} against {expected}");
     }
 
+    /// A drafted block, its leaning side edges rounded with radius 0.5, then its top rim with
+    /// 0.5 too: along the corners' arcs the ball's centre stands on the leaning cylinders'
+    /// axes, touching the top at one point (the fillet there a piece of a sphere, its contact
+    /// with the top collapsed to a vertex), and the result is the limit of slightly smaller
+    /// radii.
+    #[test]
+    fn drafted_rims_round_with_balls_as_wide_as_their_corners() {
+        let rounded = |radius: f64| -> f64 {
+            let mut model = Model::new();
+            let corners = [(-2.0, -1.5), (2.0, -1.5), (2.0, 1.5), (-2.0, 1.5)].map(|(x, y)| Point::new(x, y, 0.0));
+            let edges: Vec<Shape> = (0..4).map(|i| make::edge_between(&mut model, corners[i], corners[(i + 1) % 4]).unwrap()).collect();
+            let wire = make::wire(&mut model, &edges).unwrap();
+            let face = make::planar_face(&mut model, wire).unwrap();
+            let drafted = sweep::extrude_drafted(&mut model, face, Vector::new(0.0, 0.0, 2.0), 5f64.to_radians()).unwrap();
+            let leaning: Vec<Shape> = model.unique_subshapes(drafted, NodeKind::Edge).into_iter().filter(|&e| {
+                let (p, q) = model.edge_vertices(e);
+                (model.point(p).z - model.point(q).z).abs() > 1.0
+            }).collect();
+            let sides = fillet(&mut model, drafted, &leaning, 0.5).unwrap();
+            let rim = edges_at(&model, sides, 2.0);
+            assert_eq!(rim.len(), 8);
+            let result = fillet(&mut model, sides, &rim, radius).unwrap();
+            let report = validity::check(&model, result);
+            assert!(report.is_valid(), "{report:?}");
+            properties::volume(&model, result).mass
+        };
+        let (wide, a, b) = (rounded(0.5), rounded(0.499), rounded(0.498));
+        // (On the line through the two smaller radii: each step of 0.001 takes about 0.0019.)
+        let line = 2.0 * a - b;
+        assert!((wide - line).abs() <= 1e-5, "{wide} against {line} ({a}, {b})");
+    }
+
     #[test]
     fn chamfered_concave_edge() {
         // The inner edge of an L-shaped solid: a prism of d²/2 added.

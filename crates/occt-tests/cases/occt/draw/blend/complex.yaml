@@ -389,7 +389,6 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/complex/F1
-expect: not_done
 build:
   - a: {load: {brep: "CFI_id150009.rle"}}
   - a_9: {select: {of: a, edge: [0.920587316105, 69.8952846791, 48.8849551355], length: 86.501731632}}

@@ -16,7 +16,7 @@ use crate::geometry::curve2::{BSplineCurve2, Curve2, Line2};
 use crate::geometry::surface::{BSplineSurface, KnotVector, Surface};
 use crate::geometry::{fit, project, ParametricCurve, ParametricSurface};
 use crate::math::{Direction2, Point, Point2};
-use crate::topology::{EdgeId, Model, NodeKind, Orientation, Shape, VertexId};
+use crate::topology::{CoEdgeId, EdgeId, FaceId, Model, NodeKind, Orientation, Shape, VertexId};
 
 use super::{contact_vertex, cover_pcurve, joined_extensions, off_patch, reach_curve, reach_snapped, end_cut, extension, fillet_surface, new_face, rebuild_face, rolling_with, unwrapped, EndCut, Profile, Rolling, Use, NOT_REACHED};
 
@@ -1183,6 +1183,34 @@ fn build(model: &mut Model, shape: Shape, stripes: &[Stripe], ends: &[[End; 2]],
         };
         let (a, b) = (used(model, fillet_faces[i]), used(model, face));
         added.push(if a.is_some() && a == b { face.reversed() } else { face });
+    }
+    // (A contact that stays put, as where the ball stands still on the axis of a corner's
+    // cylinder as wide as it: its edge of no length collapsed to a point, the side face's
+    // boundary passing through it and the fillet face closing there on a degenerate edge,
+    // as at a pole.)
+    for (i, edges) in contact_edges.iter().enumerate() {
+        for &e in edges {
+            let (a, b) = model.edge_vertices(Shape::from(e));
+            // (Of no length at all: the network's tolerance grows with the contacts' deviation,
+            // far past what a contact that moves can be short of.)
+            if a.node == b.node || !(crate::properties::length(model, Shape::from(e)).mass <= crate::tolerance::LINEAR) {
+                continue;
+            }
+            let (a, b) = (VertexId::try_from(a.node).expect("a vertex"), VertexId::try_from(b.node).expect("a vertex"));
+            let gap = model.point(Shape::from(a)).distance(model.point(Shape::from(b)));
+            if gap > crate::tolerance::LINEAR {
+                continue;
+            }
+            model.replace_node(b, a)?;
+            for parent in model.parents(e.into()) {
+                let Ok(coedge) = CoEdgeId::try_from(parent) else { continue };
+                let wire = model[coedge].wire;
+                if model.face_of_wire(wire).is_some_and(|f| f != FaceId::try_from(added[i].node).expect("a face")) {
+                    model.remove_coedge(wire, coedge)?;
+                }
+            }
+            model.clear_edge_curve(Shape::from(e))?;
+        }
     }
     // The solid with the faces replaced and the new ones added (or, for a shape of shells
     // only, the shell).

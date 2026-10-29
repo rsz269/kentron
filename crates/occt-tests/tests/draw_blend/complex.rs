@@ -170,32 +170,29 @@ fn c4() -> DrawResult<()> {
 /// `tests/blend/complex/C5`
 /// kentron: sub-shapes named by OCCT's enumeration are selected by position (draw_selectors.json)
 #[test]
-#[should_panic]
-fn c5() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.dset(&["SCALE", "1000"])?;
-        d.dset(&["SCALE1", "10"])?;
-        d.dset(&["SCALE2", "1"])?;
-        d.dset(&["SCALE3", "5"])?;
-        d.restore(&[data_file("CFI_pro6309a.rle").as_str(), "a"])?;
-        d.tscale(&["a", "0", "0", "0", "1000"])?;
-        d.restore(&[data_file("pro6309b.rle").as_str(), "b"])?;
-        d.tscale(&["b", "0", "0", "0", "1000"])?;
-        d.invert(&["b"])?;
-        d.shape(&["bb", "So"])?;
-        d.add(&["b", "bb"])?;
-        d.bcut(&["cab", "a", "bb"])?;
-        d.nexplode(&["cab", "e"])?;
-        d.nearest(&["cab_10", "cab", "E", "-67.6396721825", "161.182754951", "45.0", "90.0"])?;
-        d.nearest(&["cab_11", "cab", "E", "-64.195805431", "160.022122086", "96.3662836869", "15.7086001208"])?;
-        d.nearest(&["cab_2", "cab", "E", "-110.069232527", "28.7300692648", "96.5941924382", "17.5783354564"])?;
-        d.nearest(&["cab_9", "cab", "E", "-62.1339859912", "-82.0551067591", "45.0", "90.0"])?;
-        d.blend(&["result", "cab", "10", "cab_9", "10", "cab_10", "10", "cab_2", "10", "cab_11"])?;
-        d.checkprops(&["result", "-s", "180881"])?;
-        d.checkshape(&["result"])?;
-        Ok(())
-    })
+fn c5() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.dset(&["SCALE", "1000"])?;
+    d.dset(&["SCALE1", "10"])?;
+    d.dset(&["SCALE2", "1"])?;
+    d.dset(&["SCALE3", "5"])?;
+    d.restore(&[data_file("CFI_pro6309a.rle").as_str(), "a"])?;
+    d.tscale(&["a", "0", "0", "0", "1000"])?;
+    d.restore(&[data_file("pro6309b.rle").as_str(), "b"])?;
+    d.tscale(&["b", "0", "0", "0", "1000"])?;
+    d.invert(&["b"])?;
+    d.shape(&["bb", "So"])?;
+    d.add(&["b", "bb"])?;
+    d.bcut(&["cab", "a", "bb"])?;
+    d.nexplode(&["cab", "e"])?;
+    d.nearest(&["cab_10", "cab", "E", "-67.6396721825", "161.182754951", "45.0", "90.0"])?;
+    d.nearest(&["cab_11", "cab", "E", "-64.195805431", "160.022122086", "96.3662836869", "15.7086001208"])?;
+    d.nearest(&["cab_2", "cab", "E", "-110.069232527", "28.7300692648", "96.5941924382", "17.5783354564"])?;
+    d.nearest(&["cab_9", "cab", "E", "-62.1339859912", "-82.0551067591", "45.0", "90.0"])?;
+    d.blend(&["result", "cab", "10", "cab_9", "10", "cab_10", "10", "cab_2", "10", "cab_11"])?;
+    d.checkprops(&["result", "-s", "180881"])?;
+    d.checkshape(&["result"])?;
+    Ok(())
 }
 
 /// `tests/blend/complex/C7`
