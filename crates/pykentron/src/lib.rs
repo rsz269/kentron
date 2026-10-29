@@ -593,6 +593,20 @@ fn face_normal(m: &Model, face: Shape) -> Vector {
 /// `profile` (a face or wire) swept along `v`: a prism's faces in CadQuery's order (OCCT's),
 /// those swept from the profile's edges first and its ends last, which is what an
 /// asymmetric chamfer's first face, and indexing into its faces, go by.
+/// [`extrude`], with its history: each profile sub-shape (by node) with what it swept, and
+/// each profile face's first and last faces in the result.
+#[pyfunction]
+#[allow(clippy::type_complexity)]
+fn extrude_recorded(profile: Handle, v: Xyz) -> PyResult<(Handle, Vec<(Handle, Vec<Handle>)>, Vec<(Handle, Handle, Handle)>)> {
+    with_model(|m| {
+        let swept = sweep::extrude(m, profile.shape, vector(v))?;
+        let generated = swept.history().iter().map(|(n, s)| (handle(Shape::from(*n)), s.iter().map(|&x| handle(x)).collect())).collect();
+        let ends = swept.ends().iter().map(|&(n, a, b)| (handle(Shape::from(n)), handle(a), handle(b))).collect();
+        // (As `extrude` gives it: the sides first; the faces are the same.)
+        Ok((handle(sides_first(m, &swept, profile.shape)?), generated, ends))
+    })
+}
+
 #[pyfunction]
 fn extrude(profile: Handle, v: Xyz) -> PyResult<Handle> {
     with_model(|m| {
@@ -1366,6 +1380,7 @@ fn _kentron(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(make_compound, m)?)?;
     m.add_function(wrap_pyfunction!(transformed, m)?)?;
     m.add_function(wrap_pyfunction!(union, m)?)?;
+    m.add_function(wrap_pyfunction!(extrude_recorded, m)?)?;
     m.add_function(wrap_pyfunction!(difference, m)?)?;
     m.add_function(wrap_pyfunction!(intersection, m)?)?;
     m.add_function(wrap_pyfunction!(section, m)?)?;

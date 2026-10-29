@@ -498,17 +498,34 @@ def chamfer(s: Shape, edges: Shape, d: float, history=None, name=None) -> Shape:
 def extrude(s: Shape, d, both: bool = False, history=None, name=None) -> Shape:
     """`s` (vertices, edges, wires or faces) swept along `d` (both ways if `both`)."""
     d = Vector(d)
-    results = []
+    results, generated, ends = [], {}, []
     for el in _get(s, ("Vertex", "Edge", "Wire", "Face")):
-        if both:
-            results.append(Shape.cast(native.extrude(el.moved(-d).wrapped, (d * 2).toTuple())))
-        else:
-            results.append(Shape.cast(native.extrude(el.wrapped, d.toTuple())))
+        profile, by = (el.moved(-d), d * 2) if both else (el, d)
+        if history is None:
+            results.append(Shape.cast(native.extrude(profile.wrapped, by.toTuple())))
+            continue
+        # (With its history as kentron's extrusion keeps it.)
+        shape, swept, firsts_lasts = native.extrude_recorded(profile.wrapped, by.toTuple())
+        results.append(Shape.cast(shape))
+        for source, made in swept:
+            generated.setdefault(_node(source), []).extend(Shape.cast(m) for m in made)
+        ends.extend((_node(source), Shape.cast(a), Shape.cast(b)) for source, a, b in firsts_lasts)
     result = _compound_or_shape(results)
     if history is not None:
-        start, end = (-d, d) if both else (Vector(), d)
-        profiles = s.Faces()
-        _record(history, name, [s], result, firsts=[(f, f.moved(Location(start))) for f in profiles], lasts=[(f, f.moved(Location(end))) for f in profiles], sections=[e.moved(Location(start)) if both else e for e in s.Edges()])
+        op = Op(name)
+        history.append(op, name)
+        op._tracked.update(s.Faces())
+        op._tracked.update(s.Edges())
+        op._tracked.update(s.Vertices())
+        for sub in list(s.Faces()) + list(s.Edges()) + list(s.Vertices()):
+            if _node(sub.wrapped) in generated and sub.ShapeType() != "Face":
+                op._generated[sub] = _normalize(compound(generated[_node(sub.wrapped)]))
+        for f in s.Faces():
+            for key, first, last in ends:
+                if key == _node(f.wrapped):
+                    op._first[f], op._last[f] = first, last
+                    op._first_shape = op._first_shape | first
+                    op._last_shape = op._last_shape | last
     return result
 
 

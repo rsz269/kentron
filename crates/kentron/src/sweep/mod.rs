@@ -29,19 +29,33 @@ use crate::topology::{EdgeId, FaceId, Model, NodeId, NodeKind, Orientation, Shap
 pub struct Sweep {
     pub shape: Shape,
     generated: Vec<(NodeId, Vec<Shape>)>,
+    /// Each profile face's first and last faces in the result (the face itself, closing the
+    /// start, and its copy closing the end), where the sweep made them.
+    ends: Vec<(NodeId, Shape, Shape)>,
 }
 
 impl Sweep {
     /// The same sweep with every resulting shape moved by `t`.
     fn moved(self, t: &Transform) -> Sweep {
         let generated = self.generated.into_iter().map(|(n, s)| (n, s.iter().map(|s| s.moved(t)).collect())).collect();
-        Sweep { shape: self.shape.moved(t), generated }
+        let ends = self.ends.into_iter().map(|(n, a, b)| (n, a.moved(t), b.moved(t))).collect();
+        Sweep { shape: self.shape.moved(t), generated, ends }
     }
 
     /// The shapes swept by `input` (a sub-shape of the profile); empty if `input` is not
     /// part of the profile.
     pub fn generated(&self, input: Shape) -> Vec<Shape> {
         self.generated.iter().filter(|(node, _)| *node == input.node).flat_map(|(_, s)| s.clone()).collect()
+    }
+
+    /// Every profile sub-shape (by node) with the shapes it swept.
+    pub fn history(&self) -> &[(NodeId, Vec<Shape>)] {
+        &self.generated
+    }
+
+    /// Each profile face (by node) with the result's first and last faces made from it.
+    pub fn ends(&self) -> &[(NodeId, Shape, Shape)] {
+        &self.ends
     }
 }
 
@@ -72,6 +86,7 @@ pub fn extrude(model: &mut Model, profile: Shape, v: Vector) -> Result<Sweep> {
         end_edges: HashMap::new(),
         faces: HashMap::new(),
         generated: Vec::new(),
+        ends: Vec::new(),
     };
     let shape = match profile.kind() {
         NodeKind::Vertex => {
@@ -109,18 +124,20 @@ pub fn extrude(model: &mut Model, profile: Shape, v: Vector) -> Result<Sweep> {
         NodeKind::Compound => {
             let parts: Vec<Shape> = x.model.children(profile).collect();
             let compound = x.model.new_empty(NodeKind::Compound);
-            let mut generated = Vec::new();
+            let (mut generated, mut ends) = (Vec::new(), Vec::new());
             for part in parts {
                 let sweep = extrude(x.model, part, v)?;
                 generated.extend(sweep.generated);
+                ends.extend(sweep.ends);
                 x.model.add(compound, sweep.shape)?;
             }
-            return Ok(Sweep { shape: compound, generated });
+            return Ok(Sweep { shape: compound, generated, ends });
         }
         kind => todo!("extruding a {kind:?}"),
     };
     let generated = std::mem::take(&mut x.generated);
-    Ok(Sweep { shape, generated })
+    let ends = std::mem::take(&mut x.ends);
+    Ok(Sweep { shape, generated, ends })
 }
 
 /// Sweeps `profile` along the `spine` (an edge, or a wire of edges meeting smoothly),
@@ -365,7 +382,7 @@ pub fn revolve(model: &mut Model, profile: Shape, axis: Axis, angle: f64) -> Res
         kind => todo!("revolving a {kind:?}"),
     };
     let generated = std::mem::take(&mut r.generated);
-    Ok(Sweep { shape, generated })
+    Ok(Sweep { shape, generated, ends: Vec::new() })
 }
 
 /// The state of one revolution: what each profile vertex and edge has swept, and their
@@ -746,6 +763,7 @@ struct Extruder<'m> {
     /// makes its normal `v × (edge tangent)`.
     faces: HashMap<EdgeId, Option<(FaceId, Orientation)>>,
     generated: Vec<(NodeId, Vec<Shape>)>,
+    ends: Vec<(NodeId, Shape, Shape)>,
 }
 
 impl Extruder<'_> {
@@ -929,6 +947,7 @@ impl Extruder<'_> {
         let solid = self.model.new_empty(NodeKind::Solid);
         self.model.add(solid, if volume < 0.0 { shell.reversed() } else { shell })?;
         self.record(face, solid);
+        self.ends.push((face.into(), Shape::from(face), end_face));
         Ok(solid)
     }
 }
@@ -1048,6 +1067,27 @@ mod tests {
             let solid = extrude(&mut model, face, v).unwrap().shape;
             assert_valid_solid(&model, solid, 6.0);
             assert_eq!(surfaces(&model, solid), vec!["plane"; 8]);
+        }
+    }
+
+    /// An extruded face's history: it closes the start itself, its copy moved along the
+    /// extrusion closes the end, and each of its edges sweeps one of the side faces.
+    #[test]
+    fn extrusions_record_their_ends_and_sides() {
+        let mut model = Model::new();
+        let face = polygon(&mut model, &[(0.0, 0.0), (2.0, 0.0), (2.0, 1.0), (0.0, 1.0)]);
+        let v = Vector::new(0.0, 3.0, 0.0);
+        let swept = extrude(&mut model, face, v).unwrap();
+        let &(source, first, last) = swept.ends().first().unwrap();
+        assert_eq!(source, face.node);
+        assert_eq!(first.node, face.node);
+        let (a, b) = (properties::area(&model, first).center_of_mass, properties::area(&model, last).center_of_mass);
+        assert!((b - a - v).length() < 1e-9, "{a:?} {b:?}");
+        let faces = model.unique_subshapes(swept.shape, NodeKind::Face);
+        for edge in model.unique_subshapes(face, NodeKind::Edge) {
+            let sides = swept.generated(edge);
+            assert_eq!(sides.len(), 1);
+            assert!(faces.iter().any(|f| f.node == sides[0].node));
         }
     }
 
