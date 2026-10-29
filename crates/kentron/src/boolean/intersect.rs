@@ -550,6 +550,10 @@ fn plane_along_extrusion(fa: &Face, fb: &Face) -> Option<Vec<Section>> {
     let ts: Vec<f64> = (0..=N).map(|i| t0 + (t1 - t0) * i as f64 / N as f64).collect();
     let hs: Vec<f64> = ts.iter().map(|&t| height(t)).collect();
     let ds: Vec<f64> = ts.iter().map(|&t| slope(t)).collect();
+    // (The extruded curve in the plane: the surfaces are one there, met along no line.)
+    if hs.iter().all(|h| h.abs() <= TOL) {
+        return Some(Vec::new());
+    }
     let root = |f: &dyn Fn(f64) -> f64, mut lo: f64, mut hi: f64| {
         let flo = f(lo);
         for _ in 0..100 {

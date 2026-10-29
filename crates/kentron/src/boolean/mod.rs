@@ -1767,6 +1767,38 @@ mod tests {
         check_near(&model, half, PI * PI * 90.0, 2.0 * PI * PI * 30.0 + 2.0 * PI * 9.0, 1e-6);
     }
 
+    /// A prism whose side is a straight B-spline extruded (a surface of extrusion lying in a
+    /// plane), joined to a box whose side is that plane: the extruded curve lies in the plane
+    /// along all of it, the surfaces one there, met along no line (sampled, every sample was a
+    /// root, hundreds of lines whose crossings took seconds).
+    #[test]
+    fn prism_on_a_box_along_a_straight_extruded_spline() {
+        use crate::geometry::curve::{BSplineCurve, Curve};
+        let mut model = Model::new();
+        let corners = [(0.0, 0.0), (10.0, 0.0), (10.0, 6.0), (0.0, 6.0)].map(|(x, y)| Point::new(x, y, 0.0));
+        let straight = |model: &mut Model, a: Point, b: Point| {
+            let line = Curve::BSpline(BSplineCurve::new(vec![a, a + (b - a) * 0.5, b], vec![0.0, 0.5, 1.0], vec![2, 1, 2], 1));
+            crate::make::edge_from_curve(model, line).unwrap()
+        };
+        let edges = [
+            straight(&mut model, corners[0], corners[1]),
+            crate::make::edge_between(&mut model, corners[1], corners[2]).unwrap(),
+            straight(&mut model, corners[2], corners[3]),
+            crate::make::edge_between(&mut model, corners[3], corners[0]).unwrap(),
+        ];
+        let wire = crate::make::wire(&mut model, &edges).unwrap();
+        let face = crate::make::planar_face(&mut model, wire).unwrap();
+        let prism = crate::sweep::extrude(&mut model, face, Vector::new(0.0, 0.0, 5.0)).unwrap().shape;
+        assert!(model.explore(prism, NodeKind::Face).any(|f| matches!(model.surface(f), Some(crate::geometry::surface::Surface::Extrusion(_)))));
+        // (The box beside the prism's side at y = 6, along part of it.)
+        let block = cuboid(&mut model, (2.0, 6.0, 1.0), (5.0, 4.0, 3.0));
+        let joined = union(&mut model, prism, block).unwrap();
+        let report = validity::check(&model, joined);
+        assert!(report.problems.is_empty(), "{report:?}");
+        let v = properties::volume(&model, joined).mass;
+        assert!((v - (300.0 + 60.0)).abs() < 1e-8 * 360.0, "{v}");
+    }
+
     #[test]
     fn extruded_ellipse() {
         // An elliptic prism (semi-axes 10 and 5, height 30): volume π a b h, and half of it
