@@ -568,8 +568,19 @@ def _swept_op(history, name, inputs, profile: Shape, generated, ends) -> None:
 
 
 def revolve(s: Shape, p, d, a: float = 360, history=None, name=None) -> Shape:
-    results = [Shape.cast(native.revolve(el.wrapped, _tuple(p), _tuple(d), a)) for el in _get(s, ("Vertex", "Edge", "Wire", "Face"))]
-    return _compound_or_shape(results)
+    if history is None:
+        return _compound_or_shape([Shape.cast(native.revolve(el.wrapped, _tuple(p), _tuple(d), a)) for el in _get(s, ("Vertex", "Edge", "Wire", "Face"))])
+    # (With its history as kentron's revolution keeps it.)
+    results, generated, ends = [], {}, []
+    for el in _get(s, ("Vertex", "Edge", "Wire", "Face")):
+        shape, swept, firsts_lasts, _ = native.revolve_recorded(el.wrapped, _tuple(p), _tuple(d), a)
+        results.append(Shape.cast(shape))
+        for source, made in swept:
+            generated.setdefault(_node(source), []).extend(Shape.cast(m) for m in made)
+        ends.extend((_node(source), Shape.cast(first), Shape.cast(last)) for source, first, last in firsts_lasts)
+    result = _compound_or_shape(results)
+    _swept_op(history, name, [s], s, generated, ends)
+    return result
 
 
 def offset(s: Shape, t: float, cap: bool = True, both: bool = False, tol: float = 1e-6, history=None, name=None) -> Shape:
@@ -833,8 +844,6 @@ def prism(ctx: Shape, base, faces: Shape, t, *args, history=None, name=None, **k
     all; along a direction, `prism(ctx, base, faces, t, dir, additive)`, or along each
     face's normal, tapered by an angle in degrees, `prism(ctx, base, faces, t, angle,
     additive)`. (The base face, OCCT's sketch face, is not needed.)"""
-    if history is not None:
-        raise NotImplementedError("histories of operations")
     rest = list(args)
     direction, angle = None, 0.0
     if rest and not isinstance(rest[0], bool) and isinstance(rest[0], (int, float)):
@@ -853,19 +862,19 @@ def prism(ctx: Shape, base, faces: Shape, t, *args, history=None, name=None, **k
         extent["start"], extent["until"] = t[0].face().wrapped, t[1].face().wrapped
     elif t is not None:
         extent["length"] = float(t)
-    result = ctx
-    for f in _get_faces(faces):
-        along = direction if direction is not None else f.normalAt()
-        result = Shape.cast(native.feature_prism(result.wrapped, f.wrapped, _tuple(along), math.radians(angle), additive, **extent))
-    return _compound_or_shape(result)
+    def run():
+        result = ctx
+        for f in _get_faces(faces):
+            along = direction if direction is not None else f.normalAt()
+            result = Shape.cast(native.feature_prism(result.wrapped, f.wrapped, _tuple(along), math.radians(angle), additive, **extent))
+        return _compound_or_shape(result)
+    return _recorded(history, name, [ctx, faces], run, deletes=False)
 
 
 def draft(ctx: Shape, base: Shape, faces: Shape, *args, history=None, name=None) -> Shape:
     """`ctx` with `faces` drafted by an angle (degrees) about where they meet `base`'s
     plane, against its normal or a given direction: `draft(ctx, base, faces, angle)` or
     `draft(ctx, base, faces, dir, angle)`, as CadQuery's (OCCT's draft angle)."""
-    if history is not None:
-        raise NotImplementedError("histories of operations")
     if len(args) == 1:
         direction, angle = None, args[0]
     elif len(args) == 2:
@@ -880,11 +889,13 @@ def draft(ctx: Shape, base: Shape, faces: Shape, *args, history=None, name=None)
     for f in drafted:
         if f.geomType() not in ("PLANE", "CYLINDER", "CONE"):
             raise ValueError(f"Face {f} cannot be used in a draft operation.")
-    try:
-        result = native.draft_faces(ctx.wrapped, [f.wrapped for f in drafted], _tuple(pull), math.radians(angle), _tuple(base_face.Center()), _tuple(normal))
-    except ValueError as e:
-        raise ValueError(f"the faces cannot be drafted: {e}") from e
-    return _compound_or_shape(Shape.cast(result))
+    def run():
+        try:
+            result = native.draft_faces(ctx.wrapped, [f.wrapped for f in drafted], _tuple(pull), math.radians(angle), _tuple(base_face.Center()), _tuple(normal))
+        except ValueError as e:
+            raise ValueError(f"the faces cannot be drafted: {e}") from e
+        return _compound_or_shape(Shape.cast(result))
+    return _recorded(history, name, [ctx], run)
 
 
 def check(s: Shape, results=None, tol: Optional[float] = None, verbose: bool = True) -> bool:

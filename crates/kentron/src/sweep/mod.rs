@@ -356,6 +356,8 @@ pub fn revolve(model: &mut Model, profile: Shape, axis: Axis, angle: f64) -> Res
         end_edges: HashMap::new(),
         faces: HashMap::new(),
         generated: Vec::new(),
+        ends: Vec::new(),
+        copies: Vec::new(),
     };
     let shape = match profile.kind() {
         NodeKind::Vertex => {
@@ -393,7 +395,8 @@ pub fn revolve(model: &mut Model, profile: Shape, axis: Axis, angle: f64) -> Res
         kind => todo!("revolving a {kind:?}"),
     };
     let generated = std::mem::take(&mut r.generated);
-    Ok(Sweep { shape, generated, ends: Vec::new(), copies: Vec::new() })
+    let (ends, copies) = (std::mem::take(&mut r.ends), std::mem::take(&mut r.copies));
+    Ok(Sweep { shape, generated, ends, copies })
 }
 
 /// The state of one revolution: what each profile vertex and edge has swept, and their
@@ -411,6 +414,8 @@ struct Revolver<'m> {
     /// the orientation that makes its normal `∂u × ∂v` of the sweep.
     faces: HashMap<EdgeId, Option<(FaceId, Orientation)>>,
     generated: Vec<(NodeId, Vec<Shape>)>,
+    ends: Vec<(NodeId, Shape, Shape)>,
+    copies: Vec<(NodeId, Shape)>,
 }
 
 /// How a swept edge's face is parametrized: an elementary surface with `u` the rotation
@@ -466,6 +471,7 @@ impl Revolver<'_> {
         let p = self.point(v).transformed(&self.rotation);
         let end = self.model.add_vertex(p, self.model[v].tolerance);
         self.end_vertices.insert(v, end);
+        self.copies.push((v.into(), Shape::from(end)));
         end
     }
 
@@ -520,6 +526,7 @@ impl Revolver<'_> {
             self.model.set_edge_range(end.into(), first, last)?;
         }
         self.end_edges.insert(e, end);
+        self.copies.push((e.into(), Shape::from(end)));
         Ok(end)
     }
 
@@ -751,6 +758,7 @@ impl Revolver<'_> {
                 self.model.add(end_face, Shape { orientation: wire_orientation, ..Shape::from(wire) })?;
             }
             self.model.add(shell, Shape { orientation: orientation.reversed(), ..end_face })?;
+            self.ends.push((face.into(), Shape::from(face), end_face));
         }
         // Orient the shell so that the solid has a positive volume.
         let volume = properties::closed_shell_volume(self.model, shell);

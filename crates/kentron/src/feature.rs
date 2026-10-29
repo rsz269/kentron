@@ -893,7 +893,26 @@ fn swept(model: &mut Model, profile: Shape, d: Vector, a: f64, b: f64, draft: Op
     } else {
         profile
     };
-    let solid = crate::sweep::extrude(model, start, d * (b - a))?.shape;
+    let swept = crate::sweep::extrude(model, start, d * (b - a))?;
+    // (For the history: the profile's edges and face, through their copies where the
+    // profile was moved first, sweeping the tool's sides and closing its end.)
+    let uid = model.uid();
+    if start.node != profile.node {
+        for kind in [NodeKind::Face, NodeKind::Edge] {
+            for (from, to) in model.unique_subshapes(profile, kind).into_iter().zip(model.unique_subshapes(start, kind)) {
+                crate::boolean::record(uid, from.node, to.node);
+            }
+        }
+    }
+    for (input, outputs) in swept.history() {
+        for out in outputs.iter().filter(|o| matches!(o.kind(), NodeKind::Face | NodeKind::Edge)) {
+            crate::boolean::record(uid, *input, out.node);
+        }
+    }
+    for &(input, _, last) in swept.ends() {
+        crate::boolean::record(uid, input, last.node);
+    }
+    let solid = swept.shape;
     let Some(angle) = draft else { return Ok(solid) };
     // The sides tilted about the profile's plane (the faces of the solid other than its two
     // ends, which are parallel to the profile).

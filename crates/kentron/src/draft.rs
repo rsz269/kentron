@@ -269,6 +269,25 @@ mod tests {
         valid(&model, drafted);
     }
 
+    /// A drafted box recorded: each of its faces makes one face of the result, the drafted
+    /// side the leaning one.
+    #[test]
+    fn drafts_record_their_faces() {
+        let mut model = Model::new();
+        let b = Cuboid::new(10.0, 20.0, 30.0).build(&mut model).unwrap();
+        let side = face_at_x(&model, b, 10.0);
+        let bottom = Plane::new(Point::ORIGIN, Direction::Z);
+        crate::boolean::record_begin(&model);
+        let drafted = draft(&mut model, b, Direction::Z, &[DraftedFace { face: side, angle: 5f64.to_radians(), neutral: bottom }]).unwrap();
+        let history = crate::boolean::record_end(&model, drafted);
+        for face in model.unique_subshapes(b, NodeKind::Face) {
+            assert_eq!(history.iter().filter(|(from, _)| *from == face.node).count(), 1);
+        }
+        let &(_, leaning) = history.iter().find(|(from, _)| *from == side.node).unwrap();
+        let area = crate::properties::area(&model, Shape::from(leaning)).mass;
+        assert!((area - 20.0 * 30.0 / 5f64.to_radians().cos()).abs() < 1e-6 * area, "{area}");
+    }
+
     #[test]
     fn a_cylinder_becomes_a_cone() {
         let mut model = Model::new();

@@ -432,12 +432,15 @@ fn replace_surfaces(
     let mut new_edges: Vec<(EdgeId, Vec<(Curve2, f64, f64)>)> = Vec::with_capacity(edges.len());
     for edge in &edges {
         new_edges.push(trace_edge(model, &faces, edge, &new_points, &new_vertices, tolerance)?);
+        // (Each new face and edge from the one it replaces, for the history.)
+        crate::boolean::record(model.uid(), edge.shape.node, new_edges[new_edges.len() - 1].0.into());
     }
     // The faces, wired as before.
     let mut use_index: HashMap<usize, usize> = HashMap::new();
     let mut new_faces: Vec<Shape> = Vec::with_capacity(faces.len());
     for (fi, face) in faces.iter().enumerate() {
         let new = model.new_empty(NodeKind::Face);
+        crate::boolean::record(model.uid(), face.shape.node, new.node);
         model.set_face_surface(new, face.offset.clone(), tolerance)?;
         let forward = Shape { orientation: Orientation::Forward, ..face.shape };
         for wire in model.children(forward).collect::<Vec<_>>() {

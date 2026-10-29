@@ -668,6 +668,22 @@ fn revolve(profile: Handle, origin: Xyz, axis: Xyz, angle: f64) -> PyResult<Hand
     with_model(|m| sweep::revolve(m, profile.shape, axis, angle.to_radians()).map(|s| s.shape)).map(handle)
 }
 
+/// [`revolve`], with its history: each profile sub-shape (by node) with what it swept, each
+/// profile face's first and last faces (where the revolution is not whole), and each
+/// profile edge's and vertex's copy at its end.
+#[pyfunction]
+#[allow(clippy::type_complexity)]
+fn revolve_recorded(profile: Handle, origin: Xyz, axis: Xyz, angle: f64) -> PyResult<(Handle, Vec<(Handle, Vec<Handle>)>, Vec<(Handle, Handle, Handle)>, Vec<(Handle, Handle)>)> {
+    let axis = Axis::new(point(origin), direction(axis)?);
+    with_model(|m| {
+        let swept = sweep::revolve(m, profile.shape, axis, angle.to_radians())?;
+        let generated = swept.history().iter().map(|(n, s)| (handle(Shape::from(*n)), s.iter().map(|&x| handle(x)).collect())).collect();
+        let ends = swept.ends().iter().map(|&(n, a, b)| (handle(Shape::from(n)), handle(a), handle(b))).collect();
+        let copies = swept.copies().iter().map(|&(n, c)| (handle(Shape::from(n)), handle(c))).collect();
+        Ok((handle(swept.shape), generated, ends, copies))
+    })
+}
+
 /// The loft through `sections` (wires, or vertices at the ends), passing through them
 /// spaced as `spacing` says: "chordal" (by their distances apart), "centripetal" (by those
 /// distances' square roots) or "uniform" (evenly), CadQuery's names. Their edges are
@@ -1410,6 +1426,7 @@ fn _kentron(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(transformed, m)?)?;
     m.add_function(wrap_pyfunction!(union, m)?)?;
     m.add_function(wrap_pyfunction!(extrude_recorded, m)?)?;
+    m.add_function(wrap_pyfunction!(revolve_recorded, m)?)?;
     m.add_function(wrap_pyfunction!(make_loft_recorded, m)?)?;
     m.add_function(wrap_pyfunction!(difference, m)?)?;
     m.add_function(wrap_pyfunction!(intersection, m)?)?;
