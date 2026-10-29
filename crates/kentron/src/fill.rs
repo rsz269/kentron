@@ -106,7 +106,11 @@ pub(crate) fn face_on_loop(model: &mut Model, runs: &[(crate::topology::EdgeId, 
         }
         let least = least_spread(c);
         let least = Vector::new(least[0], least[1], least[2]);
-        if least.dot(normal) < 0.0 { -least } else { least }
+        let least = if least.dot(normal) < 0.0 { -least } else { least };
+        // (Where the constraints stand so far off the loop that they spread less across it
+        // than along it, as a ring of points high above a small loop, the loop's own plane:
+        // in the other, the loop would lie edge on, less than half its area across.)
+        if least.dot(normal.normalized()) < 0.5 { normal.normalized() } else { least }
     };
     // (In the plane, the axes the constraints spread most along and least, as OCCT's average
     // plane takes them: the plate is scaled along each by the constraints' extent.)
@@ -448,6 +452,25 @@ mod tests {
         }
         let area = crate::properties::area(&model, face).mass;
         assert!((area - 221.3898).abs() < 1e-3, "{area}");
+    }
+
+    /// A 10 x 10 square filled through the points of a 5 x 5 square 10 above it (as
+    /// CadQuery's `fill` passes along a curve, sampled): the points spread across the square
+    /// less than along its normal, so the plate's plane is the square's own (in the plane
+    /// they spread least across, the square lay edge on, and the face came out inside out).
+    #[test]
+    fn a_loop_fills_through_points_far_above_it() {
+        let mut model = Model::new();
+        let edges = square(&mut model, 0.0);
+        let corners = [(2.5, 2.5), (7.5, 2.5), (7.5, 7.5), (2.5, 7.5)];
+        let points: Vec<Point> = (0..4).flat_map(|i| {
+            let ((x0, y0), (x1, y1)) = (corners[i], corners[(i + 1) % 4]);
+            (0..=16).map(move |k| Point::new(x0 + (x1 - x0) * k as f64 / 16.0, y0 + (y1 - y0) * k as f64 / 16.0, 10.0))
+        }).collect();
+        let face = n_sided(&mut model, &edges, &FillingOptions { points, ..Default::default() }).unwrap();
+        assert!(crate::validity::check(&model, face).is_valid(), "{:?}", crate::validity::check(&model, face));
+        let area = crate::properties::area(&model, face).mass;
+        assert!(area > 100.0, "area {area}");
     }
 
     #[test]
