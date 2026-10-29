@@ -501,6 +501,19 @@ pub fn pipe(profile: Handle, spine: Handle, contact: bool, correction: bool, cor
     .map(handle)
 }
 
+/// [`pipe`] (the profile carried on unturned at corners), with its history: each profile
+/// sub-shape (by node) with what it swept, and each profile face's first and last faces.
+#[pyfunction]
+#[allow(clippy::type_complexity)]
+pub fn pipe_recorded(profile: Handle, spine: Handle) -> PyResult<(Handle, Vec<(Handle, Vec<Handle>)>, Vec<(Handle, Handle, Handle)>)> {
+    with_model(|m| {
+        let swept = sweep::pipe_with(m, profile.shape, spine.shape, &Default::default())?;
+        let generated = swept.history().iter().map(|(n, s)| (handle(Shape::from(*n)), s.iter().map(|&x| handle(x)).collect())).collect();
+        let ends = swept.ends().iter().map(|&(n, a, b)| (handle(Shape::from(n)), handle(a), handle(b))).collect();
+        Ok((handle(swept.shape), generated, ends))
+    })
+}
+
 /// `sections` (wires or vertices) swept along `spine`, blended between: a shell, or with
 /// `solid` a solid.
 #[pyfunction]
@@ -686,8 +699,11 @@ pub fn cells(shapes: Vec<Handle>) -> PyResult<Vec<(Vec<bool>, Handle)>> {
 
 /// Starts recording where the booleans' result faces and edges come from.
 #[pyfunction]
-pub fn record_begin() {
-    boolean::record_begin();
+pub fn record_begin() -> PyResult<()> {
+    with_model(|m| {
+        boolean::record_begin(m);
+        Ok(())
+    })
 }
 
 /// Stops recording: each operand face or edge (as a handle on its node, unplaced) with a
@@ -700,6 +716,7 @@ pub fn record_end(result: Handle) -> PyResult<Vec<(Handle, Handle)>> {
 
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(record_begin, m)?)?;
+    m.add_function(wrap_pyfunction!(pipe_recorded, m)?)?;
     m.add_function(wrap_pyfunction!(record_end, m)?)?;
     m.add_function(wrap_pyfunction!(cells, m)?)?;
     m.add_function(wrap_pyfunction!(fillet_wire_2d, m)?)?;

@@ -690,6 +690,33 @@ fn make_loft(sections: Vec<Handle>, solid: bool, ruled: bool, spacing: &str, mat
     with_model(|m| loft::loft(m, &sections, &loft::LoftOptions { solid, ruled, matching, spacing }).map(|l| l.shape)).map(handle)
 }
 
+/// [`make_loft`], with its history: each section edge and vertex (by node) with what it
+/// lofted, and the caps on the first and last sections (of a solid).
+#[pyfunction]
+#[pyo3(signature = (sections, solid=true, ruled=false, spacing="chordal", matching="rays"))]
+#[allow(clippy::type_complexity)]
+fn make_loft_recorded(sections: Vec<Handle>, solid: bool, ruled: bool, spacing: &str, matching: &str) -> PyResult<(Handle, Vec<(Handle, Vec<Handle>)>, (Option<Handle>, Option<Handle>))> {
+    let sections: Vec<Shape> = sections.iter().map(|h| h.shape).collect();
+    let spacing = match spacing.to_ascii_lowercase().as_str() {
+        "chordal" | "chordlength" => loft::Spacing::ByDistance,
+        "centripetal" => loft::Spacing::ByRootDistance,
+        "uniform" => loft::Spacing::Even,
+        other => return Err(PyValueError::new_err(format!("unknown loft parametrization {other}"))),
+    };
+    let matching = match matching {
+        "rays" => loft::Matching::ByRays,
+        "length" => loft::Matching::ByLength,
+        "as_given" => loft::Matching::AsGiven,
+        other => return Err(PyValueError::new_err(format!("unknown loft matching {other}"))),
+    };
+    with_model(|m| {
+        let lofted = loft::loft(m, &sections, &loft::LoftOptions { solid, ruled, matching, spacing })?;
+        let generated = lofted.history().iter().map(|(n, s)| (handle(Shape::from(*n)), s.iter().map(|&x| handle(x)).collect())).collect();
+        let [first, last] = lofted.caps();
+        Ok((handle(lofted.shape), generated, (first.map(handle), last.map(handle))))
+    })
+}
+
 /// A planar wire offset in its plane ("arc" or "intersection" joins); if `open`, an open
 /// wire on one side only (to the right of its direction for a positive distance), its ends
 /// not gone round.
@@ -1381,6 +1408,7 @@ fn _kentron(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(transformed, m)?)?;
     m.add_function(wrap_pyfunction!(union, m)?)?;
     m.add_function(wrap_pyfunction!(extrude_recorded, m)?)?;
+    m.add_function(wrap_pyfunction!(make_loft_recorded, m)?)?;
     m.add_function(wrap_pyfunction!(difference, m)?)?;
     m.add_function(wrap_pyfunction!(intersection, m)?)?;
     m.add_function(wrap_pyfunction!(section, m)?)?;

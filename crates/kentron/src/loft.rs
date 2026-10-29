@@ -93,9 +93,21 @@ pub enum Matching {
 pub struct Loft {
     pub shape: Shape,
     generated: Vec<(NodeId, Vec<Shape>)>,
+    /// The caps closing a solid loft on its first and last sections.
+    caps: [Option<Shape>; 2],
 }
 
 impl Loft {
+    /// The caps closing a solid loft on its first and last sections (where it has them).
+    pub fn caps(&self) -> [Option<Shape>; 2] {
+        self.caps
+    }
+
+    /// Every section edge and vertex (by node) with what it lofted.
+    pub fn history(&self) -> &[(NodeId, Vec<Shape>)] {
+        &self.generated
+    }
+
     /// The shapes lofted from `input`: from an edge of a section, the faces running from
     /// its pieces (across all sections); from a vertex, the edges across the sections from
     /// it (all of them from a vertex section). Empty if `input` is not part of a section.
@@ -243,7 +255,7 @@ fn loft_traced(model: &mut Model, sections: &[Shape], options: &LoftOptions, bre
             }
         }
     }
-    Ok(Loft { shape: built.shape, generated })
+    Ok(Loft { shape: built.shape, generated, caps: built.caps })
 }
 
 /// One edge of a section (or part of one): its curve over a range, in the direction of the
@@ -1213,6 +1225,8 @@ struct Built {
     shape: Shape,
     columns: Vec<Vec<Shape>>,
     across: Vec<Vec<Shape>>,
+    /// The caps on the first and last sections (of a solid).
+    caps: [Option<Shape>; 2],
 }
 
 fn build(model: &mut Model, sections: &[Section], grid: &Grid, closed: bool, looped: bool, periodic: bool, options: &LoftOptions, breaks: &[usize]) -> Result<Built> {
@@ -1356,10 +1370,11 @@ fn build(model: &mut Model, sections: &[Section], grid: &Grid, closed: bool, loo
         model.add(shell, face)?;
     }
     if !options.solid {
-        return Ok(Built { shape: shell, columns, across });
+        return Ok(Built { shape: shell, columns, across, caps: [None, None] });
     }
     // Caps on the end sections, using their edges the other way round.
-    for (k, outward) in [(0, Orientation::Reversed), (n - 1, Orientation::Forward)] {
+    let mut caps = [None, None];
+    for (end, (k, outward)) in [(0, Orientation::Reversed), (n - 1, Orientation::Forward)].into_iter().enumerate() {
         let Section::Wire(w) = &sections[k] else { continue };
         // The cap's boundary runs counter-clockwise about its plane's normal. (A section not
         // in one plane, as a wire projected onto a curved face: capped by the filling of
@@ -1376,6 +1391,7 @@ fn build(model: &mut Model, sections: &[Section], grid: &Grid, closed: bool, loo
                 }
                 let cap = crate::fill::face_on_loop(model, &runs, &Default::default())?;
                 model.add(shell, cap)?;
+                caps[end] = Some(cap);
                 continue;
             }
             Err(e) => return Err(e),
@@ -1395,12 +1411,13 @@ fn build(model: &mut Model, sections: &[Section], grid: &Grid, closed: bool, loo
         let wire = model.add_wire(&coedges)?;
         model.add(face, wire.into())?;
         model.add(shell, face)?;
+        caps[end] = Some(face);
     }
     let solid = model.new_empty(NodeKind::Solid);
     // (Its sign from the faces' terms, kept in the model for the checks to come.)
     let volume = properties::closed_shell_volume(model, shell);
     model.add(solid, if volume < 0.0 { shell.reversed() } else { shell })?;
-    Ok(Built { shape: solid, columns, across })
+    Ok(Built { shape: solid, columns, across, caps })
 }
 
 /// The analytic surface ruled between two corresponding pieces, if they make one: lines in
@@ -1662,6 +1679,23 @@ mod tests {
         let area = properties::area(&model, strip).mass;
         let expected = 0.1 * std::f64::consts::TAU * turns;
         assert!((area - expected).abs() < 1e-4 * expected, "area {area} not {expected}");
+    }
+
+    /// A solid loft between two circles keeps its caps: the first on the bottom circle, the
+    /// last on the top one, both faces of the solid; a shell has none.
+    #[test]
+    fn solid_lofts_keep_their_caps() {
+        let mut model = Model::new();
+        let bottom = circle(&mut model, 0.0, 10.0, Direction::Z);
+        let top = circle(&mut model, 40.0, 6.0, Direction::Z);
+        let lofted = loft(&mut model, &[bottom, top], &LoftOptions { solid: true, ..Default::default() }).unwrap();
+        let [Some(first), Some(last)] = lofted.caps() else { panic!("caps {:?}", lofted.caps()) };
+        let faces = model.unique_subshapes(lofted.shape, NodeKind::Face);
+        assert!(faces.iter().any(|f| f.node == first.node) && faces.iter().any(|f| f.node == last.node));
+        let z = |s: Shape| properties::area(&model, s).center_of_mass.z;
+        assert!(z(first).abs() < 1e-9 && (z(last) - 40.0).abs() < 1e-9);
+        let shell = loft(&mut model, &[bottom, top], &LoftOptions::default()).unwrap();
+        assert_eq!(shell.caps(), [None, None]);
     }
 
     #[test]

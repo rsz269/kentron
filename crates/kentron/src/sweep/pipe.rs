@@ -195,6 +195,8 @@ struct Piper<'m> {
     paths: HashMap<(VertexId, usize), EdgeId>,
     faces: HashMap<(EdgeId, usize), Option<FaceId>>,
     generated: Vec<(NodeId, Vec<Shape>)>,
+    /// Each profile face with its copies closing the start and the end.
+    ends: Vec<(NodeId, Shape, Shape)>,
 }
 
 impl Piper<'_> {
@@ -428,9 +430,11 @@ impl Piper<'_> {
     fn face_solid(&mut self, face: FaceId, orientation: Orientation) -> Result<Shape> {
         let m = self.motions.len();
         let shell = self.model.new_empty(NodeKind::Shell);
+        let mut first = None;
         if !self.closed {
             let start = self.face_copy(face, 0)?;
             self.model.add(shell, Shape { orientation: start.orientation.compose(orientation), ..start })?;
+            first = Some(start);
         }
         for wire_use in self.model[face].wires.clone() {
             let (wire, wire_orientation) = (self.model[wire_use].wire, self.model[wire_use].orientation);
@@ -447,6 +451,9 @@ impl Piper<'_> {
             // The copy at the end closes it, facing the other way.
             let end = self.face_copy(face, m)?;
             self.model.add(shell, Shape { orientation: end.orientation.compose(orientation).reversed(), ..end })?;
+            if let Some(start) = first {
+                self.ends.push((face.into(), start, end));
+            }
         }
         let volume = properties::closed_shell_volume(self.model, shell);
         let solid = self.model.new_empty(NodeKind::Solid);
@@ -510,6 +517,7 @@ pub(super) fn pipe_along(model: &mut Model, profile: Shape, pieces: &[SpinePiece
         paths: HashMap::new(),
         faces: HashMap::new(),
         generated: Vec::new(),
+        ends: Vec::new(),
     };
     let shape = match profile.kind() {
         NodeKind::Vertex => {
@@ -565,7 +573,8 @@ pub(super) fn pipe_along(model: &mut Model, profile: Shape, pieces: &[SpinePiece
         kind => return Err(Error::InvalidInput(format!("a pipe of a {kind:?}"))),
     };
     let generated = std::mem::take(&mut piper.generated);
-    Ok(Sweep { shape, generated, ends: Vec::new() })
+    let ends = std::mem::take(&mut piper.ends);
+    Ok(Sweep { shape, generated, ends })
 }
 
 /// Where along the spine the profile stands, as OCCT places it (GeomFill_SectionPlacement):

@@ -1091,6 +1091,7 @@ fn build(model: &mut Model, shape: Shape, stripes: &[Stripe], ends: &[[End; 2]],
         let e = model.add_edge(from, to, kept)?;
         model.set_edge_curve(e.into(), curve, kept)?;
         model.set_edge_range(e.into(), lo, hi)?;
+        crate::boolean::record(model.uid(), old.into(), e.into());
         shortened.push((old, e, lo, hi));
     }
     // The faces: each touched once, with every change to it.
@@ -1140,6 +1141,7 @@ fn build(model: &mut Model, shape: Shape, stripes: &[Stripe], ends: &[[End; 2]],
             _ => None,
         }).or(side_carried.as_ref());
         let new = rebuild_face(model, face, &replace_refs, &shortened, &removed, &face_inserts, carried)?;
+        crate::boolean::record(model.uid(), face.node, new.node);
         rebuilt.push((face, new));
     }
     // The fillet faces: across at the start (u from 0 to 1), along the second contact, back
@@ -1160,6 +1162,7 @@ fn build(model: &mut Model, shape: Shape, stripes: &[Stripe], ends: &[[End; 2]],
         }
         uses.push((contact_edges[i][0], Orientation::Reversed, line((0.0, 0.0), (0.0, 1.0)), a.v[0], b.v[0]));
         let fillet = new_face(model, s.surface.clone(), vec![(uses, Orientation::Forward)], tolerance)?;
+        crate::boolean::record(model.uid(), s.rolling.id.into(), fillet.node);
         // Outward: away from the ball's centre for a convex edge (the ball is in the solid).
         // (At the section nearest the middle of the edge: not one past its ends, where the
         // ball may lie the other way.)

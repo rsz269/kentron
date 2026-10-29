@@ -103,7 +103,6 @@ tests.test_free_functions::test_operators
 tests.test_free_functions::test_prism_taper
 tests.test_free_functions::test_project
 tests.test_free_functions::test_revolve
-tests.test_free_functions::test_sewing
 tests.test_free_functions::test_solid
 tests.test_free_functions::test_sweep_aux
 tests.test_importers.TestImporters::testBIN
@@ -114,7 +113,6 @@ tests.test_selectors.TestCQSelectors::testNearestToShape
 tests.test_shapes::test_bin_import_export
 tests.test_shapes::test_extend
 tests.test_shapes::test_isolines
-tests.test_shapes::test_remove
 tests.test_shapes::test_replace
 tests.test_shapes::test_trimming
 tests.test_sketch::test_constraint_solver

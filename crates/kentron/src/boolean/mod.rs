@@ -188,29 +188,33 @@ pub fn intersection(model: &mut Model, a: Shape, b: Shape) -> Result<Shape> {
     run(model, a, b, Operation::Intersection)
 }
 
-/// While recording ([`record_begin`] to [`record_end`]): each operand face and edge, with a
-/// result face or edge made from it (by every build, retries and pieces of a split operation
-/// included). (Shared by threads: builds may run on any.)
-static RECORDING: std::sync::Mutex<Option<Vec<(crate::topology::NodeId, crate::topology::NodeId)>>> = std::sync::Mutex::new(None);
+/// The recordings under way ([`record_begin`] to [`record_end`]), one per model: each operand
+/// face and edge, with a result face or edge made from it (by every build, retries and
+/// pieces of a split operation included). (Shared by threads: builds may run on any.)
+static RECORDING: std::sync::Mutex<Vec<(crate::topology::ModelUid, Vec<(crate::topology::NodeId, crate::topology::NodeId)>)>> = std::sync::Mutex::new(Vec::new());
 
-/// Whether [`RECORDING`] is on (checked first: off, recording costs nothing).
-static RECORDING_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// How many recordings are under way (checked first: with none, recording costs nothing).
+static RECORDING_ON: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
-/// Records a made result face or edge's source, while recording.
-pub(super) fn record(source: crate::topology::NodeId, made: crate::topology::NodeId) {
-    if !RECORDING_ON.load(std::sync::atomic::Ordering::Relaxed) {
+/// Records a made result face or edge's source in `model` (by its uid), while it is being
+/// recorded (by the booleans, sewing and fillets).
+pub(crate) fn record(model: crate::topology::ModelUid, source: crate::topology::NodeId, made: crate::topology::NodeId) {
+    if RECORDING_ON.load(std::sync::atomic::Ordering::Relaxed) == 0 {
         return;
     }
-    if let Some(list) = RECORDING.lock().unwrap_or_else(|p| p.into_inner()).as_mut() {
+    let mut all = RECORDING.lock().unwrap_or_else(|p| p.into_inner());
+    if let Some((_, list)) = all.iter_mut().find(|(m, _)| *m == model) {
         list.push((source, made));
     }
 }
 
-/// Starts recording where the booleans' result faces and edges come from (for
-/// [`record_end`]).
-pub fn record_begin() {
-    *RECORDING.lock().unwrap_or_else(|p| p.into_inner()) = Some(Vec::new());
-    RECORDING_ON.store(true, std::sync::atomic::Ordering::Relaxed);
+/// Starts recording where the result faces and edges of `model`'s booleans (and sewing,
+/// fillets and chamfers) come from (for [`record_end`]).
+pub fn record_begin(model: &Model) {
+    let mut all = RECORDING.lock().unwrap_or_else(|p| p.into_inner());
+    all.retain(|(m, _)| *m != model.uid());
+    all.push((model.uid(), Vec::new()));
+    RECORDING_ON.store(all.len(), std::sync::atomic::Ordering::Relaxed);
 }
 
 /// Stops recording: each operand face or edge (unplaced, by node) and a face or edge of
@@ -219,11 +223,45 @@ pub fn record_begin() {
 /// a step after the boolean, made is left out.
 #[doc(alias = "BRepAlgoAPI_BuilderAlgo::Modified")]
 pub fn record_end(model: &Model, result: Shape) -> Vec<(crate::topology::NodeId, crate::topology::NodeId)> {
-    RECORDING_ON.store(false, std::sync::atomic::Ordering::Relaxed);
-    let list = RECORDING.lock().unwrap_or_else(|p| p.into_inner()).take().unwrap_or_default();
+    let list = {
+        let mut all = RECORDING.lock().unwrap_or_else(|p| p.into_inner());
+        let at = all.iter().position(|(m, _)| *m == model.uid());
+        let list = at.map(|at| all.remove(at).1).unwrap_or_default();
+        RECORDING_ON.store(all.len(), std::sync::atomic::Ordering::Relaxed);
+        list
+    };
     let present: crate::hashing::FastSet<crate::topology::NodeId> = [crate::topology::NodeKind::Face, crate::topology::NodeKind::Edge].into_iter().flat_map(|k| model.explore(result, k).map(|s| s.node).collect::<Vec<_>>()).collect();
+    // (Through the steps of an operation made of several, as a fillet's tools cut one after
+    // another: each made face or edge back to the inputs it came from, those no step made.)
+    let mut sources: crate::hashing::FastMap<crate::topology::NodeId, Vec<crate::topology::NodeId>> = Default::default();
+    for &(source, made) in &list {
+        if source != made {
+            sources.entry(made).or_default().push(source);
+        }
+    }
+    let mut out = Vec::new();
     let mut seen = crate::hashing::FastSet::default();
-    list.into_iter().filter(|&(_, made)| present.contains(&made)).filter(|pair| seen.insert(*pair)).collect()
+    for &(source, made) in &list {
+        if !present.contains(&made) {
+            continue;
+        }
+        let mut stack = vec![source];
+        let mut visited = crate::hashing::FastSet::default();
+        while let Some(n) = stack.pop() {
+            if !visited.insert(n) {
+                continue;
+            }
+            match sources.get(&n) {
+                Some(earlier) if n != made => stack.extend(earlier.iter().copied()),
+                _ => {
+                    if seen.insert((n, made)) {
+                        out.push((n, made));
+                    }
+                }
+            }
+        }
+    }
+    out
 }
 
 /// The edges where `a` and `b` meet: where their faces cross, and pieces of edges of either
@@ -1868,7 +1906,7 @@ mod tests {
         let at = |model: &Model, shape: Shape, z: f64| model.explore(shape, NodeKind::Face).find(|&f| (properties::area(model, f).center_of_mass.z - z).abs() < 1e-9).unwrap();
         let (bottom, top, slab_bottom) = (at(&model, cube, 0.0), at(&model, cube, 1.0), at(&model, slab, 0.0));
         let side_edge = model.explore(bottom, NodeKind::Edge).find(|&e| { let (a, b) = model.edge_vertices(e); model.point(a).x > 0.49 && model.point(b).x > 0.49 }).unwrap();
-        record_begin();
+        record_begin(&model);
         let result = difference(&mut model, cube, slab).unwrap();
         let history = record_end(&model, result);
         let images = |s: Shape| history.iter().filter(|(from, _)| *from == s.node).count();

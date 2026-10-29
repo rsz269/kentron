@@ -102,6 +102,8 @@ struct EdgeUse {
 }
 
 struct Face {
+    /// The input face it is (for the history of what the sewing made of it).
+    source: crate::topology::NodeId,
     surface: Surface,
     tolerance: f64,
     reversed: bool,
@@ -196,7 +198,7 @@ impl Input {
                     wires.push(uses);
                 }
                 let reversed = face.orientation == Orientation::Reversed;
-                input.faces.push(Face { surface, tolerance: model.tolerance(face), reversed, wires });
+                input.faces.push(Face { source: face.node, surface, tolerance: model.tolerance(face), reversed, wires });
             }
         }
         if input.faces.is_empty() {
@@ -449,6 +451,7 @@ impl Input {
         let mut faces = Vec::with_capacity(self.faces.len());
         for (fi, face) in self.faces.iter().enumerate() {
             let shape = model.new_empty(NodeKind::Face);
+            crate::boolean::record(model.uid(), face.source, shape.node);
             model.set_face_surface(shape, face.surface.clone(), face.tolerance)?;
             for wire in &face.wires {
                 let mut coedges = Vec::new();

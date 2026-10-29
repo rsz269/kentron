@@ -199,6 +199,15 @@ class Shape:
     def located(self, loc: Location) -> "Shape":
         return self._with_baked(self._copy_with(self.wrapped.located(_compose(loc.rows, self._baked_rows()))))
 
+    def remove(self, *subshape: "Shape") -> "Shape":
+        """The shape without the faces `subshape` (CadQuery's BRepTools_ReShape removal):
+        a shell of the faces left."""
+        removed = [s for el in subshape for s in (el.Faces() if el.ShapeType() != "Face" else [el])]
+        kept = [f for f in self.Faces() if not any(f.isSame(r) for r in removed)]
+        if len(kept) == len(self.Faces()) and removed:
+            raise NotImplementedError("removing sub-shapes other than faces")
+        return Shape.cast(native.make_shell([f.wrapped for f in kept]))
+
     def move(self, *args, **kwargs) -> "Shape":
         # (Another shape: its first location, CadQuery's `move(s.toLocs()[0])`.)
         if len(args) == 1 and not kwargs and isinstance(args[0], Shape):

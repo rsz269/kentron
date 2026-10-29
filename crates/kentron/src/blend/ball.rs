@@ -2408,6 +2408,7 @@ impl Rebuild<'_> {
                     let e = self.model.add_edge(from, to, kept)?;
                     self.model.set_edge_curve(e.into(), curve, kept)?;
                     self.model.set_edge_range(e.into(), lo, hi)?;
+                    crate::boolean::record(self.model.uid(), old.into(), e.into());
                     shortened.push((old, e, lo, hi));
                 }
             }
@@ -2514,6 +2515,7 @@ impl Rebuild<'_> {
                 let e = self.model.add_edge(from, to, kept)?;
                 self.model.set_edge_curve(e.into(), curve, kept)?;
                 self.model.set_edge_range(e.into(), lo, hi)?;
+                crate::boolean::record(self.model.uid(), old.into(), e.into());
                 shortened.push((old, e, lo, hi));
             }
         }
@@ -2536,6 +2538,7 @@ impl Rebuild<'_> {
             let (lo, hi) = (v_start[i].min(v_end[i]), v_start[i].max(v_end[i]));
             let carried = off_patch(self.model, side, &pcurve, lo, hi).then_some(&side.surface);
             let face = rebuild_face(self.model, side.face, &[(self.id, &contact_edges[i], pcurve)], &shortened, &removed, &extra, carried)?;
+            crate::boolean::record(self.model.uid(), side.face.node, face.node);
             rebuilt.push((side.face, face));
         }
         // Each end face once, with the cuts of both ends where it is at both.
@@ -2566,6 +2569,7 @@ impl Rebuild<'_> {
             }
             let carried = self.ends.iter().find(|cut| cut.carried && cut.face.face.node == face.node).map(|cut| &cut.face.surface);
             let new = rebuild_face(self.model, face, &[], &shortened, &removed, &inserts, carried)?;
+            crate::boolean::record(self.model.uid(), face.node, new.node);
             rebuilt.push((face, new));
         }
 
@@ -2599,6 +2603,7 @@ impl Rebuild<'_> {
             uses.push((e, Orientation::Reversed, line((0.0, 0.0), (0.0, 1.0)), lo, hi));
         }
         let fillet = new_face(self.model, self.surface.clone(), vec![(uses, Orientation::Forward)], tolerance)?;
+        crate::boolean::record(self.model.uid(), self.id.into(), fillet.node);
         // Outward: away from the ball's centre for a convex edge (the ball is in the solid).
         // (At the section nearest the middle of the edge: not one past its ends, where the
         // ball may lie the other way.)

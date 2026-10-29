@@ -566,6 +566,7 @@ fn fillet_solid_edges_as(model: &mut Model, shape: Shape, edges: &[(Shape, f64)]
         let (extend, beyond) = if corner.convex { (extend, Vec::new()) } else { concave_ends(model, shape, &corners, i)? };
         let tool = corner.tool(model, *radius, mitre_runs(corner, *radius, extend, mitre))?;
         let mut tool = mitred_tool(model, tool, mitre)?;
+        record_tool(model, tool, &corner.edges);
         for (solid, keep_inside) in beyond {
             tool = if keep_inside { boolean::intersection(model, tool, solid)? } else { boolean::difference(model, tool, solid)? };
         }
@@ -573,6 +574,7 @@ fn fillet_solid_edges_as(model: &mut Model, shape: Shape, edges: &[(Shape, f64)]
         result = keep(model, result)?;
     }
     for (tool, convex, local_shape, edge, radius, filleted) in rolling_tools {
+        record_tool(model, tool, &[edge.node]);
         // (Where the close tool leaves the boolean taking it failed, or the solid unsound
         // where it was sound, the loose one instead; neither leaving a sound solid sound,
         // the fillet fails.)
@@ -607,6 +609,16 @@ fn fillet_solid_edges_as(model: &mut Model, shape: Shape, edges: &[(Shape, f64)]
         result = keep(model, result)?;
     }
     Ok(result)
+}
+
+/// A fillet tool's faces as made from the `edges` it rounds (for the history: the faces the
+/// tool leaves in the result, its fillet, come from them).
+fn record_tool(model: &Model, tool: Shape, edges: &[NodeId]) {
+    for face in model.explore(tool, NodeKind::Face) {
+        for &edge in edges {
+            boolean::record(model.uid(), edge, face.node);
+        }
+    }
 }
 
 /// Failures of fillets rolled all at once after which rolling them one after another does
@@ -1139,7 +1151,9 @@ fn chamfer_solid_edges(model: &mut Model, shape: Shape, edges: &[ChamferedEdge])
     for (((corner, distances), extend), mitre) in corners.iter().zip(extensions(model, shape, &sized)).zip(&mitred) {
         let section = corner.bevel_section(model, *distances)?;
         let tool = corner.sweep_section(model, section, mitre_runs(corner, distances[0].max(distances[1]), extend, mitre))?;
-        tools.push((mitred_tool(model, tool, mitre)?, corner.convex));
+        let tool = mitred_tool(model, tool, mitre)?;
+        record_tool(model, tool, &corner.edges);
+        tools.push((tool, corner.convex));
     }
     tools.extend(chamfer_corner_tools(model, &corners)?.into_iter().map(|tool| (tool, true)));
     with_tools(model, shape, &tools)
@@ -1631,6 +1645,8 @@ fn merge_arcs(mut corners: Vec<(Corner, f64)>) -> Vec<(Corner, f64)> {
                 let (axis, radius, end) = (*xa, *ka, b.end);
                 corners[i].0.path = Path::Arc { axis, radius, angle };
                 corners[i].0.end = end;
+                let edges = corners[j].0.edges.clone();
+                corners[i].0.edges.extend(edges);
                 corners.remove(j);
                 joined = true;
                 break 'pairs;
@@ -2219,6 +2235,8 @@ struct Corner {
     faces: [(NodeId, Surface, f64); 2],
     /// True if the material lies between the faces (on the side of the smaller angle).
     convex: bool,
+    /// The edges it rounds (one, or the arcs of one circle merged), for the history.
+    edges: Vec<NodeId>,
 }
 
 impl Corner {
@@ -2317,7 +2335,7 @@ impl Corner {
         // the other face.
         let convex = n1.dot(into[1]) < 0.0;
         let faces = [sides[0].3.clone(), sides[1].3.clone()];
-        Ok(Some(Corner { origin, tangent, path, end, into, traces: [trace1, trace2], faces, convex }))
+        Ok(Some(Corner { origin, tangent, path, end, into, traces: [trace1, trace2], faces, convex, edges: vec![edge.node] }))
     }
 
     /// The ends of the edge (none for a closed one).
@@ -3414,6 +3432,27 @@ mod tests {
         // (On the line through the two smaller radii: each step of 0.001 takes about 0.0019.)
         let line = 2.0 * a - b;
         assert!((wide - line).abs() <= 1e-5, "{wide} against {line} ({a}, {b})");
+    }
+
+    /// A unit cube's top rim filleted while recording: each rim edge makes a fillet face,
+    /// and the top face the face left of it (0.8 x 0.8 for a radius of 0.1).
+    #[test]
+    fn fillets_record_their_faces() {
+        let mut model = Model::new();
+        let cube = Cuboid::new(1.0, 1.0, 1.0).build(&mut model).unwrap();
+        let rim = edges_at(&model, cube, 1.0);
+        let top = model.explore(cube, NodeKind::Face).find(|&f| (properties::area(&model, f).center_of_mass.z - 1.0).abs() < 1e-9).unwrap();
+        boolean::record_begin(&model);
+        let rounded = fillet(&mut model, cube, &rim, 0.1).unwrap();
+        let history = boolean::record_end(&model, rounded);
+        for e in &rim {
+            let made: Vec<_> = history.iter().filter(|(from, to)| *from == e.node && to.kind == NodeKind::Face).collect();
+            assert!(!made.is_empty(), "nothing recorded from a rim edge");
+        }
+        let tops: Vec<_> = history.iter().filter(|(from, _)| *from == top.node).map(|&(_, to)| to).collect();
+        assert_eq!(tops.len(), 1);
+        let area = properties::area(&model, Shape::from(tops[0])).mass;
+        assert!((area - 0.64).abs() < 1e-9, "{area}");
     }
 
     #[test]
