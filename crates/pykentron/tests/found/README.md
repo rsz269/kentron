@@ -38,18 +38,18 @@ On 2026-10-29:
 | | scripts |
 |---|---|
 | in the corpus | 751 |
-| left out: the result depends on face order (below) | 7 |
+| left out: the result depends on face order (below) | 9 |
 | left out: CadQuery itself fails | 0 |
-| compared | 744 |
-| build as on CadQuery | 662 |
+| compared | 742 |
+| build as on CadQuery | 663 |
 | differ where CadQuery's result is wrong (below) | 16 |
 | differ | 48 |
-| fail on pykentron | 18 |
-| **pykentron's failures** | **66** |
+| fail on pykentron | 15 |
+| **pykentron's failures** | **63** |
 
 Of the 191 scripts that failed or built differently when found up to 2026-10-23, 128 now
-build as on CadQuery, and 16 more differ only where CadQuery's result is wrong. The 26 found
-on 2026-10-29 are new.
+build as on CadQuery, and 16 more differ only where CadQuery's result is wrong. Of the 26 found
+on 2026-10-29, 1 now builds as on CadQuery and 2 are left out (face order).
 
 Some differences are not pykentron's:
 

@@ -1284,6 +1284,52 @@ fn chamfer_in_turn(model: &mut Model, shape: Shape, chains: &[(Shape, f64)], edg
         Ok(done) => return Ok(done.moved(&placement)),
         Err(e) => Some(e),
     };
+    // Else the chains meeting one another together, apart from those they do not meet, one
+    // group after another (as fillets are rolled: a closed edge, as round a hole, is no part
+    // of a network, and the edges of a rim beside it cannot be chamfered one by one).
+    let ends_of = |edge: Shape| -> Vec<Point> {
+        let (a, b) = model.edge_vertices(edge);
+        if a.node == b.node { Vec::new() } else { vec![model.point(a), model.point(b)] }
+    };
+    let ends: Vec<Vec<Point>> = profiles.iter().map(|(edge, _)| ends_of(*edge)).collect();
+    let mut groups: Vec<Vec<usize>> = Vec::new();
+    for i in 0..ends.len() {
+        let meeting: Vec<usize> = (0..groups.len()).filter(|&g| groups[g].iter().any(|&j| ends[i].iter().any(|p| ends[j].iter().any(|q| p.distance(*q) <= tolerance::LINEAR)))).collect();
+        let mut joined = vec![i];
+        for &g in meeting.iter().rev() {
+            joined.extend(groups.remove(g));
+        }
+        joined.sort_unstable();
+        groups.push(joined);
+    }
+    if groups.len() > 1 {
+        let mut result = Ok(shape);
+        for group in &groups {
+            let Ok(current) = result else { break };
+            let mut found = Vec::with_capacity(group.len());
+            for &k in group {
+                let (curve, first, last, face, distance, second) = &wanted[k];
+                match find_edge(model, current, curve, *first, *last) {
+                    Some(edge) => found.push((edge, ball::Profile::Chamfer { first: *face, distance: *distance, second: *second })),
+                    None => {
+                        result = Err(Error::Failed("a chamfered edge was lost by another chamfer".into()));
+                        break;
+                    }
+                }
+            }
+            if result.is_err() {
+                break;
+            }
+            result = match found.as_slice() {
+                [(edge, profile)] => ball::rolling_chamfer(model, current, *edge, profile),
+                _ => ball::blend_network(model, current, &found),
+            };
+        }
+        match result.and_then(|done| sound(model, &before, done)) {
+            Ok(done) => return Ok(done.moved(&placement)),
+            Err(e) => failure = Some(e),
+        }
+    }
     let orders: &[bool] = if wanted.len() > 1 { &[false, true] } else { &[false] };
     'orders: for &reverse in orders {
         let mut sequence: Vec<_> = wanted.iter().collect();
@@ -3301,6 +3347,41 @@ mod tests {
         let bevelled = chamfer(&mut model, cylinder, &rim, d).unwrap();
         check_volume(&model, bevelled, PI - TAU * (d * d / 2.0) * (1.0 - d / 3.0));
         assert_eq!(model.unique_subshapes(bevelled, NodeKind::Face).len(), 4);
+    }
+
+    /// A drafted block, its leaning side edges rounded, a hole through it: the top face's
+    /// edges chamfered all at once (the rim's arcs between the top and the leaning
+    /// cylinders, the hole's circle no part of a network) as the rim alone, less the hole's
+    /// chamfer (Pappus: the triangle d²/2 round the axis at its centroid).
+    #[test]
+    fn chamfered_rim_and_hole_together() {
+        let block = |model: &mut Model| -> Shape {
+            let corners = [(-2.0, -1.5), (2.0, -1.5), (2.0, 1.5), (-2.0, 1.5)].map(|(x, y)| Point::new(x, y, 0.0));
+            let edges: Vec<Shape> = (0..4).map(|i| make::edge_between(model, corners[i], corners[(i + 1) % 4]).unwrap()).collect();
+            let wire = make::wire(model, &edges).unwrap();
+            let face = make::planar_face(model, wire).unwrap();
+            let drafted = sweep::extrude_drafted(model, face, Vector::new(0.0, 0.0, 2.0), 5f64.to_radians()).unwrap();
+            let leaning: Vec<Shape> = model.unique_subshapes(drafted, NodeKind::Edge).into_iter().filter(|&e| {
+                let (p, q) = model.edge_vertices(e);
+                (model.point(p).z - model.point(q).z).abs() > 1.0
+            }).collect();
+            assert_eq!(leaning.len(), 4);
+            let rounded = fillet(model, drafted, &leaning, 0.5).unwrap();
+            let pin = crate::primitives::Cylinder::new(0.5, 4.0).build(model).unwrap().moved(&Transform::translation(Vector::new(0.0, 0.0, -1.0)));
+            boolean::difference(model, rounded, pin).unwrap()
+        };
+        let d = 0.1;
+        let mut model = Model::new();
+        let holed = block(&mut model);
+        let top = edges_at(&model, holed, 2.0);
+        assert_eq!(top.len(), 9);
+        let both = chamfer(&mut model, holed, &top, d).unwrap();
+        assert!(validity::check(&model, both).is_valid());
+        let rim: Vec<Shape> = top.iter().copied().filter(|&e| { let (a, b) = model.edge_vertices(e); a.node != b.node }).collect();
+        let rim_only = chamfer(&mut model, holed, &rim, d).unwrap();
+        let hole = std::f64::consts::TAU * (0.5 + d / 3.0) * d * d / 2.0;
+        let (v, expected) = (properties::volume(&model, both).mass, properties::volume(&model, rim_only).mass - hole);
+        assert!((v - expected).abs() <= 1e-6 * expected, "{v} against {expected}");
     }
 
     #[test]
