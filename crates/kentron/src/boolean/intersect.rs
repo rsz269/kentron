@@ -2362,6 +2362,33 @@ impl Graph {
 
     /// Records a split point on an edge (ignoring its own end vertices: an edge does not
     /// pass through them again).
+    /// Vertex `v`, put on edge `ei` by a section ending on it, put on the edges of the other
+    /// operand lying along `ei` (on the same line or circle) through it too: where the two
+    /// operands' faces meet along one edge each has (two blocks side by side, their faces
+    /// touching there), a section met only one of them, and the other, left whole, did not
+    /// match its pieces. (Not on an edge a section ended on near there itself: each has its
+    /// own vertex there, and both on each would leave a sliver between them.)
+    fn pave_coincident(&mut self, ei: usize, v: usize) {
+        let (Some(curve), operand) = (self.edges[ei].curve.clone(), self.edges[ei].operand) else { return };
+        let p = self.vertices.points[v];
+        for j in 0..self.edges.len() {
+            let e = &self.edges[j];
+            if j == ei || e.operand.is_none() || e.operand == operand || v == e.start || v == e.end {
+                continue;
+            }
+            let Some(c) = &e.curve else { continue };
+            if !same_carrier(&curve, c) {
+                continue;
+            }
+            let (s, d) = geom::project(c, e.first, e.last, p);
+            let inside = s > e.first.min(e.last) + 1e-9 && s < e.first.max(e.last) - 1e-9;
+            let reach = 1e-3 * c.point(e.first).distance(c.point(e.last));
+            if d <= on_tol() && inside && !e.paves.iter().any(|&(_, w)| self.vertices.points[w].distance(p) <= reach) {
+                self.add_pave(j, s, v);
+            }
+        }
+    }
+
     pub fn add_pave(&mut self, ei: usize, t: f64, v: usize) {
         let e = &mut self.edges[ei];
         if v == e.start || v == e.end {
@@ -2614,6 +2641,8 @@ impl Graph {
             }
             (curves, crossings)
         });
+        // (The edges sections ended on, with the vertices put there.)
+        let mut ended: Vec<(usize, usize)> = Vec::new();
         for (&(fa, fb), (curves, crossings)) in pairs.iter().zip(found) {
             // The crossings are vertices of both sections.
             for p in crossings {
@@ -2643,6 +2672,7 @@ impl Graph {
                     if let Some(v) = known.filter(|&v| on_edge(v)).min_by(|&v, &w| self.vertices.points[v].distance(q).total_cmp(&self.vertices.points[w].distance(q))) {
                         let s = geom::project(e.curve.as_ref().unwrap(), e.first, e.last, self.vertices.points[v]).0;
                         self.add_pave(edge, s, v);
+                        ended.push((edge, v));
                         if !met.iter().any(|m| m.1 == v) {
                             met.push((t, v, false));
                         }
@@ -2650,6 +2680,7 @@ impl Graph {
                     }
                     let v = self.vertices.add(q);
                     self.add_pave(edge, s, v);
+                    ended.push((edge, v));
                     self.faces[fa].vertices_on.push(v);
                     self.faces[fb].vertices_on.push(v);
                     met.push((t, v, false));
@@ -2679,6 +2710,9 @@ impl Graph {
                 let on = found.into_iter().filter(|&(_, v, only_near)| !only_near || near[&v] >= 2).map(|(t, v, _)| (t, v)).collect();
                 self.add_section(fa, fb, section, on);
             }
+        }
+        for (edge, v) in ended {
+            self.pave_coincident(edge, v);
         }
     }
 

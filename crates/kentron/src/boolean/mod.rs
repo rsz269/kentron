@@ -1267,6 +1267,25 @@ mod tests {
         assert!((v - 12.481824).abs() <= 1e-5 * 12.481824, "volume {v}");
     }
 
+    /// Two uneven stucco blocks (lofts, from cqfantasy's round block generator, Apache-2.0)
+    /// side by side, touching along a face, their top B-spline faces meeting nearly tangent
+    /// along an edge each block has: a section between those faces ends on one block's edge,
+    /// and the other's, lying along it, is split there too (left whole, it did not match the
+    /// pieces, and the shell stayed open). The union is both blocks.
+    #[test]
+    fn stucco_blocks_side_by_side() {
+        let mut model = Model::new();
+        let mut read = |text: &str| crate::io::brep::read(&mut model, &mut text.as_bytes()).unwrap();
+        let a = read(include_str!("tests/stucco_blocks_side_by_side_a.brep"));
+        let b = read(include_str!("tests/stucco_blocks_side_by_side_b.brep"));
+        let both = properties::volume(&model, a).mass + properties::volume(&model, b).mass;
+        let result = union(&mut model, a, b).unwrap();
+        assert!(validity::check(&model, result).is_valid(), "{:?}", validity::check(&model, result));
+        assert_eq!(model.explore(result, NodeKind::Solid).count(), 1);
+        let v = properties::volume(&model, result).mass;
+        assert!((v - both).abs() <= 1e-6 * both, "volume {v} against {both}");
+    }
+
     /// A box and a slab under a wave (a B-spline) rising just through the box's top, by 2e-5
     /// over 0.013, and again by 5e-4: the top meets the wave in pairs of lines close
     /// together, and is kept between them.
