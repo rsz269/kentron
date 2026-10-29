@@ -42,8 +42,6 @@ tests.test_assembly::test_colors_fused_assy[single_compound1_assy-expected2]
 tests.test_assembly::test_colors_fused_assy[spheres0_assy-expected3]
 tests.test_assembly::test_exportGLTF
 tests.test_assembly::test_export[caf-args9-kwargs9]
-tests.test_assembly::test_export[glb-args5-kwargs5]
-tests.test_assembly::test_export[gltf-args4-kwargs4]
 tests.test_assembly::test_export[vrml-args3-kwargs3]
 tests.test_assembly::test_export[wrl-args10-kwargs10]
 tests.test_assembly::test_export[xbf-args2-kwargs2]
@@ -58,8 +56,6 @@ tests.test_assembly::test_native_export
 tests.test_assembly::test_save[caf-args3]
 tests.test_assembly::test_save[wrl-args4]
 tests.test_assembly::test_save[xml-args1]
-tests.test_assembly::test_save_gltf
-tests.test_assembly::test_save_gltf_boxes2
 tests.test_assembly::test_save_stl_formats
 tests.test_assembly::test_save_vtkjs
 tests.test_assembly::test_shallow_assy

@@ -71,9 +71,9 @@ conversation's context, read back from the cache).
 - **OCCT's GTests:** the computational-geometry and topology toolkits, translated by hand.
 - **BRL-CAD:** NIST's MBE PMI test parts and other STEP files from its source tree, with
   OCCT's reading of them as the reference, plus its `libbg` geometry tests.
-- **CadQuery's own test suite** (v2.8.0), run unchanged against pykentron: 588 of 727 tests
+- **CadQuery's own test suite** (v2.8.0), run unchanged against pykentron: 592 of 727 tests
   pass. Most of the rest exercise OCCT's document formats (OCAF/XDE), exporters kentron
-  lacks (glTF, VRML, VTK), or OCCT-specific behaviour.
+  lacks (VRML, VTK), or OCCT-specific behaviour.
 - **44 CadQuery models from a private project** build on pykentron; for the 42 that return
   their parts, every part is valid and within 0.1% of CadQuery's volume.
 - **751 CadQuery scripts from 113 public projects**: of the 742 whose results don't depend

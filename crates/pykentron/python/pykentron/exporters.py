@@ -129,6 +129,11 @@ def export(w, fname, exportType: Optional[str] = None, tolerance: float = 0.1, a
 
 
 def export_assembly(assembly, path, exportType: Optional[str] = None, tolerance: float = 0.1, angularTolerance: float = 0.1) -> None:
+    if (exportType or Path(str(path)).suffix.lstrip(".")).upper() in ("GLTF", "GLB"):
+        from .occ_impl.exporters.assembly import exportGLTF
+
+        exportGLTF(assembly, str(path), None, tolerance, angularTolerance)
+        return
     kind = _type_of(path, exportType)
     if kind == "STEP":
         native.write_step_assembly(str(path), [assembly._step_tree()])

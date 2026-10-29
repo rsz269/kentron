@@ -388,6 +388,80 @@ def test_same_as_cadquery(case):
             assert math.isclose(got, expected, rel_tol=1e-4, abs_tol=1e-6), f"{key}: {got} != {expected}"
 
 
+def _gltf_scene(path):
+    """A glTF file's nodes (name, translation, rotation), materials' colours, and the volume
+    its meshes enclose, placed."""
+    import json
+    import struct
+
+    raw = Path(path).read_bytes()
+    if raw[:4] == b"glTF":
+        n = struct.unpack_from("<I", raw, 12)[0]
+        doc = json.loads(raw[20:20 + n])
+        data = raw[20 + n + 8:]
+    else:
+        doc = json.loads(raw)
+        data = (Path(path).parent / doc["buffers"][0]["uri"]).read_bytes()
+
+    def accessor(i):
+        a = doc["accessors"][i]
+        v = doc["bufferViews"][a["bufferView"]]
+        size = 3 if a["type"] == "VEC3" else 1
+        values = struct.unpack_from("<%d%s" % (size * a["count"], {5126: "f", 5125: "I", 5123: "H"}[a["componentType"]]), data, v["byteOffset"] + a.get("byteOffset", 0))
+        return [values[k:k + 3] for k in range(0, len(values), 3)] if size == 3 else list(values)
+
+    def placement(node):
+        x, y, z, w = node.get("rotation", [0, 0, 0, 1])
+        t = node.get("translation", [0, 0, 0])
+        r = [[1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)], [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)], [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)]]
+        return [r[i] + [t[i]] for i in range(3)]
+
+    def times(a, b):
+        return [[sum(a[i][k] * b[k][j] for k in range(3)) for j in range(3)] + [sum(a[i][k] * b[k][3] for k in range(3)) + a[i][3]] for i in range(3)]
+
+    volume, nodes = 0.0, []
+
+    def walk(i, m):
+        nonlocal volume
+        node = doc["nodes"][i]
+        m = times(m, placement(node))
+        nodes.append((node.get("name"), node.get("translation", [0, 0, 0]), node.get("rotation", [0, 0, 0, 1])))
+        for primitive in doc["meshes"][node["mesh"]]["primitives"] if "mesh" in node else []:
+            points = [[sum(m[r][k] * p[k] for k in range(3)) + m[r][3] for r in range(3)] for p in accessor(primitive["attributes"]["POSITION"])]
+            indices = accessor(primitive["indices"])
+            for k in range(0, len(indices), 3):
+                a, b, c = (points[j] for j in indices[k:k + 3])
+                volume += (a[0] * (b[1] * c[2] - b[2] * c[1]) - a[1] * (b[0] * c[2] - b[2] * c[0]) + a[2] * (b[0] * c[1] - b[1] * c[0])) / 6
+        for child in node.get("children", []):
+            walk(child, m)
+
+    walk(doc["scenes"][0]["nodes"][0], [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0]])
+    return nodes, [m["pbrMetallicRoughness"]["baseColorFactor"] for m in doc.get("materials", [])], volume
+
+
+@parametrize("suffix", [".gltf", ".glb"])
+def test_gltf_assembly_as_cadquery(tmp_path, suffix):
+    # (A placed assembly, coloured parts and a placed sub-assembly: the same nodes, placed
+    # alike, turned Z up to Y up, the same materials, and the meshes enclosing the parts.)
+    def write(cq, path):
+        sub = cq.Assembly(name="sub", loc=cq.Location((0, 30, 0), (0, 0, 1), 45)).add(cq.Solid.makeSphere(4), name="ball", color=cq.Color("green"))
+        assy = cq.Assembly(name="top", loc=cq.Location((1, 2, 3)))
+        assy.add(cq.Solid.makeBox(10, 20, 30), name="box", color=cq.Color("red"))
+        assy.add(cq.Solid.makeCylinder(3, 5), name="cyl", loc=cq.Location((20, 0, 0), (1, 0, 0), 30), color=cq.Color(0, 0, 1, 0.5))
+        assy.add(sub)
+        assy.export(str(path))
+        return _gltf_scene(path)
+
+    ours = write(pykentron, tmp_path / f"ours{suffix}")
+    theirs = write(cadquery, tmp_path / f"theirs{suffix}")
+    assert [n[0] for n in ours[0]] == [n[0] for n in theirs[0]]
+    for (_, t1, r1), (_, t2, r2) in zip(ours[0], theirs[0]):
+        assert all(math.isclose(a, b, abs_tol=1e-9) for a, b in zip(t1 + r1, t2 + r2)), (t1, r1, t2, r2)
+    assert ours[1] == theirs[1]
+    # (Meshes of the same parts, finer or coarser.)
+    assert math.isclose(ours[2], theirs[2], rel_tol=1e-3), (ours[2], theirs[2])
+
+
 if __name__ == "__main__":
     import traceback
 
@@ -399,5 +473,15 @@ if __name__ == "__main__":
         except Exception as e:
             failed += 1
             print(f"FAILED  {case.__name__}: {type(e).__name__}: {e}")
-    print(f"{len(CASES) - failed} passed, {failed} failed")
+    import tempfile
+
+    for suffix in (".gltf", ".glb"):
+        with tempfile.TemporaryDirectory() as folder:
+            try:
+                test_gltf_assembly_as_cadquery(Path(folder), suffix)
+                print(f"ok      gltf_assembly{suffix}")
+            except Exception as e:
+                failed += 1
+                print(f"FAILED  gltf_assembly{suffix}: {type(e).__name__}: {e}")
+    print(f"{len(CASES) + 2 - failed} passed, {failed} failed")
     sys.exit(1 if failed else 0)

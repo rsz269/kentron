@@ -1,4 +1,4 @@
-"""CadQuery's `occ_impl.exporters.assembly` on pykentron: assemblies written to STEP files."""
+"""CadQuery's `occ_impl.exporters.assembly` on pykentron: assemblies written to STEP and glTF files."""
 
 from __future__ import annotations
 
@@ -123,8 +123,150 @@ def exportVRML(assy, path: str, tolerance: float = 1e-3, angularTolerance: float
     raise NotImplementedError("exporting assemblies to VRML files")
 
 
-def exportGLTF(assy, path: str, binary=None, tolerance: float = 1e-3, angularTolerance: float = 0.1) -> None:
-    raise NotImplementedError("exporting assemblies to glTF files")
+def _quaternion(rows) -> list:
+    """The rotation of a placement's rows (3 x 4) as a unit quaternion (x, y, z, w)."""
+    import math
+
+    (a, b, c), (d, e, f), (g, h, i) = (r[:3] for r in rows)
+    trace = a + e + i
+    if trace > 0.0:
+        k = 0.5 / math.sqrt(trace + 1.0)
+        q = [(h - f) * k, (c - g) * k, (d - b) * k, 0.25 / k]
+    elif a > e and a > i:
+        k = 2.0 * math.sqrt(1.0 + a - e - i)
+        q = [0.25 * k, (b + d) / k, (c + g) / k, (h - f) / k]
+    elif e > i:
+        k = 2.0 * math.sqrt(1.0 + e - a - i)
+        q = [(b + d) / k, 0.25 * k, (f + h) / k, (c - g) / k]
+    else:
+        k = 2.0 * math.sqrt(1.0 + i - a - e)
+        q = [(c + g) / k, (f + h) / k, 0.25 * k, (d - b) / k]
+    n = math.sqrt(sum(x * x for x in q))
+    return [x / n for x in q]
+
+
+def exportGLTF(assy, path: str, binary=None, tolerance: float = 1e-3, angularTolerance: float = 0.1) -> bool:
+    """Writes the assembly to a glTF file (binary, .glb, unless the path ends in .gltf; a
+    .gltf's data in a .bin beside it), as CadQuery's (OCCT's glTF writer): a node for each
+    of the assembly's, placed as it is, with a mesh of its shape, a primitive for each face
+    (positions and normals), in millimetres; its root turned so that +Z up becomes glTF's
+    +Y up; a material for each colour (children without one taking their parent's)."""
+    import json
+    import math
+    import os
+    import struct
+    from array import array
+
+    if binary is None:
+        binary = not str(path).lower().endswith(".gltf")
+    data = bytearray()
+    accessors, views, meshes, materials, nodes = [], [], [], [], []
+    material_of = {}
+
+    def view(blob: bytes, target: int, stride=None) -> int:
+        while len(data) % 4:
+            data.append(0)
+        v = {"buffer": 0, "byteOffset": len(data), "byteLength": len(blob), "target": target}
+        if stride:
+            v["byteStride"] = stride
+        data.extend(blob)
+        views.append(v)
+        return len(views) - 1
+
+    def material(rgba) -> int:
+        key = tuple(round(x, 6) for x in rgba)
+        if key not in material_of:
+            m = {"name": f"mat_{len(materials)}", "pbrMetallicRoughness": {"baseColorFactor": list(key)}, "doubleSided": True}
+            if key[3] < 1.0:
+                m["pbrMetallicRoughness"]["metallicFactor"] = 0.0
+                m["alphaMode"] = "BLEND"
+            materials.append(m)
+            material_of[key] = len(materials) - 1
+        return material_of[key]
+
+    def mesh(name, shape, rgba):
+        primitives = []
+        for face in Shape.cast(shape).Faces():
+            points, tris = native.triangulate(face.wrapped, tolerance, angularTolerance)
+            if not tris:
+                continue
+            # (Each point's normal: the triangles' round it, weighted by their areas.)
+            normals = [[0.0, 0.0, 0.0] for _ in points]
+            for t in tris:
+                p, q, r = (points[k] for k in t)
+                u, v = [q[j] - p[j] for j in range(3)], [r[j] - p[j] for j in range(3)]
+                n = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]]
+                for k in t:
+                    normals[k] = [normals[k][j] + n[j] for j in range(3)]
+            for n in normals:
+                length = math.sqrt(sum(x * x for x in n)) or 1.0
+                n[:] = [x / length for x in n]
+            flat = array("f", [x for p in points for x in p])
+            lo = [min(p[j] for p in points) for j in range(3)]
+            hi = [max(p[j] for p in points) for j in range(3)]
+            at = len(accessors)
+            accessors.append({"bufferView": view(flat.tobytes(), 34962, 12), "componentType": 5126, "count": len(points), "type": "VEC3", "min": lo, "max": hi})
+            accessors.append({"bufferView": view(array("f", [x for n in normals for x in n]).tobytes(), 34962, 12), "componentType": 5126, "count": len(points), "type": "VEC3"})
+            accessors.append({"bufferView": view(array("I", [k for t in tris for k in t]).tobytes(), 34963), "componentType": 5125, "count": 3 * len(tris), "type": "SCALAR"})
+            primitive = {"attributes": {"POSITION": at, "NORMAL": at + 1}, "indices": at + 2, "mode": 4}
+            if rgba is not None:
+                primitive["material"] = material(rgba)
+            primitives.append(primitive)
+        if not primitives:
+            return None
+        meshes.append({"name": name, "primitives": primitives})
+        return len(meshes) - 1
+
+    def node(tree, rgba, rows=None) -> int:
+        name, shape, own_rows, own_rgba, children, _ = tree
+        rgba = own_rgba if own_rgba is not None else rgba
+        rows = rows if rows is not None else own_rows
+        n = {"name": name}
+        translation = [r[3] for r in rows]
+        if any(abs(x) > 1e-12 for x in translation):
+            n["translation"] = translation
+        if any(abs(v - (1.0 if i == j else 0.0)) > 1e-12 for i, r in enumerate(rows) for j, v in enumerate(r[:3])):
+            n["rotation"] = _quaternion(rows)
+        nodes.append(n)
+        index = len(nodes) - 1
+        if shape is not None:
+            m = mesh(name, shape, rgba)
+            if m is not None:
+                n["mesh"] = m
+        kids = [node(child, rgba) for child in children]
+        if kids:
+            n["children"] = kids
+        return index
+
+    tree = _tree(assy)
+    # (The root's placement followed by a turn about X by -90°, Z up to Y up, as CadQuery's
+    # `assy.loc *= Location((0, 0, 0), (1, 0, 0), -90)`.)
+    turn = [[1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, -1.0, 0.0]]
+    own = tree[2]
+    root = [[sum(own[i][k] * turn[k][j] for k in range(3)) for j in range(3)] + [own[i][3]] for i in range(3)]
+    node(tree, None, root)
+    while len(data) % 4:
+        data.append(0)
+    doc = {"asset": {"generator": "pykentron", "version": "2.0"}, "scene": 0, "scenes": [{"nodes": [0]}], "nodes": nodes, "meshes": meshes, "accessors": accessors, "bufferViews": views}
+    if materials:
+        doc["materials"] = materials
+    if binary:
+        doc["buffers"] = [{"byteLength": len(data)}]
+        text = json.dumps(doc, separators=(",", ":")).encode()
+        text += b" " * (-len(text) % 4)
+        total = 12 + 8 + len(text) + 8 + len(data)
+        with open(path, "wb") as f:
+            f.write(struct.pack("<4sII", b"glTF", 2, total))
+            f.write(struct.pack("<I4s", len(text), b"JSON") + text)
+            f.write(struct.pack("<I4s", len(data), b"BIN\x00") + bytes(data))
+    else:
+        bin_path = os.path.splitext(str(path))[0] + ".bin"
+        doc["buffers"] = [{"byteLength": len(data), "uri": os.path.basename(bin_path)}]
+        with open(bin_path, "wb") as f:
+            f.write(bytes(data))
+        with open(path, "w") as f:
+            json.dump(doc, f, indent=1)
+    return True
 
 
 def exportVTKJS(assy, path: str) -> None:
