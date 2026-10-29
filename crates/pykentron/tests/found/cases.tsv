@@ -210,3 +210,50 @@ cadquery_tests	completed/sawppy_wheel_nema_17_test.py	Roger-random/cadquery_test
 cadquery_tests	completed/pvc_sch_40_cap.py	Roger-random/cadquery_tests@56a7be5	MIT	slower	performance: sweeps and lofts	0.14	0.27	0.14s vs 0.27s
 cadquery_tests	completed/thin_wall_experiments.py	Roger-random/cadquery_tests@56a7be5	MIT	slower	performance: offsets and shells	0.10	0.22	0.10s vs 0.22s
 cadquery_plaground	screw_cap_container.py	mryndzionek/cadquery_plaground@8169dde	MIT	fails	booleans	2.95	6.12	ValueError: invalid input: no pcurve for a section edge
+cadquery_tests	lathe/chuck_1_2_adapter.py	Roger-random/cadquery_tests@56a7be5	MIT	diverges	fillets and chamfers	0.06	0.28	shown0: area 4738.79 vs 4678.39; result: area 4738.79 vs 4678.39
+CADTestBench	baselines/CADTests/GPT-5.2/Abstract/generated_models/00997229/gpt_generated.py	dimitrismallis/CADTestBench@e29283c	MIT	diverges	compound/solid structure	0.01	0.09	export:gpt_generated.stl: solids 1 vs 2; final_result: solids 1 vs 2
+cadqueryhelper	example/grid/grid_cell_random.py	medicationforall/cadqueryhelper@5e70aa7	Apache-2.0	diverges	offsets and shells	0.02	0.29	export:grid_cell_random.stl: volume 3501.69 vs 3765.73; export:grid_cell_random.stl: area 3779.14 vs 4201.46; export:grid_cell_random.stl: solids 8 vs 9; grid: volume 3501.69 vs 3765.73; grid: area 3779.14 vs 4201.46; grid: solids 8 vs 9
+cadquery_tests	completed/dessicant_container_lid_drill_jig.py	Roger-random/cadquery_tests@56a7be5	MIT	fails	fillets and chamfers	1.12	0.84	ValueError: invalid input: the fillet does not reach the face at the end of its edge
+CADabra	frontend-preview/ortho_outputs/ortho_deepcadimg_002354_generated.py	snowcodeer/CADabra@a5417a2	not copied (none)	diverges	other geometry	0.08	0.51	result: bbox differs
+solid-hyperobjects	pump-adapter/main.py	madfam-org/solid-hyperobjects@9d818bd	not copied (CERN-OHL-W-2.0)	diverges	sweeps and lofts	0.43	1.75	result: volume 5546.07 vs 4905.57; result: area 5019.43 vs 4367.06
+cqfantasy	example/watchtower/watch_tower.py	medicationforall/cqfantasy@704d0e9	Apache-2.0	fails	other errors	5.42	90.88	ValueError: Cannot find a solid on the stack or in the parent chain
+cqindustry	example/depot/container.py	medicationforall/cqindustry@c583078	Apache-2.0	fails	fillets and chamfers	0.57	0.66	ValueError: invalid input: no fillet section here (no convergence)
+cadquery_tests	lathe/tail_stock_handle.py	Roger-random/cadquery_tests@56a7be5	MIT	diverges	fillets and chamfers	4.66	0.60	shown0: area 7667.19 vs 7581.32; wrench: area 7667.19 vs 7581.32
+synthetic_cadquery	generated_code/00159876_57403b1ae4b055a05f187f5e_step_000.py	anniedoris/synthetic_cadquery@f874cca	not copied (none)	diverges	compound/solid structure	1.31	2.38	result: solids 7 vs 4
+cqterrain	example/door/door.py	medicationforall/cqterrain@6604257	Apache-2.0	diverges	offsets and shells	0.06	0.39	export:door.stl: area 3283.93 vs 3275.81; result: area 3283.93 vs 3275.81
+cqterrain	example/minibase/minibase_group_wood.py	medicationforall/cqterrain@6604257	Apache-2.0	diverges	other geometry	5.93	14.80	export:minibase_group_wood.stl: volume 26166.3 vs 26235.6; export:minibase_group_wood.stl: area 18657 vs 18141.8; export:minibase_group_wood.stl: invalid; export:minibase_group_wood.stl: bbox differs; export:minibase_group_wood.stl: solids 6 vs 5; ellipse_base: volume 15439.6 vs 15508.9
+cqfantasy	example/tower/round_block_stucco_generator.py	medicationforall/cqfantasy@704d0e9	Apache-2.0	diverges	other geometry	6.32	22.69	export:round_block_stucco_generator.stl: volume 66494.8 vs 15188.7; export:round_block_stucco_generator.stl: area 16809.8 vs 22786; export:round_block_stucco_generator.stl: invalid; export:round_block_stucco_generator.stl: solids 53 vs 81; ex_blocks: volume 66494.8 vs 15188.7; ex_blocks: area 16809.
+synthetic_cadquery	generated_code/00886684_649961f60cc17fd3748aba5a_step_000.py	anniedoris/synthetic_cadquery@f874cca	not copied (none)	diverges	offsets and shells	0.04	0.21	result: area 47400 vs 53800; result: solids 3 vs 6
+cqindustry	example/portal/portal_frame_window_block.py	medicationforall/cqindustry@c583078	Apache-2.0	diverges	other geometry	16.32	39.29	export:portal_class_frame_window_block.stl: invalid; result_open: invalid
+cadquery_tests	lathe/chuck_key_handle.py	Roger-random/cadquery_tests@56a7be5	MIT	diverges	sweeps and lofts	0.48	0.56	shown0: volume -815.294 vs 92288.2; shown0: area 707.381 vs 14848.8; shown0: invalid; shown0: bbox differs
+cqindustry	example/depot/depot_plate.py	medicationforall/cqindustry@c583078	Apache-2.0	fails	fillets and chamfers	0.46	4.84	ValueError: invalid input: no fillet section here (no convergence)
+cqfantasy	example/tower/round_block_uneven_generator.py	medicationforall/cqfantasy@704d0e9	Apache-2.0	diverges	other geometry	11.73	62.03	export:round_block_uneven_generator.stl: volume 361929 vs 57437.3; export:round_block_uneven_generator.stl: area 77683.4 vs 84810.5; export:round_block_uneven_generator.stl: invalid; export:round_block_uneven_generator.stl: solids 241 vs 300; ex_blocks: volume 361929 vs 57437.3; ex_blocks: area 7768
+synthetic_cadquery	generated_code/00845551_de68abf9acfd8e493d47a938_step_002.py	anniedoris/synthetic_cadquery@f874cca	not copied (none)	diverges	compound/solid structure	0.02	0.28	curved_elbow: solids 3 vs 2
+cq_warehouse	docs/fastener_diagrams.py	gumyr/cq_warehouse@a57bb7a	Apache-2.0	fails	other errors	2.51	96.99	ValueError: invalid input: the draft closes a straight edge of the profile
+cqfantasy	example/tower/tower_top_greebled.py	medicationforall/cqfantasy@704d0e9	Apache-2.0	diverges	other geometry	43.03	57.56	export:tower_top_greebled.stl: volume 118159 vs 149138; export:tower_top_greebled.stl: area 33278.1 vs 67689; export:tower_top_greebled.stl: invalid; export:tower_top_greebled.stl: bbox differs; export:tower_top_greebled.stl: solids 107 vs 1; ex_tower: volume 118159 vs 149138
+cqindustry	example/power/powerStationGreebledUniquePanelsAssembly.py	medicationforall/cqindustry@c583078	Apache-2.0	fails	import/export	3.91	31.41	NotImplementedError: exporting assemblies to glTF files
+solid-hyperobjects	squeeze-nozzle/main.py	madfam-org/solid-hyperobjects@9d818bd	not copied (CERN-OHL-W-2.0)	diverges	sweeps and lofts	0.34	1.64	result: volume 4734.23 vs 4753.56; result: area 5558.94 vs 4440.34
+synthetic_cadquery	generated_code/00271292_8e7eca5e967a634bd273e303_step_000.py	anniedoris/synthetic_cadquery@f874cca	not copied (none)	fails	fillets and chamfers	0.02	0.55	ValueError: invalid input: a fillet edge must bound two faces, it bounds 4
+cqindustry	example/portal/portal_cutaway.py	medicationforall/cqindustry@c583078	Apache-2.0	diverges	booleans	14.41	42.24	result_open: invalid
+cqterrain	example/shieldwall/straight_hex.py	medicationforall/cqterrain@6604257	Apache-2.0	fails	import/export	0.69	5.49	NotImplementedError: exporting assemblies to glTF files
+Gear-Generator-Cadquery	Gear_Generator_Newest.py	abdullahburakt06-ctrl/Gear-Generator-Cadquery@dbcaeed	not copied (none)	slower	performance: splines and surface fitting	12.41	13.86	12.41s vs 13.86s
+cq_warehouse	docs/cq_title_image.py	gumyr/cq_warehouse@a57bb7a	Apache-2.0	slower	performance: offsets and shells	0.95	1.41	0.95s vs 1.41s
+solid-hyperobjects	ladder-lock/main.py	madfam-org/solid-hyperobjects@9d818bd	not copied (CERN-OHL-W-2.0)	slower	performance: sweeps and lofts	0.13	0.22	0.13s vs 0.22s
+CadQuery_Scripts	headphone_mount.py	lewisaronmilne/CadQuery_Scripts@4dfd6e4	not copied (none)	slower	performance: fillets and chamfers	0.13	0.24	0.13s vs 0.24s
+cqindustry	example/power/steelFrame.py	medicationforall/cqindustry@c583078	Apache-2.0	slower	performance: general	0.12	0.24	0.12s vs 0.24s
+ParaSMR	components_premade/components_premade_above_core_structure.py	PSI-advanced-nuclear-systems/ParaSMR@c2ab6ea	MIT	slower	performance: offsets and shells	0.22	0.48	0.22s vs 0.48s
+cqfantasy	example/tower/lattice_window.py	medicationforall/cqfantasy@704d0e9	Apache-2.0	slower	performance: general	0.22	0.48	0.22s vs 0.48s
+cadquery_tests	fit_test_blocks/belt_supoprt.py	Roger-random/cadquery_tests@56a7be5	MIT	slower	performance: fillets and chamfers	0.06	0.13	0.06s vs 0.13s
+cqfantasy	example/house/house_cut_away.py	medicationforall/cqfantasy@704d0e9	Apache-2.0	slower	performance: general	1.36	3.11	1.36s vs 3.11s
+3d-modeling	cap_stand_7/cap_stand_7.py	mono0926/3d-modeling@7724258	not copied (none)	slower	performance: fillets and chamfers	0.06	0.15	0.06s vs 0.15s
+cadquery_tests	lathe/chuck_key.py	Roger-random/cadquery_tests@56a7be5	MIT	slower	performance: text	0.08	0.18	0.08s vs 0.18s
+AeroTower	src/plant_cup.py	urban-smart-grow/AeroTower@e9ae128	not copied (none)	slower	performance: offsets and shells	0.10	0.24	0.10s vs 0.24s
+CadQuery_Scripts	hexagon_solder_mount.py	lewisaronmilne/CadQuery_Scripts@4dfd6e4	not copied (none)	slower	performance: fillets and chamfers	0.08	0.19	0.08s vs 0.19s
+cadquery_tests	lathe/multi_tool_block.py	Roger-random/cadquery_tests@56a7be5	MIT	slower	performance: fillets and chamfers	0.13	0.33	0.13s vs 0.33s
+solid-hyperobjects	condensate-fitting/main.py	madfam-org/solid-hyperobjects@9d818bd	not copied (CERN-OHL-W-2.0)	slower	performance: sweeps and lofts	0.06	0.16	0.06s vs 0.16s
+cadqueryhelper	example/hinge/hinge_larger_tab.py	medicationforall/cadqueryhelper@5e70aa7	Apache-2.0	slower	performance: general	0.10	0.26	0.10s vs 0.26s
+cad-image-to-3d	examples/cases/z2c_94/loop1.py	skykim/cad-image-to-3d@09a9b9f	Apache-2.0	slower	performance: fillets and chamfers	0.13	0.35	0.13s vs 0.35s
+cqindustry	example/portal/portal.py	medicationforall/cqindustry@c583078	Apache-2.0	slower	performance: general	0.23	0.63	0.23s vs 0.63s
+solid-hyperobjects	snap-hook-swivel/main.py	madfam-org/solid-hyperobjects@9d818bd	not copied (CERN-OHL-W-2.0)	slower	performance: sweeps and lofts	0.12	0.34	0.12s vs 0.34s
+CadQuery_Scripts	knob.py	lewisaronmilne/CadQuery_Scripts@4dfd6e4	not copied (none)	slower	performance: fillets and chamfers	0.06	0.17	0.06s vs 0.17s
+gear-shaper-simulator	with_cq_gears.py	jschoch/gear-shaper-simulator@142e196	MIT	slower	performance: offsets and shells	0.10	0.28	0.10s vs 0.28s

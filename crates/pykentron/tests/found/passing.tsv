@@ -358,3 +358,206 @@ cqfantasy	example/house/body_types.py	medicationforall/cqfantasy@704d0e9	Apache-
 objects	sb210_button_cover.py	Gigahawk/objects@5cbc0cd	not copied (none)	0.017	0.017	0.050	0.060	1
 zhangwen	resources/hardware-skills/dfr0026-ambient-light-sensor/models/cadquery.py	yusen/zhangwen@2e75546	Apache-2.0	0.008	0.008	0.051	0.065	4
 cadquery-server	examples/box.py	lypwig/cadquery-server@302cd6f	MIT	0.002	0.002	0.006	0.006	6
+cadqueryhelper	example/shape/teardrop.py	medicationforall/cadqueryhelper@5e70aa7	Apache-2.0	0.023	0.024	0.143	0.222	2
+synthetic_cadquery	docs_examples/example31.py	anniedoris/synthetic_cadquery@f874cca	not copied (none)	0.022	0.019	0.188	0.110	1
+solid-hyperobjects	aerator-adapter/main.py	madfam-org/solid-hyperobjects@9d818bd	not copied (CERN-OHL-W-2.0)	0.419	4.967	1.763	31.463	1
+3d-modeling	tic_tac_toe_pieces/tic_tac_toe_pieces.py	mono0926/3d-modeling@7724258	not copied (none)	0.014	0.014	0.309	0.247	2
+synthetic_cadquery	generated_code/00197555_5787e617e4b038b786de6bb4_step_051.py	anniedoris/synthetic_cadquery@f874cca	not copied (none)	0.141	0.415	0.684	2.730	1
+solid-hyperobjects	shaft-collar/main.py	madfam-org/solid-hyperobjects@9d818bd	not copied (CERN-OHL-W-2.0)	0.024	0.046	0.086	0.584	1
+Wheelly	mechanics/wheelly-cad/src/check_cable_route.py	teoteo/Wheelly@0ae1656	MIT	1.430	0.806	47.340	38.934	1
+solid-hyperobjects	gimbal-holder/main.py	madfam-org/solid-hyperobjects@9d818bd	not copied (CERN-OHL-W-2.0)	0.163	0.123	0.944	1.703	1
+cqfantasy	example/house_wall/wall_split_class.py	medicationforall/cqfantasy@704d0e9	Apache-2.0	0.232	0.228	1.971	2.735	3
+CADTestBench	baselines/CADTests/Claude-4.6-Sonnet/Abstract/generated_models/00037135/gpt_generated.py	dimitrismallis/CADTestBench@e29283c	MIT	0.007	0.007	0.112	0.136	2
+OF1Heavy-CadQuery	OF1_Heavy-Backplate.py	nicotapiero/OF1Heavy-CadQuery@918cbe3	not copied (none)	0.033	0.033	0.373	0.389	4
+solid-hyperobjects	cord-lock/main.py	madfam-org/solid-hyperobjects@9d818bd	not copied (CERN-OHL-W-2.0)	0.028	0.028	0.264	0.334	1
+Hephaestus-CCX	benchmark/kits/multi/067_jp12_jaxa_innovative_satellite/build.py	guijinSON/Hephaestus-CCX@bbe8b0f	MIT	0.005	0.005	0.087	0.098	1
+Hephaestus-CCX	benchmark/kits/multi/219_df3_aiaa_space_lunar_base/build.py	guijinSON/Hephaestus-CCX@bbe8b0f	MIT	0.005	0.005	0.058	0.067	1
+3D-prints	Coax_tops.py	MaikBrand/3D-prints@0e1cee8	Apache-2.0	1.201	1.375	6.039	14.411	29
+cadquery_tests	completed/hallowing_m0_cover.py	Roger-random/cadquery_tests@56a7be5	MIT	0.050	0.050	0.452	0.487	3
+cqterrain	example/door/door_two.py	medicationforall/cqterrain@6604257	Apache-2.0	0.037	0.037	0.468	0.492	2
+cadqueryhelper	example/shape/pinwheel.py	medicationforall/cadqueryhelper@5e70aa7	Apache-2.0	0.017	0.017	0.393	0.402	2
+gym	robots/so101/parts/camera_mount.py	yotown/gym@e50fa99	Apache-2.0	0.039	0.106	0.223	0.911	3
+cqterrain	example/tile/glyph.py	medicationforall/cqterrain@6604257	Apache-2.0	0.052	0.052	0.349	0.277	2
+cqindustry	example/power/cradle.py	medicationforall/cqindustry@c583078	Apache-2.0	0.241	0.339	1.842	2.542	3
+Hephaestus-CCX	benchmark/kits/single/090_ng5_iso10328_p5_prosthetic_pylon/build.py	guijinSON/Hephaestus-CCX@bbe8b0f	MIT	0.004	0.004	0.061	0.070	1
+cadqueryhelper	example/wave/square_twist_extrude2.py	medicationforall/cadqueryhelper@5e70aa7	Apache-2.0	0.456	0.766	3.879	5.372	8
+cadquery_tests	solar_tripod/washer_wingnut.py	Roger-random/cadquery_tests@56a7be5	MIT	0.049	0.086	0.088	0.316	1
+ai-cad	frontend/src/lib/parsers/__fixtures__/treasure_chest_test_fixture/assembly/lid/part.py	ai-cad-labs/ai-cad@578aed9	Apache-2.0	0.015	0.015	0.324	0.244	2
+solid-hyperobjects	water-meter-lid/main.py	madfam-org/solid-hyperobjects@9d818bd	not copied (CERN-OHL-W-2.0)	0.032	0.035	0.265	0.390	1
+cqindustry	example/dome/door_hexagon.py	medicationforall/cqindustry@c583078	Apache-2.0	0.129	0.104	0.793	0.749	2
+ParaSMR	components_premade/components_premade_strongback.py	PSI-advanced-nuclear-systems/ParaSMR@c2ab6ea	MIT	0.029	0.029	0.255	0.232	2
+synthetic_cadquery	generated_code/00511017_197c8ed4e164403450806542_step_000.py	anniedoris/synthetic_cadquery@f874cca	not copied (none)	0.007	0.007	0.210	0.097	1
+synthetic_cadquery	generated_code/00059595_e95b454f4e7f4f84a6f994cf_step_000.py	anniedoris/synthetic_cadquery@f874cca	not copied (none)	0.017	0.017	0.704	0.573	8
+3dprint-pipeline	cdrom_enclosure.py	tommasobbianchi/3dprint-pipeline@91d9a19	not copied (none)	0.014	0.011	0.224	0.131	3
+cqfantasy	example/house_wall/wall_tudor_class.py	medicationforall/cqfantasy@704d0e9	Apache-2.0	0.046	0.046	0.634	0.780	2
+Hephaestus-CCX	benchmark/kits/multi/333_i_eu1_esa_rexus_experiment_module/build.py	guijinSON/Hephaestus-CCX@bbe8b0f	MIT	0.005	0.005	0.070	0.072	1
+CADTestBench	baselines/CADTests/Claude-4.6-Sonnet/Abstract/generated_models/00009529/gpt_generated.py	dimitrismallis/CADTestBench@e29283c	MIT	0.005	0.005	0.064	0.067	2
+CADTestBench	baselines/CADTests/GPT-5.2/Detailed/generated_models/00034239/gpt_generated.py	dimitrismallis/CADTestBench@e29283c	MIT	0.011	0.011	0.142	0.319	2
+synthetic_cadquery	generated_code/00544233_40e2a67c0057ce265fd1c300_step_000.py	anniedoris/synthetic_cadquery@f874cca	not copied (none)	0.045	0.109	0.091	0.310	4
+cadqueryhelper	example/grid/randomized_rotation_grid.py	medicationforall/cadqueryhelper@5e70aa7	Apache-2.0	0.019	0.019	0.178	0.246	3
+cqfantasy	example/house/house_plate.py	medicationforall/cqfantasy@704d0e9	Apache-2.0	0.769	7.018	2.586	15.481	2
+cqindustry	example/power/controlPlatform.py	medicationforall/cqindustry@c583078	Apache-2.0	0.776	5.328	3.540	16.140	2
+3d-modeling	pegboard_spacer/pegboard_spacer.py	mono0926/3d-modeling@7724258	not copied (none)	0.026	0.028	0.204	0.104	3
+3dprint-pipeline	bracket_simple.py	tommasobbianchi/3dprint-pipeline@91d9a19	not copied (none)	0.040	0.022	0.086	0.090	3
+cadqueryhelper	example/shape/cone.py	medicationforall/cadqueryhelper@5e70aa7	Apache-2.0	0.013	0.013	0.089	0.097	2
+cqindustry	example/power/spoolCladding.py	medicationforall/cqindustry@c583078	Apache-2.0	0.077	0.075	0.669	0.671	4
+gym	robots/lerobot_humanoid/parts/torso_upper_torso_12.py	yotown/gym@e50fa99	Apache-2.0	0.059	0.059	2.108	0.991	5
+cadqueryhelper	example/grid/grid_points_random_coords.py	medicationforall/cadqueryhelper@5e70aa7	Apache-2.0	0.403	1.001	2.594	7.274	2
+cadqueryhelper	example/shape/nonagon.py	medicationforall/cadqueryhelper@5e70aa7	Apache-2.0	0.012	0.012	0.083	0.088	2
+gym	robots/lerobot_humanoid/parts/tibias2_hat_big.py	yotown/gym@e50fa99	Apache-2.0	0.006	0.006	0.078	0.046	2
+CADabra	frontend-preview/ortho_outputs/ortho_deepcadimg_128105_generated.py	snowcodeer/CADabra@a5417a2	not copied (none)	0.008	0.008	0.088	0.092	1
+cadqueryhelper	example/wave/sine.py	medicationforall/cadqueryhelper@5e70aa7	Apache-2.0	0.035	0.050	0.429	0.589	2
+Hephaestus-CCX	benchmark/kits/single/026_pt26_fra_49cfr238_rail/build.py	guijinSON/Hephaestus-CCX@bbe8b0f	MIT	0.003	0.003	0.051	0.059	4
+CADabra	backend/sample_data/deepcad_selected/deepcadimg_037782.py	snowcodeer/CADabra@a5417a2	not copied (none)	0.006	0.018	0.064	0.269	10
+cadqueryhelper	example/shape/arch_round.py	medicationforall/cadqueryhelper@5e70aa7	Apache-2.0	0.019	0.019	0.094	0.100	2
+Hephaestus-CCX	benchmark/kits/multi/055_s24_cmh17_cfrp_rotor_blade/build.py	guijinSON/Hephaestus-CCX@bbe8b0f	MIT	0.005	0.005	0.067	0.072	1
+gym	robots/lerobot_humanoid/parts/foot_hat_small.py	yotown/gym@e50fa99	Apache-2.0	0.011	0.010	0.190	0.112	2
+synthetic_cadquery	generated_code/00424073_586e4b4f75e31d107f6eee00_step_088.py	anniedoris/synthetic_cadquery@f874cca	not copied (none)	0.041	0.033	0.716	0.335	1
+cqindustry	example/portal/ramp_frame.py	medicationforall/cqindustry@c583078	Apache-2.0	0.048	0.048	0.392	0.411	4
+cqfantasy	example/tower/tower_mid.py	medicationforall/cqfantasy@704d0e9	Apache-2.0	8.271	14.509	70.614	106.820	2
+mars	maintenance/multi-arm-repair-machine/assets/model.py	yotown/mars@2121edc	MIT	0.062	0.061	1.006	1.228	2
+cad-image-to-3d	examples/cases/z2c_94/exec0.py	skykim/cad-image-to-3d@09a9b9f	Apache-2.0	0.059	0.209	0.216	0.797	3
+cadqueryhelper	example/wave/sawtooth.py	medicationforall/cadqueryhelper@5e70aa7	Apache-2.0	0.014	0.014	0.132	0.155	2
+cadquery_tests	mill/ring_led_quill_mount.py	Roger-random/cadquery_tests@56a7be5	MIT	0.028	0.087	0.097	0.466	1
+CADTestBench	baselines/CADTests/GPT-5.2/Abstract/generated_models/00980651/gpt_generated.py	dimitrismallis/CADTestBench@e29283c	MIT	0.005	0.005	0.056	0.091	2
+3dprint-pipeline	skills/_legacy/cadquery-codegen/templates/threaded_insert.py	tommasobbianchi/3dprint-pipeline@91d9a19	not copied (none)	0.018	0.089	0.088	0.396	3
+Hephaestus-CCX	benchmark/kits/single/115_e5_chem_e_car_pressurized_reservoir/build.py	guijinSON/Hephaestus-CCX@bbe8b0f	MIT	0.008	0.008	0.098	0.119	1
+CADTestBench	baselines/CADTests/GPT-5.2/Abstract/generated_models/00033093/gpt_generated.py	dimitrismallis/CADTestBench@e29283c	MIT	0.005	0.005	0.126	0.149	2
+cqindustry	example/support/strut.py	medicationforall/cqindustry@c583078	Apache-2.0	0.016	0.057	0.084	0.275	2
+3D-prints	54H20--LM20a-DK_and_coax_clip.py	MaikBrand/3D-prints@0e1cee8	Apache-2.0	0.879	1.284	5.881	9.383	24
+CADTestBench	baselines/CADTests/Claude-4.6-Sonnet/Abstract/generated_models/00997852/gpt_generated.py	dimitrismallis/CADTestBench@e29283c	MIT	0.005	0.005	0.061	0.069	2
+Hephaestus-CCX	benchmark/kits/single/039_s8_fia_art253_rollcage/build.py	guijinSON/Hephaestus-CCX@bbe8b0f	MIT	0.223	0.228	1.125	2.238	4
+cqterrain	example/shieldwall/straight_demo.py	medicationforall/cqterrain@6604257	Apache-2.0	0.373	0.469	2.946	6.666	4
+cqfantasy	example/house/house_greebled.py	medicationforall/cqfantasy@704d0e9	Apache-2.0	5.581	9.243	40.498	56.066	4
+cad-image-to-3d	examples/cases/unity_plate/loop1.py	skykim/cad-image-to-3d@09a9b9f	Apache-2.0	0.054	0.065	0.243	1.056	3
+3d-modeling	acrylic_marker_palette/acrylic_marker_palette.py	mono0926/3d-modeling@7724258	not copied (none)	0.514	0.477	24.293	26.388	7
+cadqueryhelper	example/shape/cube.py	medicationforall/cadqueryhelper@5e70aa7	Apache-2.0	0.015	0.015	0.080	0.083	2
+cadqueryhelper	example/shape/triangle_right.py	medicationforall/cadqueryhelper@5e70aa7	Apache-2.0	0.024	0.024	0.085	0.087	2
+Wheelly	mechanics/wheelly-cad/src/solids_wheel.py	teoteo/Wheelly@0ae1656	MIT	0.153	0.594	0.600	2.528	7
+cadquery_tests	solar_tripod/corner_brace_l.py	Roger-random/cadquery_tests@56a7be5	MIT	0.015	0.015	0.105	0.116	1
+cadquery_tests	completed/knob_lathe.py	Roger-random/cadquery_tests@56a7be5	MIT	0.045	0.046	0.352	0.636	11
+CADTestBench	baselines/CADTests/Claude-4.6-Sonnet/Abstract/generated_models/00997373/gpt_generated.py	dimitrismallis/CADTestBench@e29283c	MIT	0.019	0.024	0.085	0.108	2
+Hephaestus-CCX	benchmark/kits/single/093_ng8_build_change_seismic_retrofit/build.py	guijinSON/Hephaestus-CCX@bbe8b0f	MIT	0.009	0.009	0.089	0.086	1
+CADabra	backend/sample_data/deepcad_selected/deepcadimg_069872.py	snowcodeer/CADabra@a5417a2	not copied (none)	0.009	0.009	0.131	0.149	16
+Hephaestus-CCX	benchmark/kits/multi/232_df16_onr_neec/build.py	guijinSON/Hephaestus-CCX@bbe8b0f	MIT	0.005	0.005	0.051	0.054	1
+CADTestBench	baselines/CADTests/GPT-5.2/Abstract/generated_models/00520130/gpt_generated.py	dimitrismallis/CADTestBench@e29283c	MIT	0.004	0.004	0.051	0.061	2
+cadqueryhelper	example/shape/hexagon.py	medicationforall/cadqueryhelper@5e70aa7	Apache-2.0	0.012	0.012	0.185	0.187	2
+coordproof-openbim-mep	cadquery/pump_skid_frame.py	Taz33m/coordproof-openbim-mep@918ebda	Apache-2.0	0.034	0.032	0.535	0.356	2
+objects	fake_loonie.py	Gigahawk/objects@5cbc0cd	not copied (none)	0.016	0.016	0.194	0.350	1
+Hephaestus-CCX	benchmark/kits/multi/214_af2_sasol_solar_challenge/build.py	guijinSON/Hephaestus-CCX@bbe8b0f	MIT	0.012	0.009	0.053	0.064	1
+AeroTower	src/head_electronics_case.py	urban-smart-grow/AeroTower@e9ae128	not copied (none)	0.018	0.046	0.056	0.185	2
+CADabra	backend/sample_data/deepcad_selected/deepcadimg_108596.py	snowcodeer/CADabra@a5417a2	not copied (none)	0.005	0.005	0.113	0.096	7
+cadquery_tests	usb_led_00_minimalist/usb_led_00_minimalist.py	Roger-random/cadquery_tests@56a7be5	MIT	0.042	0.043	0.267	0.509	2
+cqterrain	example/tile/slot_diagonal.py	medicationforall/cqterrain@6604257	Apache-2.0	0.021	0.091	0.098	0.376	2
+cqterrain	example/shieldwall/base_cut.py	medicationforall/cqterrain@6604257	Apache-2.0	0.039	0.039	0.210	0.194	2
+cadqueryhelper	example/shape/cylinder_sector.py	medicationforall/cadqueryhelper@5e70aa7	Apache-2.0	0.015	0.015	0.104	0.101	2
+cqfantasy	example/watchtower/tower_base.py	medicationforall/cqfantasy@704d0e9	Apache-2.0	0.019	0.053	0.053	0.116	2
+cadqueryhelper	example/hinge/simple_hinge.py	medicationforall/cadqueryhelper@5e70aa7	Apache-2.0	0.040	0.051	0.452	0.353	2
+cqindustry	example/dome/make_angled_steps.py	medicationforall/cqindustry@c583078	Apache-2.0	0.027	0.027	0.246	0.296	2
+3dprint-pipeline	skills/_legacy/3d-print-orchestrator/credit_card_holder.py	tommasobbianchi/3dprint-pipeline@91d9a19	not copied (none)	0.043	0.043	0.664	0.479	9
+gym	robots/lerobot_humanoid/parts/shoulder1_part.py	yotown/gym@e50fa99	Apache-2.0	0.441	1.143	1.666	11.969	7
+Hephaestus-CCX	benchmark/kits/multi/350_i_eu13_igvc_2026_frame/build.py	guijinSON/Hephaestus-CCX@bbe8b0f	MIT	0.008	0.005	0.055	0.061	1
+cadqueryhelper	example/hinge/hinge.py	medicationforall/cadqueryhelper@5e70aa7	Apache-2.0	0.092	0.416	0.308	2.254	2
+Hephaestus-CCX	benchmark/kits/multi/094_ng9_ose_ceb_liberator_press/build.py	guijinSON/Hephaestus-CCX@bbe8b0f	MIT	0.005	0.005	0.053	0.061	1
+3D-prints	52840_33_5340-DK_and_coax_clip.py	MaikBrand/3D-prints@0e1cee8	Apache-2.0	0.606	2.180	2.889	12.586	24
+3dprint-pipeline	u_channel_80mm.py	tommasobbianchi/3dprint-pipeline@91d9a19	not copied (none)	0.014	0.012	0.068	0.066	3
+CADTestBench	baselines/CADTests/GPT-5.2/Detailed/generated_models/00997065/gpt_generated.py	dimitrismallis/CADTestBench@e29283c	MIT	0.014	0.014	0.067	0.072	2
+cqindustry	example/dome/make_pentagon.py	medicationforall/cqindustry@c583078	Apache-2.0	0.018	0.018	0.138	0.141	2
+coordproof-openbim-mep	cadquery/mounting_plate.py	Taz33m/coordproof-openbim-mep@918ebda	Apache-2.0	0.014	0.011	0.093	0.150	2
+Hephaestus-CCX	benchmark/kits/multi/201_oc1_arch_rover/build.py	guijinSON/Hephaestus-CCX@bbe8b0f	MIT	0.005	0.005	0.062	0.072	1
+cqindustry	example/portal/rampGreebled.py	medicationforall/cqindustry@c583078	Apache-2.0	1.035	1.031	6.254	5.234	2
+cadqueryhelper	example/grid/points_randomize.py	medicationforall/cadqueryhelper@5e70aa7	Apache-2.0	0.016	0.062	0.074	0.340	2
+3dprint-pipeline	standoff_m3.py	tommasobbianchi/3dprint-pipeline@91d9a19	not copied (none)	0.047	0.057	0.612	0.312	3
+cadqueryhelper	example/grid/grid_cell_basic_random.py	medicationforall/cadqueryhelper@5e70aa7	Apache-2.0	0.030	0.036	0.337	0.444	2
+Hephaestus-CCX	benchmark/kits/single/252_a12_asme_hpvc_rps/build.py	guijinSON/Hephaestus-CCX@bbe8b0f	MIT	0.011	0.011	0.199	0.248	5
+cqterrain	example/walkway/walkway.py	medicationforall/cqterrain@6604257	Apache-2.0	0.304	0.914	1.107	5.105	5
+cqfantasy	example/watchtower/tower_body_greebled.py	medicationforall/cqfantasy@704d0e9	Apache-2.0	4.394	15.484	18.723	77.154	2
+3dprint-pipeline	stepped_cylinder.py	tommasobbianchi/3dprint-pipeline@91d9a19	not copied (none)	0.021	0.071	0.071	0.300	3
+cqterrain	example/tile/rivetRound.py	medicationforall/cqterrain@6604257	Apache-2.0	0.036	0.061	0.281	0.290	2
+cqfantasy	example/house/snowy_roof.py	medicationforall/cqfantasy@704d0e9	Apache-2.0	2.385	3.634	15.364	38.877	2
+cad-image-to-3d	examples/ground_truth/unity_plate.py	skykim/cad-image-to-3d@09a9b9f	Apache-2.0	0.048	0.076	0.236	1.063	3
+CADabra	backend/sample_data/deepcad_selected/deepcadimg_000039.py	snowcodeer/CADabra@a5417a2	not copied (none)	0.005	0.005	0.107	0.107	13
+CADabra	backend/sample_data/deepcad_selected/deepcadimg_057780.py	snowcodeer/CADabra@a5417a2	not copied (none)	0.004	0.004	0.074	0.074	9
+cqfantasy	example/house_wall/log_wall.py	medicationforall/cqfantasy@704d0e9	Apache-2.0	0.046	0.054	0.382	0.512	2
+cqfantasy	example/tower/frame_window.py	medicationforall/cqfantasy@704d0e9	Apache-2.0	0.041	0.119	0.150	0.697	2
+cq_warehouse	docs/drafting_diagrams.py	gumyr/cq_warehouse@a57bb7a	Apache-2.0	0.241	0.188	1.480	1.463	14
+cad-skill	examples/mx_master3_bin_3x3.py	flowful-ai/cad-skill@fe42159	not copied (PolyForm-Noncommercial-1.0.0)	0.213	0.347	1.363	3.278	2
+coordproof-openbim-mep	cadquery/pipe_support.py	Taz33m/coordproof-openbim-mep@918ebda	Apache-2.0	0.019	0.017	0.389	0.289	2
+ParaSMR	components_premade/components_premade_top_plate.py	PSI-advanced-nuclear-systems/ParaSMR@c2ab6ea	MIT	0.037	0.108	0.119	0.383	4
+cqfantasy	example/house_wall/tudor_wall.py	medicationforall/cqfantasy@704d0e9	Apache-2.0	0.037	0.037	0.439	0.484	2
+CADabra	backend/sample_data/deepcad_selected/deepcadimg_061490.py	snowcodeer/CADabra@a5417a2	not copied (none)	0.014	0.014	0.201	0.181	15
+cadquery_tests	fit_test_blocks/hole_fit_test.py	Roger-random/cadquery_tests@56a7be5	MIT	2.752	3.355	25.032	35.051	4
+CADabra	backend/sample_data/deepcad_selected/deepcadimg_108680.py	snowcodeer/CADabra@a5417a2	not copied (none)	0.007	0.007	0.137	0.073	9
+Hephaestus-CCX	benchmark/kits/single/050_s19_abs_hsc_hull_bottom_panel/build.py	guijinSON/Hephaestus-CCX@bbe8b0f	MIT	0.017	0.017	0.273	0.375	1
+cqfantasy	example/fence/basic_fence.py	medicationforall/cqfantasy@704d0e9	Apache-2.0	0.042	0.163	0.183	0.913	2
+cqterrain	example/stairs/round/outline.py	medicationforall/cqterrain@6604257	Apache-2.0	0.020	0.020	0.222	0.222	2
+cadquery_tests	fit_test_blocks/ball_socket_test.py	Roger-random/cadquery_tests@56a7be5	MIT	6.598	7.108	43.935	62.985	7
+cqterrain	example/window/grill.py	medicationforall/cqterrain@6604257	Apache-2.0	0.030	0.030	0.166	0.245	2
+CADabra	backend/sample_data/deepcad_selected/deepcadimg_000035.py	snowcodeer/CADabra@a5417a2	not copied (none)	0.026	0.037	0.262	0.189	13
+3D-prints	54L15-DK_and_coax_clip.py	MaikBrand/3D-prints@0e1cee8	Apache-2.0	0.648	0.825	4.521	6.235	25
+zhangwen	services/structure-cad/templates/servo-vertical.py	yusen/zhangwen@2e75546	Apache-2.0	0.028	0.028	0.767	0.499	7
+CADabra	backend/sample_data/deepcad_selected/deepcadimg_037407.py	snowcodeer/CADabra@a5417a2	not copied (none)	0.013	0.013	0.187	0.188	13
+CADabra	backend/sample_data/deepcad_selected/deepcadimg_000043.py	snowcodeer/CADabra@a5417a2	not copied (none)	0.022	0.026	0.047	0.067	12
+cadquery_tests	lathe/chuck_key_vise_block.py	Roger-random/cadquery_tests@56a7be5	MIT	0.033	0.033	0.230	0.179	8
+cqfantasy	example/house/body_greebled_corner.py	medicationforall/cqfantasy@704d0e9	Apache-2.0	0.641	0.602	6.525	8.039	2
+3D-prints	54LV10-DK_and_coax_clip.py	MaikBrand/3D-prints@0e1cee8	Apache-2.0	0.363	1.044	1.575	6.230	25
+3D-prints	Coax_secure_clip.py	MaikBrand/3D-prints@0e1cee8	Apache-2.0	0.313	0.803	0.076	0.251	4
+cqterrain	example/window/casement.py	medicationforall/cqterrain@6604257	Apache-2.0	0.023	0.023	0.224	0.337	2
+cqfantasy	example/house/stucco_brick_body.py	medicationforall/cqfantasy@704d0e9	Apache-2.0	1.161	1.197	12.515	15.985	2
+cqterrain	example/damage/uneven_spline_plane_safe.py	medicationforall/cqterrain@6604257	Apache-2.0	0.292	0.315	4.360	4.687	2
+mars	energy/self-deploying-solar-station/assets/model.py	yotown/mars@2121edc	MIT	0.167	0.167	2.418	2.004	1
+CadQuery_Scripts	conduit_junction.py	lewisaronmilne/CadQuery_Scripts@4dfd6e4	not copied (none)	0.039	0.052	0.263	0.337	1
+CadQueryCreations	CadQueryProjects/day2glasswithhole.py	ashdriod/CadQueryCreations@6fea1c5	not copied (MPL-2.0)	0.010	0.028	0.066	0.269	9
+zhangwen	services/structure-cad/templates/servo-side.py	yusen/zhangwen@2e75546	Apache-2.0	0.015	0.015	0.748	0.268	8
+CadQuery_Scripts	long_box_wall_mount.py	lewisaronmilne/CadQuery_Scripts@4dfd6e4	not copied (none)	0.036	0.040	0.347	0.414	6
+gym	robots/lerobot_humanoid/parts/tibias2_shin_spacer_2.py	yotown/gym@e50fa99	Apache-2.0	0.006	0.018	0.033	0.098	2
+3dprint-pipeline	washer_m8.py	tommasobbianchi/3dprint-pipeline@91d9a19	not copied (none)	0.010	0.013	0.069	0.061	3
+Hephaestus-CCX	benchmark/kits/multi/230_df14_auvsi_robosub/build.py	guijinSON/Hephaestus-CCX@bbe8b0f	MIT	0.005	0.005	0.049	0.055	1
+cqindustry	example/portal/ramp_greebled_two.py	medicationforall/cqindustry@c583078	Apache-2.0	0.433	1.154	1.856	5.647	2
+3dprint-pipeline	hexagonal_prism.py	tommasobbianchi/3dprint-pipeline@91d9a19	not copied (none)	0.012	0.012	0.075	0.063	3
+Hephaestus-CCX	benchmark/kits/multi/208_oc8_ekka_farm_innovation/build.py	guijinSON/Hephaestus-CCX@bbe8b0f	MIT	0.005	0.005	0.053	0.057	1
+coordproof-openbim-mep	cadquery/rectangular_duct.py	Taz33m/coordproof-openbim-mep@918ebda	Apache-2.0	0.013	0.010	0.178	0.226	2
+cqindustry	example/portal/frame_window.py	medicationforall/cqindustry@c583078	Apache-2.0	0.130	0.115	1.262	1.127	3
+coordproof-openbim-mep	cadquery/cable_tray.py	Taz33m/coordproof-openbim-mep@918ebda	Apache-2.0	0.045	0.070	0.336	0.391	2
+CADabra	backend/sample_data/deepcad_selected/deepcadimg_000060.py	snowcodeer/CADabra@a5417a2	not copied (none)	0.012	0.006	0.024	0.024	9
+Hephaestus-CCX	benchmark/kits/multi/085_kr16_drone_soccer/build.py	guijinSON/Hephaestus-CCX@bbe8b0f	MIT	0.005	0.005	0.067	0.079	1
+cqterrain	example/crystal/crystal_random.py	medicationforall/cqterrain@6604257	Apache-2.0	0.034	0.034	0.303	0.338	2
+3d-modeling	air_duster_nozzle/ptfe_test.py	mono0926/3d-modeling@7724258	not copied (none)	0.162	0.155	1.139	1.226	5
+cad-image-to-3d	examples/cases/unity_plate/final.py	skykim/cad-image-to-3d@09a9b9f	Apache-2.0	0.113	0.071	0.717	1.004	3
+tech_europe	out/orchestrator_happy_probe/part.py	D4V1ND/tech_europe@9d7026d	MIT	0.003	0.003	0.022	0.027	1
+cqindustry	example/wall/corridor_wall_greebled.py	medicationforall/cqindustry@c583078	Apache-2.0	0.141	0.096	1.101	1.176	2
+Hephaestus-CCX	benchmark/kits/single/186_sa3_kibocube/build.py	guijinSON/Hephaestus-CCX@bbe8b0f	MIT	0.010	0.010	0.189	0.208	1
+CadQuery_Scripts	murphy_bed.py	lewisaronmilne/CadQuery_Scripts@4dfd6e4	not copied (none)	0.146	0.157	1.731	2.649	25
+open-miyota-9075-gmt-case	gasket_models.py	Kelsus/open-miyota-9075-gmt-case@062b048	MIT	0.004	0.004	0.025	0.025	3
+CADabra	frontend-preview/ortho_outputs/ortho_deepcadimg_117514_generated.py	snowcodeer/CADabra@a5417a2	not copied (none)	0.011	0.011	0.125	0.158	1
+gym	robots/lerobot_humanoid/parts/ujoint_spacer_12_ujoint.py	yotown/gym@e50fa99	Apache-2.0	0.016	0.027	0.051	0.182	3
+3dprint-pipeline	mounting_disk.py	tommasobbianchi/3dprint-pipeline@91d9a19	not copied (none)	0.027	0.114	0.067	0.400	3
+cadquery_tests	completed/p51_body_paint_stand.py	Roger-random/cadquery_tests@56a7be5	MIT	0.010	0.025	0.042	0.122	2
+3d-modeling	under_shelf_tissue_holder/under_shelf_tissue_holder.py	mono0926/3d-modeling@7724258	not copied (none)	0.076	0.075	0.670	0.661	4
+AeroTower	example.py	urban-smart-grow/AeroTower@e9ae128	not copied (none)	0.002	0.002	0.012	0.010	2
+gym	robots/lerobot_humanoid/parts/femur_v2_hat_femur_2.py	yotown/gym@e50fa99	Apache-2.0	0.010	0.010	0.087	0.074	2
+CADabra	backend/sample_data/deepcad_selected/deepcadimg_064437.py	snowcodeer/CADabra@a5417a2	not copied (none)	0.020	0.008	0.101	0.069	10
+CADabra	backend/sample_data/block_ground_truth.py	snowcodeer/CADabra@a5417a2	not copied (none)	0.003	0.003	0.013	0.013	1
+CadQuery_Scripts	eclipse_tile_holder.py	lewisaronmilne/CadQuery_Scripts@4dfd6e4	not copied (none)	0.304	0.356	3.768	5.796	14
+CADabra	backend/sample_data/deepcad_selected/deepcadimg_000042.py	snowcodeer/CADabra@a5417a2	not copied (none)	0.007	0.007	0.137	0.194	10
+cad-coworker	examples/enclosure.py	karaage0703/cad-coworker@3c48185	MIT	0.008	0.028	0.039	0.160	4
+CADabra	backend/sample_data/deepcad_selected/deepcadimg_117514.py	snowcodeer/CADabra@a5417a2	not copied (none)	0.013	0.010	0.123	0.137	10
+cqterrain	example/segment/base_segment.py	medicationforall/cqterrain@6604257	Apache-2.0	0.048	0.037	0.321	0.192	2
+CadQueryCreations	CadQueryProjects/day1specs.py	ashdriod/CadQueryCreations@6fea1c5	not copied (MPL-2.0)	0.004	0.004	0.020	0.020	4
+ParaSMR	components_premade/components_premade_diagrid.py	PSI-advanced-nuclear-systems/ParaSMR@c2ab6ea	MIT	0.004	0.004	0.020	0.022	2
+CADabra	backend/sample_data/deepcad_selected/deepcadimg_065120.py	snowcodeer/CADabra@a5417a2	not copied (none)	0.005	0.005	0.075	0.071	10
+cq-annotate	examples/add_assembly_arrows_example.py	jmwright/cq-annotate@b46fbe2	Apache-2.0	0.015	0.015	0.166	0.110	3
+cqterrain	example/tile/octagon_with_dots.py	medicationforall/cqterrain@6604257	Apache-2.0	0.016	0.048	0.099	0.263	2
+3d-modeling	air_duster_nozzle/air_duster_nozzle.py	mono0926/3d-modeling@7724258	not copied (none)	0.052	0.177	0.035	0.118	6
+ParaSMR	components_premade/components_premade_redan.py	PSI-advanced-nuclear-systems/ParaSMR@c2ab6ea	MIT	0.009	0.009	0.022	0.022	2
+cadquery-server	examples/cq_tutorial.py	lypwig/cadquery-server@302cd6f	MIT	0.019	0.019	0.098	0.130	2
+CADabra	backend/sample_data/deepcad_selected/deepcadimg_058137.py	snowcodeer/CADabra@a5417a2	not copied (none)	0.004	0.004	0.033	0.034	8
+3d-modeling	acrylic_marker_case/acrylic_marker_case.py	mono0926/3d-modeling@7724258	not copied (none)	1.633	1.579	26.157	19.625	6
+cqterrain	example/ruin/ruin_three_wall_corner.py	medicationforall/cqterrain@6604257	Apache-2.0	0.039	0.039	0.477	0.578	2
+objects	desktop_battery_tray.py	Gigahawk/objects@5cbc0cd	not copied (none)	0.029	0.029	0.081	0.090	1
+CadQueryCreations	CadQueryProjects/3points .py	ashdriod/CadQueryCreations@6fea1c5	not copied (MPL-2.0)	0.002	0.002	0.014	0.014	2
+zhangwen	services/structure-cad/templates/servo-horizontal.py	yusen/zhangwen@2e75546	Apache-2.0	0.028	0.028	0.601	0.329	7
+cqindustry	example/dome/cut_key_pentagon.py	medicationforall/cqindustry@c583078	Apache-2.0	0.081	0.188	0.346	1.548	2
+cadquery_tests	fit_test_blocks/ball_and_socket.py	Roger-random/cadquery_tests@56a7be5	MIT	0.032	0.074	0.050	0.145	6
+coordproof-openbim-mep	cadquery/duct_hanger.py	Taz33m/coordproof-openbim-mep@918ebda	Apache-2.0	0.017	0.015	0.290	0.308	2
+gym	robots/open_duck_mini_v2/parts/left_cache.py	yotown/gym@e50fa99	Apache-2.0	0.026	0.108	0.222	1.096	5
