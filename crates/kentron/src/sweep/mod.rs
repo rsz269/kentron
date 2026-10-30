@@ -1143,6 +1143,41 @@ mod tests {
         assert!((volume - 10.0 * PI).abs() < 1e-6 * volume, "{volume}");
     }
 
+    /// Circles of radius 1.5, 1.5, 1 and 1 at the ends of a spine of a line (5 long), a half
+    /// circle (radius 4) and a line (CadQuery's multi-section sweep example): the radius is
+    /// the cubic through them by how far along the spine each stands (as OCCT's, by their
+    /// abscissa), not by their places among its edges; the volume π ∫ r² along it.
+    #[test]
+    fn sections_blend_by_how_far_along_the_spine_they_stand() {
+        let mut model = Model::new();
+        let first = make::edge_between(&mut model, Point::new(-5.0, 0.0, 4.0), Point::new(0.0, 0.0, 4.0)).unwrap();
+        let half = Curve::Circle(Circle::new(Frame::new(Point::ORIGIN, Direction::Y, Direction::Z), 4.0));
+        let half = make::edge_from_curve_range(&mut model, half, 0.0, PI).unwrap();
+        let last = make::edge_between(&mut model, Point::new(0.0, 0.0, -4.0), Point::new(-5.0, 0.0, -4.0)).unwrap();
+        let spine = make::wire(&mut model, &[first, half, last]).unwrap();
+        let mut sections = Vec::new();
+        for (x, z, r) in [(-5.0, 4.0, 1.5), (0.0, 4.0, 1.5), (0.0, -4.0, 1.0), (-5.0, -4.0, 1.0)] {
+            let circle = Curve::Circle(Circle::new(Frame::new(Point::new(x, 0.0, z), Direction::X, Direction::Y), r));
+            let edge = make::edge_from_curve(&mut model, circle).unwrap();
+            sections.push((make::wire(&mut model, &[edge]).unwrap(), PipeOptions::default()));
+        }
+        let solid = pipe_through(&mut model, &sections, spine, true).unwrap();
+        let report = validity::check(&model, solid);
+        assert!(report.is_valid(), "{report:?}");
+        let at = [0.0, 5.0, 5.0 + 4.0 * PI, 10.0 + 4.0 * PI];
+        let radius = |s: f64| {
+            (0..4)
+                .map(|i| [1.5, 1.5, 1.0, 1.0][i] * (0..4).filter(|&j| j != i).map(|j| (s - at[j]) / (at[i] - at[j])).product::<f64>())
+                .sum::<f64>()
+        };
+        // (Simpson's rule, far finer than the cubic needs.)
+        let n = 2000;
+        let h = at[3] / n as f64;
+        let expected = PI * h / 3.0 * (0..=n).map(|i| radius(i as f64 * h).powi(2) * if i == 0 || i == n { 1.0 } else if i % 2 == 1 { 4.0 } else { 2.0 }).sum::<f64>();
+        let volume = properties::volume(&model, solid).mass;
+        assert!((volume - expected).abs() < 1e-5 * expected, "{volume} vs {expected}");
+    }
+
     /// The face of the polygon through `points` (in the XY plane).
     fn polygon_xy(model: &mut Model, points: &[(f64, f64)]) -> Shape {
         let p: Vec<Point> = points.iter().map(|&(x, y)| Point::new(x, y, 0.0)).collect();

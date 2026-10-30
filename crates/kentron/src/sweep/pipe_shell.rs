@@ -1,6 +1,6 @@
 //! Sweeps through several sections along a spine: each section placed on the spine and
-//! seen in the spine's frame there, the sections blended along it (linearly, carried on
-//! past the first and the last), the blend carried by the frame.
+//! seen in the spine's frame there, the sections blended along it by how far along it they
+//! stand (carried on past the first and the last), the blend carried by the frame.
 
 use std::collections::HashMap;
 
@@ -84,8 +84,19 @@ pub(super) fn pipe_shell(model: &mut Model, sections: &[(Shape, PipeOptions)], p
         return Err(Error::InvalidInput("a sweep needs a spine and sections".into()));
     }
     let (reference, _) = motions(pieces, SAMPLES, (0, 0.0), framing)?;
-    // Each section: where it stands (as a global spine position) and its motion into the
-    // frame at the spine's start.
+    // How far along the spine a fraction of a piece is, each piece as long as it is (sections
+    // are blended by it, as OCCT's by their abscissa on the path; within a piece, by its
+    // parameter): from the spine's start, and at each junction.
+    let mut junctions = vec![0.0];
+    for (k, piece) in pieces.iter().enumerate() {
+        let length = crate::geometry::measure::length_between(&piece.curve, piece.first.min(piece.last), piece.first.max(piece.last));
+        junctions.push(junctions[k] + length);
+    }
+    let along = |k: usize, s: f64| junctions[k] + (junctions[k + 1] - junctions[k]) * s;
+    // (The samples of the frames along each piece, that far along.)
+    let sampled: Vec<Vec<f64>> = reference.iter().enumerate().map(|(k, motion)| motion.params.iter().map(|&s| along(k, s)).collect()).collect();
+    // Each section: where it stands (how far along the spine) and its motion into the frame
+    // at the spine's start.
     let mut placed: Vec<(f64, Shape, Transform)> = Vec::with_capacity(sections.len());
     for &(section, options) in sections {
         // (Where it stands found before it is placed, as OCCT finds it.)
@@ -93,7 +104,7 @@ pub(super) fn pipe_shell(model: &mut Model, sections: &[(Shape, PipeOptions)], p
         let placing = super::placing(model, section, pieces, &options)?;
         let section = section.moved(&placing);
         let (at_anchor, _) = motions(pieces, SAMPLES, (k, s), framing)?;
-        placed.push((k as f64 + s, section, at_anchor[0].transforms[0]));
+        placed.push((along(k, s), section, at_anchor[0].transforms[0]));
     }
     placed.sort_by(|a, b| a.0.total_cmp(&b.0));
     let first_section = placed[0].1.node;
@@ -166,7 +177,7 @@ pub(super) fn pipe_shell(model: &mut Model, sections: &[(Shape, PipeOptions)], p
     let vertex_count = if closed { edge_count } else { edge_count + 1 };
     let vertex_law = |v: usize| -> Vec<(f64, Point)> { if v < edge_count { law(v, 0) } else { law(edge_count - 1, pole_count - 1) } };
     let m = pieces.len();
-    let mut builder = Builder { model, vertices: HashMap::new(), edges: HashMap::new(), paths: HashMap::new() };
+    let mut builder = Builder { model, junctions: &junctions, vertices: HashMap::new(), edges: HashMap::new(), paths: HashMap::new() };
     let shell = builder.model.new_empty(NodeKind::Shell);
     let line = |x: f64, y: f64, dx: f64, dy: f64| Curve2::Line(Line2::new(Point2::new(x, y), Direction2::new(dx, dy)));
     let u_knots = fit_curve(&vec![Point::ORIGIN; pole_count], n)?;
@@ -177,7 +188,7 @@ pub(super) fn pipe_shell(model: &mut Model, sections: &[(Shape, PipeOptions)], p
             // The surface: each pole's law carried by the frames along the piece.
             // (Fitted alike, as few poles along as hold the samples: few where the frames and
             // the sections' blend vary smoothly, as along a straight spine.)
-            let samples: Vec<Vec<Point>> = (0..pole_count).map(|i| carried_points(motion, k, &law(e, i))).collect();
+            let samples: Vec<Vec<Point>> = (0..pole_count).map(|i| carried_points(motion, &sampled[k], &law(e, i))).collect();
             let paths = crate::geometry::fit::approximate_alike(&samples, &motion.params, 3, 1e-8)?;
             let v = KnotVector::new(paths[0].knots().to_vec(), paths[0].multiplicities().to_vec(), paths[0].degree());
             let u = KnotVector::new(u_knots.knots().to_vec(), u_knots.multiplicities().to_vec(), u_knots.degree());
@@ -187,8 +198,8 @@ pub(super) fn pipe_shell(model: &mut Model, sections: &[(Shape, PipeOptions)], p
             let surface = planar.clone().map(Surface::Plane).unwrap_or(Surface::BSpline(swept));
             let bottom = builder.junction_edge(e, k, v0, v1, &junction(k), &|i| law(e, i), pole_count, n, &vertex_law)?;
             let top = builder.junction_edge(e, k + 1, v0, v1, &junction(k + 1), &|i| law(e, i), pole_count, n, &vertex_law)?;
-            let right = builder.vertex_path(v1, k, motion, &vertex_law(v1), &junction, &vertex_law)?;
-            let left = builder.vertex_path(v0, k, motion, &vertex_law(v0), &junction, &vertex_law)?;
+            let right = builder.vertex_path(v1, k, motion, &sampled[k], &vertex_law(v1), &junction, &vertex_law)?;
+            let left = builder.vertex_path(v0, k, motion, &sampled[k], &vertex_law(v0), &junction, &vertex_law)?;
             // Where the section is a point, the face closes at it with no edge, unless both
             // its sides are one edge (a seam): then by a degenerate edge of its own there.
             let point = |builder: &mut Builder, j: usize| -> Result<Option<EdgeId>> {
@@ -268,21 +279,23 @@ fn fit_curve(poles: &[Point], n: usize) -> Result<BSplineCurve> {
     Ok(BSplineCurve::new(poles.to_vec(), knots.knots().to_vec(), knots.multiplicities().to_vec(), knots.degree()))
 }
 
-/// A point following `law` (in the reference frame) carried by the frames along piece `k`,
-/// at the samples' fractions along it.
-fn carried_points(motion: &PieceMotion, k: usize, law: &[(f64, Point)]) -> Vec<Point> {
-    motion.params.iter().zip(&motion.transforms).map(|(&s, t)| blend(law, k as f64 + s).transformed(t)).collect()
+/// A point following `law` (in the reference frame) carried by the frames along a piece, at
+/// its samples (`along`, how far along the spine each is).
+fn carried_points(motion: &PieceMotion, along: &[f64], law: &[(f64, Point)]) -> Vec<Point> {
+    along.iter().zip(&motion.transforms).map(|(&g, t)| blend(law, g).transformed(t)).collect()
 }
 
-/// The cubic through a point following `law` carried by the frames along piece `k`,
+/// The cubic through a point following `law` carried by the frames along a piece,
 /// parametrized by the fraction along it.
-fn carried(motion: &PieceMotion, k: usize, law: &[(f64, Point)]) -> Result<BSplineCurve> {
-    crate::geometry::fit::interpolate_with_parameters(&carried_points(motion, k, law), &motion.params)
+fn carried(motion: &PieceMotion, along: &[f64], law: &[(f64, Point)]) -> Result<BSplineCurve> {
+    crate::geometry::fit::interpolate_with_parameters(&carried_points(motion, along, law), &motion.params)
 }
 
 /// The sweep's vertices and edges, made once and shared by the faces meeting along them.
 struct Builder<'m> {
     model: &'m mut Model,
+    /// How far along the spine each junction is.
+    junctions: &'m [f64],
     vertices: HashMap<(usize, usize), VertexId>,
     /// The edges of the sections at the junctions; `None` where the section is a point.
     edges: HashMap<(usize, usize), Option<EdgeId>>,
@@ -294,7 +307,7 @@ impl Builder<'_> {
         if let Some(&id) = self.vertices.get(&(v, j)) {
             return id;
         }
-        let p = blend(&vertex_law(v), j as f64).transformed(at);
+        let p = blend(&vertex_law(v), self.junctions[j]).transformed(at);
         // (Where the section is a point, its vertices are one.)
         let same = self.vertices.iter().find(|(&(_, jj), &id)| jj == j && self.model[id].point.distance(p) <= tolerance::LINEAR).map(|(_, &id)| id);
         let id = same.unwrap_or_else(|| self.model.add_vertex(p, tolerance::LINEAR));
@@ -320,7 +333,7 @@ impl Builder<'_> {
         if let Some(found) = self.edges.get(&(e, j)) {
             return Ok(*found);
         }
-        let poles: Vec<Point> = (0..pole_count).map(|i| blend(&law(i), j as f64).transformed(at)).collect();
+        let poles: Vec<Point> = (0..pole_count).map(|i| blend(&law(i), self.junctions[j]).transformed(at)).collect();
         let (a, b) = (self.vertex(v0, j, at, vertex_law), self.vertex(v1, j, at, vertex_law));
         if poles.iter().all(|p| p.distance(poles[0]) <= tolerance::LINEAR) {
             // A point: the faces close at it, with no edge.
@@ -339,6 +352,7 @@ impl Builder<'_> {
         v: usize,
         k: usize,
         motion: &PieceMotion,
+        along: &[f64],
         law: &[(f64, Point)],
         junction: &dyn Fn(usize) -> Transform,
         vertex_law: &dyn Fn(usize) -> Vec<(f64, Point)>,
@@ -347,7 +361,7 @@ impl Builder<'_> {
             return Ok(id);
         }
         let (a, b) = (self.vertex(v, k, &junction(k), vertex_law), self.vertex(v, k + 1, &junction(k + 1), vertex_law));
-        let curve = carried(motion, k, law)?;
+        let curve = carried(motion, along, law)?;
         let edge = self.model.add_edge(a, b, tolerance::LINEAR)?;
         self.model.set_edge_curve(edge.into(), Curve::BSpline(curve), tolerance::LINEAR)?;
         self.model.set_edge_range(edge.into(), 0.0, 1.0)?;
