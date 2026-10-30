@@ -1117,7 +1117,8 @@ pub fn ruled_quadric(base: &Surface, other: &Surface, tolerance: f64, v_range: O
     let (v_lo, v_hi) = v_range.unwrap_or((f64::NEG_INFINITY, f64::INFINITY));
     // Where a branch exists, and why it ends: the discriminant vanishing (the branches
     // join) or `v` leaving its range.
-    let exists = |upper: bool, angle: f64| branch(0.0, TAU, upper).height(angle).filter(|v| *v >= v_lo && *v <= v_hi).is_some();
+    let whole = [branch(0.0, TAU, false), branch(0.0, TAU, true)];
+    let exists = |upper: bool, angle: f64| whole[upper as usize].height(angle).filter(|v| *v >= v_lo && *v <= v_hi).is_some();
     // (Or, where `v` is still well within its range there, the branch ended for its roots
     // meeting: the discriminant only nears zero as the square root of the angle's distance
     // from the join, too slowly to vanish against the terms of `c` alone where `b` is zero.)
@@ -1127,7 +1128,7 @@ pub fn ruled_quadric(base: &Surface, other: &Surface, tolerance: f64, v_range: O
             let margin = 1e-6 * (1.0 + v.abs()) + if v_hi > v_lo && v_hi.is_finite() && v_lo.is_finite() { 1e-6 * (v_hi - v_lo) } else { 0.0 };
             v > v_lo + margin && v < v_hi - margin
         };
-        !linear && (b * b - 4.0 * a * c <= 1e-6 * (b * b).max(4.0 * (a * c).abs()) || branch(0.0, TAU, upper).height(angle).is_some_and(within))
+        !linear && (b * b - 4.0 * a * c <= 1e-6 * (b * b).max(4.0 * (a * c).abs()) || whole[upper as usize].height(angle).is_some_and(within))
     };
     const SAMPLES: usize = 1440;
     let angles: Vec<f64> = (0..SAMPLES).map(|i| TAU * i as f64 / SAMPLES as f64).collect();
@@ -1135,6 +1136,10 @@ pub fn ruled_quadric(base: &Surface, other: &Surface, tolerance: f64, v_range: O
         let (mut a, mut b) = (inside, outside);
         for _ in 0..100 {
             let mid = 0.5 * (a + b);
+            // (Done once the halves are neighbouring numbers.)
+            if mid == a || mid == b {
+                break;
+            }
             if exists(upper, mid) {
                 a = mid;
             } else {
@@ -1146,7 +1151,7 @@ pub fn ruled_quadric(base: &Surface, other: &Surface, tolerance: f64, v_range: O
     // Between the samples at `angle` and `angle + step`, both out of range, where `v` runs
     // across the whole range: the angles where it enters and leaves it.
     let crossing = |upper: bool, angle: f64, step: f64| -> Option<(f64, f64)> {
-        let height = |t: f64| branch(0.0, TAU, upper).height(t);
+        let height = |t: f64| whole[upper as usize].height(t);
         let (h0, h1) = (height(angle)?, height(angle + step)?);
         if !((h0 < v_lo && h1 > v_hi) || (h0 > v_hi && h1 < v_lo)) {
             return None;
@@ -1156,6 +1161,9 @@ pub fn ruled_quadric(base: &Surface, other: &Surface, tolerance: f64, v_range: O
             let below = |t: f64| height(t).map(|h| (h < level) == (h0 < level));
             for _ in 0..100 {
                 let mid = 0.5 * (a + b);
+                if mid == a || mid == b {
+                    break;
+                }
                 if below(mid)? {
                     a = mid;
                 } else {
@@ -1170,17 +1178,24 @@ pub fn ruled_quadric(base: &Surface, other: &Surface, tolerance: f64, v_range: O
         let (enter_level, leave_level) = if h0 < v_lo { (v_lo, v_hi) } else { (v_hi, v_lo) };
         (leave > enter && lands(enter, enter_level) && lands(leave, leave_level)).then_some((enter, leave))
     };
+    let step = TAU / SAMPLES as f64;
+    // Stretches of samples where no branch can start or end, nor run across the range of
+    // `v`: there the first sample stands for the rest.
+    let (same_as, quiet_after) = quiet_stretches(&probe, linear, (v_lo, v_hi), SAMPLES);
     // Each branch's domains: (start, end, start joins, end joins).
     let mut domains: Vec<(bool, f64, f64, bool, bool)> = Vec::new();
     for upper in if linear { vec![true] } else { vec![true, false] } {
-        let valid: Vec<bool> = angles.iter().map(|&t| exists(upper, t)).collect();
+        let mut valid: Vec<bool> = Vec::with_capacity(SAMPLES);
+        for (k, &t) in angles.iter().enumerate() {
+            let v = if same_as[k] == k { exists(upper, t) } else { valid[same_as[k]] };
+            valid.push(v);
+        }
         if valid.iter().all(|&v| v) {
             domains.push((upper, 0.0, TAU, false, false));
             continue;
         }
         // Walk round from an invalid sample (where none is valid, for domains between them).
         let start = valid.iter().position(|&v| !v).expect("an invalid sample");
-        let step = TAU / SAMPLES as f64;
         let mut i = 0;
         while i < SAMPLES {
             let k = (start + i) % SAMPLES;
@@ -1197,7 +1212,7 @@ pub fn ruled_quadric(base: &Surface, other: &Surface, tolerance: f64, v_range: O
                 let b = refine(upper, end_angle - step, end_angle);
                 domains.push((upper, a, b, joins_here(upper, a), joins_here(upper, b)));
                 i = j;
-            } else if let Some(domain) = crossing(upper, angles[start] + step * i as f64, step) {
+            } else if let Some(domain) = (!quiet_after[k]).then(|| crossing(upper, angles[start] + step * i as f64, step)).flatten() {
                 // A domain narrower than the samples: `v` running across its whole range
                 // between two of them (a plane crossing a narrow band nearly along a
                 // generator).
@@ -1239,6 +1254,127 @@ pub fn ruled_quadric(base: &Surface, other: &Surface, tolerance: f64, v_range: O
     }
     let next = joins.iter().map(|j| j[1].map(|k| (k, true))).collect();
     Some(QuadricCurves { curves, next, joins, same: false })
+}
+
+/// A trigonometric polynomial `c₀ + Σ cₖ cos kθ + sₖ sin kθ` (k up to 7), fitted to values
+/// at 16 equally spaced angles.
+struct Trigonometric {
+    cos: [f64; 8],
+    sin: [f64; 8],
+}
+
+impl Trigonometric {
+    const ANGLES: usize = 16;
+
+    fn fit(values: &[f64]) -> Self {
+        let n = Self::ANGLES as f64;
+        let (mut cos, mut sin) = ([0.0; 8], [0.0; 8]);
+        for (j, f) in values.iter().enumerate() {
+            let t = TAU * j as f64 / n;
+            for k in 0..8 {
+                let (s, c) = (k as f64 * t).sin_cos();
+                cos[k] += f * c * if k == 0 { 1.0 / n } else { 2.0 / n };
+                sin[k] += f * s * 2.0 / n;
+            }
+        }
+        Self { cos, sin }
+    }
+
+    /// The value and the derivative at `t`.
+    fn at(&self, t: f64) -> (f64, f64) {
+        let (s1, c1) = t.sin_cos();
+        let (mut s, mut c) = (0.0, 1.0);
+        let (mut f, mut d) = (self.cos[0], 0.0);
+        for k in 1..8 {
+            (s, c) = (s * c1 + c * s1, c * c1 - s * s1);
+            f += self.cos[k] * c + self.sin[k] * s;
+            d += k as f64 * (self.sin[k] * c - self.cos[k] * s);
+        }
+        (f, d)
+    }
+
+    /// The sum of the coefficients' sizes, bounding the value.
+    fn size(&self) -> f64 {
+        self.cos.iter().chain(&self.sin).map(|c| c.abs()).sum()
+    }
+
+    /// True if the polynomial stays further than `slack` from zero over `[t, t + span]`
+    /// (by its second derivative's bound).
+    fn clear(&self, t: f64, span: f64, slack: f64) -> bool {
+        let (f, d) = self.at(t);
+        let curvature: f64 = (1..8).map(|k| (k * k) as f64 * (self.cos[k].abs() + self.sin[k].abs())).sum();
+        f.abs() > d.abs() * span + 0.5 * curvature * span * span + slack
+    }
+}
+
+/// For `samples` angles round the base of a ruled quadric's section (`probe`, either
+/// branch), the sample each one surely agrees with on whether a branch exists there, and
+/// whether a branch surely neither starts, ends nor runs across `range` (of the generator
+/// parameter `v`) from each sample to the next. A branch starts or ends only where the
+/// discriminant of `a v² + b v + c`, `a` (`b`, for a linear equation) or the quadric's value at
+/// either end of the range changes sign, all trigonometric polynomials of the angle of degree
+/// at most 4 (2 for a cylinder): fitted, they show stretches clear of zero. (Where the fit
+/// fails, from a surface that is not one, every sample stands alone.)
+fn quiet_stretches(probe: &QuadricCurve, linear: bool, (v_lo, v_hi): (f64, f64), samples: usize) -> (Vec<usize>, Vec<bool>) {
+    let mut same_as: Vec<usize> = (0..samples).collect();
+    let mut quiet_after = vec![false; samples];
+    let n = Trigonometric::ANGLES;
+    // The functions, and the slack each is clear of zero by: generous against the rounding
+    // the samples allow for (and the rounding of a near double root).
+    let functions = |t: f64| {
+        let (a, b, c) = probe.height_equation(t);
+        let level = |v: f64| if v.is_finite() { a * v * v + b * v + c } else { 0.0 };
+        [a, b, c, b * b - 4.0 * a * c, level(v_lo), level(v_hi)]
+    };
+    let values: Vec<[f64; 6]> = (0..n).map(|j| functions(TAU * j as f64 / n as f64)).collect();
+    let fits: Vec<Trigonometric> = (0..6).map(|i| Trigonometric::fit(&values.iter().map(|v| v[i]).collect::<Vec<_>>())).collect();
+    let [a, b, c, disc, lo, hi] = [0, 1, 2, 3, 4, 5].map(|i| &fits[i]);
+    let (a_size, b_size, c_size) = (a.size(), b.size(), c.size());
+    let coefficients = a_size + b_size + c_size;
+    // (Checked halfway between the fitted angles.)
+    let fitted = (0..n).all(|j| {
+        let t = TAU * (j as f64 + 0.5) / n as f64;
+        functions(t).iter().zip(&fits).all(|(f, fit)| (f - fit.at(t).0).abs() <= 1e-9 * (fit.size() + coefficients))
+    });
+    if !fitted || !(coefficients > 0.0 && coefficients.is_finite()) {
+        return (same_as, quiet_after);
+    }
+    let noise = values
+        .iter()
+        .enumerate()
+        .filter(|(_, v)| v[0] != 0.0)
+        .map(|(j, v)| {
+            let vertex = probe.base.point(TAU * j as f64 / n as f64, -v[1] / (2.0 * v[0]));
+            4.0 * v[0].abs() * 1e3 * f64::EPSILON * quadric_size(&probe.quadric, vertex)
+        })
+        .fold(0.0, f64::max);
+    let mut guards: Vec<(&Trigonometric, f64)> = Vec::new();
+    if linear {
+        guards.push((b, 1e-9 * coefficients));
+    } else {
+        guards.push((a, 1e-9 * coefficients));
+        guards.push((disc, 1e-3 * b_size * b_size + 100.0 * noise + 1e-9 * (disc.size() + 4.0 * a_size * c_size)));
+    }
+    for (fit, v) in [(lo, v_lo), (hi, v_hi)] {
+        if v.is_finite() {
+            guards.push((fit, 1e-9 * (fit.size() + a_size * v * v + b_size * v.abs() + c_size)));
+        }
+    }
+    let step = TAU / samples as f64;
+    let quiet = |k: usize, len: usize| guards.iter().all(|(g, slack)| g.clear(k as f64 * step, len as f64 * step, *slack));
+    let mut stack: Vec<(usize, usize)> = (0..samples).step_by(32).map(|k| (k, 32.min(samples - k))).collect();
+    while let Some((k, len)) = stack.pop() {
+        if quiet(k, len) {
+            for i in k..k + len {
+                same_as[i] = k;
+                quiet_after[i] = true;
+            }
+        } else if len > 1 {
+            stack.push((k, len / 2));
+            stack.push((k + len / 2, len - len / 2));
+        }
+    }
+    (same_as, quiet_after)
 }
 
 /// Where an extrusion meets a surface unchanged along the extrusion's direction (a plane
