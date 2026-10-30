@@ -12,7 +12,6 @@ tests/blend/buildevol/K2
 tests/blend/buildevol/K6
 tests/blend/buildevol/K8
 tests/blend/complex/A1
-tests/blend/complex/A3
 tests/blend/complex/A5
 tests/blend/complex/A6
 tests/blend/complex/A7

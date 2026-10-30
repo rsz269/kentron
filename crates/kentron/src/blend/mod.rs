@@ -2894,6 +2894,62 @@ mod tests {
     use crate::primitives::Cuboid;
     use crate::{properties, validity};
 
+    /// A socket (cylinder of radius 18.86, leaning 5 degrees) with a handle (radius 10, along
+    /// y) and a floor cut across them, leaning with the socket, 2 below the handle's axis:
+    /// the edge where handle and socket meet, in two pieces (split where it crosses the
+    /// handle's seam, one piece short), rounded with R 6 ends on the floor (each piece's
+    /// crossing with the floor sought from the middle of the piece itself, not of its
+    /// sections run on past its ends), OCCT's volume; and the floor's edges rounded after
+    /// (feet on the R 6 fillet's surface, carried on round the handle past its face, sought
+    /// on the face first).
+    #[test]
+    fn a_fillet_between_cylinders_ends_on_a_leaning_floor() {
+        use crate::geometry::ParametricCurve;
+        use crate::primitives::Cylinder;
+        let mut model = Model::new();
+        let lean = 5f64.to_radians();
+        let axis = Vector::new(0.0, -lean.sin(), lean.cos());
+        let socket = Cylinder::new(18.86, 30.0).with_frame(Frame::new(Point::ORIGIN - axis * 15.0, Direction::from_vector(axis), Direction::X)).build(&mut model).unwrap();
+        let handle = Cylinder::new(10.0, 70.0).with_frame(Frame::new(Point::ORIGIN, Direction::Y, Direction::X)).build(&mut model).unwrap();
+        let body = boolean::union(&mut model, socket, handle).unwrap();
+        let up = Vector::new(0.0, lean.sin(), lean.cos());
+        let on_floor = Point::new(0.0, 0.0, -2.0);
+        let side = Vector::new(0.0, lean.cos(), -lean.sin());
+        let above = Cuboid::new(400.0, 400.0, 200.0).with_frame(Frame::new(on_floor - Vector::new(200.0, 0.0, 0.0) - side * 200.0, Direction::from_vector(up), Direction::X)).build(&mut model).unwrap();
+        let body = boolean::intersection(&mut model, body, above).unwrap();
+        // (The edges on both cylinders.)
+        let off_axis = |p: Point, origin: Point, d: Vector| ((p - origin) - d * (p - origin).dot(d)).length();
+        let join: Vec<Shape> = model
+            .unique_subshapes(body, NodeKind::Edge)
+            .into_iter()
+            .filter(|&e| {
+                let (c, a, b) = model.edge_curve(e).unwrap();
+                let p = c.point(0.5 * (a + b));
+                (off_axis(p, Point::ORIGIN, axis) - 18.86).abs() < 1e-5 && (off_axis(p, Point::ORIGIN, Vector::new(0.0, 1.0, 0.0)) - 10.0).abs() < 1e-5
+            })
+            .collect();
+        assert_eq!(join.len(), 2);
+        let rounded = fillet(&mut model, body, &join, 6.0).unwrap();
+        let report = validity::check(&model, rounded);
+        assert!(report.problems.is_empty(), "{report:?}");
+        let v = properties::volume(&model, rounded).mass;
+        assert!((v - 32971.8938).abs() < 1e-4 * v, "{v}");
+        for vertex in model.unique_subshapes(rounded, NodeKind::Vertex) {
+            assert!((model.point(vertex) - on_floor).dot(up) > -1e-6, "{:?} under the floor", model.point(vertex));
+        }
+        let floor: Vec<Shape> = model
+            .unique_subshapes(rounded, NodeKind::Edge)
+            .into_iter()
+            .filter(|&e| {
+                let (c, a, b) = model.edge_curve(e).unwrap();
+                (0..=4).all(|k| (c.point(a + (b - a) * k as f64 / 4.0) - on_floor).dot(up).abs() < 1e-6)
+            })
+            .collect();
+        let edged = fillet(&mut model, rounded, &floor, 0.5).unwrap();
+        let report = validity::check(&model, edged);
+        assert!(report.problems.is_empty(), "{report:?}");
+    }
+
     /// A 20 x 20 x 20 box with a boss (a cylinder of radius 3 and height 5) standing on its
     /// top face 3.5 from its front edge: rounding that edge (R 4) runs under the boss, which
     /// stands on the fillet, carried on down to it.

@@ -54,6 +54,8 @@ struct Side {
     /// The face's range of `v`: a surface of revolution's inverse may take a point to its
     /// meridian's half across the axis (the same point, with the normal the other way).
     v_range: (f64, f64),
+    /// The face's ranges of `u` and `v`.
+    uv_box: (f64, f64, f64, f64),
     /// For a surface of revolution, the face's range of `v` carried on as long as its
     /// meridian stays on its side of the axis (found once).
     own_range: std::cell::Cell<Option<(f64, f64)>>,
@@ -65,7 +67,7 @@ impl Side {
         let b = model.face_uv_bounds(face);
         let size = { let b = crate::properties::bounding_box(model, face); (b.max - b.min).length() };
         let closed = closes_across(&surface, (b.0, b.1, b.2, b.3), 1e-7 * (1.0 + size));
-        Side { face, surface, sign, along, last: Default::default(), closed, v_range: (b.2, b.3), own_range: Default::default() }
+        Side { face, surface, sign, along, last: Default::default(), closed, v_range: (b.2, b.3), uv_box: b, own_range: Default::default() }
     }
 
     /// The signed distance from the surface (positive outside the solid), the foot point
@@ -115,7 +117,30 @@ impl Side {
                     ((foot.u, foot.v), Some((foot.point, foot.du, foot.dv)))
                 }
                 None => {
-                    let (u, v, _) = crate::geometry::extrema::nearest_on_surface(p, &self.surface, None);
+                    let (mut u, mut v, d) = crate::geometry::extrema::nearest_on_surface(p, &self.surface, None);
+                    // (On the face itself where a foot there is as near: a surface carried on
+                    // far past its face, as a fillet's along a closed curve, may pass over the
+                    // face again.)
+                    let (u0, u1, v0, v1) = self.uv_box;
+                    let (mu, mv) = (0.05 * (u1 - u0), 0.05 * (v1 - v0));
+                    let inside = |u: f64, v: f64| u >= u0 - mu && u <= u1 + mu && v >= v0 - mv && v <= v1 + mv;
+                    if !inside(u, v) && u1 > u0 && v1 > v0 {
+                        let near = d + 1e-7 * (1.0 + (p - Point::ORIGIN).length());
+                        let mut best: Option<(f64, f64, f64)> = None;
+                        for i in 0..3 {
+                            for j in 0..3 {
+                                let seed = (u0 + (u1 - u0) * (0.25 + 0.25 * i as f64), v0 + (v1 - v0) * (0.25 + 0.25 * j as f64));
+                                let f = crate::geometry::extrema::newton_foot(p, &self.surface, seed);
+                                let gap = f.point.distance(p);
+                                if inside(f.u, f.v) && gap <= near && best.is_none_or(|b| gap < b.2) {
+                                    best = Some((f.u, f.v, gap));
+                                }
+                            }
+                        }
+                        if let Some((bu, bv, _)) = best {
+                            (u, v) = (bu, bv);
+                        }
+                    }
                     self.last.set(Some((u, v)));
                     ((u, v), None)
                 }
@@ -1664,7 +1689,13 @@ fn end_cut_on(
 
     // Across the fillet, where it leaves the end face's surface: going from the middle of
     // the edge towards this end, the outward distance turns positive.
-    let mid = 0.5 * (ts[0] + ts[ts.len() - 1]);
+    // (The middle of the edge itself: its sections may run on past its ends unevenly, past
+    // one far beyond its length, as a short piece of a longer curve's.)
+    let mid = {
+        let (first, last) = model.edge_range(Shape::from(id));
+        let mid = 0.5 * (first + last);
+        if mid > ts[0] && mid < ts[ts.len() - 1] { mid } else { 0.5 * (ts[0] + ts[ts.len() - 1]) }
+    };
     let order: Vec<f64> = if at_end {
         ts.iter().copied().filter(|&t| t >= mid).collect()
     } else {
