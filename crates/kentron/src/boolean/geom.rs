@@ -1118,12 +1118,15 @@ struct SegmentGrid {
     /// segment list).
     starts: Vec<usize>,
     segments: Vec<usize>,
+    /// A tree over the segments' boxes instead, where a cell would hold many (segments
+    /// crowded along a thin strip across the cells).
+    tree: Option<Bvh>,
 }
 
 impl SegmentGrid {
     fn new(segments: &[(Uv, Uv)]) -> Self {
         if segments.len() < 64 {
-            return SegmentGrid { origin: [0.0, 0.0], cell: 0.0, n: [0, 0], starts: Vec::new(), segments: Vec::new() };
+            return SegmentGrid { origin: [0.0, 0.0], cell: 0.0, n: [0, 0], starts: Vec::new(), segments: Vec::new(), tree: None };
         }
         let (lo, hi) = segments.iter().fold(([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]), |(lo, hi), (a, b)| {
             ([lo[0].min(a[0]).min(b[0]), lo[1].min(a[1]).min(b[1])], [hi[0].max(a[0]).max(b[0]), hi[1].max(a[1]).max(b[1])])
@@ -1147,6 +1150,10 @@ impl SegmentGrid {
                 starts[c + 1] += 1;
             }
         }
+        if starts.iter().max().is_some_and(|&most| most > 64) {
+            let boxes: Vec<BoundingBox> = segments.iter().map(|(a, b)| BoundingBox::new(Point::new(a[0].min(b[0]), a[1].min(b[1]), 0.0), Point::new(a[0].max(b[0]), a[1].max(b[1]), 0.0))).collect();
+            return SegmentGrid { origin: lo, cell, n, starts: Vec::new(), segments: Vec::new(), tree: Some(Bvh::new(&boxes)) };
+        }
         for c in 0..count {
             starts[c + 1] += starts[c];
         }
@@ -1158,11 +1165,14 @@ impl SegmentGrid {
                 next[c] += 1;
             }
         }
-        SegmentGrid { origin: lo, cell, n, starts, segments: members }
+        SegmentGrid { origin: lo, cell, n, starts, segments: members, tree: None }
     }
 
     /// The distance from `p` to the nearest segment, searching rings of cells outwards.
     fn distance(&self, segments: &[(Uv, Uv)], p: Uv) -> f64 {
+        if let Some(tree) = &self.tree {
+            return tree.nearest(Point::new(p[0], p[1], 0.0), |k| segment_distance(segments[k], p)).map_or(f64::INFINITY, |(_, d)| d);
+        }
         if self.starts.is_empty() {
             return segments.iter().map(|&s| segment_distance(s, p)).fold(f64::INFINITY, f64::min);
         }
