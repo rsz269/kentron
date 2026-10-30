@@ -839,10 +839,10 @@ impl Graph {
         let mut on_faces = Seen::default();
         for face in model.explore(shape, NodeKind::Face) {
             // (A far face is unplaced, or placed where the operation only counts it.)
-            if let (Some(data), Ok(id)) = (far.get(&face.node).cloned(), FaceId::try_from(face.node)) {
+            if let (Some((data, apart)), Ok(id)) = (far.get(&face.node).cloned(), FaceId::try_from(face.node)) {
                 let outward = if face.orientation == Orientation::Reversed { -1.0 } else { 1.0 };
                 far_uses.extend(data.edges.iter().filter(|e| e.curve.is_some()).map(|e| Use::Model(e.edge)));
-                let far_face = super::far::FarFace { operand, face: id, placement: face.placement, outward, data, seq: self.seq };
+                let far_face = super::far::FarFace { operand, face: id, placement: face.placement, outward, data, seq: self.seq, apart };
                 let extent = far_face.placed(far_face.data.sample.extent);
                 self.face_bounds[operand].push(BoundingBox::new(extent.0, extent.1));
                 self.far.push(far_face);

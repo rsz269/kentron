@@ -499,15 +499,17 @@ fn run_graph(model: &mut Model, a: Shape, b: Shape, operation: Operation, use_fa
         return Ok(Some((mixed::run(model, graph, operation)?, Vec::new(), true)));
     }
     let (pieces, arcs_of, regions) = classified(model, &mut graph);
+    // Faces far from the other operand lie outside it, whole (or inside it, those apart from
+    // its faces where the operands overlap).
+    let Some(far_states) = far::states(&graph) else { return Ok(None) };
     let mut kept = Vec::new();
     for (fi, region, state) in regions {
         if let Some(flip) = operation.keeps(graph.faces[fi].operand, state) {
             kept.push(Kept { face: fi, region, flip, far: false });
         }
     }
-    // Faces far from the other operand lie outside it, whole.
     for (i, f) in graph.far.iter().enumerate() {
-        if let Some(flip) = operation.keeps(f.operand, State::Outside) {
+        if let Some(flip) = operation.keeps(f.operand, far_states[i]) {
             kept.push(Kept { face: i, region: split::Region::whole(), flip, far: true });
         }
     }
@@ -1044,6 +1046,40 @@ mod tests {
         assert_eq!(model.explore(both, NodeKind::Solid).count(), 2);
         let common = intersection(&mut model, cut, apart).unwrap();
         assert_eq!(properties::volume(&model, common).mass, 0.0);
+    }
+
+    #[test]
+    fn faces_apart_from_the_other_operand_where_they_overlap_pass_through() {
+        let mut model = Model::new();
+        // A post through a block's top: the post's bottom, inside the block, is apart from
+        // the block's faces, and the same face in the results (as its top).
+        let block = cuboid(&mut model, (0.0, 0.0, 0.0), (10.0, 10.0, 10.0));
+        let post = cuboid(&mut model, (4.0, 4.0, 8.0), (2.0, 2.0, 4.0));
+        let at = |model: &Model, s: Shape, z: f64| {
+            model.explore(s, NodeKind::Face).map(|f| f.node).find(|&n| {
+                let b = properties::bounding_box(model, Shape::from(crate::topology::FaceId::try_from(n).unwrap()));
+                (b.min.z - z).abs() < 1e-5 && (b.max.z - z).abs() < 1e-5 && b.max.x - b.min.x < 3.0
+            })
+        };
+        let (bottom, top) = (at(&model, post, 8.0).unwrap(), at(&model, post, 12.0).unwrap());
+        // (Left out of the graph: the bottom found inside the block, the top beyond where
+        // the operands' boxes overlap.)
+        let graph = operands(&model, block, post, true).unwrap();
+        let states = far::states(&graph).unwrap();
+        let left_out = |n: crate::topology::NodeId| graph.far.iter().zip(&states).find(|(f, _)| crate::topology::NodeId::from(f.face) == n).map(|(f, s)| (f.apart, *s));
+        assert_eq!(left_out(bottom), Some((true, State::Inside)));
+        assert_eq!(left_out(top), Some((false, State::Outside)));
+        let fused = union(&mut model, block, post).unwrap();
+        check(&model, fused, 1008.0, 616.0, 1);
+        assert_eq!(at(&model, fused, 12.0), Some(top));
+        let common = intersection(&mut model, block, post).unwrap();
+        check(&model, common, 8.0, 24.0, 1);
+        assert_eq!(at(&model, common, 8.0), Some(bottom));
+        let cut = difference(&mut model, block, post).unwrap();
+        check(&model, cut, 992.0, 616.0, 1);
+        let rest = difference(&mut model, post, block).unwrap();
+        check(&model, rest, 8.0, 24.0, 1);
+        assert_eq!(at(&model, rest, 12.0), Some(top));
     }
 
     #[test]

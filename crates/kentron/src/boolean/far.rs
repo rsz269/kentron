@@ -1,8 +1,11 @@
 //! Faces far from the other operand: their boxes clear of where the operands' boxes
-//! overlap, so that nothing of the other operand meets them and they lie outside it. They
-//! stay out of the boolean graph: they stand only for counting ray crossings when the other
-//! operand's points are classified, and go into the result whole, as they are, or not at
-//! all. What they need is found once per face and kept in the model with it.
+//! overlap, so that nothing of the other operand meets them and they lie outside it; or,
+//! within that overlap, clear of every box of the other operand's faces, so that nothing of
+//! it meets them either and they lie wholly inside or outside it (found once the graph is
+//! built, alike for faces joined by edges). They stay out of the boolean graph: they stand
+//! only for counting ray crossings when the other operand's points are classified, and go
+//! into the result whole, as they are, or not at all. What they need is found once per face
+//! and kept in the model with it.
 
 use crate::hashing::FastSet as HashSet;
 use std::sync::Arc;
@@ -55,6 +58,9 @@ pub(super) struct FarFace {
     pub data: Arc<FaceData>,
     /// Its place among the operands' faces.
     pub seq: usize,
+    /// True for a face within the operands' overlap, apart from the other operand's faces:
+    /// inside or outside it, to be found ([`states`]); else outside it.
+    pub apart: bool,
 }
 
 impl FarFace {
@@ -217,8 +223,9 @@ pub(super) fn prepare(model: &Model, shapes: [Shape; 2], shape_edges: [&[Shape];
     faces.into_iter().map(NodeId::from).zip(found).collect()
 }
 
-/// Faces far from the other operand (unplaced, by node), with their data.
-pub(super) type FarData = crate::hashing::FastMap<NodeId, Arc<FaceData>>;
+/// Faces far from the other operand (unplaced, by node), with their data and whether they
+/// lie within the operands' overlap, only apart from the other's faces.
+pub(super) type FarData = crate::hashing::FastMap<NodeId, (Arc<FaceData>, bool)>;
 
 /// The faces of `a` and of `b` (unplaced, by node) far from the other operand: only between
 /// operands made of solids whose every face has a sure box.
@@ -288,13 +295,89 @@ pub(super) fn choose(model: &Model, a: Shape, b: Shape, prepared: &Prepared, pla
     let common = (lo.x <= hi.x && lo.y <= hi.y && lo.z <= hi.z).then(|| BoundingBox::new(lo, hi));
     // (Operands sharing nodes, as results of earlier operations do, meet where they share an
     // edge.)
+    // (Within the overlap, the boxes of the other operand's faces there: a face of one
+    // overlapping a face of the other overlaps it within the overlap.)
+    let widened = |h: &BoundingBox| BoundingBox::new(
+        Point::new(h.min.x - margin, h.min.y - margin, h.min.z - margin),
+        Point::new(h.max.x + margin, h.max.y + margin, h.max.z + margin),
+    );
+    let near: Vec<Vec<BoundingBox>> = hulls.iter().map(|list| list.iter().filter(|(_, h)| common.is_some_and(|c| c.overlaps(h))).map(|(_, h)| *h).collect()).collect();
+    let trees: Vec<crate::math::Bvh> = near.iter().map(|boxes| crate::math::Bvh::new(boxes)).collect();
     let far = |k: usize| {
         hulls[k]
             .iter()
             .zip(&boundaries[k])
-            .filter(|((n, h), d)| (placed_ok[k] || !placed[k].contains(n)) && !repeated[k].contains(n) && common.is_none_or(|c| !c.overlaps(h)) && !d.edges.iter().any(|e| edges[1 - k].contains(&e.edge)))
-            .map(|((n, _), d)| (*n, d.clone()))
+            .filter(|((n, _), d)| !repeated[k].contains(n) && !d.edges.iter().any(|e| edges[1 - k].contains(&e.edge)))
+            .filter_map(|((n, h), d)| {
+                if common.is_none_or(|c| !c.overlaps(h)) {
+                    return (placed_ok[k] || !placed[k].contains(n)).then(|| (*n, (d.clone(), false)));
+                }
+                // (Unplaced only: it may be kept, inside the other operand as well as outside.)
+                (!placed[k].contains(n) && trees[1 - k].overlapping(&widened(h)).is_empty()).then(|| (*n, (d.clone(), true)))
+            })
             .collect()
     };
     [far(0), far(1)]
+}
+
+/// Where each far face of `graph` lies with respect to the other operand: outside it, but
+/// for those apart from its faces within the operands' overlap, found by a few of each set
+/// of them joined by edges (they lie alike). `None` if those disagree or one is found on the
+/// other operand (it should not be: the graph is then built without far faces).
+pub(super) fn states(graph: &graph::Graph) -> Option<Vec<super::classify::State>> {
+    use super::classify::State;
+    let mut states = vec![State::Outside; graph.far.len()];
+    let apart: Vec<usize> = (0..graph.far.len()).filter(|&i| graph.far[i].apart).collect();
+    if apart.is_empty() {
+        return Some(states);
+    }
+    // Sets joined by edges (of one operand).
+    let mut parent: Vec<usize> = (0..graph.far.len()).collect();
+    fn root(parent: &mut [usize], mut i: usize) -> usize {
+        while parent[i] != i {
+            parent[i] = parent[parent[i]];
+            i = parent[i];
+        }
+        i
+    }
+    let mut by_edge: crate::hashing::FastMap<(usize, EdgeId), usize> = Default::default();
+    for &i in &apart {
+        let f = &graph.far[i];
+        for e in &f.data.edges {
+            if let Some(&j) = by_edge.get(&(f.operand, e.edge)) {
+                let (a, b) = (root(&mut parent, i), root(&mut parent, j));
+                parent[a] = b;
+            } else {
+                by_edge.insert((f.operand, e.edge), i);
+            }
+        }
+    }
+    let mut sets: crate::hashing::FastMap<usize, Vec<usize>> = Default::default();
+    for &i in &apart {
+        let r = root(&mut parent, i);
+        sets.entry(r).or_default().push(i);
+    }
+    let sets: Vec<Vec<usize>> = sets.into_values().collect();
+    let classify = |i: usize| {
+        let f = &graph.far[i];
+        let polylines = &f.data.sample.polylines;
+        let own: Vec<&[geom::Uv]> = polylines.iter().map(|p| p.as_slice()).collect();
+        let uv = geom::interior_point_among(polylines, &geom::Obstacles::new(&own));
+        let p = geom::surface_point(&f.data.surface, uv);
+        let outward = geom::normal_at(&f.data.surface, uv) * f.outward;
+        graph.classify(p, outward, 1 - f.operand, 0.0)
+    };
+    const SAMPLES: usize = 3;
+    let found = crate::parallel::map(&sets, |set| {
+        let sampled: Vec<usize> = if set.len() <= SAMPLES { set.clone() } else { (0..SAMPLES).map(|k| set[k * set.len() / SAMPLES]).collect() };
+        let first = classify(sampled[0]);
+        (matches!(first, State::Inside | State::Outside) && sampled[1..].iter().all(|&i| classify(i) == first)).then_some(first)
+    });
+    for (set, state) in sets.iter().zip(found) {
+        let state = state?;
+        for &i in set {
+            states[i] = state;
+        }
+    }
+    Some(states)
 }
