@@ -1464,6 +1464,31 @@ mod tests {
         assert!((removed - expected).abs() < 1e-4 * volume, "{removed} vs {expected}");
     }
 
+    /// A socket with a thread fused into its bore (the bore's ceiling at z 5.37 meeting the
+    /// thread's swept faces in fitted sections, straying 2e-6 from them, more than their
+    /// tolerance), and a box 20 x 20 from z 5.27, just under the ceiling, its corners in the
+    /// thread: where the box's sides meet those sections the sections along the sides pass,
+    /// so the sides are split there, and the box's bottom, in the bore, is outside the
+    /// socket (else a slab 0.1 thick is taken as inside it: 1280).
+    #[test]
+    fn a_box_reaching_just_into_a_threaded_bore() {
+        let mut model = Model::new();
+        let mut read = |text: &str| crate::io::brep::read(&mut model, &mut text.as_bytes()).unwrap();
+        let socket = read(include_str!("tests/threaded_socket_a.brep"));
+        let block = read(include_str!("tests/threaded_socket_b.brep"));
+        let volume = properties::volume(&model, socket).mass;
+        // (The socket above the ceiling within the box, 20 x 20 x 3.1, and slivers of the
+        // thread below it.)
+        let common = intersection(&mut model, socket, block).unwrap();
+        assert!(validity::check(&model, common).is_valid(), "{:?}", validity::check(&model, common));
+        let v = properties::volume(&model, common).mass;
+        assert!(v > 1240.0 && v < 1241.0, "{v}");
+        let result = difference(&mut model, socket, block).unwrap();
+        assert!(validity::check(&model, result).is_valid(), "{:?}", validity::check(&model, result));
+        let left = properties::volume(&model, result).mass;
+        assert!((left + v - volume).abs() < 1e-6 * volume, "{left} + {v} vs {volume}");
+    }
+
     /// A tube from `a` to `b` of radius `r`, as a lattice's strut: two circles square to the
     /// line swept through along it (its side a B-spline closed round without a period).
     fn strut(model: &mut Model, a: crate::math::Point, b: crate::math::Point, r: f64) -> Shape {

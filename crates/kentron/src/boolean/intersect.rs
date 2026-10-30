@@ -3006,7 +3006,7 @@ impl Graph {
             }
         }
         let enough = if section.closed() { 1 } else { 2 };
-        if drift <= on_tol() || distinct.len() >= enough {
+        if distinct.len() >= enough {
             return exact;
         }
         // Points where an edge meets a face not found exactly on the section: their point on
@@ -3018,6 +3018,19 @@ impl Graph {
                 continue;
             }
             let p = self.vertices.points[v];
+            // (Where the faces' edges are taken as exact, a vertex off the surfaces by a few
+            // times the classifying distance all the same strays as far as the edge it is on:
+            // a fitted section of an earlier operation, straying from its face between its fit
+            // points by more than its tolerance says.)
+            let drift = if drift > on_tol() {
+                drift
+            } else {
+                let off = geom::signed_distance(a, p).abs().max(geom::signed_distance(b, p).abs());
+                if off <= on_tol() || off > 10.0 * on_tol() {
+                    continue;
+                }
+                1.5 * off
+            };
             let q = onto_both(a, b, p);
             let sine = geom::normal_at_point(a, q).cross(geom::normal_at_point(b, q)).length();
             // (Not where the surfaces meet nearly tangent: there edges of one lie as near the
