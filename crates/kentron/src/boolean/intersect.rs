@@ -169,7 +169,7 @@ struct ContactKey {
 }
 
 fn surface_contact(curve: &Curve, first: f64, last: f64, surface: &Surface, tolerance: f64) -> Contact {
-    if let Some(contact) = plane_contact(curve, first, last, surface).or_else(|| coaxial_contact(curve, first, last, surface)) {
+    if let Some(contact) = plane_contact(curve, first, last, surface).or_else(|| coaxial_contact(curve, first, last, surface)).or_else(|| extrusion_contact(curve, first, surface)) {
         return contact;
     }
     // (As many as the surface's sampling has, at least: one winding round many times may be
@@ -368,6 +368,21 @@ fn coaxial_contact(curve: &Curve, first: f64, last: f64, surface: &Surface) -> O
     Some(if g.abs() <= on_tol() && geom::signed_distance(surface, curve.point(0.5 * (first + last))).abs() <= on_tol() { Contact::On } else { Contact::At(Vec::new()) })
 }
 
+/// [`surface_contact`] in closed form against a surface of extrusion, for a line along its
+/// direction (as far from it all along: on it or clear of it) and for the surface's basis
+/// curve moved along the direction (on it).
+fn extrusion_contact(curve: &Curve, first: f64, surface: &Surface) -> Option<Contact> {
+    let Surface::Extrusion(e) = surface else { return None };
+    let d = Vector::from(e.direction());
+    match curve {
+        Curve::Line(line) if Vector::from(line.direction).cross(d).length() <= 1e-12 => {
+            Some(if geom::signed_distance(surface, curve.point(first)).abs() <= on_tol() { Contact::On } else { Contact::At(Vec::new()) })
+        }
+        Curve::BSpline(_) if same_shadow(curve, e.basis(), d) => Some(Contact::On),
+        _ => None,
+    }
+}
+
 /// [`surface_contact`] in closed form for a line or a circle against a plane.
 fn plane_contact(curve: &Curve, first: f64, last: f64, surface: &Surface) -> Option<Contact> {
     let Surface::Plane(plane) = surface else { return None };
@@ -492,20 +507,32 @@ fn stretch_ends(curve: &Curve, first: f64, last: f64, surface: &Surface, ts: Vec
 
 /// Where a plane across the direction of a surface of extrusion meets it: the extruded
 /// curve projected along the direction onto the plane (exactly, for curves defined by poles
-/// or planar across the direction).
+/// or, for a plane square to the direction, planar across it). A plane tilted from square to
+/// the direction takes the projection along it, oblique to the plane (not one nearly along
+/// the direction, which stretches the curve without bound).
 fn plane_across_extrusion(plane: &Surface, extrusion: &Surface) -> Option<Section> {
-    use crate::math::{AffineTransform, AffineTransformable, Transformable};
+    use crate::math::{AffineTransform, AffineTransformable, Matrix3, Transformable};
     let (Surface::Plane(plane), Surface::Extrusion(extrusion)) = (plane, extrusion) else { return None };
     let (n, d) = (Vector::from(plane.normal()), Vector::from(extrusion.direction()));
-    if n.cross(d).length() > crate::tolerance::ANGULAR.sqrt() {
+    let square = n.cross(d).length() <= crate::tolerance::ANGULAR.sqrt();
+    let slant = n.dot(d);
+    if !square && slant.abs() < 0.05 {
         return None;
     }
     let basis = extrusion.basis();
     let (first, last) = (basis.first_parameter(), basis.last_parameter());
-    let projection = AffineTransform::plane_affinity(plane.origin(), plane.normal(), 0.0);
+    let projection = if square {
+        AffineTransform::plane_affinity(plane.origin(), plane.normal(), 0.0)
+    } else {
+        // p -> p - d (n·(p - o)) / (n·d).
+        let (dv, nv) = ([d.x, d.y, d.z], [n.x, n.y, n.z]);
+        let row = |i: usize| [0, 1, 2].map(|j| if i == j { 1.0 } else { 0.0 } - dv[i] * nv[j] / slant);
+        AffineTransform::new(Matrix3::from_rows([row(0), row(1), row(2)]), d * (n.dot(plane.origin() - Point::ORIGIN) / slant))
+    };
     let curve = match basis {
         Curve::BSpline(c) => Curve::BSpline(c.affine_transformed(&projection)),
         Curve::Bezier(c) => Curve::Bezier(c.affine_transformed(&projection)),
+        _ if !square => return None,
         c => {
             // Planar across the direction: moved onto the plane.
             let height = |t: f64| n.dot(c.point(t) - plane.origin());
@@ -554,6 +581,16 @@ fn plane_along_extrusion(fa: &Face, fb: &Face) -> Option<Vec<Section>> {
     if hs.iter().all(|h| h.abs() <= TOL) {
         return Some(Vec::new());
     }
+    let boxes = [&fa.bbox, &fb.bbox];
+    Some(height_roots(&height, &slope, &ts, &hs, &ds).into_iter().map(|t| line_across(curve.point(t) - n * height(t), extrusion.direction(), boxes)).collect())
+}
+
+/// The roots of `height` over the samples `ts` (with its values `hs` and slopes `ds`
+/// there): found between samples and either side of the turns of the height (two roots
+/// close together, the curve dipping just through the surface, or one where it touches).
+fn height_roots(height: &dyn Fn(f64) -> f64, slope: &dyn Fn(f64) -> f64, ts: &[f64], hs: &[f64], ds: &[f64]) -> Vec<f64> {
+    let n = ts.len() - 1;
+    let span = ts[n] - ts[0];
     let root = |f: &dyn Fn(f64) -> f64, mut lo: f64, mut hi: f64| {
         let flo = f(lo);
         for _ in 0..100 {
@@ -563,55 +600,141 @@ fn plane_along_extrusion(fa: &Face, fb: &Face) -> Option<Vec<Section>> {
             } else {
                 hi = mid;
             }
-            if hi - lo <= 1e-15 * (t1 - t0) {
+            if hi - lo <= 1e-15 * span {
                 break;
             }
         }
         0.5 * (lo + hi)
     };
     let mut roots = Vec::new();
-    for i in 0..N {
+    for i in 0..n {
         let (a, b) = (ts[i], ts[i + 1]);
         if hs[i] == 0.0 {
             roots.push(a);
             continue;
         }
         if hs[i] * hs[i + 1] < 0.0 {
-            roots.push(root(&height, a, b));
+            roots.push(root(height, a, b));
         } else if ds[i] * ds[i + 1] < 0.0 && hs[i + 1] != 0.0 {
-            // A turn of the height: through the plane and back, or touching it.
-            let turn = root(&slope, a, b);
+            // A turn of the height: through the surface and back, or touching it.
+            let turn = root(slope, a, b);
             let h = height(turn);
             if h * hs[i] < 0.0 {
-                roots.push(root(&height, a, turn));
-                roots.push(root(&height, turn, b));
+                roots.push(root(height, a, turn));
+                roots.push(root(height, turn, b));
             } else if h.abs() <= TOL {
                 roots.push(turn);
             }
         }
     }
-    if hs[N] == 0.0 {
-        roots.push(ts[N]);
+    if hs[n] == 0.0 {
+        roots.push(ts[n]);
     }
+    roots
+}
+
+/// The line through `p` along `d`, over the range of it that the boxes both cover.
+fn line_across(p: Point, d: Direction, boxes: [&(Point, Point); 2]) -> Section {
+    let line = Line::new(p, d);
+    let dv = Vector::from(d);
+    let along = |bx: &(Point, Point)| {
+        let (lo, hi) = *bx;
+        let ts = (0..8).map(|i| {
+            let corner = Point::new(if i & 1 == 0 { lo.x } else { hi.x }, if i & 2 == 0 { lo.y } else { hi.y }, if i & 4 == 0 { lo.z } else { hi.z });
+            (corner - line.origin).dot(dv)
+        });
+        ts.fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), t| (a.min(t), b.max(t)))
+    };
+    let ((lo_a, hi_a), (lo_b, hi_b)) = (along(boxes[0]), along(boxes[1]));
+    Section::Open(Curve::Line(line), lo_a.max(lo_b) - 1.0, hi_a.min(hi_b) + 1.0)
+}
+
+/// Where a surface of extrusion meets another along the same direction (a surface of
+/// extrusion or a cylinder): lines along the direction through the points of the extruded
+/// curve on the other surface, the roots of its distance from it. `None` where the
+/// surfaces are not along one direction, or run together along a stretch of the curve
+/// (left to the general tracing).
+fn extrusions_along(fa: &Face, fb: &Face) -> Option<Vec<Section>> {
+    let (extrusion, extruded, other) = match (&fa.surface, &fb.surface) {
+        (Surface::Extrusion(e), o @ (Surface::Extrusion(_) | Surface::Cylinder(_))) => (e, fa, o),
+        (o @ Surface::Cylinder(_), Surface::Extrusion(e)) => (e, fb, o),
+        _ => return None,
+    };
+    let d = Vector::from(extrusion.direction());
+    let other_direction = match other {
+        Surface::Extrusion(e) => Vector::from(e.direction()),
+        Surface::Cylinder(c) => Vector::from(c.frame().z()),
+        _ => return None,
+    };
+    if d.cross(other_direction).length() > crate::tolerance::ANGULAR {
+        return None;
+    }
+    if let Surface::Extrusion(o) = other {
+        if same_shadow(extrusion.basis(), o.basis(), d) {
+            return Some(Vec::new());
+        }
+    }
+    let curve = extrusion.basis();
+    let (b0, b1) = (curve.first_parameter(), curve.last_parameter());
+    let (u0, u1) = extruded.u_range;
+    let span = u1 - u0;
+    let (t0, t1) = ((u0 - 0.05 * span).max(b0), (u1 + 0.05 * span).min(b1));
+    if !(t1 > t0) {
+        return Some(Vec::new());
+    }
+    // (The distance from the other surface, along its normal at the foot point; where the
+    // foot is held at the end of the other's extruded curve, not the distance to it.)
+    let height = |t: f64| geom::signed_distance(other, curve.point(t));
+    let slope = |t: f64| {
+        let (p, tangent) = curve.d1(t);
+        geom::signed_distance_with_gradient(other, p).map_or(0.0, |(_, g)| g.dot(tangent))
+    };
+    const N: usize = 256;
+    let ts: Vec<f64> = (0..=N).map(|i| t0 + (t1 - t0) * i as f64 / N as f64).collect();
+    let hs: Vec<f64> = ts.iter().map(|&t| height(t)).collect();
+    // (The same surface over the whole face, as a copy of it: met along no line, as
+    // coincident quadrics; met over a stretch only, left to the tracing.)
+    if hs.iter().all(|h| h.abs() <= TOL) {
+        return Some(Vec::new());
+    }
+    if hs.windows(2).any(|w| w[0].abs() <= TOL && w[1].abs() <= TOL) {
+        return None;
+    }
+    let ds: Vec<f64> = ts.iter().map(|&t| slope(t)).collect();
     let boxes = [&fa.bbox, &fb.bbox];
+    let on_other = |p: Point| {
+        let uv = geom::uv_of(other, p);
+        geom::surface_point(other, uv).distance(p) <= 10.0 * TOL
+    };
     Some(
-        roots
+        height_roots(&height, &slope, &ts, &hs, &ds)
             .into_iter()
-            .map(|t| {
-                let line = Line::new(curve.point(t) - n * height(t), extrusion.direction());
-                let along = |bx: &(Point, Point)| {
-                    let (lo, hi) = *bx;
-                    let ts = (0..8).map(|i| {
-                        let corner = Point::new(if i & 1 == 0 { lo.x } else { hi.x }, if i & 2 == 0 { lo.y } else { hi.y }, if i & 4 == 0 { lo.z } else { hi.z });
-                        (corner - line.origin).dot(d)
-                    });
-                    ts.fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), t| (a.min(t), b.max(t)))
-                };
-                let ((lo_a, hi_a), (lo_b, hi_b)) = (along(boxes[0]), along(boxes[1]));
-                Section::Open(Curve::Line(line), lo_a.max(lo_b) - 1.0, hi_a.min(hi_b) + 1.0)
-            })
+            .map(|t| curve.point(t))
+            .filter(|&p| on_other(p))
+            .map(|p| line_across(p, extrusion.direction(), boxes))
             .collect(),
     )
+}
+
+/// Whether two B-spline curves are the same seen along `d` (as the bases of one surface of
+/// extrusion, a copy of the other's): equal degrees, knots and weights, and poles apart
+/// along `d` only (a unit vector, or zero for the same curve), within the meeting tolerance.
+fn same_shadow(a: &Curve, b: &Curve, d: Vector) -> bool {
+    let (Curve::BSpline(a), Curve::BSpline(b)) = (a, b) else { return false };
+    let near = |x: &[f64], y: &[f64]| x.len() == y.len() && x.iter().zip(y).all(|(p, q)| (p - q).abs() <= 1e-12 * (1.0 + p.abs()));
+    a.degree() == b.degree()
+        && a.multiplicities() == b.multiplicities()
+        && near(a.knots(), b.knots())
+        && match (a.weights(), b.weights()) {
+            (None, None) => true,
+            (Some(x), Some(y)) => near(x, y),
+            _ => false,
+        }
+        && a.poles().len() == b.poles().len()
+        && a.poles().iter().zip(b.poles()).all(|(&p, &q)| {
+            let w = q - p;
+            (w - d * w.dot(d)).length() <= on_tol()
+        })
 }
 
 /// A curve where two faces' surfaces meet.
@@ -1402,6 +1525,9 @@ fn sections(fa: &Face, fb: &Face, crossings: &[Point]) -> Vec<Section> {
         return vec![section];
     }
     if let Some(sections) = plane_along_extrusion(fa, fb) {
+        return sections;
+    }
+    if let Some(sections) = extrusions_along(fa, fb) {
         return sections;
     }
     if let Some(sections) = meridians(a, b).or_else(|| meridians(b, a)) {
@@ -2228,8 +2354,11 @@ impl Graph {
                     // it strays from its own face's: a fitted section bounding a face cut to
                     // a surface strays from it between its fit points by more than its
                     // tolerance says.)
+                    // (Only where the edge's middle, one of the points `farthest` takes, is that
+                    // close to the face: a quick test, most edges near a face being clear of it.)
                     Contact::At(_)
-                        if own_faces[ei].iter().any(|&own| {
+                        if geom::signed_distance(&face.surface, curve.point(0.5 * (edge.first + edge.last))).abs() <= 1e3 * on_tol() + on_tol()
+                            && own_faces[ei].iter().any(|&own| {
                             let own = &self.faces[own];
                             let strays = farthest(curve, edge.first, edge.last, &own.surface);
                             strays <= 1e3 * on_tol() && coincide(own, face) && farthest(curve, edge.first, edge.last, &face.surface) <= strays + on_tol()
@@ -3114,7 +3243,7 @@ fn onto_both(a: &Surface, b: &Surface, mut p: Point) -> Point {
     p
 }
 
-/// True if two curves are the same circle, or lie on the same line.
+/// True if two curves are the same circle or B-spline, or lie on the same line.
 fn same_carrier(a: &Curve, b: &Curve) -> bool {
     let tol = on_tol();
     match (a, b) {
@@ -3127,6 +3256,9 @@ fn same_carrier(a: &Curve, b: &Curve) -> bool {
             let axis = |c: &Circle| Vector::from(c.frame().x()).cross(Vector::from(c.frame().y()));
             x.center().distance(y.center()) <= tol && (x.radius() - y.radius()).abs() <= tol && axis(x).cross(axis(y)).length() <= 1e-9
         }
+        // (One B-spline twice, as a copy of a shape fused with it: the same knots, weights
+        // and poles.)
+        (Curve::BSpline(_), Curve::BSpline(_)) => same_shadow(a, b, Vector::new(0.0, 0.0, 0.0)),
         _ => false,
     }
 }

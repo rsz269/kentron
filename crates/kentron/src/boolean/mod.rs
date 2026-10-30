@@ -1894,6 +1894,73 @@ mod tests {
         assert!((v - (300.0 + 60.0)).abs() < 1e-8 * 360.0, "{v}");
     }
 
+    /// A prism whose side is a parabolic arc (a quadratic B-spline, y = 6t(1 - t) over
+    /// x = 10t; the arch's area 10) extruded along z, and its prism.
+    fn arched_prism(model: &mut Model, z: f64, height: f64) -> Shape {
+        use crate::geometry::curve::{BSplineCurve, Curve};
+        let at = |x: f64, y: f64| Point::new(x, y, z);
+        let arc = Curve::BSpline(BSplineCurve::new(vec![at(0.0, 0.0), at(5.0, 3.0), at(10.0, 0.0)], vec![0.0, 1.0], vec![3, 3], 2));
+        let edges = [crate::make::edge_from_curve(model, arc).unwrap(), crate::make::edge_between(model, at(10.0, 0.0), at(0.0, 0.0)).unwrap()];
+        let wire = crate::make::wire(model, &edges).unwrap();
+        let face = crate::make::planar_face(model, wire).unwrap();
+        crate::sweep::extrude(model, face, Vector::new(0.0, 0.0, height)).unwrap().shape
+    }
+
+    /// Two arched prisms, one on the other's side surface along all of it (moved along the
+    /// direction of extrusion): their curved sides are one surface, met along no line, and
+    /// the union is the prism made taller.
+    #[test]
+    fn prisms_on_one_extruded_surface() {
+        let mut model = Model::new();
+        let (lower, upper) = (arched_prism(&mut model, 0.0, 5.0), arched_prism(&mut model, 2.0, 5.0));
+        let joined = union(&mut model, lower, upper).unwrap();
+        let report = validity::check(&model, joined);
+        assert!(report.problems.is_empty(), "{report:?}");
+        let v = properties::volume(&model, joined).mass;
+        assert!((v - 10.0 * 7.0).abs() < 1e-8 * 70.0, "{v}");
+    }
+
+    /// An arched prism and a cylinder along the same direction, crossing its arc: they meet
+    /// along two lines, and the union's volume is the cross-sections' union (the overlap
+    /// integrated across x) times the height.
+    #[test]
+    fn an_extruded_arc_across_a_parallel_cylinder() {
+        let mut model = Model::new();
+        let prism = arched_prism(&mut model, 0.0, 5.0);
+        let (cx, cy, r) = (5.0, 1.5, 2.0);
+        let cylinder = cylinder(&mut model, (cx, cy, -1.0), Direction::Z, r, 7.0);
+        let joined = union(&mut model, prism, cylinder).unwrap();
+        let report = validity::check(&model, joined);
+        assert!(report.problems.is_empty(), "{report:?}");
+        // (Vertical lines through points on both the circle and the arch: the two where
+        // they cross, each perhaps in pieces.)
+        let top = |x: f64| 6.0 * (x / 10.0) * (1.0 - x / 10.0);
+        let mut crossings: Vec<(f64, f64)> = Vec::new();
+        for e in model.explore(joined, NodeKind::Edge) {
+            let Some((crate::geometry::curve::Curve::Line(_), _, _)) = model.edge_curve(e) else { continue };
+            let (a, b) = model.edge_vertices(e);
+            let (p, q) = (model.point(a), model.point(b));
+            let on_circle = ((p.x - cx).hypot(p.y - cy) - r).abs() < 1e-6;
+            if (p - q).cross(Vector::new(0.0, 0.0, 1.0)).length() < 1e-9 && on_circle && (p.y - top(p.x)).abs() < 1e-6 && !crossings.iter().any(|c| (c.0 - p.x).hypot(c.1 - p.y) < 1e-6) {
+                crossings.push((p.x, p.y));
+            }
+        }
+        assert_eq!(crossings.len(), 2, "{crossings:?}");
+        // (The overlap of the arch and the disc, by Simpson's rule in x.)
+        let overlap_at = |x: f64| {
+            let h = (r * r - (x - cx) * (x - cx)).max(0.0).sqrt();
+            let top = 6.0 * (x / 10.0) * (1.0 - x / 10.0);
+            (top.min(cy + h) - (cy - h).max(0.0)).max(0.0)
+        };
+        let n = 200_000;
+        let (a, b) = (cx - r, cx + r);
+        let step = (b - a) / n as f64;
+        let overlap = (0..=n).map(|i| overlap_at(a + step * i as f64) * if i == 0 || i == n { 1.0 } else if i % 2 == 1 { 4.0 } else { 2.0 }).sum::<f64>() * step / 3.0;
+        let v = properties::volume(&model, joined).mass;
+        let expected = 5.0 * (10.0 - overlap) + PI * r * r * 7.0;
+        assert!((v - expected).abs() < 1e-6 * expected, "{v} against {expected}");
+    }
+
     /// A unit cube cut by a slab across the middle of its bottom (CadQuery's history test):
     /// recorded, the cube's bottom face makes the two strips the cut leaves of it, an edge
     /// across the slab's two pieces, and the slab's bottom face (on the cube's, taken away)
