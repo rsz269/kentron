@@ -249,6 +249,9 @@ class Shape:
         return Shape.cast(shapes[0])
 
     def cut(self, *toCut: "Shape", tol: Optional[float] = None) -> "Shape":
+        # (Several at once, as OCCT takes them: one operation, not one each on the whole.)
+        if len(toCut) > 1:
+            return Shape.cast(_cut_solid_by_solid(self.wrapped, native.make_compound([other.wrapped for other in toCut])))
         result = self.wrapped
         for other in toCut:
             result = _cut_solid_by_solid(result, other.wrapped)
