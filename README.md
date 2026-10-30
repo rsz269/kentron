@@ -56,8 +56,8 @@ it honest. Every change is checked against the test sources below before it is c
 and no change may make a passing test fail.
 
 <!-- effort -->
-So far (2026-09-25 to 2026-10-30): about 260 hours of the agent's active work, 17.6 million
-tokens written by it, and 9.9 billion tokens processed in all (nearly all of them its
+So far (2026-09-25 to 2026-10-30): about 260 hours of the agent's active work, 17.7 million
+tokens written by it, and 10.0 billion tokens processed in all (nearly all of them its
 conversation's context, read back from the cache).
 <!-- /effort -->
 
@@ -77,10 +77,10 @@ conversation's context, read back from the cache).
 - **44 CadQuery models from a private project** build on pykentron; for the 42 that return
   their parts, every part is valid and within 0.1% of CadQuery's volume.
 - **746 CadQuery scripts from 113 public projects** (5 more open render windows or wait and
-  are not run): of the 737 whose results don't depend on the order a kernel lists faces in,
-  pykentron builds 662 as CadQuery does, and 16 more differ only where CadQuery's result is
-  wrong (2026-10-30). Timed on 2026-10-30, on the 662 it then built alike, it took 168 s in
-  all against CadQuery's 984 s, and was faster on 637.
+  are not run): of the 736 whose results don't depend on the order a kernel lists faces in,
+  pykentron builds 667 as CadQuery does, and 20 more differ only where CadQuery's result is
+  wrong (2026-10-31). Timed on 2026-10-31, on the 667 it then built alike, it took 167 s in
+  all against CadQuery's 963 s, and was faster on 643.
   The scripts, what they found and where they stand:
   [`crates/pykentron/tests/found`](crates/pykentron/tests/found/README.md).
 
