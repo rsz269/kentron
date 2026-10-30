@@ -76,11 +76,11 @@ conversation's context, read back from the cache).
   lacks (VRML, VTK), or OCCT-specific behaviour.
 - **44 CadQuery models from a private project** build on pykentron; for the 42 that return
   their parts, every part is valid and within 0.1% of CadQuery's volume.
-- **748 CadQuery scripts from 113 public projects** (3 more open render windows and are not
-  run): of the 739 whose results don't depend on the order a kernel lists faces in, pykentron
-  builds 664 as CadQuery does, and 16 more differ only where CadQuery's result is wrong
-  (2026-10-30). Timed on 2026-10-30, on the 664 it then built alike, it took 185 s in all
-  against CadQuery's 1,006 s, and was faster on 633.
+- **746 CadQuery scripts from 113 public projects** (5 more open render windows or wait and
+  are not run): of the 737 whose results don't depend on the order a kernel lists faces in,
+  pykentron builds 662 as CadQuery does, and 16 more differ only where CadQuery's result is
+  wrong (2026-10-30). Timed on 2026-10-30, on the 662 it then built alike, it took 168 s in
+  all against CadQuery's 984 s, and was faster on 637.
   The scripts, what they found and where they stand:
   [`crates/pykentron/tests/found`](crates/pykentron/tests/found/README.md).
 
