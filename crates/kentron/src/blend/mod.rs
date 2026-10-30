@@ -655,7 +655,7 @@ fn rolls_off(model: &Model, shape: Shape, corner: &Corner, radius: f64) -> bool 
     let faces = model.unique_subshapes(shape, NodeKind::Face);
     let find = |node: NodeId| faces.iter().copied().find(|f| f.node == node);
     let (Some(a), Some(b)) = (find(corner.faces[0].0), find(corner.faces[1].0)) else { return false };
-    runover::rolls_off(model, [a, b], corner.tangent, length, [t1, t2])
+    runover::rolls_off(model, [a, b], corner.tangent, length, [t1, t2], [corner.origin, corner.end])
 }
 
 /// `op` on `shape` where it has solids; on the solids closed shells bound, given back as
@@ -2801,6 +2801,44 @@ mod tests {
         assert_eq!(cylinders, 4);
         let v = properties::volume(&model, rounded).mass;
         assert!((v - 456.4692).abs() < 1e-3, "{v}");
+    }
+
+    /// A frustum of a square pyramid (10 square to 6 over 5): along an edge of its base, the
+    /// side narrows upwards, and the ball's contact on it (r 1) runs off it near the edge's
+    /// ends, across the side's slanted edges from the ends: the fillet's ends meet the faces
+    /// there as at any end, not rolling on (tried before the corners' tools, that failed
+    /// slowly, edge after edge).
+    #[test]
+    fn a_face_narrowing_to_the_edge_ends_is_not_rolled_off() {
+        let mut model = Model::new();
+        let square = |model: &mut Model, half: f64, z: f64| {
+            let corners = [(-half, -half), (half, -half), (half, half), (-half, half)];
+            let edges: Vec<Shape> = (0..4)
+                .map(|i| {
+                    let ((x0, y0), (x1, y1)) = (corners[i], corners[(i + 1) % 4]);
+                    crate::make::edge_between(model, Point::new(x0, y0, z), Point::new(x1, y1, z)).unwrap()
+                })
+                .collect();
+            crate::make::wire(model, &edges).unwrap()
+        };
+        let (low, high) = (square(&mut model, 5.0, 0.0), square(&mut model, 3.0, 5.0));
+        let options = crate::loft::LoftOptions { solid: true, ruled: true, ..Default::default() };
+        let block = crate::loft::loft(&mut model, &[low, high], &options).unwrap().shape;
+        let base: Vec<Shape> = model
+            .unique_subshapes(block, NodeKind::Edge)
+            .into_iter()
+            .filter(|&e| {
+                let (a, b) = model.edge_vertices(e);
+                model.point(a).z.abs() < 1e-9 && model.point(b).z.abs() < 1e-9
+            })
+            .collect();
+        assert_eq!(base.len(), 4);
+        for &edge in &base {
+            let corner = Corner::of(&model, block, edge, false).unwrap().expect("an elementary corner");
+            assert!(!rolls_off(&model, block, &corner, 1.0));
+        }
+        let rounded = fillet(&mut model, block, &base, 1.0).unwrap();
+        assert!(validity::check(&model, rounded).errors().next().is_none());
     }
 
     /// A sector of a ring (a torus's tube, hollowed by a coaxial torus, bored across and

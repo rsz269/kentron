@@ -807,18 +807,27 @@ fn lens(model: &mut Model, s: &Section) -> Result<Shape> {
 
 /// Whether the ball of the fillet along a straight edge between `faces`, touching them at
 /// `contacts` in the section at the edge's start (the edge running along `tangent` for
-/// `length`), touches them off their bounds somewhere along it: where it must roll onto the
-/// faces beyond.
-pub(super) fn rolls_off(model: &Model, faces: [Shape; 2], tangent: Vector, length: f64, contacts: [Point; 2]) -> bool {
+/// `length`, from `ends[0]` to `ends[1]`), touches them off their bounds somewhere along it:
+/// where it must roll onto the faces beyond. (Not where a contact leaves its face across an
+/// edge from one of the edge's ends, as a face narrowing to its end: the fillet's end meets
+/// the faces there as at any end.)
+pub(super) fn rolls_off(model: &Model, faces: [Shape; 2], tangent: Vector, length: f64, contacts: [Point; 2], ends: [Point; 2]) -> bool {
     const SAMPLES: usize = 32;
     faces.iter().zip(contacts).any(|(&face, contact)| {
         let Some(bounded) = Bounded::of(model, face) else { return false };
+        // (Whether the face's boundary edge nearest `p` runs from one of the edge's ends.)
+        let from_an_end = |p: Point| {
+            let gap = |&(ref c, first, last): &(Curve, f64, f64)| (0..=64).map(|i| c.point(first + (last - first) * i as f64 / 64.0).distance(p)).fold(f64::INFINITY, f64::min);
+            let Some(nearest) = (0..bounded.edges.len()).min_by(|&i, &j| gap(&bounded.edges[i]).total_cmp(&gap(&bounded.edges[j]))) else { return false };
+            let (c, first, last) = &bounded.edges[nearest];
+            [c.point(*first), c.point(*last)].iter().any(|q| ends.iter().any(|e| q.distance(*e) <= crate::tolerance::LINEAR))
+        };
         (0..=SAMPLES).any(|i| {
             // (Not at the very ends, where the contact meets the faces there.)
             let s = length * (0.02 + 0.96 * i as f64 / SAMPLES as f64);
             let p = contact + tangent.normalized() * s;
             let (u, v, d) = nearest_on_surface(p, &bounded.surface, None);
-            d <= 1e-6 * (1.0 + length) && !bounded.contains((u, v))
+            d <= 1e-6 * (1.0 + length) && !bounded.contains((u, v)) && !from_an_end(p)
         })
     })
 }
