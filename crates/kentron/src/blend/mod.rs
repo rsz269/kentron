@@ -2081,6 +2081,8 @@ struct CornerPatch {
     radius: f64,
     /// Through the centre, each normal towards the vertex.
     planes: Vec<Vector>,
+    /// Whether the three faces are planes.
+    planar: bool,
 }
 
 impl CornerPatch {
@@ -2152,7 +2154,8 @@ impl CornerPatch {
                 if (vertex - center).dot(n) < 0.0 { -n } else { n }
             })
             .collect();
-        Ok(Some(CornerPatch { vertex, center, radius, planes }))
+        let planar = faces.iter().all(|f| matches!(f.1, Surface::Plane(_)));
+        Ok(Some(CornerPatch { vertex, center, radius, planes, planar }))
     }
 
     fn tool(&self, model: &mut Model) -> Result<Shape> {
@@ -2160,6 +2163,21 @@ impl CornerPatch {
         // The spheres' poles away from the corner.
         let away = Direction::from_vector(self.center - self.vertex);
         let frame = Frame::new(self.center, away, Direction::from_vector(perpendicular(Vector::from(away))));
+        // Planes square to one another, at a corner of planar faces (square to them in turn):
+        // the solid there is a box from the centre to the faces, the tool the box a little
+        // beyond them less the ball.
+        let square = |i: usize, j: usize| self.planes[i].dot(self.planes[j]).abs() <= 1e-9;
+        if self.planar && self.planes.len() == 3 && square(0, 1) && square(0, 2) && square(1, 2) {
+            let sides: Vec<f64> = self.planes.iter().map(|&n| n.dot(self.vertex - self.center) + 0.1 * self.radius).collect();
+            if sides.iter().all(|&s| s > 1.05 * self.radius) {
+                // (x, y and z along the planes' normals, right-handed.)
+                let (a, b, c) = if self.planes[2].cross(self.planes[0]).dot(self.planes[1]) > 0.0 { (0, 1, 2) } else { (1, 0, 2) };
+                let box_frame = Frame::new(self.center, Direction::from_vector(self.planes[c]), Direction::from_vector(self.planes[a]));
+                let cube = crate::primitives::Cuboid::new(sides[a], sides[b], sides[c]).with_frame(box_frame).build(model)?;
+                let ball = crate::primitives::Sphere::new(self.radius).with_frame(frame).build(model)?;
+                return boolean::difference(model, cube, ball);
+            }
+        }
         let outer = crate::primitives::Sphere::new(reach).with_frame(frame).build(model)?;
         let ball = crate::primitives::Sphere::new(self.radius).with_frame(frame).build(model)?;
         let mut tool = boolean::difference(model, outer, ball)?;
