@@ -1146,7 +1146,15 @@ fn chamfer_solid_edges(model: &mut Model, shape: Shape, edges: &[ChamferedEdge])
         corners.push((corner, if first_on_second { [d2, d1] } else { [d1, d2] }));
     }
     let sized: Vec<(Corner, f64)> = corners.iter().map(|(c, d)| (c.clone(), d[0].max(d[1]))).collect();
-    let mitred = mitres(&sized);
+    let mut mitred = mitres(&sized);
+    // (Where convex and concave chamfers meet, each ends at its section and a cap closes the
+    // corner.)
+    let mixed = mixed_chamfer_corners(model, &corners)?;
+    for m in &mixed {
+        for &(i, at_end, plane) in &m.ends {
+            mitred[i][usize::from(at_end)] = Some(plane);
+        }
+    }
     let mut tools = Vec::with_capacity(corners.len());
     for (((corner, distances), extend), mitre) in corners.iter().zip(extensions(model, shape, &sized)).zip(&mitred) {
         let section = corner.bevel_section(model, *distances)?;
@@ -1156,7 +1164,23 @@ fn chamfer_solid_edges(model: &mut Model, shape: Shape, edges: &[ChamferedEdge])
         tools.push((tool, corner.convex));
     }
     tools.extend(chamfer_corner_tools(model, &corners)?.into_iter().map(|tool| (tool, true)));
-    with_tools(model, shape, &tools)
+    // (The caps' parts beyond them cut away after the chamfers, those short of them added
+    // last.)
+    for m in &mixed {
+        let edges: Vec<NodeId> = m.ends.iter().flat_map(|&(i, _, _)| corners[i].0.edges.clone()).collect();
+        for t in [m.cut, m.add].into_iter().flatten() {
+            record_tool(model, t, &edges);
+        }
+    }
+    tools.extend(mixed.iter().filter_map(|m| m.cut).map(|t| (t, true)));
+    tools.extend(mixed.iter().filter_map(|m| m.add).map(|t| (t, false)));
+    let chamfered = with_tools(model, shape, &tools)?;
+    if mixed.is_empty() {
+        return Ok(chamfered);
+    }
+    // (The faces the caps and the chamfers ending at their sections split, one again.)
+    let merged = crate::unify::unify_same_domain_with(model, chamfered, crate::unify::UnifyOptions { faces: true, edges: false, same_surface_only: false })?;
+    crate::unify::unify_same_domain_with(model, merged, crate::unify::UnifyOptions { faces: false, edges: true, same_surface_only: true })
 }
 
 /// `shape` with `tools` cut away (each convex) or added (concave) in turn; a run of one kind
@@ -1421,6 +1445,203 @@ fn chamfer_corner_tools(model: &mut Model, corners: &[(Corner, [f64; 2])]) -> Re
         tools.push(tetrahedron(model, [p, q, r, apex])?);
     }
     Ok(tools)
+}
+
+/// A corner where three chamfered straight edges between planes meet, some convex and some
+/// concave (a column standing on a block, a post on a plate): each chamfer ends at its
+/// section as far along its edge from the vertex as it is wide, and one plane through those
+/// sections' ends caps the corner, as OCCT's does. The edges' ends there (corner, at its end,
+/// and the section plane, with its normal into the edge), and the solids to cut away and to
+/// add: the hull of the vertex and the chamfers' ends at it and at the sections, beyond the
+/// cap and short of it.
+struct MixedCorner {
+    ends: Vec<(usize, bool, (Point, Vector))>,
+    cut: Option<Shape>,
+    add: Option<Shape>,
+}
+
+/// The [`MixedCorner`]s of the chamfers of `corners` (each with its distances).
+fn mixed_chamfer_corners(model: &mut Model, corners: &[(Corner, [f64; 2])]) -> Result<Vec<MixedCorner>> {
+    let straight = |c: &Corner| matches!(c.path, Path::Line { .. }) && c.traces.iter().all(|t| matches!(t, Trace::Line));
+    // The vertices and the corners ending there (at their ends or not).
+    let mut vertices: Vec<(Point, Vec<(usize, bool)>)> = Vec::new();
+    for (i, (corner, _)) in corners.iter().enumerate() {
+        if corner.ends().is_empty() {
+            continue;
+        }
+        for (at_end, p) in [(false, corner.origin), (true, corner.end)] {
+            match vertices.iter_mut().find(|(q, _)| q.distance(p) <= tolerance::LINEAR) {
+                Some((_, at)) => at.push((i, at_end)),
+                None => vertices.push((p, vec![(i, at_end)])),
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for (v, at) in vertices {
+        let convex = at.iter().filter(|&&(i, _)| corners[i].0.convex).count();
+        // (Each chamfer as wide on both its faces.)
+        if at.len() != 3 || convex == 0 || convex == 3 || !at.iter().all(|&(i, _)| straight(&corners[i].0) && (corners[i].1[0] - corners[i].1[1]).abs() <= tolerance::LINEAR) {
+            continue;
+        }
+        // Each chamfer's ends on its faces at the vertex and at its section.
+        let along = |i: usize, at_end: bool| corners[i].0.tangent * if at_end { -1.0 } else { 1.0 };
+        let mut points = vec![v];
+        let mut sections: Vec<Point> = Vec::new();
+        let mut ends = Vec::new();
+        for &(i, at_end) in &at {
+            let (corner, d) = &corners[i];
+            let t = along(i, at_end);
+            for k in 0..2 {
+                let p = v + corner.into[k] * d[k];
+                let q = p + t * d[0];
+                points.extend([p, q]);
+                if !sections.iter().any(|s| s.distance(q) <= tolerance::LINEAR) {
+                    sections.push(q);
+                }
+            }
+            ends.push((i, at_end, (v + t * d[0], t)));
+        }
+        // The cap: the plane through the sections' four ends.
+        let [a, b, c, d] = sections[..] else { continue };
+        let n = (b - a).cross(c - a);
+        if !(n.length() > 0.0) {
+            continue;
+        }
+        let n = n.normalized();
+        if (d - a).dot(n).abs() > tolerance::LINEAR {
+            continue;
+        }
+        // Its normal towards what is cut away: the side of the convex edges, the concave ones
+        // on the other.
+        let mut sign = 0.0;
+        let consistent = at.iter().all(|&(i, at_end)| {
+            let (corner, d) = &corners[i];
+            let s = (v + along(i, at_end) * (0.5 * d[0]) - a).dot(n) * if corner.convex { 1.0 } else { -1.0 };
+            if s.abs() <= tolerance::LINEAR {
+                return false;
+            }
+            if sign == 0.0 {
+                sign = s.signum();
+            }
+            s.signum() == sign
+        });
+        if !consistent {
+            continue;
+        }
+        let n = n * sign;
+        let Some(facets) = hull_facets(&points) else { continue };
+        // The hull's corners each side of the cap, and where its edges cross the cap.
+        let side = |p: Point| (p - a).dot(n);
+        let mut beyond: Vec<Point> = Vec::new();
+        let mut short: Vec<Point> = Vec::new();
+        for (_, polygon) in &facets {
+            for (k, &p) in polygon.iter().enumerate() {
+                let q = polygon[(k + 1) % polygon.len()];
+                let (sp, sq) = (side(p), side(q));
+                if sp >= -tolerance::LINEAR {
+                    beyond.push(p);
+                }
+                if sp <= tolerance::LINEAR {
+                    short.push(p);
+                }
+                if (sp > tolerance::LINEAR && sq < -tolerance::LINEAR) || (sp < -tolerance::LINEAR && sq > tolerance::LINEAR) {
+                    let x = p + (q - p) * (sp / (sp - sq));
+                    beyond.push(x);
+                    short.push(x);
+                }
+            }
+        }
+        let cut = convex_solid(model, &beyond)?;
+        let add = convex_solid(model, &short)?;
+        out.push(MixedCorner { ends, cut, add });
+    }
+    Ok(out)
+}
+
+/// The facets of the convex hull of `points`: each one's outward normal and its corners in
+/// order round it (none in line with their neighbours); `None` where the points are flat.
+fn hull_facets(points: &[Point]) -> Option<Vec<(Vector, Vec<Point>)>> {
+    let mut distinct: Vec<Point> = Vec::new();
+    for &p in points {
+        if !distinct.iter().any(|q| q.distance(p) <= tolerance::LINEAR) {
+            distinct.push(p);
+        }
+    }
+    let eps = tolerance::LINEAR;
+    let mut facets: Vec<(Vector, Vec<Point>)> = Vec::new();
+    let n = distinct.len();
+    for i in 0..n {
+        for j in i + 1..n {
+            for k in j + 1..n {
+                let (a, b, c) = (distinct[i], distinct[j], distinct[k]);
+                let normal = (b - a).cross(c - a);
+                if !(normal.length() > eps * (b - a).length().max((c - a).length())) {
+                    continue;
+                }
+                let normal = normal.normalized();
+                let (mut above, mut below) = (false, false);
+                for &p in &distinct {
+                    let s = (p - a).dot(normal);
+                    above |= s > eps;
+                    below |= s < -eps;
+                }
+                if above && below {
+                    continue;
+                }
+                let normal = if above { -normal } else { normal };
+                if facets.iter().any(|(m, poly)| m.dot(normal) >= 1.0 - 1e-9 && (poly[0] - a).dot(normal).abs() <= eps) {
+                    continue;
+                }
+                // The facet's points in order round its centre, those in line with their
+                // neighbours left out.
+                let on: Vec<Point> = distinct.iter().copied().filter(|&p| (p - a).dot(normal).abs() <= eps).collect();
+                let centre = Point::barycenter(&on.iter().map(|&p| (p, 1.0)).collect::<Vec<_>>());
+                // (From the point farthest from the centre: one may be at it.)
+                let far = on.iter().copied().max_by(|p, q| p.distance(centre).total_cmp(&q.distance(centre))).expect("points");
+                let x = (far - centre).normalized();
+                let y = normal.cross(x);
+                let mut ordered = on.clone();
+                ordered.sort_by(|p, q| {
+                    let angle = |p: &Point| (*p - centre).dot(y).atan2((*p - centre).dot(x));
+                    angle(p).total_cmp(&angle(q))
+                });
+                let mut corners: Vec<Point> = Vec::new();
+                for (m, &p) in ordered.iter().enumerate() {
+                    let before = ordered[(m + ordered.len() - 1) % ordered.len()];
+                    let after = ordered[(m + 1) % ordered.len()];
+                    if (p - before).cross(after - p).dot(normal) > eps * (after - before).length() {
+                        corners.push(p);
+                    }
+                }
+                if corners.len() >= 3 {
+                    facets.push((normal, corners));
+                }
+            }
+        }
+    }
+    (facets.len() >= 4).then_some(facets)
+}
+
+/// The solid convex hull of `points`; `None` where they are flat.
+fn convex_solid(model: &mut Model, points: &[Point]) -> Result<Option<Shape>> {
+    let Some(facets) = hull_facets(points) else { return Ok(None) };
+    let mut faces = Vec::with_capacity(facets.len());
+    for (_, polygon) in &facets {
+        let sides = (0..polygon.len()).map(|k| make::edge_between(model, polygon[k], polygon[(k + 1) % polygon.len()])).collect::<Result<Vec<_>>>()?;
+        let wire = make::wire(model, &sides)?;
+        faces.push(make::planar_face(model, wire)?);
+    }
+    let sewn = crate::sew::sew(model, &faces, &crate::sew::SewOptions::default())?;
+    let shell = model.explore(sewn, NodeKind::Shell).next().ok_or_else(|| Error::Failed("a corner's faces did not sew".into()))?;
+    let solid = model.new_empty(NodeKind::Solid);
+    model.add(solid, shell)?;
+    // (Outward: a positive volume.)
+    if volume_of(model, solid) < 0.0 {
+        let solid = model.new_empty(NodeKind::Solid);
+        model.add(solid, shell.reversed())?;
+        return Ok(Some(solid));
+    }
+    Ok(Some(solid))
 }
 
 /// The solid tetrahedron with corners `points`.
@@ -3376,6 +3597,31 @@ mod tests {
         let d = 0.1;
         let chamfered = chamfer(&mut model, cube, &front[..1], d).unwrap();
         check_volume(&model, chamfered, 1.0 - d * d / 2.0);
+    }
+
+    /// A block 60 x 40 x 10 with a column 10 x 40 x 30 standing on it (at its end, in its
+    /// middle) or a post 10 x 10 x 30, every edge chamfered 3: where the column's convex
+    /// edges meet the concave one at its foot, each chamfer ends 3 along its edge and one
+    /// plane through the four ends closes the corner (OCCT's volumes and faces).
+    #[test]
+    fn chamfers_meeting_convex_and_concave_are_capped() {
+        for ((c0, c1), occt, faces) in [
+            (((0.0, 0.0, 0.0), (10.0, 40.0, 30.0)), 29858.0, 38),
+            (((25.0, 0.0, 0.0), (35.0, 40.0, 30.0)), 29912.0, 50),
+            (((25.0, 15.0, 0.0), (35.0, 25.0, 30.0)), 23840.0, 51),
+        ] {
+            let mut model = Model::new();
+            let block = Cuboid::from_corners(Point::ORIGIN, Point::new(60.0, 40.0, 10.0)).build(&mut model).unwrap();
+            let column = Cuboid::from_corners(Point::new(c0.0, c0.1, c0.2), Point::new(c1.0, c1.1, c1.2)).build(&mut model).unwrap();
+            let body = boolean::union(&mut model, block, column).unwrap();
+            let edges = model.unique_subshapes(body, NodeKind::Edge);
+            let bevelled = chamfer(&mut model, body, &edges, 3.0).unwrap();
+            let report = validity::check(&model, bevelled);
+            assert!(report.problems.is_empty(), "{report:?}");
+            let v = properties::volume(&model, bevelled).mass;
+            assert!((v - occt).abs() < 1e-6 * occt, "{v} vs {occt}");
+            assert_eq!(model.unique_subshapes(bevelled, NodeKind::Face).len(), faces);
+        }
     }
 
     #[test]
