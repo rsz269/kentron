@@ -343,6 +343,18 @@ def hollowed_turned_box(cq):
     return cq.Solid.makeBox(12, 4.5, 26.2).rotate(cq.Vector(), cq.Vector(0, 0, 1), 30).hollow([], 0.1)
 
 
+def corners_of_a_placed_cutter_rounded(cq):
+    # (A disc notched by a square placed across its rim, the square's corners in the disc then
+    # rounded, as a sketch rounds the corners it tagged: found among the cut face's corners,
+    # though the cut made them anew where it baked the square's placement.)
+    disc = cq.Face.makeFromWires(cq.Wire.makeCircle(3, cq.Vector(), cq.Vector(0, 0, 1)))
+    square = cq.Face.makePlane(1, 1).moved(cq.Location(cq.Vector(2.8, 0, 0)))
+    face = disc.cut(square).Faces()[0]
+    corners = [v for v in square.Vertices() if v in face.Vertices()]
+    assert len(corners) == 2
+    return cq.Solid.extrudeLinear(face.fillet2D(0.2, corners), cq.Vector(0, 0, 1))
+
+
 CASES = [
     box, cylinder_along_y, cone, workplane_box, fused_boxes, cut_bores, intersected,
     polyline_prism_xz, polyline_prism_custom_plane, hexagon, face_with_hole, loft,
@@ -355,7 +367,7 @@ CASES = [
     asymmetric_chamfer_of_an_extrusion, rounded_corners_between_arcs_and_lines,
     loft_through_three_unevenly_spaced_circles, vertices_of_a_face_placed_twice,
     text_in_fonts_not_installed_and_cff_ones, reeded_prisms_under_their_lids,
-    cut_of_overlapping_solids, hollowed_turned_box,
+    cut_of_overlapping_solids, hollowed_turned_box, corners_of_a_placed_cutter_rounded,
 ]
 
 

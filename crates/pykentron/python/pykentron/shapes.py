@@ -854,6 +854,15 @@ class Vertex(Shape):
     def Center(self) -> Vector:
         return Vector(native.vertex_point(self.wrapped))
 
+    # A vertex is the one it was made from by a boolean of a moved (placed) shape: kentron's
+    # booleans bake placements into new vertices at the same points, where OCCT's keep the
+    # placed vertex itself (as a sketch's tagged corners, filleted after it is cut).
+    def __eq__(self, other) -> bool:
+        return isinstance(other, Vertex) and (self.isSame(other) or native.vertex_point(self.wrapped) == native.vertex_point(other.wrapped))
+
+    def __hash__(self) -> int:
+        return hash(native.vertex_point(self.wrapped))
+
     @classmethod
     def makeVertex(cls, x: float, y: float, z: float) -> "Vertex":
         return Shape.cast(native.make_vertex((x, y, z)))
