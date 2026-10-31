@@ -120,6 +120,8 @@ Not yet: DXF import, SVG and other exporters, `cadquery.vis.show` (warns).
   against pykentron, unchanged: `python3 crates/pykentron/scripts/cadquery_tests.py [pytest
   arguments]`. It fails on any test failing that is not in `tests/cadquery_baseline.txt` and
   reports those of the baseline that pass; `--update-baseline` records the current failures.
+  Tests of OCCT's own ways rather than CadQuery's behaviour are left out
+  (`tests/cadquery_excluded.txt`, each with its reason).
   The suite reaches CadQuery's internals (`cadquery.occ_impl.*`, `cadquery.func`, OCP): the
   shim resolves those names to pykentron's where it has them, and makes the rest placeholders
   that raise NotImplementedError when used.

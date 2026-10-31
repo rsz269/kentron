@@ -1,0 +1,70 @@
+# CadQuery tests left out of cadquery_tests.py's runs: what they test is OCCT's own way of
+# doing things, not CadQuery's behaviour (each group's reason above its tests).
+
+# Approximation behaviour of OCCT's own: its smoothed fit of degree 3 failing within 1e-6
+# where its plain one of that degree swings wide (2.20 long through an airfoil of 2.02), and the
+# smoothed curve longer than the plain one by some 1e-5.
+tests.test_cadquery.TestCadQuery::testSplineApprox
+
+# The order OCCT stores a box's edges' vertices in (the end before the start), which its
+# explorer lists them by.
+tests.test_cad_objects.TestCadObjects::testPlaneMethods
+
+# OCCT's volume of a shell revolved from a wire (a cylinder's surface): 4 pi, not the pi it
+# encloses.
+tests.test_free_functions::test_revolve
+
+# The faces OCCT's tapered prism splits its side into.
+tests.test_free_functions::test_prism_taper
+
+# The Python class of OCCT's shapes (OCP.TopoDS.TopoDS_Solid).
+tests.test_cadquery.TestCadQuery::testToOCC
+
+# OCCT's name in a binary STL's header ("STL Exported by Open CASCADE").
+tests.test_exporters::test_stl_binary[0-None-STL Exported by Open CASCADE]
+tests.test_exporters::test_stl_binary[1-opt1-STL Exported by Open CASCADE]
+tests.test_exporters::test_stl_binary[2-opt2-STL Exported by Open CASCADE]
+tests.test_exporters::test_stl_binary[3-opt3-STL Exported by Open CASCADE]
+tests.test_exporters::test_stl_binary[4-opt4-STL Exported by Open CASCADE]
+
+# OCCT's own file formats: its documents' (OCAF: XBF, XML, CAF) and its binary BREP's
+# (BinTools).
+tests.test_assembly::test_assembly_multi_subshape_import[xbf]
+tests.test_assembly::test_assembly_multi_subshape_import[xml]
+tests.test_assembly::test_assembly_step_import_roundtrip[boxes0_assy-xbf]
+tests.test_assembly::test_assembly_step_import_roundtrip[boxes0_assy-xml]
+tests.test_assembly::test_assembly_step_import_roundtrip[nested_assy-xbf]
+tests.test_assembly::test_assembly_step_import_roundtrip[nested_assy-xml]
+tests.test_assembly::test_assembly_step_import_roundtrip[simple_assy-xbf]
+tests.test_assembly::test_assembly_step_import_roundtrip[simple_assy-xml]
+tests.test_assembly::test_assembly_step_import_roundtrip[subshape_assy-xbf]
+tests.test_assembly::test_assembly_step_import_roundtrip[subshape_assy-xml]
+tests.test_assembly::test_assembly_subshape_import[xbf]
+tests.test_assembly::test_assembly_subshape_import[xml]
+tests.test_assembly::test_colors_assy0[boxes1_assy-xbf]
+tests.test_assembly::test_colors_assy0[boxes1_assy-xml]
+tests.test_assembly::test_colors_assy0[chassis0_assy-xbf]
+tests.test_assembly::test_colors_assy0[chassis0_assy-xml]
+tests.test_assembly::test_colors_assy0[multi_subshape_assy-xbf]
+tests.test_assembly::test_colors_assy0[multi_subshape_assy-xml]
+tests.test_assembly::test_colors_assy0[subshape_assy-xbf]
+tests.test_assembly::test_colors_assy0[subshape_assy-xml]
+tests.test_assembly::test_colors_assy1[boxes0_assy-xbf]
+tests.test_assembly::test_colors_assy1[boxes2_assy-xbf]
+tests.test_assembly::test_colors_assy1[boxes3_assy-xbf]
+tests.test_assembly::test_colors_assy1[boxes4_assy-xbf]
+tests.test_assembly::test_colors_assy1[boxes5_assy-xbf]
+tests.test_assembly::test_colors_assy1[boxes6_assy-xbf]
+tests.test_assembly::test_colors_assy1[boxes7_assy-xbf]
+tests.test_assembly::test_colors_assy1[empty_top_assy-xbf]
+tests.test_assembly::test_colors_assy1[multi_subshape_assy-xbf]
+tests.test_assembly::test_colors_assy1[nested_assy-xbf]
+tests.test_assembly::test_colors_assy1[subshape_assy-xbf]
+tests.test_assembly::test_export[caf-args9-kwargs9]
+tests.test_assembly::test_export[xbf-args2-kwargs2]
+tests.test_assembly::test_export[xml-args1-kwargs1]
+tests.test_assembly::test_save[caf-args3]
+tests.test_assembly::test_save[xml-args1]
+tests.test_exporters.TestExporters::testBIN
+tests.test_importers.TestImporters::testBIN
+tests.test_shapes::test_bin_import_export

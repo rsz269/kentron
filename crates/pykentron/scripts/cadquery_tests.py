@@ -5,7 +5,9 @@ The tests are fetched from CadQuery's repository at a pinned release, into a cac
 with pytest in a virtual environment of their own (made with `uv`), with the `cadquery` shim
 first on the path, so that `import cadquery` loads pykentron. Each test's outcome is compared
 with the baseline (`crates/pykentron/tests/cadquery_baseline.txt`, the tests that fail): the run
-fails on a test failing that is not in it, and reports those of it that pass.
+fails on a test failing that is not in it, and reports those of it that pass. Tests that
+test OCCT's own way of doing things rather than CadQuery's behaviour are left out
+(`crates/pykentron/tests/cadquery_excluded.txt`, each with its reason).
 
 Usage:
     python3 crates/pykentron/scripts/cadquery_tests.py [--update-baseline] [pytest arguments...]
@@ -25,6 +27,8 @@ HERE = Path(__file__).resolve().parent
 PYKENTRON = HERE.parent
 ROOT = PYKENTRON.parent.parent
 BASELINE = PYKENTRON / "tests" / "cadquery_baseline.txt"
+# Tests left out: what they test is OCCT's own way of doing things (each with its reason).
+EXCLUDED = PYKENTRON / "tests" / "cadquery_excluded.txt"
 
 # The CadQuery release whose tests run, and the Python packages they import besides
 # cadquery and OCP (which the shim provides).
@@ -79,6 +83,21 @@ def outcomes(junit: Path) -> dict:
     return out
 
 
+def excluded() -> list:
+    """The tests left out ([`EXCLUDED`]), as JUnit names them (as the baseline does)."""
+    if not EXCLUDED.exists():
+        return []
+    return [l.strip() for l in EXCLUDED.read_text().splitlines() if l.strip() and not l.startswith("#")]
+
+
+def node_id(name: str) -> str:
+    """pytest's id of a test as JUnit names it: `tests.test_x.Class::test[...]` is
+    `tests/test_x.py::Class::test[...]`."""
+    path, _, rest = name.partition("::")
+    parts = path.split(".")
+    return "/".join(parts[:2]) + ".py" + "".join("::" + p for p in parts[2:]) + "::" + rest
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--cache", default=str(ROOT / "target" / "cadquery-tests"), help="where sources and the environment are kept")
@@ -105,7 +124,7 @@ def main() -> int:
     junit.unlink(missing_ok=True)
     env = dict(os.environ)
     env["PYTHONPATH"] = os.pathsep.join([str(PYKENTRON / "python" / "pykentron" / "cadquery_shim"), str(PYKENTRON / "python")])
-    cmd = [str(python), "-m", "pytest", "tests", "-q", "-p", "no:cacheprovider", "--continue-on-collection-errors", f"--timeout={args.timeout}", f"--junitxml={junit}", "-o", "junit_family=xunit1", *(["-n", str(args.jobs)] if args.jobs > 1 else []), *pytest_args]
+    cmd = [str(python), "-m", "pytest", "tests", "-q", "-p", "no:cacheprovider", "--continue-on-collection-errors", f"--timeout={args.timeout}", f"--junitxml={junit}", "-o", "junit_family=xunit1", *(["-n", str(args.jobs)] if args.jobs > 1 else []), *[f"--deselect={node_id(t)}" for t in excluded()], *pytest_args]
     print("+", " ".join(cmd), file=sys.stderr)
     subprocess.run(cmd, cwd=suite, env=env)
     if not junit.exists():
