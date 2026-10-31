@@ -10,6 +10,7 @@ lie (kentron's operations do not keep one); elsewhere they are accepted and igno
 
 from __future__ import annotations
 
+import enum
 import math
 from typing import Iterable, List, Literal, Optional, Sequence, Tuple, Union
 
@@ -988,12 +989,70 @@ def draft(ctx: Shape, base: Shape, faces: Shape, *args, history=None, name=None)
     return result
 
 
+class BOPAlgo_CheckStatus(enum.Enum):
+    """What a check found wrong (OCCT's statuses, as OCP's `BOPAlgo_CheckStatus`)."""
+
+    BOPAlgo_CheckUnknown = 0
+    BOPAlgo_BadType = 1
+    BOPAlgo_SelfIntersect = 2
+    BOPAlgo_TooSmallEdge = 3
+    BOPAlgo_NonRecoverableFace = 4
+    BOPAlgo_IncompatibilityOfVertex = 5
+    BOPAlgo_IncompatibilityOfEdge = 6
+    BOPAlgo_IncompatibilityOfFace = 7
+    BOPAlgo_OperationAborted = 8
+    BOPAlgo_GeomAbs_C0 = 9
+    BOPAlgo_InvalidCurveOnSurface = 10
+    BOPAlgo_NotValid = 11
+
+
+def _interfering_faces(s: Shape, tol: float):
+    """The pairs of `s`'s faces that run into one another (OCCT's self-interference, as its
+    check finds it): on one plane, sharing an area; else meeting where at least one of them
+    has no boundary (not along an edge both are bounded by)."""
+    faces = s.Faces()
+    boxes = [native.bounding_box(f.wrapped, False) for f in faces]
+    apart = lambda a, b: any(a[0][k] > b[1][k] + tol or b[0][k] > a[1][k] + tol for k in range(3))
+    size = max((max(b[1][k] - b[0][k] for k in range(3)) for b in boxes), default=1.0)
+
+    def on_boundary(face, p) -> bool:
+        return min(native.distance(p.wrapped, e.wrapped)[0] for e in face.Edges()) <= tol
+
+    for i in range(len(faces)):
+        for j in range(i + 1, len(faces)):
+            if apart(boxes[i], boxes[j]):
+                continue
+            a, b = faces[i], faces[j]
+            if a.geomType() == "PLANE" and b.geomType() == "PLANE":
+                na, nb = a.normalAt(), b.normalAt()
+                if na.cross(nb).Length <= 1e-9 and abs((b.Center() - a.Center()).dot(na)) <= tol:
+                    try:
+                        common = native.intersection(a.wrapped, b.wrapped)
+                    except ValueError:
+                        continue
+                    if native.area(common)[0] > tol * size:
+                        yield a, b
+                    continue
+            try:
+                met = Shape.cast(native.section(a.wrapped, b.wrapped))
+            except ValueError:
+                continue
+            for e in met.Edges():
+                p = Vertex.makeVertex(*e.positionAt(0.5).toTuple())
+                if not (on_boundary(a, p) and on_boundary(b, p)):
+                    yield a, b
+                    break
+
+
 def check(s: Shape, results=None, tol: Optional[float] = None, verbose: bool = True) -> bool:
-    """True if `s` is valid; its problems added to `results` (if given)."""
-    problems = native.problems(s.wrapped)
+    """True if `s` is valid and no two of its faces run into one another (CadQuery's
+    BRepAlgoAPI_Check, within `tol`); its problems added to `results` (if given): the
+    faces running into one another with `BOPAlgo_SelfIntersect`."""
+    problems = [([s], p) for p in native.problems(s.wrapped)]
+    problems += [([a, b], BOPAlgo_CheckStatus.BOPAlgo_SelfIntersect) for a, b in _interfering_faces(s, tol or 1e-7)]
     if results is not None:
         results.clear()
-        results.extend(([s], p) for p in problems)
+        results.extend(problems)
     return not problems
 
 
