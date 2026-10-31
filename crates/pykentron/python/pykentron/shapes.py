@@ -1794,7 +1794,12 @@ class Face(Shape):
         raise NotImplementedError("trimming faces by wires or parameter polygons")
 
     def isoline(self, param: float, direction: str = "v") -> Edge:
-        raise NotImplementedError("isolines")
+        """The surface's line of constant u (`direction` "u") or v at `param`, over the face's
+        range of the other parameter."""
+        return Shape.cast(native.face_isoline(self.wrapped, float(param), direction == "u"))
+
+    def isolines(self, params, direction: str = "v") -> List[Edge]:
+        return [self.isoline(p, direction) for p in params]
 
     def extend(self, d: float, umin: bool = True, umax: bool = True, vmin: bool = True, vmax: bool = True) -> "Face":
         """The face's surface over its range of parameters widened by `d` each way (OCCT's

@@ -250,6 +250,10 @@ pub(super) fn build(model: &mut Model, shape: Shape, edge: Shape, sections: &[Se
     }
     // At the ends of an open edge, where the fillet crosses the face there.
     if !closed {
+        // (The edge itself split where a contact crossed it: its ends are no longer found.)
+        if model.get(EdgeId::try_from(edge.node).map_err(|_| failed("an edge that is not one"))?).is_none() {
+            return Err(failed("the edge split by a contact on it"));
+        }
         let (va, vb) = model.edge_vertices(Shape { orientation: Orientation::Forward, ..edge });
         for (end, vertex) in [(0, va), (count, vb)] {
             let stretch = if end == 0 { 0 } else { count - 1 };

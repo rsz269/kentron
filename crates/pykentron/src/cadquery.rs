@@ -599,6 +599,20 @@ pub fn face_uv_bounds(face: Handle) -> PyResult<(f64, f64, f64, f64)> {
     with_model(|m| Ok(m.face_uv_bounds(face.shape)))
 }
 
+/// The face's surface's line of constant u (`along_v`) or v at `param`, over the face's range
+/// of the other parameter, as an edge.
+#[pyfunction]
+pub fn face_isoline(face: Handle, param: f64, along_v: bool) -> PyResult<Handle> {
+    with_model(|m| {
+        let s = m.surface(face.shape).ok_or_else(|| kentron::Error::InvalidInput("a face without a surface".into()))?.clone();
+        let s = s.transformed_by(&face.shape.placement);
+        let (u0, u1, v0, v1) = m.face_uv_bounds(face.shape);
+        let (curve, first, last) = if along_v { (s.u_iso(param), v0, v1) } else { (s.v_iso(param), u0, u1) };
+        kentron::make::edge_from_curve_range(m, curve, first, last)
+    })
+    .map(handle)
+}
+
 /// (point, unit normal as used, u derivative, v derivative) at each of the parameters
 /// `uvs`.
 #[pyfunction]
@@ -787,6 +801,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(inertia, m)?)?;
     m.add_function(wrap_pyfunction!(chamfer, m)?)?;
     m.add_function(wrap_pyfunction!(face_uv_bounds, m)?)?;
+    m.add_function(wrap_pyfunction!(face_isoline, m)?)?;
     m.add_function(wrap_pyfunction!(face_points, m)?)?;
     m.add_function(wrap_pyfunction!(face_parameters, m)?)?;
     Ok(())

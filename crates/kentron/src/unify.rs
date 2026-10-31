@@ -235,6 +235,7 @@ fn unify_shell(model: &mut Model, shell: Shape, options: UnifyOptions) -> Result
     }
     let mut changed = options.faces && merge_faces(model, &mut specs, options.same_surface_only);
     if options.edges {
+        changed |= drop_seams(&mut specs);
         changed |= merge_edges(model, &mut specs)?;
     }
     if !changed {
@@ -286,6 +287,71 @@ fn build_face(model: &mut Model, spec: &Spec) -> Result<Shape> {
         model.add(face, wire.into())?;
     }
     Ok(face)
+}
+
+/// Seams a face does without: where a face on a periodic surface runs along a seam edge of
+/// its own both ways and its loop closes without it, the pieces after the seam shifted a
+/// whole period (as OCCT's faces that do not go round the surface lie across its seam
+/// without one: a sphere's cap round its seam's meridian). The edges the seam ended at may
+/// then merge, as a circle round the cap in one edge.
+fn drop_seams(specs: &mut [Spec]) -> bool {
+    let mut uses: HashMap<EdgeId, usize> = HashMap::default();
+    for u in specs.iter().flat_map(|s| s.loops.iter().flatten()) {
+        *uses.entry(u.edge).or_default() += 1;
+    }
+    let mut changed = false;
+    for spec in specs.iter_mut() {
+        let periods = [spec.surface.u_period(), spec.surface.v_period()];
+        if periods.iter().all(Option::is_none) {
+            continue;
+        }
+        let tol = 1e-7;
+        for l in 0..spec.loops.len() {
+            let uses_here = &spec.loops[l];
+            let Some((i, j)) = (0..uses_here.len()).find_map(|i| {
+                let e = uses_here[i].edge;
+                (uses[&e] == 2).then(|| (i + 1..uses_here.len()).find(|&j| uses_here[j].edge == e).map(|j| (i, j))).flatten()
+            }) else {
+                continue;
+            };
+            let n = uses_here.len();
+            let a: Vec<usize> = (i + 1..j).collect();
+            let b: Vec<usize> = (j + 1..n).chain(0..i).collect();
+            if a.is_empty() || uses_here.iter().any(|u| u.pcurve.is_none()) {
+                continue;
+            }
+            let Some(ends) = a.iter().chain(&b).map(|&k| uv_ends(&uses_here[k])).collect::<Option<Vec<_>>>() else { continue };
+            let (a_ends, b_ends) = ends.split_at(a.len());
+            // The shift taking the pieces after the seam on from those before it: a whole
+            // period, closing the loop.
+            let shift = if b.is_empty() { Vector2::new(0.0, 0.0) } else { a_ends[a.len() - 1].1 - b_ends[0].0 };
+            let whole = |x: f64, period: Option<f64>| match period {
+                Some(p) => ((x / p).round() * p - x).abs() <= tol,
+                None => x.abs() <= tol,
+            };
+            if !whole(shift.x, periods[0]) || !whole(shift.y, periods[1]) || (shift.x.abs() <= tol && shift.y.abs() <= tol && !b.is_empty()) {
+                continue;
+            }
+            let last = if b.is_empty() { a_ends[a.len() - 1].1 } else { b_ends[b.len() - 1].1 + shift };
+            if (last - a_ends[0].0).length() > tol {
+                continue;
+            }
+            let moved = Transform2::translation(shift);
+            let mut new_loop: Vec<Use> = Vec::with_capacity(n - 2);
+            for &k in &a {
+                let u = &uses_here[k];
+                new_loop.push(Use { edge: u.edge, orientation: u.orientation, pcurve: u.pcurve.clone(), first: u.first, last: u.last });
+            }
+            for &k in &b {
+                let u = &uses_here[k];
+                new_loop.push(Use { edge: u.edge, orientation: u.orientation, pcurve: u.pcurve.as_ref().map(|p| p.transformed(&moved)), first: u.first, last: u.last });
+            }
+            spec.loops[l] = new_loop;
+            spec.original = None;
+            changed = true;
+        }
+    }
+    changed
 }
 
 /// The ends of a use, in the direction it runs.
@@ -693,12 +759,62 @@ fn merge_edges(model: &mut Model, specs: &mut [Spec]) -> Result<bool> {
             }
         }
         in_chain.extend(chain.iter().copied());
+        if cyclic && chain.len() >= 2 {
+            changed |= merge_cycle(model, specs, &chain, &curves)?;
+            continue;
+        }
         if cyclic || chain.len() < 2 || head == tail {
             continue;
         }
         changed |= merge_chain(model, specs, &chain, head, tail, &curves)?;
     }
     Ok(changed)
+}
+
+/// Arcs of one circle going all the way round it (split where a seam, now gone, met it), in
+/// faces whose loops are those arcs alone: one closed edge round the circle, from the first
+/// arc's start, its pcurves fitted from where each loop's first arc starts.
+fn merge_cycle(model: &mut Model, specs: &mut [Spec], chain: &[EdgeId], curves: &HashMap<EdgeId, (Curve, f64, f64)>) -> Result<bool> {
+    let tau = std::f64::consts::TAU;
+    let Curve::Circle(_) = &curves[&chain[0]].0 else { return Ok(false) };
+    let span: f64 = chain.iter().map(|e| (curves[e].2 - curves[e].1).abs()).sum();
+    if (span - tau).abs() > 1e-9 {
+        return Ok(false);
+    }
+    let members: HashSet<EdgeId> = chain.iter().copied().collect();
+    let (head, _) = ends(model, chain[0], Orientation::Forward);
+    let circle = curves[&chain[0]].0.clone();
+    let start = curves[&chain[0]].1;
+    let (first, last) = (start, start + tau);
+    let tolerance = chain.iter().map(|&e| model.tolerance(Shape::from(e))).fold(0.0, f64::max);
+    let mut replacements: Vec<(usize, usize, Use)> = Vec::new();
+    for (si, spec) in specs.iter().enumerate() {
+        for (li, l) in spec.loops.iter().enumerate() {
+            if !l.iter().any(|u| members.contains(&u.edge)) {
+                continue;
+            }
+            if l.len() != chain.len() || !l.iter().all(|u| members.contains(&u.edge)) {
+                return Ok(false);
+            }
+            let Some(u0) = l.iter().find(|u| u.edge == chain[0]) else { return Ok(false) };
+            // (Run as the first arc runs in it, from its start at the head.)
+            let Some((at_head, _)) = uv_ends(&Use { edge: u0.edge, orientation: Orientation::Forward, pcurve: u0.pcurve.clone(), first: u0.first, last: u0.last }) else { return Ok(false) };
+            let Some(pcurve) = crate::geometry::project::pcurve_on_range_from(&circle, &spec.surface, first, last, &[tolerance.max(1e-7)], Some((at_head.x, at_head.y))) else { return Ok(false) };
+            replacements.push((si, li, Use { edge: chain[0], orientation: u0.orientation, pcurve: Some(Curve2::BSpline(pcurve)), first, last }));
+        }
+    }
+    if replacements.is_empty() {
+        return Ok(false);
+    }
+    let edge = model.add_edge(head, head, tolerance)?;
+    model.set_edge_curve(edge.into(), circle, tolerance)?;
+    model.set_edge_range(edge.into(), first, last)?;
+    for (si, li, mut u) in replacements {
+        u.edge = edge;
+        specs[si].original = None;
+        specs[si].loops[li] = vec![u];
+    }
+    Ok(true)
 }
 
 /// True if two edges' curves are one line or one circle.
@@ -1001,6 +1117,25 @@ mod tests {
     use crate::math::Frame;
     use crate::primitives::{Cuboid, Cylinder};
     use crate::{properties, validity};
+
+    /// A sphere of radius 1 and a 0.5 x 4 x 4 box through its middle, fused and unified:
+    /// where the box's sides cut the sphere, one circle each, as OCCT's (the sphere's seam
+    /// crossing one of them leaves its cap in pieces, merged, and the circle in two arcs,
+    /// merged round), 14 edges in all (as CadQuery's clean test counts them).
+    #[test]
+    fn a_circle_split_by_a_seam_merged_round() {
+        let mut model = Model::new();
+        let sphere = crate::primitives::Sphere::new(1.0).build(&mut model).unwrap();
+        let slab = Cuboid::from_corners(Point::new(-0.25, -2.0, -2.0), Point::new(0.25, 2.0, 2.0)).build(&mut model).unwrap();
+        let fused = boolean::union(&mut model, sphere, slab).unwrap();
+        let unified = unify_same_domain(&mut model, fused).unwrap();
+        let report = validity::check(&model, unified);
+        assert!(report.problems.is_empty(), "{report:?}");
+        assert_eq!(model.unique_subshapes(unified, NodeKind::Edge).len(), 14);
+        let v = properties::volume(&model, unified).mass;
+        let caps = std::f64::consts::PI * (4.0 / 3.0 - (0.5 - 2.0 * 0.25f64.powi(3) / 3.0));
+        assert!((v - (8.0 + caps)).abs() < 1e-6, "{v}");
+    }
 
     /// The offset all round a segment (each side cut in two pieces, an arc round each end)
     /// unified: one line each side, the arcs kept (as OCCT's clean leaves a stadium).
