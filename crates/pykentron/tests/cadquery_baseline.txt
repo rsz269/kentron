@@ -9,7 +9,6 @@ tests.test_assembly::test_colors_fused_assy[empty_top_assy-expected0]
 tests.test_assembly::test_colors_fused_assy[single_compound0_assy-expected1]
 tests.test_assembly::test_colors_fused_assy[single_compound1_assy-expected2]
 tests.test_assembly::test_colors_fused_assy[spheres0_assy-expected3]
-tests.test_assembly::test_exportGLTF
 tests.test_assembly::test_export[vrml-args3-kwargs3]
 tests.test_assembly::test_export[wrl-args10-kwargs10]
 tests.test_assembly::test_export_vtkjs
@@ -17,7 +16,6 @@ tests.test_assembly::test_imprinting
 tests.test_assembly::test_leaf_node_count[empty_top_assy-1]
 tests.test_assembly::test_leaf_node_count[nested_assy-3]
 tests.test_assembly::test_leaf_node_count[simple_assy-3]
-tests.test_assembly::test_name_geometries
 tests.test_assembly::test_native_export
 tests.test_assembly::test_save[wrl-args4]
 tests.test_assembly::test_save_stl_formats
@@ -43,7 +41,6 @@ tests.test_free_functions::test_adaptor_curve_to_edge
 tests.test_free_functions::test_cap
 tests.test_free_functions::test_edgeOn
 tests.test_free_functions::test_faceOn
-tests.test_free_functions::test_imprint_error
 tests.test_free_functions::test_operators
 tests.test_free_functions::test_project
 tests.test_free_functions::test_solid

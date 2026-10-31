@@ -897,14 +897,19 @@ impl<'a> Reader<'a> {
                 c
             }
         } else if let Some(p) = inst.record("GEOMETRIC_SET").or(inst.record("GEOMETRIC_CURVE_SET")) {
-            // Its surfaces as faces (curves and points left out): bounded ones whole, those
-            // bounded by curves on them by those.
+            // Its surfaces as faces (points left out): bounded ones whole, those bounded by
+            // curves on them by those; its trimmed curves as edges.
             let c = self.model.new_empty(NodeKind::Compound);
             let mut any = false;
             for item in self.list(&p[1])?.to_vec() {
                 let item = Self::reference(&item)?;
                 let it = self.get(item)?;
-                let face = if it.has("CURVE_BOUNDED_SURFACE") {
+                let face = if it.has("TRIMMED_CURVE") {
+                    // (A curve trimmed: an edge of it.)
+                    let (curve, scale) = self.curve(item)?;
+                    let (a, b) = self.trim_range(item, &curve, scale)?;
+                    crate::make::edge_from_curve_range(self.model, curve, a, b)?
+                } else if it.has("CURVE_BOUNDED_SURFACE") {
                     self.curve_bounded_face(item)?
                 } else if it.has("B_SPLINE_SURFACE") || it.has("B_SPLINE_SURFACE_WITH_KNOTS") || it.has("RECTANGULAR_TRIMMED_SURFACE") || it.has("BEZIER_SURFACE") {
                     let surface = self.surface(item)?;

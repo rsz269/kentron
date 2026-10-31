@@ -122,6 +122,20 @@ impl<'a> Writer<'a> {
         self.lines.len()
     }
 
+    /// Entity `id` (a curve's or surface's, written unnamed) named `name` (already escaped),
+    /// as OCCT names the geometry of named faces and edges.
+    fn name_geometry(&mut self, id: usize, name: &str) {
+        if name.is_empty() {
+            return;
+        }
+        let line = &mut self.lines[id - 1];
+        if line.contains("REPRESENTATION_ITEM('')") {
+            *line = line.replacen("REPRESENTATION_ITEM('')", &format!("REPRESENTATION_ITEM('{name}')"), 1);
+        } else if let Some(at) = line.find("(''") {
+            line.replace_range(at..at + 3, &format!("('{name}'"));
+        }
+    }
+
     /// A string in STEP's form: quotes doubled, non-ASCII characters encoded (`\X2\..\X0\`).
     fn escape(&self, s: &str) -> String {
         let mut out = String::new();
@@ -357,6 +371,41 @@ impl<'a> Writer<'a> {
             let shell = self.add(format!("OPEN_SHELL('',({list}))"));
             out.push((self.add(format!("SHELL_BASED_SURFACE_MODEL('',(#{shell}))")), true));
         }
+        if out.is_empty() && model.explore(shape, NodeKind::Edge).next().is_some() {
+            // Loose edges: a set of their curves, each trimmed to the edge (at its ends'
+            // points, as well as parameters), named as the edges are (the set as the first).
+            let mut ids = Vec::new();
+            let mut set_name = String::new();
+            for e in model.unique_subshapes(shape, NodeKind::Edge) {
+                let Some((curve, first, last)) = model.edge_curve(Shape { orientation: Orientation::Forward, ..e }) else { continue };
+                let basis = self.curve(&curve, first, last)?;
+                let mark = self.marks.get(&e.node).cloned().unwrap_or_default();
+                let name = mark.name.as_deref().map(|n| self.escape(n)).unwrap_or_default();
+                self.name_geometry(basis, &name);
+                if set_name.is_empty() {
+                    set_name = name.clone();
+                }
+                let (a, b) = (self.point(curve.point(first)), self.point(curve.point(last)));
+                // (Parameters too where the curve is written on its own (not interpolated
+                // anew, over a range of its own).)
+                let own = match &curve {
+                    Curve::Trimmed(t) => !matches!(t.basis(), Curve::BSpline(b) if b.is_periodic()) && matches!(t.basis(), Curve::Line(_) | Curve::Circle(_) | Curve::Ellipse(_) | Curve::BSpline(_)),
+                    Curve::Line(_) | Curve::Circle(_) | Curve::Ellipse(_) => true,
+                    Curve::BSpline(b) => !b.is_periodic(),
+                    _ => false,
+                };
+                let trims = if own {
+                    format!("(#{a},PARAMETER_VALUE({})),(#{b},PARAMETER_VALUE({}))", real(first), real(last))
+                } else {
+                    format!("(#{a}),(#{b})")
+                };
+                ids.push(self.add(format!("TRIMMED_CURVE('{name}',#{basis},{trims},.T.,.CARTESIAN.)")));
+            }
+            if !ids.is_empty() {
+                let list = ids.iter().map(|v| format!("#{v}")).collect::<Vec<_>>().join(",");
+                out.push((self.add(format!("GEOMETRIC_CURVE_SET('{set_name}',({list}))")), true));
+            }
+        }
         Ok(out)
     }
 
@@ -403,6 +452,7 @@ impl<'a> Writer<'a> {
         let same_sense = forward != flipped;
         let mark = self.marks.get(&face.node).cloned().unwrap_or_default();
         let name = mark.name.as_deref().map(|n| self.escape(n)).unwrap_or_default();
+        self.name_geometry(surface_id, &name);
         let id = self.add(format!("ADVANCED_FACE('{name}',({list}),#{surface_id},{})", if same_sense { ".T." } else { ".F." }));
         if let Some([r, g, b, a]) = mark.color {
             let styled = self.style(id, [r, g, b], Some(a));
@@ -440,6 +490,7 @@ impl<'a> Writer<'a> {
         let curve = self.curve(&curve, first, last)?;
         let mark = self.marks.get(&edge.node).cloned().unwrap_or_default();
         let name = mark.name.as_deref().map(|n| self.escape(n)).unwrap_or_default();
+        self.name_geometry(curve, &name);
         let e = self.add(format!("EDGE_CURVE('{name}',#{va},#{vb},#{curve},.T.)"));
         if let Some(layer) = &mark.layer {
             self.layer(layer, e);
@@ -723,6 +774,41 @@ mod tests {
 
     /// A face's name, colour and layer, an edge's layer, a part's translucent colour and
     /// its material: written (named colours by name, as OCCT writes them) and read back.
+    /// A named face's surface and a named loose edge's curve (a segment, as CadQuery's
+    /// `name_geometries` names them) carry the names too, as OCCT writes them; the segment,
+    /// alone in its product, written as a curve set and read back as an edge.
+    #[test]
+    fn named_geometry_and_loose_edges() {
+        use super::super::Subshape;
+        let mut model = Model::new();
+        let cube = Cuboid::new(1.0, 1.0, 1.0).build(&mut model).unwrap();
+        let top = model.unique_subshapes(cube, NodeKind::Face)[5];
+        let segment = crate::make::edge_between(&mut model, Point::new(0.0, 0.0, 0.0), Point::new(0.0, 1.0, 0.0)).unwrap();
+        let named = |shape: Shape, name: &str| Subshape { shape, name: Some(name.into()), color: None, layer: None };
+        let roots = [Node {
+            name: "top".into(),
+            children: vec![
+                Node { name: "cube".into(), shape: Some(cube), subshapes: vec![named(top, "lid")], ..Default::default() },
+                Node { name: "rod".into(), shape: Some(segment), subshapes: vec![named(segment, "seg")], ..Default::default() },
+            ],
+            ..Default::default()
+        }];
+        let mut bytes = Vec::new();
+        write_assembly(&model, &roots, &mut bytes).unwrap();
+        let text = String::from_utf8(bytes.clone()).unwrap();
+        assert_eq!(text.matches("'lid'").count(), 2, "{text}");
+        assert!(text.contains("PLANE('lid'"));
+        assert_eq!(text.matches("'seg'").count(), 3);
+        assert!(text.contains("LINE('seg'") && text.contains("TRIMMED_CURVE('seg'") && text.contains("GEOMETRIC_CURVE_SET('seg'"));
+        let mut other = Model::new();
+        let back = super::super::read_assembly(&mut other, &mut bytes.as_slice()).unwrap();
+        let rod = back[0].children.iter().find(|c| c.name == "rod").unwrap();
+        let edges = other.unique_subshapes(rod.shape.unwrap(), NodeKind::Edge);
+        assert_eq!(edges.len(), 1);
+        let (a, b) = other.edge_vertices(edges[0]);
+        assert!(other.point(a).distance(Point::new(0.0, 0.0, 0.0)) < 1e-9 && other.point(b).distance(Point::new(0.0, 1.0, 0.0)) < 1e-9);
+    }
+
     #[test]
     fn subshapes_and_materials_read_back() {
         use super::super::{Material, Subshape};

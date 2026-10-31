@@ -68,3 +68,10 @@ tests.test_assembly::test_save[xml-args1]
 tests.test_exporters.TestExporters::testBIN
 tests.test_importers.TestImporters::testBIN
 tests.test_shapes::test_bin_import_export
+
+# OCCT's history internals: its builder's Images patched to raise OCCT's
+# Standard_NoSuchObject, which its imprint is to catch.
+tests.test_free_functions::test_imprint_error
+
+# How OCCT's glTF writer lays out its JSON (compact, "accessors" first).
+tests.test_assembly::test_exportGLTF
