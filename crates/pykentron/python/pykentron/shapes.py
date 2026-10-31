@@ -199,6 +199,23 @@ class Shape:
     def located(self, loc: Location) -> "Shape":
         return self._with_baked(self._copy_with(self.wrapped.located(_compose(loc.rows, self._baked_rows()))))
 
+    def replace(self, old: "Shape", *new: "Shape") -> "Shape":
+        """The shape with face `old` replaced by the faces of `new` (CadQuery's
+        BRepTools_ReShape replacement), each shell rebuilt of its faces: faces only (as a
+        face split, its pieces on the original's boundary edges)."""
+        if old.ShapeType() != "Face":
+            raise NotImplementedError("replacing sub-shapes other than faces")
+        pieces = [f for el in new for f in (el.Faces() if el.ShapeType() != "Face" else [el])]
+        shells = []
+        for shell in self.Shells():
+            faces = []
+            for f in shell.Faces():
+                faces.extend(pieces if f.isSame(old) else [f])
+            shells.append(native.make_shell([f.wrapped for f in faces]))
+        if self.ShapeType() == "Solid":
+            return Shape.cast(native.make_solid(shells))
+        return Shape.cast(shells[0]) if len(shells) == 1 else Compound.makeCompound([Shape.cast(s) for s in shells])
+
     def remove(self, *subshape: "Shape") -> "Shape":
         """The shape without the faces `subshape` (CadQuery's BRepTools_ReShape removal):
         a shell of the faces left."""
@@ -1028,6 +1045,13 @@ class Edge(Shape, Mixin1D):
     def _geomAdaptor(self) -> "Edge":
         return self
 
+    # (The edge standing in for its curve adaptor, as `_geomAdaptor` gives it.)
+    def FirstParameter(self) -> float:
+        return native.curve_parameters_at_lengths(self.wrapped, [0.0])[0]
+
+    def LastParameter(self) -> float:
+        return native.curve_parameters_at_lengths(self.wrapped, [1.0])[0]
+
     def close(self) -> "Shape":
         return self if self.IsClosed() else Wire.assembleEdges([self]).close()
 
@@ -1531,6 +1555,30 @@ def _chamfer_corner(a: Edge, b: Edge, corner, d: float):
     return pa, Edge.makeLine(pa, pb), pb
 
 
+def _coplanar(outer: "Wire", inner) -> bool:
+    """Whether the `inner` wires lie in the plane of `outer` (true where `outer` bounds no
+    plane: its face is then not a plane's, and no plane is to keep to)."""
+    def samples(w):
+        return [p for e in w.Edges() for p in native.edge_points(e.wrapped, [0.0, 0.25, 0.5, 0.75])]
+    pts = samples(outer)
+    # (Newell's normal: the outline's area vector.)
+    n = [0.0, 0.0, 0.0]
+    for (x0, y0, z0), (x1, y1, z1) in zip(pts, pts[1:] + pts[:1]):
+        n[0] += (y0 - y1) * (z0 + z1)
+        n[1] += (z0 - z1) * (x0 + x1)
+        n[2] += (x0 - x1) * (y0 + y1)
+    size = max(max(abs(a - b) for a, b in zip(p, pts[0])) for p in pts) or 1.0
+    length = sum(c * c for c in n) ** 0.5
+    if length <= 1e-12 * size * size:
+        return True
+    n = [c / length for c in n]
+    c = [sum(p[k] for p in pts) / len(pts) for k in range(3)]
+    tol = 1e-6 * (1.0 + size)
+    if any(abs(sum((p[k] - c[k]) * n[k] for k in range(3))) > tol for p in pts):
+        return True
+    return all(abs(sum((p[k] - c[k]) * n[k] for k in range(3))) <= tol for w in inner for p in samples(w))
+
+
 def _round_corners(wire: Wire, size: float, vertices, corner_edge) -> Wire:
     """`wire`'s corners at `vertices` (all if none) replaced by `corner_edge`'s edges."""
     edges = list(wire)
@@ -1540,6 +1588,9 @@ def _round_corners(wire: Wire, size: float, vertices, corner_edge) -> Wire:
     starts = [e.startPoint() for e in edges]
     ends = [e.endPoint() for e in edges]
     inserts = {}
+    # (An open wire's ends are no corners: rounding one fails, as OCCT's does.)
+    if wanted is not None and not closed and any((p - w).Length <= 1e-6 for w in wanted for p in (starts[0], ends[-1])):
+        raise ValueError("a 2D fillet or chamfer at an end of an open wire")
     for i in range(n if closed else n - 1):
         j = (i + 1) % n
         p = ends[i]
@@ -1663,6 +1714,8 @@ class Face(Shape):
         for w in innerWires:
             if not w.IsClosed():
                 raise ValueError("Cannot build face(s): inner wire is not closed")
+        if innerWires and not _coplanar(outerWire, innerWires):
+            raise ValueError("Cannot build face(s): wires not planar")
         outerWire = _spikes_trimmed(outerWire)
 
         # A wire is a hole of a group when it lies within the group's outer wire: a point on

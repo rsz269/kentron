@@ -47,7 +47,10 @@ def edgesToWires(edges: Iterable[Edge], tol: float = 1e-6) -> List[Wire]:
 
 
 def downcast(obj):
-    """The shape as its own kind: pykentron's handles always are."""
+    """The shape as its own kind: pykentron's handles always are. An empty one has none (as
+    OCCT's downcast of a null shape fails)."""
+    if getattr(obj, "IsNull", lambda: False)():
+        raise ValueError("an empty shape has no kind")
     return obj
 
 

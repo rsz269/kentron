@@ -65,13 +65,9 @@ tests.test_assembly::test_vtkjs_export
 tests.test_cad_objects.TestCadObjects::testEdgeWrapperCenter
 tests.test_cad_objects.TestCadObjects::testEdgeWrapperEllipseCenter
 tests.test_cad_objects.TestCadObjects::testPlaneMethods
-tests.test_cadquery.TestCadQuery::test2Dchamfer
 tests.test_cadquery.TestCadQuery::testCompSolid
-tests.test_cadquery.TestCadQuery::testExtrude
 tests.test_cadquery.TestCadQuery::testExtrudeUntilFace
 tests.test_cadquery.TestCadQuery::testFuzzyBoolOp
-tests.test_cadquery.TestCadQuery::testLocationAt
-tests.test_cadquery.TestCadQuery::testNullShape
 tests.test_cadquery.TestCadQuery::testSplineApprox
 tests.test_cadquery.TestCadQuery::testToOCC
 tests.test_cadquery.TestCadQuery::test_makeNSidedSurface
@@ -108,6 +104,5 @@ tests.test_jupyter.TestJupyter::test_repr_javascript
 tests.test_selectors.TestCQSelectors::testNearestToShape
 tests.test_shapes::test_bin_import_export
 tests.test_shapes::test_extend
-tests.test_shapes::test_replace
 tests.test_shapes::test_trimming
 tests.test_sketch::test_constraint_solver
