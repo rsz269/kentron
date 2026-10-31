@@ -562,10 +562,13 @@ fn fillet_solid_edges_as(model: &mut Model, shape: Shape, edges: &[(Shape, f64)]
         Ok(result)
     };
     let mitred = mitres(&corners);
-    for (i, (((corner, radius), extend), mitre)) in corners.iter().zip(extensions(model, shape, &corners)).zip(&mitred).enumerate() {
+    let extended = extensions(model, shape, &corners);
+    let overhangs = overhanging_ends(model, shape, &corners, &extended, &mitred);
+    for (i, ((((corner, radius), extend), mitre), overhang)) in corners.iter().zip(extended).zip(&mitred).zip(&overhangs).enumerate() {
         let (extend, beyond) = if corner.convex { (extend, Vec::new()) } else { concave_ends(model, shape, &corners, i)? };
         let tool = corner.tool(model, *radius, mitre_runs(corner, *radius, extend, mitre))?;
-        let mut tool = mitred_tool(model, tool, mitre)?;
+        let tool = mitred_tool(model, tool, mitre)?;
+        let mut tool = mitred_tool(model, tool, overhang)?;
         record_tool(model, tool, &corner.edges);
         for (solid, keep_inside) in beyond {
             tool = if keep_inside { boolean::intersection(model, tool, solid)? } else { boolean::difference(model, tool, solid)? };
@@ -969,6 +972,54 @@ fn extensions(model: &Model, shape: Shape, corners: &[(Corner, f64)]) -> Vec<[f6
         .collect()
 }
 
+/// For each convex corner, at each end its tool stops square (material carrying on past it,
+/// no mitre, no other edge meeting it) and the edge ends on one other face, a plane leaning
+/// back over the tool's cross-section (an overhang, as a chamfer's face above a box's side
+/// edge): that plane, facing the side of it the tool keeps. The tool ends on it, as OCCT
+/// ends a fillet on the face at its edge's end, instead of square under it.
+fn overhanging_ends(model: &Model, shape: Shape, corners: &[(Corner, f64)], extended: &[[f64; 2]], mitred: &[[Option<(Point, Vector)>; 2]]) -> Vec<[Option<(Point, Vector)>; 2]> {
+    corners
+        .iter()
+        .enumerate()
+        .map(|(i, (corner, _))| {
+            let mut planes = [None; 2];
+            if !corner.convex || corner.ends().is_empty() {
+                return planes;
+            }
+            for (k, p) in [corner.origin, corner.end].into_iter().enumerate() {
+                if extended[i][k] > 0.0 || mitred[i][k].is_some() || corners.iter().enumerate().any(|(j, (other, _))| j != i && other.ends().iter().any(|q| q.distance(p) <= tolerance::LINEAR)) {
+                    continue;
+                }
+                let mut faces: Vec<Shape> = Vec::new();
+                for face in model.explore(shape, NodeKind::Face) {
+                    if corner.faces.iter().any(|f| f.0 == face.node) || faces.iter().any(|f| f.node == face.node) {
+                        continue;
+                    }
+                    if model.explore(face, NodeKind::Vertex).any(|v| model.point(v).distance(p) <= tolerance::LINEAR) {
+                        faces.push(face);
+                    }
+                }
+                let [face] = faces[..] else { continue };
+                let Some(Surface::Plane(_)) = model.surface(face).map(untrimmed) else { continue };
+                let Some(surface) = model.surface(face).map(|s| untrimmed(s).transformed(&face.placement)) else { continue };
+                let Some((u, v)) = surface.parameters(p) else { continue };
+                let (_, du, dv) = surface.d1(u, v);
+                let n = du.cross(dv).normalized() * if face.orientation == Orientation::Reversed { -1.0 } else { 1.0 };
+                let out = corner.direction_at(p) * if k == 0 { -1.0 } else { 1.0 };
+                // (Facing back along the edge, and behind its end all across the tool's
+                // cross-section, leaning back from both faces; square to the edge, nothing to
+                // cut.)
+                let (_, into) = corner.past(k == 1, 0.0);
+                let leaning = into.map(|d| d.dot(n));
+                if n.dot(out) < -tolerance::ANGULAR.sqrt() && n.dot(out) > -1.0 + tolerance::ANGULAR && leaning.iter().all(|&l| l <= tolerance::ANGULAR) && leaning.iter().any(|&l| l < -tolerance::ANGULAR.sqrt()) {
+                    planes[k] = Some((p, n));
+                }
+            }
+            planes
+        })
+        .collect()
+}
+
 /// For the tool of concave fillet `corners[i]` (added material, which stops square at the
 /// edge's ends): at each end where no other fillet meets it and the edge ends on one other
 /// face, a cylinder or a plane not square to it, facing on past the end, how far to run the
@@ -1175,10 +1226,8 @@ fn chamfer_solid_edges(model: &mut Model, shape: Shape, edges: &[ChamferedEdge])
     tools.extend(mixed.iter().filter_map(|m| m.cut).map(|t| (t, true)));
     tools.extend(mixed.iter().filter_map(|m| m.add).map(|t| (t, false)));
     let chamfered = with_tools(model, shape, &tools)?;
-    if mixed.is_empty() {
-        return Ok(chamfered);
-    }
-    // (The faces the caps and the chamfers ending at their sections split, one again.)
+    // (The faces the caps, the chamfers ending at their sections and the tools' square ends
+    // flush with a face at their edge's end split, one again.)
     let merged = crate::unify::unify_same_domain_with(model, chamfered, crate::unify::UnifyOptions { faces: true, edges: false, same_surface_only: false })?;
     crate::unify::unify_same_domain_with(model, merged, crate::unify::UnifyOptions { faces: false, edges: true, same_surface_only: true })
 }
@@ -3678,6 +3727,54 @@ mod tests {
             assert!((v - occt).abs() < 1e-6 * occt, "{v} vs {occt}");
             assert_eq!(model.unique_subshapes(bevelled, NodeKind::Face).len(), faces);
         }
+    }
+
+    /// A 28 x 70 x 24 block with a slab 4 wider each side along its top, the slab's
+    /// underside edges chamfered 3: a side edge of the block, rounded R 2, runs up into the
+    /// chamfer's face above it and ends on it (OCCT's values), not square under it. The
+    /// chamfer's end, square to its edge and flush with the block's side, is one face with
+    /// that side.
+    #[test]
+    fn a_fillet_ends_on_the_chamfer_overhanging_it() {
+        let mut model = Model::new();
+        let block = Cuboid::from_corners(Point::new(-14.0, -35.0, -12.0), Point::new(14.0, 35.0, 12.0)).build(&mut model).unwrap();
+        let slab = Cuboid::from_corners(Point::new(-18.0, -35.0, 6.0), Point::new(18.0, 35.0, 12.0)).build(&mut model).unwrap();
+        let body = boolean::union(&mut model, block, slab).unwrap();
+        let ends = |model: &Model, e: Shape| {
+            let (a, b) = model.edge_vertices(e);
+            (model.point(a), model.point(b))
+        };
+        let under: Vec<Shape> = model
+            .unique_subshapes(body, NodeKind::Edge)
+            .into_iter()
+            .filter(|&e| {
+                let (p, q) = ends(&model, e);
+                (p.z - 6.0).abs() < 1e-9 && (q.z - 6.0).abs() < 1e-9 && (p.x.abs().max(q.x.abs()) - 18.0).abs() < 1e-9
+            })
+            .collect();
+        assert_eq!(under.len(), 6);
+        let bevelled = chamfer(&mut model, body, &under, 3.0).unwrap();
+        assert!((properties::volume(&model, bevelled).mass - 49734.0).abs() < 1e-6);
+        assert_eq!(model.unique_subshapes(bevelled, NodeKind::Face).len(), 16);
+        let side: Vec<Shape> = model
+            .unique_subshapes(bevelled, NodeKind::Edge)
+            .into_iter()
+            .filter(|&e| {
+                let (p, q) = ends(&model, e);
+                [p, q].iter().all(|r| (r.x - 14.0).abs() < 1e-9 && (r.y - 35.0).abs() < 1e-9)
+            })
+            .collect();
+        assert_eq!(side.len(), 1);
+        let rounded = fillet(&mut model, bevelled, &side, 2.0).unwrap();
+        let report = validity::check(&model, rounded);
+        assert!(report.problems.is_empty(), "{report:?}");
+        let v = properties::volume(&model, rounded).mass;
+        assert!((v - 49716.35703).abs() < 1e-6 * v, "{v}");
+        let a = properties::area(&model, rounded).mass;
+        assert!((a - 9550.98610).abs() < 1e-6 * a, "{a}");
+        // (The chamfer's plane carried on over the fillet's end a face of its own, as OCCT
+        // leaves it.)
+        assert_eq!(model.unique_subshapes(rounded, NodeKind::Face).len(), 18);
     }
 
     #[test]
