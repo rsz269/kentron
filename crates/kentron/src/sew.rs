@@ -49,7 +49,8 @@ impl Default for SewOptions {
 }
 
 /// The faces of `shapes` joined along boundaries that meet within `options.tolerance`. The
-/// shapes are left as they are; the result is made of new faces.
+/// shapes are left as they are; the result is made of new faces, unless no face has a free
+/// edge (all already joined): then of the faces themselves.
 #[doc(alias = "BRepBuilderAPI_Sewing::Perform")]
 #[doc(alias = "sewing")]
 pub fn sew(model: &mut Model, shapes: &[Shape], options: &SewOptions) -> Result<Shape> {
@@ -57,6 +58,11 @@ pub fn sew(model: &mut Model, shapes: &[Shape], options: &SewOptions) -> Result<
         todo!("non-manifold sewing");
     }
     let mut input = Input::collect(model, shapes)?;
+    if !input.edges.iter().any(Edge::free) {
+        if let Some(kept) = input.as_they_are(model)? {
+            return Ok(kept);
+        }
+    }
     let tolerance = options.tolerance;
     if options.cutting {
         input.cut(tolerance);
@@ -106,6 +112,8 @@ struct EdgeUse {
 struct Face {
     /// The input face it is (for the history of what the sewing made of it).
     source: crate::topology::NodeId,
+    /// That face as found, placed.
+    shape: Shape,
     surface: Surface,
     tolerance: f64,
     reversed: bool,
@@ -200,7 +208,7 @@ impl Input {
                     wires.push(uses);
                 }
                 let reversed = face.orientation == Orientation::Reversed;
-                input.faces.push(Face { source: face.node, surface, tolerance: model.tolerance(face), reversed, wires });
+                input.faces.push(Face { source: face.node, shape: face, surface, tolerance: model.tolerance(face), reversed, wires });
             }
         }
         if input.faces.is_empty() {
@@ -525,6 +533,37 @@ impl Input {
         assemble(model, &faces, shells)
     }
 
+    /// The faces, all their edges already shared, grouped into shells as they are; `None`
+    /// where a shell's faces differ in placement (a shell holds no placed faces: the shell
+    /// is placed instead).
+    fn as_they_are(&self, model: &mut Model) -> Result<Option<Shape>> {
+        let mut uses: HashMap<usize, Vec<(usize, bool)>> = HashMap::new();
+        for (fi, face) in self.faces.iter().enumerate() {
+            for u in face.wires.iter().flatten() {
+                uses.entry(u.edge).or_default().push((fi, u.forward));
+            }
+        }
+        let groups = shells(&self.faces, &uses);
+        if groups.iter().any(|g| g.iter().any(|&(f, _)| self.faces[f].shape.placement != self.faces[g[0].0].shape.placement)) {
+            return Ok(None);
+        }
+        let unplaced = crate::math::Transform::IDENTITY;
+        let faces: Vec<Shape> = self.faces.iter().map(|f| Shape { orientation: Orientation::Forward, placement: unplaced, ..f.shape }).collect();
+        let mut parts = Vec::with_capacity(groups.len());
+        for group in groups {
+            let placement = self.faces[group[0].0].shape.placement;
+            parts.push(assemble(model, &faces, vec![group])?.moved(&placement));
+        }
+        if parts.len() == 1 {
+            return Ok(Some(parts[0]));
+        }
+        let compound = model.new_empty(NodeKind::Compound);
+        for part in parts {
+            model.add(compound, part)?;
+        }
+        Ok(Some(compound))
+    }
+
     /// The root of `v`'s group, without path compression (for use through `&self`).
     fn parent_root(&self, mut v: usize) -> usize {
         while self.parent[v] != v {
@@ -695,6 +734,19 @@ fn edge_box(edge: &Edge, margin: f64) -> BoundingBox {
 mod tests {
     use super::*;
     use crate::make;
+
+    /// Faces already joined (a box's) are not sewn anew: the shell is made of them.
+    #[test]
+    fn joined_faces_are_kept() {
+        let mut model = Model::new();
+        let solid = crate::primitives::Cuboid::new(1.0, 2.0, 3.0).build(&mut model).unwrap();
+        let faces = model.unique_subshapes(solid, NodeKind::Face);
+        let sewn = sew(&mut model, &faces, &SewOptions::default()).unwrap();
+        assert_eq!(sewn.kind(), NodeKind::Shell);
+        let kept = model.unique_subshapes(sewn, NodeKind::Face);
+        assert_eq!(kept.len(), 6);
+        assert!(kept.iter().all(|f| faces.iter().any(|g| g.node == f.node)));
+    }
 
     /// A face through the corners, all moved by `shift` (so that faces leave gaps).
     fn square(model: &mut Model, corners: [[f64; 3]; 4], shift: f64) -> Shape {

@@ -2421,9 +2421,6 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/sewing/tol_0_01/Q8
-notes:
-  - "kentron deviation: The input as kentron reads it is already inconsistent: two vertices lie 5 (the tube's diameter) from their line edge and two pcurves 5 from their circular edges, so the result's tolerance is 5; OCCT's is 1.1e-4."
-expect: not_done
 build:
   - a: {load: {brep: "CTO900_buc60127-part.rle"}}
   - result: {sew: {shapes: [a], tolerance: 0.01}}

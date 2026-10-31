@@ -216,12 +216,9 @@ def _normalize(s: Shape) -> Shape:
 
 
 def _closed_shell(s: Shape) -> bool:
-    # Every edge shared by two faces.
-    counts = {}
-    for f in s.Faces():
-        for e in f.Edges():
-            counts[e] = counts.get(e, 0) + 1
-    return bool(counts) and all(c >= 2 for c in counts.values())
+    # Every edge but degenerate ones (a sphere's poles) shared by two faces, or one face
+    # along a seam.
+    return native.is_closed(s.wrapped)
 
 
 def _compound_or_shape(s) -> Shape:
@@ -315,6 +312,9 @@ def shell(*s, tol: float = 1e-6, manifold: bool = True, ctx=None, history=None, 
             if images:
                 op._images[f] = _normalize(compound(images))
                 op._modified[f] = _normalize(compound(images))
+            elif _node(f.wrapped) in placed:
+                # (A face the sewing kept, already joined to the others: its own image.)
+                op._images[f] = placed[_node(f.wrapped)]
     return result
 
 
@@ -324,10 +324,14 @@ def solid(*s, inner=None, tol: float = 1e-6, history=None, name=None) -> Shape:
     if len(s) >= 1 and isinstance(s[0], (list, tuple)):
         if len(s) > 1 and inner is None:
             inner = s[1]
-        outer = _get_one(shell(*s[0], tol=tol), "Shell")
+        outer = _get_one(shell(*s[0], tol=tol, history=history, name=name), "Shell")
         shells = [outer.wrapped]
         if inner:
-            shells += [sh.wrapped.reversed() for sh in _get(shell(*inner, tol=tol), "Shell")]
+            shells += [sh.wrapped.reversed() for sh in _get(shell(*inner, tol=tol, history=history), "Shell")]
+            # (The inner shells' sewing one step with the outer's.)
+            if history is not None:
+                inner_op = history.pop()
+                _combine_ops(history.ops[-1], inner_op)
         return Shape.cast(native.make_solid(shells))
     found = [f for el in s for f in _get(el, ("Shell", "Face"))]
     shells = [el for el in found if isinstance(el, Shell)]
@@ -1119,6 +1123,21 @@ def _combine_hist_dict(d1, *ds) -> None:
             d1[k] |= d[k]
         for k in d.keys() - d1.keys():
             d1[k] = d[k]
+
+
+def _combine_ops(op: Op, *ops: Op) -> Op:
+    """History steps combined into the first, in place."""
+    for el in ops:
+        op._tracked.update(el._tracked)
+        op._deleted.extend(el._deleted)
+        _combine_hist_dict(op._modified, el._modified)
+        _combine_hist_dict(op._generated, el._generated)
+        _combine_hist_dict(op._images, el._images)
+        _combine_hist_dict(op._first, el._first)
+        _combine_hist_dict(op._last, el._last)
+        op._first_shape |= el._first_shape
+        op._last_shape |= el._last_shape
+    return op
 
 
 class History:
