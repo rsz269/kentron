@@ -16,3 +16,9 @@ rust-version = "1.88"
 inherits = "release"
 lto = "fat"
 codegen-units = 1
+
+# (Unoptimized, the rolling-ball fillets of OCCT's blend cases take tens of seconds each,
+# near their time limit; optimizing kentron alone keeps its results, as Rust's floating
+# point does not change with optimization, and its tests well within it.)
+[profile.dev.package.kentron]
+opt-level = 1
