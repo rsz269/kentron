@@ -56,9 +56,30 @@ use graph::Graph;
 pub fn union(model: &mut Model, a: Shape, b: Shape) -> Result<Shape> {
     // An operand may be a compound of solids that overlap one another: like OCCT's general
     // fuse, every solid is fused with those it meets (boxes overlapping or touching), one
-    // after another; groups apart from each other are only gathered.
+    // after another; groups apart from each other are only gathered. (Two solids apart are
+    // gathered too, and any shapes apart: each as it was, placed where it was, as OCCT's
+    // fuse keeps what it does not change.)
+    let apart = {
+        let boxed = |s: Shape| crate::properties::tight_bounding_box(model, s).enlarged(geom::on_tol());
+        let (ba, bb) = (boxed(a), boxed(b));
+        !ba.is_empty() && !bb.is_empty() && !ba.overlaps(&bb)
+    };
+    // (Other shapes apart, faces as solids: gathered as they are.)
+    if apart && (only_solids(model, a).is_none() || only_solids(model, b).is_none()) {
+        let result = model.new_empty(crate::topology::NodeKind::Compound);
+        for operand in [a, b] {
+            if operand.kind() == crate::topology::NodeKind::Compound {
+                for child in model.children(operand).collect::<Vec<_>>() {
+                    model.add(result, child)?;
+                }
+            } else {
+                model.add(result, operand)?;
+            }
+        }
+        return Ok(result);
+    }
     if let (Some(sa), Some(sb)) = (only_solids(model, a), only_solids(model, b)) {
-        if sa.len() > 1 || sb.len() > 1 {
+        if sa.len() > 1 || sb.len() > 1 || apart {
             let solids: Vec<Shape> = sa.into_iter().chain(sb).collect();
             let boxes: Vec<BoundingBox> = solids.iter().map(|&s| crate::properties::tight_bounding_box(model, s).enlarged(geom::on_tol())).collect();
             let mut group: Vec<usize> = (0..solids.len()).collect();
@@ -827,6 +848,22 @@ mod tests {
     use crate::primitives::{Cone, Cuboid, Cylinder, Sphere};
     use crate::topology::NodeKind;
     use crate::{properties, validity};
+
+    /// Two unit boxes, one moved 5 along x, the other -15, fused: apart, each is kept as it
+    /// was, placed where it was (as OCCT's fuse keeps them: a selection by nearness then
+    /// finds the operand itself among the result's solids).
+    #[test]
+    fn solids_apart_are_kept_as_they_are() {
+        let mut model = Model::new();
+        let unit = Cuboid::new(1.0, 1.0, 1.0).build(&mut model).unwrap();
+        let near = unit.moved(&crate::math::Transform::translation(Vector::new(5.0, 0.0, 0.0)));
+        let far = unit.moved(&crate::math::Transform::translation(Vector::new(-15.0, 0.0, 0.0)));
+        let fused = union(&mut model, near, far).unwrap();
+        let solids: Vec<Shape> = model.explore(fused, NodeKind::Solid).collect();
+        assert_eq!(solids.len(), 2);
+        assert!(solids.contains(&near) && solids.contains(&far));
+        assert!((properties::volume(&model, fused).mass - 2.0).abs() < 1e-12);
+    }
 
     /// A door (25 x 4.5 x 55) with its lower corners cut away by a block (5 x 4.5 x 20, as
     /// thick as the door) whose upper edge is chamfered back all but 1e-6 of its width,
