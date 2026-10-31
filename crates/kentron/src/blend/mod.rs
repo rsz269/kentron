@@ -233,6 +233,220 @@ fn sharp<T: Copy>(model: &Model, shape: Shape, edges: &[T], edge: impl Fn(&T) ->
 
 /// [`fillet_edges`] of a shape with solids.
 fn fillet_solid_edges(model: &mut Model, shape: Shape, edges: &[(Shape, f64)]) -> Result<Shape> {
+    // (Edges ending on fillets made before, as a pocket's rim rounded one edge at a time:
+    // those fillets undone and made again with the edges, meeting them as OCCT's do.)
+    let Some((restored, together, radii)) = with_earlier_fillets(model, shape, edges)? else {
+        return fillet_solid_edges_once(model, shape, edges);
+    };
+    let plain = fillet_solid_edges_once(model, shape, edges);
+    // (The fillets meeting otherwise differ only about the corners where they meet, by less
+    // than the cube of their radii there: more would be material put back and not taken
+    // away again.)
+    let near = |model: &Model, rounded: Shape| match &plain {
+        Ok(p) => (crate::properties::volume(model, rounded).mass - crate::properties::volume(model, *p).mass).abs() <= radii.iter().map(|r| 0.5 * r * r * r).sum::<f64>(),
+        Err(_) => true,
+    };
+    // (The half of each fillet left and its half made again, on one cylinder, one face.)
+    if let Ok(rounded) = fillet_solid_edges_once(model, restored, &together).and_then(|r| crate::unify::unify_same_domain(model, r)) {
+        if crate::validity::check(model, rounded).is_valid() && near(model, rounded) {
+            return Ok(rounded);
+        }
+    }
+    plain
+}
+
+/// Where a convex straight edge to round (or one continuing it tangentially) ends on the
+/// cylinder of an earlier fillet of about its radius, the fillet of a straight edge between
+/// planes, one of them the edge's own face (a pocket's rim rounded one edge at a time):
+/// `shape` with that fillet undone over its half towards the edge (the material it took
+/// away put back), `edges` with the sharp edges so made back, and those fillets' radii.
+/// Rounded together, the fillets meet as at once, as OCCT's do; one rounded after the
+/// other, the later would run on square into the earlier's cylinder.
+#[allow(clippy::type_complexity)]
+fn with_earlier_fillets(model: &mut Model, shape: Shape, edges: &[(Shape, f64)]) -> Result<Option<(Shape, Vec<(Shape, f64)>, Vec<f64>)>> {
+    use crate::geometry::ParametricCurve;
+    let faces: Vec<Shape> = model.explore(shape, NodeKind::Face).collect();
+    let mut by_edge: std::collections::HashMap<NodeId, Vec<usize>> = std::collections::HashMap::new();
+    let mut by_vertex: std::collections::HashMap<NodeId, Vec<usize>> = std::collections::HashMap::new();
+    for (i, f) in faces.iter().enumerate() {
+        for (kind, by) in [(NodeKind::Edge, &mut by_edge), (NodeKind::Vertex, &mut by_vertex)] {
+            for s in model.unique_subshapes(*f, kind) {
+                let at = by.entry(s.node).or_default();
+                if !at.contains(&i) {
+                    at.push(i);
+                }
+            }
+        }
+    }
+    // The outward normal of face `i` at `p` (on it).
+    let normal = |model: &Model, i: usize, p: Point| -> Option<Vector> {
+        let face = faces[i];
+        let surface = untrimmed(model.surface(face)?).transformed(&face.placement);
+        let (u, v) = surface.parameters(p)?;
+        let (_, du, dv) = surface.d1(u, v);
+        Some(du.cross(dv).normalized() * if face.orientation == Orientation::Reversed { -1.0 } else { 1.0 })
+    };
+    let is_plane = |model: &Model, i: usize| matches!(model.surface(faces[i]).map(untrimmed), Some(Surface::Plane(_)));
+    // A convex fillet's cylinder of about `radius` (its normals away from its axis), its
+    // axis and its own radius.
+    let fillet_cylinder = |model: &Model, i: usize, radius: f64| -> Option<(Axis, f64)> {
+        let Some(Surface::Cylinder(c)) = model.surface(faces[i]).map(untrimmed) else { return None };
+        if (c.radius() - radius).abs() > 0.05 * radius || faces[i].placement != Transform::IDENTITY {
+            return None;
+        }
+        let axis = surface_axis(&Surface::Cylinder(c.clone()));
+        let p = model.point(model.explore(faces[i], NodeKind::Vertex).next()?);
+        let n = normal(model, i, p)?;
+        (n.dot(p - foot(axis, p)) > 0.0).then_some((axis, c.radius()))
+    };
+    // The earlier fillets the edges end on (or the edges continuing them tangentially).
+    let mut found: Vec<(usize, Axis, f64, Point)> = Vec::new();
+    for (edge, radius) in tangent_chains(model, shape, edges, 0.0) {
+        let Some(line) = model.edge_curve(Shape { orientation: Orientation::Forward, ..edge }).and_then(|c| line_of(&c.0)) else { continue };
+        let Some(own) = by_edge.get(&edge.node) else { continue };
+        if own.len() != 2 || !own.iter().all(|&i| is_plane(model, i)) || !Corner::of(model, shape, edge, true)?.is_some_and(|c| c.convex) {
+            continue;
+        }
+        let (a, b) = model.edge_vertices(edge);
+        for vertex in [a, b] {
+            let p = model.point(vertex);
+            // (Faces of no area there, slivers left by earlier steps, aside.)
+            let others: Vec<usize> = by_vertex
+                .get(&vertex.node)
+                .into_iter()
+                .flatten()
+                .copied()
+                .filter(|i| !own.contains(i) && crate::properties::area(model, faces[*i]).mass > tolerance::LINEAR * radius)
+                .collect();
+            let [f] = others[..] else { continue };
+            let Some((axis, own_radius)) = fillet_cylinder(model, f, radius) else { continue };
+            if Vector::from(axis.direction).cross(Vector::from(line.direction)).length() <= tolerance::ANGULAR {
+                continue;
+            }
+            // (Tangent to one of the edge's faces.)
+            if !own.iter().any(|&i| model.unique_subshapes(faces[i], NodeKind::Edge).iter().any(|e| by_edge.get(&e.node).is_some_and(|at| at.contains(&f)))) {
+                continue;
+            }
+            if !found.iter().any(|g| g.0 == f) {
+                found.push((f, axis, own_radius, p));
+            }
+        }
+    }
+    if found.is_empty() {
+        return Ok(None);
+    }
+    // Each fillet's material put back over its half towards the edge: the prism between its
+    // planes and its cylinder, cut to the plane of that end and to the plane square to it
+    // halfway. (The other half stays as it is, meeting the fillet made again on the same
+    // cylinder, its other end as it was.)
+    let mut restored = shape;
+    let mut sharp_edges = Vec::new();
+    let mut added = 0.0;
+    for &(f, axis, radius, meeting) in &found {
+        let d = Vector::from(axis.direction);
+        let mut planes: Vec<Vector> = Vec::new();
+        let mut ends: Vec<(Point, Vector)> = Vec::new();
+        let mut ends_at: Vec<Point> = Vec::new();
+        for e in model.unique_subshapes(faces[f], NodeKind::Edge) {
+            let Some((curve, a, b)) = model.edge_curve(Shape { orientation: Orientation::Forward, ..e }) else { return Ok(None) };
+            let along = line_of(&curve).is_some_and(|l| Vector::from(l.direction).cross(d).length() <= tolerance::ANGULAR);
+            if along {
+                let Some(&g) = by_edge.get(&e.node).and_then(|at| at.iter().find(|&&g| g != f)) else { return Ok(None) };
+                let q = curve.point(0.5 * (a + b));
+                if !is_plane(model, g) {
+                    return Ok(None);
+                }
+                let Some(n) = normal(model, g, q) else { return Ok(None) };
+                if n.dot(d).abs() > tolerance::ANGULAR || (foot(axis, q).distance(q) - radius).abs() > 1e-7 * radius.max(1.0) {
+                    return Ok(None);
+                }
+                planes.push(n);
+            } else {
+                // (An end.)
+                for k in 0..=8 {
+                    ends_at.push(curve.point(a + (b - a) * k as f64 / 8.0));
+                }
+            }
+        }
+        let [n1, n2] = planes[..] else { return Ok(None) };
+        // The fillet's extent along its axis.
+        let ts: Vec<f64> = model.explore(faces[f], NodeKind::Vertex).map(|v| (model.point(v) - axis.origin).dot(d)).collect();
+        let (t0, t1) = ts.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), &t| (lo.min(t), hi.max(t)));
+        // Each end a plane curve (of one edge or several): its plane.
+        for side in [false, true] {
+            let at: Vec<Point> = ends_at.iter().copied().filter(|p| ((*p - axis.origin).dot(d) > 0.5 * (t0 + t1)) == side).collect();
+            let Some(&p0) = at.first() else { return Ok(None) };
+            let far = |from: &dyn Fn(Point) -> f64| at.iter().copied().max_by(|x, y| from(*x).total_cmp(&from(*y))).expect("points");
+            let p1 = far(&|p| p.distance(p0));
+            let u = (p1 - p0).normalized();
+            let p2 = far(&|p| ((p - p0) - u * (p - p0).dot(u)).length());
+            let m = u.cross(p2 - p0);
+            if !(m.length() > 1e-9 * radius) {
+                return Ok(None);
+            }
+            let m = m.normalized();
+            if at.iter().any(|p| (*p - p0).dot(m).abs() > 1e-6 * radius.max(1.0)) {
+                return Ok(None);
+            }
+            ends.push((p0, m));
+        }
+        let mid = axis.origin + d * (0.5 * (t0 + t1));
+        let towards = if (meeting - mid).dot(d) > 0.0 { d } else { -d };
+        ends.push((mid, towards));
+        let c = n1.dot(n2);
+        let corner = n1 * radius + n2 * radius;
+        let at = |t: f64| axis.origin + d * t;
+        let start = t0 - 2.0 * radius;
+        let kite = [at(start) + corner * (1.0 / (1.0 + c)), at(start) + n1 * radius, at(start), at(start) + n2 * radius];
+        let sides: Vec<Shape> = (0..4).map(|i| make::edge_between(model, kite[i], kite[(i + 1) % 4])).collect::<Result<_>>()?;
+        let wire = make::wire(model, &sides)?;
+        let section = make::planar_face(model, wire)?;
+        let length = t1 - t0 + 4.0 * radius;
+        let prism = sweep::extrude(model, section, d * length)?.shape;
+        let cylinder = crate::primitives::Cylinder::new(radius, length).with_frame(Frame::new(at(start), axis.direction, Direction::from_vector(perpendicular(d)))).build(model)?;
+        let mut back = boolean::difference(model, prism, cylinder)?;
+        let middle = mid + towards * (0.25 * (t1 - t0));
+        for &(p, m) in &ends {
+            let m = if m.dot(middle - p) > 0.0 { m } else { -m };
+            back = mitred_tool(model, back, &[Some((p, m)), None])?;
+        }
+        added += crate::properties::volume(model, back).mass;
+        restored = boolean::union(model, restored, back)?;
+        let sharp = Curve::Line(crate::geometry::curve::Line { origin: at(0.0) + corner * (1.0 / (1.0 + c)), direction: axis.direction });
+        sharp_edges.push((sharp, t0 - 2.0 * radius, t1 + 2.0 * radius, radius));
+    }
+    let before = crate::properties::volume(model, shape).mass;
+    if (crate::properties::volume(model, restored).mass - before - added).abs() > 1e-7 * before.abs().max(1.0) {
+        return Ok(None);
+    }
+    let restored = crate::unify::unify_same_domain(model, restored)?;
+    let mut together = Vec::with_capacity(edges.len() + sharp_edges.len());
+    for &(edge, radius) in edges {
+        let Some((curve, a, b)) = model.edge_curve(Shape { orientation: Orientation::Forward, ..edge }) else { return Ok(None) };
+        let Some(found) = find_edge(model, restored, &curve, a, b) else { return Ok(None) };
+        together.push((found, radius));
+    }
+    for (curve, a, b, radius) in sharp_edges {
+        let Some(found) = find_edge(model, restored, &curve, a, b) else { return Ok(None) };
+        if !together.iter().any(|e| e.0.node == found.node) {
+            together.push((found, radius));
+        }
+    }
+    let radii = found.iter().map(|f| f.2).collect();
+    Ok(Some((restored, together, radii)))
+}
+
+/// The line `curve` lies on, if it is one (or a piece of one).
+fn line_of(curve: &Curve) -> Option<crate::geometry::curve::Line> {
+    match curve {
+        Curve::Line(l) => Some(l.clone()),
+        Curve::Trimmed(t) => line_of(t.basis()),
+        _ => None,
+    }
+}
+
+/// [`fillet_solid_edges`] of the edges as they are.
+fn fillet_solid_edges_once(model: &mut Model, shape: Shape, edges: &[(Shape, f64)]) -> Result<Shape> {
     let before: std::collections::HashSet<NodeId> = model.unique_subshapes(shape, NodeKind::Face).into_iter().map(|f| f.node).collect();
     let before_edges: std::collections::HashSet<NodeId> = model.unique_subshapes(shape, NodeKind::Edge).into_iter().map(|e| e.node).collect();
     let rounded = fillet_solid_edges_inner(model, shape, edges)?;
@@ -3726,6 +3940,44 @@ mod tests {
             let v = properties::volume(&model, bevelled).mass;
             assert!((v - occt).abs() < 1e-6 * occt, "{v} vs {occt}");
             assert_eq!(model.unique_subshapes(bevelled, NodeKind::Face).len(), faces);
+        }
+    }
+
+    /// A 30 x 30 x 10 block with a 10 x 16 pocket 4 deep in its top: the rim's long edge
+    /// rounded (R 1), then a short edge meeting it at the pocket's corner, on its own. The
+    /// two fillets meet as when both are rounded at once (OCCT's values: its fillet of one
+    /// then the other is so too), not the later running square into the earlier's cylinder.
+    /// Of radius 0.99 the later meets it so too.
+    #[test]
+    fn a_fillet_meets_one_made_before_at_a_pockets_corner() {
+        for (radius, occt_volume, occt_area, faces) in [(1.0, 8354.32448, 3197.41150, Some(13)), (0.99, 8354.39425, 3197.47451, None)] {
+            let mut model = Model::new();
+            let block = Cuboid::from_corners(Point::new(-15.0, -15.0, -5.0), Point::new(15.0, 15.0, 5.0)).build(&mut model).unwrap();
+            let pocket = Cuboid::from_corners(Point::new(-5.0, -8.0, 1.0), Point::new(5.0, 8.0, 6.0)).build(&mut model).unwrap();
+            let body = boolean::difference(&mut model, block, pocket).unwrap();
+            let rim = |model: &Model, shape: Shape, at: Point| {
+                model.unique_subshapes(shape, NodeKind::Edge).into_iter().find(|&e| {
+                    let (a, b) = model.edge_vertices(e);
+                    (model.point(a) + (model.point(b) - model.point(a)) * 0.5).distance(at) < 1e-9
+                })
+            };
+            let long = rim(&model, body, Point::new(0.0, 8.0, 5.0)).unwrap();
+            // (Cleaned, as CadQuery's fillet cleans what it makes.)
+            let rounded = fillet(&mut model, body, &[long], 1.0).unwrap();
+            let rounded = crate::unify::unify_same_domain(&mut model, rounded).unwrap();
+            assert!((properties::volume(&model, rounded).mass - 8357.85398).abs() < 1e-5);
+            // (The short edge now runs on under the first fillet's end, to its far side.)
+            let short = rim(&model, rounded, Point::new(5.0, 0.5, 5.0)).unwrap();
+            let both = fillet(&mut model, rounded, &[short], radius).unwrap();
+            let report = validity::check(&model, both);
+            assert!(report.problems.is_empty(), "{report:?}");
+            let v = properties::volume(&model, both).mass;
+            assert!((v - occt_volume).abs() < 1e-7 * v, "{v}");
+            let a = properties::area(&model, both).mass;
+            assert!((a - occt_area).abs() < 1e-5 * a, "{a}");
+            if let Some(faces) = faces {
+                assert_eq!(model.unique_subshapes(both, NodeKind::Face).len(), faces);
+            }
         }
     }
 
