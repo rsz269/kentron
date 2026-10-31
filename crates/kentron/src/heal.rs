@@ -1050,6 +1050,25 @@ mod tests {
         let length = crate::properties::length(&model, fixed).mass;
         assert!((length - 9.054743851305652).abs() < 1e-4, "{length}");
     }
+
+    #[test]
+    fn a_spline_crossing_itself_loses_its_loop() {
+        // CadQuery's rational_spline.dxf: a closed rational cubic whose heavy first pole
+        // makes a small loop. OCCT's wire fixing leaves one closed edge 5256.4499 long.
+        use crate::geometry::curve::{BSplineCurve, Curve};
+        use crate::math::Point;
+        let mut model = Model::new();
+        let poles = vec![Point::new(0.0, 0.0, 0.0), Point::new(1250.0, 1560.0, 0.0), Point::new(3130.0, 610.0, 0.0), Point::new(2250.0, 1250.0, 0.0)];
+        let spline = BSplineCurve::try_new_periodic(poles, vec![0.0, 1.0, 2.0, 3.0, 4.0], vec![1; 5], 3).unwrap().with_weights(vec![3.0, 1.0, 1.0, 1.0]);
+        let edge = crate::make::edge_from_curve(&mut model, Curve::BSpline(spline)).unwrap();
+        let fixed = remove_edge_loop(&mut model, edge).unwrap().expect("a loop removed");
+        let length = crate::properties::length(&model, fixed).mass;
+        assert!((length - 5256.4499).abs() < 1e-3, "{length}");
+        let wire = crate::make::wire(&mut model, &[fixed]).unwrap();
+        let face = crate::make::planar_face(&mut model, wire).unwrap();
+        assert!(crate::validity::check(&model, face).errors().next().is_none());
+        assert!(remove_edge_loop(&mut model, fixed).unwrap().is_none());
+    }
     use crate::geometry::surface::Surface;
     use crate::primitives::{Cuboid, Cylinder, Sphere};
 
@@ -1458,4 +1477,131 @@ fn moved_seam(model: &mut Model, face: Shape, seam: EdgeId) -> Result<bool> {
         model.remove_subtree(w.node);
     }
     Ok(true)
+}
+
+/// A closed B-spline edge whose curve crosses itself, as one closed edge without the loop
+/// the crossing makes (OCCT's wire fixing removes it so): the shorter of the curve's two
+/// parts between the crossing's parameters left out, the other's ends joined at the
+/// crossing. `None` where the edge is not such an edge.
+#[doc(alias = "ShapeFix_Wire::FixSelfIntersectingEdge")]
+pub fn remove_edge_loop(model: &mut Model, edge: Shape) -> Result<Option<Shape>> {
+    use crate::geometry::curve::Curve;
+    use crate::math::Point;
+    let Some((Curve::BSpline(curve), first, last)) = model.edge_curve(edge) else { return Ok(None) };
+    let (a, b) = model.edge_vertices(edge);
+    if a.node != b.node {
+        return Ok(None);
+    }
+    // Where the curve's polygon crosses itself (segments not neighbours, at no distance).
+    const SAMPLES: usize = 512;
+    let at = |i: usize| first + (last - first) * i as f64 / SAMPLES as f64;
+    let points: Vec<Point> = (0..=SAMPLES).map(|i| curve.point(at(i))).collect();
+    let size = points.iter().map(|p| p.distance(points[0])).fold(0.0, f64::max);
+    let mut crossing = None;
+    'search: for i in 0..SAMPLES {
+        for j in i + 2..SAMPLES {
+            if i == 0 && j == SAMPLES - 1 {
+                continue;
+            }
+            let (s, t, gap) = segments_closest(points[i], points[i + 1], points[j], points[j + 1]);
+            if gap <= 1e-9 * size.max(1.0) {
+                crossing = Some((at(i) + s * (at(i + 1) - at(i)), at(j) + t * (at(j + 1) - at(j))));
+                break 'search;
+            }
+        }
+    }
+    let Some((mut s, mut t)) = crossing else { return Ok(None) };
+    // Refined: C(s) = C(t), by Gauss-Newton.
+    for _ in 0..30 {
+        let ((p, dp), (q, dq)) = (curve.d1(s), curve.d1(t));
+        let r = p - q;
+        let (a11, a12, a22) = (dp.dot(dp), -dp.dot(dq), dq.dot(dq));
+        let (b1, b2) = (-dp.dot(r), dq.dot(r));
+        let det = a11 * a22 - a12 * a12;
+        if det.abs() <= f64::MIN_POSITIVE {
+            break;
+        }
+        let (ds, dt) = ((b1 * a22 - a12 * b2) / det, (a11 * b2 - a12 * b1) / det);
+        s = (s + ds).clamp(first, last);
+        t = (t + dt).clamp(first, last);
+        if ds.abs() + dt.abs() <= 1e-15 * (last - first) {
+            break;
+        }
+    }
+    let (p, q) = (curve.point(s), curve.point(t));
+    if p.distance(q) > crate::tolerance::LINEAR || !(first < s && s < t && t < last) {
+        return Ok(None);
+    }
+    let length = |u1: f64, u2: f64| -> f64 {
+        (0..64).map(|k| curve.point(u1 + (u2 - u1) * k as f64 / 64.0).distance(curve.point(u1 + (u2 - u1) * (k + 1) as f64 / 64.0))).sum()
+    };
+    let piece = |u1: f64, u2: f64| {
+        let mut c = curve.clone();
+        c.segment(u1, u2);
+        c
+    };
+    let middle = p + (q - p) * 0.5;
+    let joined = if length(s, t) < length(first, s) + length(t, last) {
+        // (The loop between the parameters: what runs to it and on from it, joined.)
+        match join_at(piece(first, s), piece(t, last), middle) {
+            Some(c) => c,
+            None => return Ok(None),
+        }
+    } else {
+        piece(s, t)
+    };
+    Ok(Some(crate::make::edge_from_curve(model, Curve::BSpline(joined))?))
+}
+
+/// Parameters (on `[0, 1]`) of the closest points of segments `ab` and `cd`, and their
+/// distance.
+fn segments_closest(a: crate::math::Point, b: crate::math::Point, c: crate::math::Point, d: crate::math::Point) -> (f64, f64, f64) {
+    let (u, v, w) = (b - a, d - c, a - c);
+    let (uu, uv, vv, uw, vw) = (u.dot(u), u.dot(v), v.dot(v), u.dot(w), v.dot(w));
+    let det = uu * vv - uv * uv;
+    let mut s = if det > 1e-300 { ((uv * vw - vv * uw) / det).clamp(0.0, 1.0) } else { 0.0 };
+    let mut t = if vv > 0.0 { ((uv * s + vw) / vv).clamp(0.0, 1.0) } else { 0.0 };
+    if uu > 0.0 {
+        s = ((uv * t - uw) / uu).clamp(0.0, 1.0);
+    }
+    if vv > 0.0 {
+        t = ((uv * s + vw) / vv).clamp(0.0, 1.0);
+    }
+    let gap = (a + u * s).distance(c + v * t);
+    (s, t, gap)
+}
+
+/// Clamped B-splines `a` then `b` as one, their meeting pole moved to `at` (`b`'s
+/// parameters shifted to follow `a`'s, its weights scaled to meet `a`'s).
+fn join_at(
+    a: crate::geometry::curve::BSplineCurve,
+    b: crate::geometry::curve::BSplineCurve,
+    at: crate::math::Point,
+) -> Option<crate::geometry::curve::BSplineCurve> {
+    let p = a.degree();
+    let clamped = |c: &crate::geometry::curve::BSplineCurve| {
+        let m = c.multiplicities();
+        !c.is_periodic() && m[0] == p + 1 && m[m.len() - 1] == p + 1
+    };
+    if b.degree() != p || !clamped(&a) || !clamped(&b) {
+        return None;
+    }
+    let shift = a.knots()[a.knots().len() - 1] - b.knots()[0];
+    let mut knots = a.knots().to_vec();
+    let mut multiplicities = a.multiplicities().to_vec();
+    *multiplicities.last_mut()? = p;
+    knots.extend(b.knots()[1..].iter().map(|k| k + shift));
+    multiplicities.extend_from_slice(&b.multiplicities()[1..]);
+    let mut poles = a.poles().to_vec();
+    *poles.last_mut()? = at;
+    poles.extend_from_slice(&b.poles()[1..]);
+    let joined = crate::geometry::curve::BSplineCurve::try_new(poles, knots, multiplicities, p).ok()?;
+    if !a.is_rational() && !b.is_rational() {
+        return Some(joined);
+    }
+    let (na, nb) = (a.poles().len(), b.poles().len());
+    let scale = a.weight(na - 1) / b.weight(0);
+    let mut weights: Vec<f64> = (0..na).map(|i| a.weight(i)).collect();
+    weights.extend((1..nb).map(|i| b.weight(i) * scale));
+    Some(joined.with_weights(weights))
 }

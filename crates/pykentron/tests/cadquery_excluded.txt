@@ -6,6 +6,13 @@
 # smoothed curve longer than the plain one by some 1e-5.
 tests.test_cadquery.TestCadQuery::testSplineApprox
 
+# The size of OCCT's STL files: how finely its mesher divides a shape (kentron meets the same
+# deviation with half the triangles) and how it writes numbers.
+tests.test_assembly::test_save_stl_formats
+
+# The degree of the surfaces OCCT's fillets make (6, where kentron's sections are of degree 2).
+tests.test_exporters::test_dxf_approx
+
 # The order OCCT stores a box's edges' vertices in (the end before the start), which its
 # explorer lists them by.
 tests.test_cad_objects.TestCadObjects::testPlaneMethods

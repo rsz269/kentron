@@ -613,6 +613,18 @@ pub fn face_isoline(face: Handle, param: f64, along_v: bool) -> PyResult<Handle>
     .map(handle)
 }
 
+/// A closed B-spline edge crossing itself as one without its loop; `None` for other edges.
+#[pyfunction]
+pub fn remove_edge_loop(edge: Handle) -> PyResult<Option<Handle>> {
+    with_model(|m| kentron::heal::remove_edge_loop(m, edge.shape)).map(|e| e.map(handle))
+}
+
+/// The shape with its curves and surfaces as (rational) B-splines.
+#[pyfunction]
+pub fn to_nurbs(shape: Handle) -> PyResult<Handle> {
+    with_model(|m| kentron::convert::to_nurbs(m, shape.shape)).map(handle)
+}
+
 /// (point, unit normal as used, u derivative, v derivative) at each of the parameters
 /// `uvs`.
 #[pyfunction]
@@ -802,6 +814,8 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(chamfer, m)?)?;
     m.add_function(wrap_pyfunction!(face_uv_bounds, m)?)?;
     m.add_function(wrap_pyfunction!(face_isoline, m)?)?;
+    m.add_function(wrap_pyfunction!(to_nurbs, m)?)?;
+    m.add_function(wrap_pyfunction!(remove_edge_loop, m)?)?;
     m.add_function(wrap_pyfunction!(face_points, m)?)?;
     m.add_function(wrap_pyfunction!(face_parameters, m)?)?;
     Ok(())

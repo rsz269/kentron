@@ -1,6 +1,7 @@
 """DXF export (CadQuery's `DxfDocument` and `exportDXF`), with ezdxf: lines, circles and
 their arcs, ellipses and their arcs, and B-splines (other curves as B-splines), each from
-kentron's edge curves as CadQuery takes them from OCCT's."""
+kentron's edge curves as CadQuery takes them from OCCT's; or other curves approximated by
+circular arcs, or B-splines by cubic ones (`approx`)."""
 
 from __future__ import annotations
 
@@ -67,20 +68,60 @@ class DxfDocument:
         else:
             shape_ = shape
         general = {"layer": layer} if layer else {}
-        if self.approx == "arc":
-            raise NotImplementedError("DXF curves approximated by arcs")
         edges = self._ordered_edges(shape_)
-        # (With approx "spline", CadQuery makes its B-splines cubic: kentron's are written
-        # as they are.)
         for edge in edges:
-            converter = self._DISPATCH_MAP.get(edge.geomType())
+            kind = edge.geomType()
+            # (With approx "arc", every curve but lines and circles as circular arcs within
+            # the tolerance; with "spline", B-splines of degree above 3 as cubic ones.)
+            if self.approx == "arc" and kind not in ("LINE", "CIRCLE"):
+                for entity_type, attributes in self._dxf_arcs(edge, self.tolerance):
+                    self.msp.add_entity(factory.new(entity_type, dxfattribs={**attributes, **general}))
+                continue
+            converter = self._DISPATCH_MAP.get(kind)
             if converter:
                 entity_type, attributes = converter(edge)
                 self.msp.add_entity(factory.new(entity_type, dxfattribs={**attributes, **general}))
             else:
+                if self.approx == "spline" and native.edge_bspline(edge.wrapped)[0] > 3:
+                    points = [edge.positionAt(i / 64) for i in range(65)]
+                    edge = Edge.makeSplineApprox(points, self.tolerance, minDeg=1, maxDeg=3)
                 _, attributes = self._dxf_spline(edge, None)
                 self.msp.add_spline(dxfattribs=general).apply_construction_tool(ezdxf.math.BSpline(**attributes))
         return self
+
+    @staticmethod
+    def _dxf_arcs(edge: Edge, tolerance: float) -> List[DxfEntityAttributes]:
+        """`edge` (in the XY plane) as circular arcs (lines where straight), each through its
+        piece's ends and middle and within `tolerance` of it, pieces halved until they are."""
+        point = lambda t: edge.positionAt(t)
+        out: List[DxfEntityAttributes] = []
+
+        def piece(a: float, b: float, depth: int) -> None:
+            p0, pm, p1 = point(a), point(0.5 * (a + b)), point(b)
+            probes = [point(a + (b - a) * f) for f in (0.25, 0.75)]
+            # The circle through the three (in XY): its centre where the chords' bisectors meet.
+            ax, ay, bx, by, cx, cy = p0.x, p0.y, pm.x, pm.y, p1.x, p1.y
+            d = 2 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by))
+            if abs(d) <= 1e-12 * max(1.0, (p1 - p0).Length ** 2):
+                if all(_off_line(q, p0, p1) <= tolerance for q in probes) or depth > 20:
+                    out.append(("LINE", {"start": p0.toTuple(), "end": p1.toTuple()}))
+                    return
+            else:
+                ux = ((ax * ax + ay * ay) * (by - cy) + (bx * bx + by * by) * (cy - ay) + (cx * cx + cy * cy) * (ay - by)) / d
+                uy = ((ax * ax + ay * ay) * (cx - bx) + (bx * bx + by * by) * (ax - cx) + (cx * cx + cy * cy) * (bx - ax)) / d
+                r = math.hypot(ax - ux, ay - uy)
+                if all(abs(math.hypot(q.x - ux, q.y - uy) - r) <= tolerance for q in probes) or depth > 20:
+                    angle = lambda p: math.degrees(math.atan2(p.y - uy, p.x - ux))
+                    # (DXF arcs run counter-clockwise: from the end where the turn is one.)
+                    ccw = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax) > 0
+                    start, end = (angle(p0), angle(p1)) if ccw else (angle(p1), angle(p0))
+                    out.append(("ARC", {"center": (ux, uy, p0.z), "radius": r, "start_angle": start, "end_angle": end}))
+                    return
+            piece(a, 0.5 * (a + b), depth + 1)
+            piece(0.5 * (a + b), b, depth + 1)
+
+        piece(0.0, 1.0, 0)
+        return out
 
     @staticmethod
     def _ordered_edges(s: Shape) -> List[Edge]:
@@ -132,6 +173,15 @@ class DxfDocument:
     def _dxf_spline(cls, edge: Edge, plane: Optional[Plane]) -> DxfEntityAttributes:
         degree, poles, knots, weights, periodic = native.edge_bspline(edge.wrapped)
         return ("SPLINE", {"control_points": [tuple(p) for p in poles], "order": degree + 1, "knots": list(knots), "weights": weights})
+
+
+def _off_line(q: Vector, a: Vector, b: Vector) -> float:
+    """The distance of `q` from the line through `a` and `b` (in XY)."""
+    dx, dy = b.x - a.x, b.y - a.y
+    length = math.hypot(dx, dy)
+    if length == 0:
+        return math.hypot(q.x - a.x, q.y - a.y)
+    return abs((q.x - a.x) * dy - (q.y - a.y) * dx) / length
 
 
 def exportDXF(w, fname: str, approx: Optional[ApproxOptions] = None, tolerance: float = 1e-3, *, doc_units: int = units.MM) -> None:

@@ -164,8 +164,16 @@ pub fn wire_within(model: &mut Model, edges: &[Shape], tolerance: f64) -> Result
         orientations.push(orientation);
         end = next_end;
     }
-    // Close the wire on its first vertex if its ends meet.
-    if ids.len() > 1 && end != first_start && meet(model, end, first_start) {
+    // Close the wire on its first vertex if its ends meet; a lone edge too, unless it is no
+    // longer than the gap allowed (its middle then within that of its ends).
+    let lone_edge_closes = |model: &Model| {
+        model.edge_curve(placed[0]).is_some_and(|(curve, first, last)| {
+            let middle = curve.point(0.5 * (first + last));
+            let gap = gap_tolerance.max(tolerance::LINEAR);
+            [first_start, end].iter().all(|&v| model[v].point.distance(middle) > 2.0 * gap)
+        })
+    };
+    if end != first_start && meet(model, end, first_start) && (ids.len() > 1 || lone_edge_closes(model)) {
         let last = *ids.last().expect("edges");
         let record = &model[last];
         let closing_use = if *orientations.last().expect("edges") == Orientation::Forward { record.end } else { record.start };
@@ -483,6 +491,24 @@ pub fn face_on_domain(model: &mut Model, surface: Surface, u1: f64, u2: f64, v1:
 mod tests {
     use super::*;
     use crate::topology::NodeKind;
+
+    /// A lone edge whose ends are within the tolerance apart closes its wire (an ellipse
+    /// stopping 1e-5 short of its start, as DXF files store them), unless it is itself no
+    /// longer than that.
+    #[test]
+    fn a_lone_edge_closes_within_the_tolerance() {
+        use crate::geometry::curve::Ellipse;
+        use crate::math::Frame;
+        let mut model = Model::new();
+        let frame = Frame::new(Point::new(0.0, 0.0, 0.0), Direction::Z, Direction::X);
+        let ellipse = Curve::Ellipse(Ellipse::new(frame, 2.0, 1.0));
+        let edge = edge_from_curve_range(&mut model, ellipse, 0.0, std::f64::consts::TAU - 1e-5).unwrap();
+        let wire = wire_within(&mut model, &[edge], 1e-3).unwrap();
+        assert!(model.is_closed_wire(WireId::try_from(wire.node).unwrap()));
+        let short = edge_between(&mut model, Point::new(0.0, 0.0, 0.0), Point::new(1e-4, 0.0, 0.0)).unwrap();
+        let wire = wire_within(&mut model, &[short], 1e-3).unwrap();
+        assert!(!model.is_closed_wire(WireId::try_from(wire.node).unwrap()));
+    }
 
     /// The edges of a box bound its six faces; two circles crossing each other, inside a
     /// third, its regions: the lens, the two crescents, and the rest with both as a hole.

@@ -1045,7 +1045,11 @@ class Edge(Shape, Mixin1D):
     def _geomAdaptor(self) -> "Edge":
         return self
 
-    # (The edge standing in for its curve adaptor, as `_geomAdaptor` gives it.)
+    # (The edge standing in for its curve adaptor, as `_geomAdaptor` gives it, and for that
+    # adaptor's curve, `Curve().Curve()`.)
+    def Curve(self) -> "Edge":
+        return self
+
     def FirstParameter(self) -> float:
         return native.curve_parameters_at_lengths(self.wrapped, [0.0])[0]
 
@@ -1454,6 +1458,16 @@ def _lines_joined(wire: "Wire") -> "Wire":
     return Wire.assembleEdges(joined)
 
 
+def _loop_removed(wire: "Wire") -> "Wire":
+    """A wire of one closed spline edge crossing itself without the loop (as OCCT's wire
+    fixing removes it, which CadQuery's faces get)."""
+    edges = native.ordered_edges(wire.wrapped)
+    if len(edges) != 1 or Shape.cast(edges[0]).geomType() != "BSPLINE":
+        return wire
+    edge = native.remove_edge_loop(edges[0])
+    return wire if edge is None else Wire.assembleEdges([Shape.cast(edge)])
+
+
 def _spikes_trimmed(wire: "Wire") -> "Wire":
     """A closed wire without the spikes where a straight edge goes back along the one before
     it (as OCCT's wire fixing trims them, which CadQuery's faces get): each such pair one edge
@@ -1716,7 +1730,8 @@ class Face(Shape):
                 raise ValueError("Cannot build face(s): inner wire is not closed")
         if innerWires and not _coplanar(outerWire, innerWires):
             raise ValueError("Cannot build face(s): wires not planar")
-        outerWire = _spikes_trimmed(outerWire)
+        outerWire = _spikes_trimmed(_loop_removed(outerWire))
+        innerWires = [_loop_removed(w) for w in innerWires]
 
         # A wire is a hole of a group when it lies within the group's outer wire: a point on
         # it at no distance from the face the outer wire bounds (bounding boxes overlap for

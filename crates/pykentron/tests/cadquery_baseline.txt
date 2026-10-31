@@ -18,7 +18,6 @@ tests.test_assembly::test_leaf_node_count[nested_assy-3]
 tests.test_assembly::test_leaf_node_count[simple_assy-3]
 tests.test_assembly::test_native_export
 tests.test_assembly::test_save[wrl-args4]
-tests.test_assembly::test_save_stl_formats
 tests.test_assembly::test_save_vtkjs
 tests.test_assembly::test_shallow_assy
 tests.test_assembly::test_toJSON
@@ -30,12 +29,10 @@ tests.test_cadquery.TestCadQuery::testFuzzyBoolOp
 tests.test_cadquery.TestCadQuery::test_makeNSidedSurface
 tests.test_cadquery.TestCadQuery::test_project
 tests.test_cadquery.TestCadQuery::test_toVtk
-tests.test_exporters.TestExporters::testDXF
 tests.test_exporters.TestExporters::testSVGOptions
 tests.test_exporters.TestExporters::testVRML
 tests.test_exporters.TestExporters::testVTP
 tests.test_exporters::test_assy_vtk_rotation
-tests.test_exporters::test_dxf_approx
 tests.test_exporters::test_toVTK
 tests.test_free_functions::test_adaptor_curve_to_edge
 tests.test_free_functions::test_cap
@@ -44,7 +41,6 @@ tests.test_free_functions::test_faceOn
 tests.test_free_functions::test_operators
 tests.test_free_functions::test_project
 tests.test_free_functions::test_solid
-tests.test_importers.TestImporters::testImportDXF
 tests.test_jupyter.TestJupyter::test_display_error
 tests.test_jupyter.TestJupyter::test_repr_javascript
 tests.test_shapes::test_extend

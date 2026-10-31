@@ -57,7 +57,7 @@ and no change may make a passing test fail.
 
 <!-- effort -->
 So far (2026-09-25 to 2026-10-31): about 271 hours of the agent's active work, 18.2 million
-tokens written by it, and 10.3 billion tokens processed in all (nearly all of them its
+tokens written by it, and 10.4 billion tokens processed in all (nearly all of them its
 conversation's context, read back from the cache).
 <!-- /effort -->
 
@@ -71,10 +71,11 @@ conversation's context, read back from the cache).
 - **OCCT's GTests:** the computational-geometry and topology toolkits, translated by hand.
 - **BRL-CAD:** NIST's MBE PMI test parts and other STEP files from its source tree, with
   OCCT's reading of them as the reference, plus its `libbg` geometry tests.
-- **CadQuery's own test suite** (v2.8.0), run unchanged against pykentron: 622 of the 676
-  tests that test CadQuery's behaviour pass. The 51 left out test OCCT's own ways instead
-  (its document and binary formats, its STL and glTF writers' layout, its approximations' and
-  vertex orders' particulars: `crates/pykentron/tests/cadquery_excluded.txt`); about half the rest are
+- **CadQuery's own test suite** (v2.8.0), run unchanged against pykentron: 624 of the 674
+  tests that test CadQuery's behaviour pass. The 53 left out test OCCT's own ways instead
+  (its document and binary formats, its STL and glTF writers' layout and mesh density, its
+  approximations', fillet surfaces' and vertex orders' particulars:
+  `crates/pykentron/tests/cadquery_excluded.txt`); about half the rest are
   assembly features (colours of fused parts, names, JSON and VTK.js export), the others
   exporters kentron lacks (VRML, VTK), NURBS fitting, and a few operations.
 - **44 CadQuery models from a private project** build on pykentron; for the 42 that return
