@@ -263,6 +263,22 @@ fn build_face(model: &mut Model, spec: &Spec) -> Result<Shape> {
             let coedge = model.add_coedge(u.edge, u.orientation)?;
             if let Some(p) = &u.pcurve {
                 model.set_pcurve_with_range(coedge, p.clone(), u.first, u.last)?;
+                // (A pcurve carried over from another face's parametrization may stray from
+                // the edge by a few rounding errors more than the edge allows: the edge made
+                // that much more tolerant, up to a hundredth of a micron.)
+                if let Some((curve, first, last)) = model.edge_curve(Shape::from(u.edge)) {
+                    let stray = (0..=8)
+                        .map(|k| {
+                            let s = k as f64 / 8.0;
+                            let uv = p.point(u.first + (u.last - u.first) * s);
+                            spec.surface.point(uv.x, uv.y).distance(curve.point(first + (last - first) * s))
+                        })
+                        .fold(0.0, f64::max);
+                    let tolerance = model.tolerance(Shape::from(u.edge));
+                    if stray > tolerance && stray <= 1e-5 {
+                        model.set_edge_tolerance(u.edge, 1.5 * stray)?;
+                    }
+                }
             }
             coedges.push(coedge);
         }

@@ -301,7 +301,8 @@ fn with_earlier_fillets(model: &mut Model, shape: Shape, edges: &[(Shape, f64)])
     };
     // The earlier fillets the edges end on (or the edges continuing them tangentially).
     let mut found: Vec<(usize, Axis, f64, Point)> = Vec::new();
-    for (edge, radius) in tangent_chains(model, shape, edges, 0.0) {
+    let chain = tangent_chains(model, shape, edges, 0.0);
+    for &(edge, radius) in &chain {
         let Some(line) = model.edge_curve(Shape { orientation: Orientation::Forward, ..edge }).and_then(|c| line_of(&c.0)) else { continue };
         let Some(own) = by_edge.get(&edge.node) else { continue };
         if own.len() != 2 || !own.iter().all(|&i| is_plane(model, i)) || !Corner::of(model, shape, edge, true)?.is_some_and(|c| c.convex) {
@@ -321,6 +322,10 @@ fn with_earlier_fillets(model: &mut Model, shape: Shape, edges: &[(Shape, f64)])
             let [f] = others[..] else { continue };
             let Some((axis, own_radius)) = fillet_cylinder(model, f, radius) else { continue };
             if Vector::from(axis.direction).cross(Vector::from(line.direction)).length() <= tolerance::ANGULAR {
+                continue;
+            }
+            // (Not where the edges run on along its own: the rounding carries on round it.)
+            if chain.iter().any(|c| by_edge.get(&c.0.node).is_some_and(|at| at.contains(&f))) {
                 continue;
             }
             // (Tangent to one of the edge's faces.)
@@ -420,11 +425,21 @@ fn with_earlier_fillets(model: &mut Model, shape: Shape, edges: &[(Shape, f64)])
         return Ok(None);
     }
     let restored = crate::unify::unify_same_domain(model, restored)?;
-    let mut together = Vec::with_capacity(edges.len() + sharp_edges.len());
+    let mut together: Vec<(Shape, f64)> = Vec::with_capacity(edges.len() + sharp_edges.len());
     for &(edge, radius) in edges {
         let Some((curve, a, b)) = model.edge_curve(Shape { orientation: Orientation::Forward, ..edge }) else { return Ok(None) };
         let Some(found) = find_edge(model, restored, &curve, a, b) else { return Ok(None) };
         together.push((found, radius));
+    }
+    // (And the edges continuing them tangentially as they were: the sharp edges put back
+    // break the run of those beyond them.)
+    for (edge, radius) in chain {
+        let Some((curve, a, b)) = model.edge_curve(Shape { orientation: Orientation::Forward, ..edge }) else { continue };
+        if let Some(found) = find_edge(model, restored, &curve, a, b) {
+            if !together.iter().any(|e| e.0.node == found.node) && !smooth(model, restored, found) {
+                together.push((found, radius));
+            }
+        }
     }
     for (curve, a, b, radius) in sharp_edges {
         let Some(found) = find_edge(model, restored, &curve, a, b) else { return Ok(None) };
@@ -1271,6 +1286,19 @@ fn concave_ends(model: &mut Model, shape: Shape, corners: &[(Corner, f64)], i: u
         // (On past the end: along the edge out of it.)
         let out = corner.direction_at(p) * if k == 0 { -1.0 } else { 1.0 };
         let facing = n.dot(out);
+        // (A plane leaning back over the end, as a pocket's wall at an inside corner wider
+        // than square: the pocket runs on past the end under it, and the fillet with it,
+        // until it meets that wall: the tool run on past it, then cut back to its open side.)
+        if facing < -tolerance::ANGULAR.sqrt() && facing > -1.0 + tolerance::ANGULAR && matches!(surface, Surface::Plane(_)) {
+            let (_, into) = corner.past(k == 1, 0.0);
+            let ahead = into.iter().map(|d| d.dot(n).abs()).fold(0.0, f64::max);
+            run[k] = radius * (1.0 + ahead / -facing) * 1.5;
+            let x = perpendicular(n);
+            let y = (-n).cross(x);
+            let frame = Frame::new(p - x * reach - y * reach, Direction::from_vector(-n), Direction::from_vector(x));
+            beyond.push((crate::primitives::Cuboid::new(2.0 * reach, 2.0 * reach, reach).with_frame(frame).build(model)?, false));
+            continue;
+        }
         if !(facing > tolerance::ANGULAR.sqrt()) {
             continue;
         }
@@ -3941,6 +3969,39 @@ mod tests {
             assert!((v - occt).abs() < 1e-6 * occt, "{v} vs {occt}");
             assert_eq!(model.unique_subshapes(bevelled, NodeKind::Face).len(), faces);
         }
+    }
+
+    /// A 40 x 40 x 10 block with a pocket 6 deep, one wall of which turns 135 degrees
+    /// inward into the next: the floor's edge along the first rounded (R 2, added
+    /// material), the fillet runs on past the wall's end under the leaning one until it
+    /// meets it (OCCT's values), not square at the end.
+    #[test]
+    fn a_floor_fillet_runs_on_to_a_wall_leaning_over_its_end() {
+        let mut model = Model::new();
+        let block = Cuboid::from_corners(Point::new(-20.0, -20.0, 0.0), Point::new(20.0, 20.0, 10.0)).build(&mut model).unwrap();
+        let outline = [(-10.0, -10.0), (5.0, -10.0), (5.0, 2.0), (-1.0, 8.0), (-10.0, 8.0)].map(|(x, y)| Point::new(x, y, 4.0));
+        let sides: Vec<Shape> = (0..5).map(|i| make::edge_between(&mut model, outline[i], outline[(i + 1) % 5]).unwrap()).collect();
+        let wire = make::wire(&mut model, &sides).unwrap();
+        let face = make::planar_face(&mut model, wire).unwrap();
+        let pocket = sweep::extrude(&mut model, face, Vector::new(0.0, 0.0, 10.0)).unwrap().shape;
+        let body = boolean::difference(&mut model, block, pocket).unwrap();
+        let floor = model
+            .unique_subshapes(body, NodeKind::Edge)
+            .into_iter()
+            .find(|&e| {
+                let (a, b) = model.edge_vertices(e);
+                let (p, q) = (model.point(a), model.point(b));
+                (p.x - 5.0).abs() < 1e-9 && (q.x - 5.0).abs() < 1e-9 && (p.z - 4.0).abs() < 1e-9 && (q.z - 4.0).abs() < 1e-9
+            })
+            .unwrap();
+        let rounded = fillet(&mut model, body, &[floor], 2.0).unwrap();
+        let report = validity::check(&model, rounded);
+        assert!(report.problems.is_empty(), "{report:?}");
+        let v = properties::volume(&model, rounded).mass;
+        assert!((v - 14498.68439).abs() < 1e-7 * v, "{v}");
+        let a = properties::area(&model, rounded).mass;
+        assert!((a - 5162.82159).abs() < 1e-7 * a, "{a}");
+        assert_eq!(model.unique_subshapes(rounded, NodeKind::Face).len(), 13);
     }
 
     /// A 30 x 30 x 10 block with a 10 x 16 pocket 4 deep in its top: the rim's long edge
