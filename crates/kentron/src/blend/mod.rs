@@ -180,6 +180,16 @@ fn smooth(model: &Model, shape: Shape, edge: Shape) -> bool {
                 }
             })
         }
+        // (More than two: where all are tangent there, a pinch between surfaces touching
+        // along it, as two round holes side by side: OCCT leaves it as it is.)
+        ref more if more.len() > 2 => {
+            let Some((curve, first, last)) = model.edge_curve(Shape { orientation: Orientation::Forward, ..edge }) else { return false };
+            [0.2, 0.5, 0.8].iter().all(|&s| {
+                let p = curve.point(first + (last - first) * s);
+                let normals: Option<Vec<Vector>> = more.iter().map(|&f| normal_at(model, shape, f, p)).collect();
+                normals.is_some_and(|ns| ns.iter().all(|n| n.dot(ns[0]).abs() >= 1.0 - tolerance::ANGULAR.sqrt()))
+            })
+        }
         _ => false,
     }
 }
@@ -823,6 +833,7 @@ fn fillet_solid_edges_as(model: &mut Model, shape: Shape, edges: &[(Shape, f64)]
     let mitred = mitres(&corners);
     let extended = extensions(model, shape, &corners);
     let overhangs = overhanging_ends(model, shape, &corners, &extended, &mitred);
+    let runs = extended.clone();
     for (i, ((((corner, radius), extend), mitre), overhang)) in corners.iter().zip(extended).zip(&mitred).zip(&overhangs).enumerate() {
         let (extend, beyond) = if corner.convex { (extend, Vec::new()) } else { concave_ends(model, shape, &corners, i)? };
         let tool = corner.tool(model, *radius, mitre_runs(corner, *radius, extend, mitre))?;
@@ -834,6 +845,87 @@ fn fillet_solid_edges_as(model: &mut Model, shape: Shape, edges: &[(Shape, f64)]
         }
         result = if corner.convex { boolean::difference(model, result, tool)? } else { boolean::union(model, result, tool)? };
         result = keep(model, result)?;
+    }
+    // Where two convex fillets meet at a corner the material carries on past (a rim turning
+    // inward), not mitred (a straight one and a circular one): past the corner, what either
+    // takes away where the other would too, or where it lies beyond the other's wall, as the
+    // fillets run on until they cross. (Between two straight ones, what their mitre plane
+    // leaves.)
+    for (p, at) in &meetings {
+        let [i, j] = at[..] else { continue };
+        let end_of = |c: &Corner| usize::from(c.origin.distance(*p) > tolerance::LINEAR);
+        let (ki, kj) = (end_of(&corners[i].0), end_of(&corners[j].0));
+        if !corners[i].0.convex || !corners[j].0.convex || mitred[i][ki].is_some() || mitred[j][kj].is_some() || runs[i][ki] > 0.0 || runs[j][kj] > 0.0 {
+            continue;
+        }
+        // (One of them circular, of the same radius, on a plane they share.)
+        let circular = |c: &Corner| matches!(c.path, Path::Arc { .. });
+        let shared = corners[i].0.faces.iter().find(|f| corners[j].0.faces.iter().any(|g| g.0 == f.0));
+        if !(circular(&corners[i].0) || circular(&corners[j].0)) || (corners[i].1 - corners[j].1).abs() > tolerance::LINEAR || !shared.is_some_and(|f| matches!(f.1, Surface::Plane(_))) {
+            continue;
+        }
+        // (Turning inward on that plane: each edge leaves the corner away from the other's
+        // side of the plane's material.)
+        let shared = shared.expect("a shared face").0;
+        let leaving = |c: &Corner, k: usize| {
+            let d = c.direction_at(*p);
+            let other = if k == 0 { c.end } else { c.origin };
+            if (other - *p).dot(d) < 0.0 { -d } else { d }
+        };
+        let inward = |c: &Corner, k: usize| {
+            let (_, into) = c.past(k == 1, 0.0);
+            c.faces.iter().position(|f| f.0 == shared).map(|s| into[s])
+        };
+        let turning_in = match (inward(&corners[i].0, ki), inward(&corners[j].0, kj)) {
+            (Some(a), Some(b)) => leaving(&corners[j].0, kj).dot(a) < -tolerance::ANGULAR.sqrt() && leaving(&corners[i].0, ki).dot(b) < -tolerance::ANGULAR.sqrt(),
+            _ => false,
+        };
+        if !turning_in {
+            continue;
+        }
+        let reach = 3.0 * corners[i].1.max(corners[j].1);
+        let run_at = |k: usize| if k == 0 { [reach, 0.0] } else { [0.0, reach] };
+        let mut on = Vec::with_capacity(2);
+        for (k, l, end) in [(i, j, ki), (j, i, kj)] {
+            let tool = corners[k].0.tool(model, corners[k].1, run_at(end))?;
+            let wall = corners[k].0.faces.iter().find(|f| !corners[l].0.faces.iter().any(|g| g.0 == f.0)).cloned();
+            let Some(beyond) = (match wall {
+                Some(w) => beyond_wall(model, &w, *p, reach)?,
+                None => None,
+            }) else {
+                break;
+            };
+            on.push((tool, Some(beyond)));
+        }
+        if on.len() != 2 {
+            continue;
+        }
+        let mut taken: Option<Shape> = None;
+        for (k, l) in [(0, 1), (1, 0)] {
+            let other = match on[l].1 {
+                Some(beyond) => boolean::union(model, on[l].0, beyond)?,
+                None => on[l].0,
+            };
+            let part = boolean::intersection(model, on[k].0, other)?;
+            taken = Some(match taken {
+                Some(t) => boolean::union(model, t, part)?,
+                None => part,
+            });
+        }
+        let near = crate::primitives::Cuboid::from_corners(*p - Vector::new(reach, reach, reach), *p + Vector::new(reach, reach, reach)).build(model)?;
+        let taken = boolean::intersection(model, taken.expect("two parts"), near)?;
+        // (Only a sliver at the corner, no more than it holds taken away.)
+        let size = crate::properties::volume(model, taken).mass;
+        if model.explore(taken, NodeKind::Face).next().is_none() || !(size > 0.0 && size < reach * reach * reach) {
+            continue;
+        }
+        record_tool(model, taken, &[corners[i].0.edges.clone(), corners[j].0.edges.clone()].concat());
+        let before = crate::properties::volume(model, result).mass;
+        let cut = boolean::difference(model, result, taken)?;
+        let cut = keep(model, cut)?;
+        if before - crate::properties::volume(model, cut).mass <= size * (1.0 + 1e-6) + 1e-9 {
+            result = cut;
+        }
     }
     for (tool, convex, local_shape, edge, radius, filleted) in rolling_tools {
         record_tool(model, tool, &[edge.node]);
@@ -875,6 +967,33 @@ fn fillet_solid_edges_as(model: &mut Model, shape: Shape, edges: &[(Shape, f64)]
         result = keep(model, result)?;
     }
     Ok(result)
+}
+
+/// The side of a fillet's wall `wall` (a plane or a cylinder, with its sign outward) away
+/// from its material, within `reach` of `p`: `None` for other surfaces.
+fn beyond_wall(model: &mut Model, wall: &(NodeId, Surface, f64), p: Point, reach: f64) -> Result<Option<Shape>> {
+    let near = crate::primitives::Cuboid::from_corners(p - Vector::new(reach, reach, reach), p + Vector::new(reach, reach, reach)).build(model)?;
+    let (u, v) = wall.1.parameters(p).unwrap_or((0.0, 0.0));
+    let (_, du, dv) = wall.1.d1(u, v);
+    let out = du.cross(dv).normalized() * wall.2;
+    match &wall.1 {
+        Surface::Plane(_) => {
+            let x = perpendicular(out);
+            let frame = Frame::new(p - x * (2.0 * reach) - out.cross(x) * (2.0 * reach), Direction::from_vector(out), Direction::from_vector(x));
+            let half = crate::primitives::Cuboid::new(4.0 * reach, 4.0 * reach, 2.0 * reach).with_frame(frame).build(model)?;
+            Ok(Some(boolean::intersection(model, half, near)?))
+        }
+        Surface::Cylinder(c) => {
+            let axis = c.frame().z_axis();
+            let z = Vector::from(axis.direction);
+            let base = foot(axis, p) - z * (2.0 * reach);
+            let solid = crate::primitives::Cylinder::new(c.radius(), 4.0 * reach).with_frame(Frame::new(base, axis.direction, Direction::from_vector(perpendicular(z)))).build(model)?;
+            // (Facing its axis, the wall of a hole: beyond it, within; else without.)
+            let inward = out.dot(foot(axis, p) - p) > 0.0;
+            Ok(Some(if inward { boolean::intersection(model, solid, near)? } else { boolean::difference(model, near, solid)? }))
+        }
+        _ => Ok(None),
+    }
 }
 
 /// Where three concave straight fillets of one radius meet at a corner of three planes (a
@@ -4058,6 +4177,70 @@ mod tests {
             assert!((v - occt).abs() < 1e-6 * occt, "{v} vs {occt}");
             assert_eq!(model.unique_subshapes(bevelled, NodeKind::Face).len(), faces);
         }
+    }
+
+    /// A bar 75 x 3 x 2 across a disc of radius 15, then across a ring 27 to 30, both 2
+    /// thick: their tops' edges rounded (R 1). Where the bar's straight fillets meet the
+    /// disc's and the ring's circular ones, at corners turning inward, the fillets run on
+    /// until they cross (OCCT's values), not each square at the corner.
+    #[test]
+    fn straight_and_circular_fillets_meet_where_they_cross() {
+        use crate::primitives::Cylinder;
+        for (ring, occt_volume, occt_area) in [(false, 1644.73194, 1973.42143), (true, 1382.84280, 2258.85459)] {
+            let mut model = Model::new();
+            let bar = Cuboid::from_corners(Point::new(-37.5, -1.5, 0.0), Point::new(37.5, 1.5, 2.0)).build(&mut model).unwrap();
+            let round = if ring {
+                let outer = Cylinder::new(30.0, 2.0).build(&mut model).unwrap();
+                let inner = Cylinder::new(27.0, 2.0).build(&mut model).unwrap();
+                boolean::difference(&mut model, outer, inner).unwrap()
+            } else {
+                Cylinder::new(15.0, 2.0).build(&mut model).unwrap()
+            };
+            let body = boolean::union(&mut model, bar, round).unwrap();
+            let body = crate::unify::unify_same_domain(&mut model, body).unwrap();
+            let top: Vec<Shape> = model
+                .unique_subshapes(body, NodeKind::Edge)
+                .into_iter()
+                .filter(|&e| {
+                    let (a, b) = model.edge_vertices(e);
+                    (model.point(a).z - 2.0).abs() < 1e-9 && (model.point(b).z - 2.0).abs() < 1e-9 && !smooth(&model, body, e)
+                })
+                .collect();
+            let rounded = fillet(&mut model, body, &top, 1.0).unwrap();
+            let report = validity::check(&model, rounded);
+            assert!(report.problems.is_empty(), "{report:?}");
+            let v = properties::volume(&model, rounded).mass;
+            assert!((v - occt_volume).abs() < 1e-6 * v, "{v} vs {occt_volume}");
+            let a = properties::area(&model, rounded).mass;
+            assert!((a - occt_area).abs() < 1e-6 * a, "{a} vs {occt_area}");
+        }
+    }
+
+    /// A 100 x 60 x 10 plate with two holes of radius 10 through it, side by side, touching
+    /// along a line: its vertical edges rounded (R 5), that line among them, where the
+    /// holes' walls pinch the plate to nothing, is left as it is (OCCT's values), not refused
+    /// as an edge of four faces.
+    #[test]
+    fn a_pinch_between_holes_is_left_unrounded() {
+        use crate::primitives::Cylinder;
+        let mut model = Model::new();
+        let mut body = Cuboid::from_corners(Point::new(-50.0, -30.0, -5.0), Point::new(50.0, 30.0, 5.0)).build(&mut model).unwrap();
+        for y in [10.0, -10.0] {
+            let hole = Cylinder::new(10.0, 20.0).with_frame(Frame::from_z(Point::new(20.0, y, -10.0), Direction::Z)).build(&mut model).unwrap();
+            body = boolean::difference(&mut model, body, hole).unwrap();
+        }
+        let vertical: Vec<Shape> = model
+            .unique_subshapes(body, NodeKind::Edge)
+            .into_iter()
+            .filter(|&e| matches!(model.edge_curve(e), Some((Curve::Line(l), ..)) if Vector::from(l.direction).cross(Vector::new(0.0, 0.0, 1.0)).length() < 1e-9))
+            .collect();
+        let rounded = fillet(&mut model, body, &vertical, 5.0).unwrap();
+        let report = validity::check(&model, rounded);
+        assert!(report.problems.is_empty(), "{report:?}");
+        let v = properties::volume(&model, rounded).mass;
+        assert!((v - 53502.21286).abs() < 1e-7 * v, "{v}");
+        let a = properties::area(&model, rounded).mass;
+        assert!((a - 15071.23890).abs() < 1e-7 * a, "{a}");
     }
 
     /// A 30 x 30 x 10 block with a 10 x 16 pocket 6 deep: its floor's edges and its
