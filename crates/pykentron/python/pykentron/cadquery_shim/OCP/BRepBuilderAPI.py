@@ -114,6 +114,15 @@ class BRepBuilderAPI_MakeEdge:
             self._edge = args[0]
         elif len(args) == 2 and all(hasattr(a, "X") for a in args):
             self._edge = _kentron.make_line(*[(a.X(), a.Y(), a.Z()) for a in args])
+        elif len(args) == 1 and hasattr(args[0], "Position") and (hasattr(args[0], "Radius") or hasattr(args[0], "MajorRadius")):
+            # (A whole circle or ellipse, in its frame.)
+            frame = args[0].Position()
+            xyz = lambda d: (d.X(), d.Y(), d.Z())
+            centre, normal, x = xyz(frame.Location()), xyz(frame.Direction()), xyz(frame.XDirection())
+            if hasattr(args[0], "Radius"):
+                self._edge = _kentron.make_circle(args[0].Radius(), centre, normal, 0.0, 360.0, x)
+            else:
+                self._edge = _kentron.make_ellipse(args[0].MajorRadius(), args[0].MinorRadius(), centre, normal, x, 0.0, 360.0)
         else:
             raise NotImplementedError("OCP.BRepBuilderAPI.BRepBuilderAPI_MakeEdge from curves is not provided by pykentron")
 

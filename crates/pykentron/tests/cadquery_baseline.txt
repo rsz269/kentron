@@ -62,8 +62,6 @@ tests.test_assembly::test_shallow_assy
 tests.test_assembly::test_toJSON
 tests.test_assembly::test_vrml_export
 tests.test_assembly::test_vtkjs_export
-tests.test_cad_objects.TestCadObjects::testEdgeWrapperCenter
-tests.test_cad_objects.TestCadObjects::testEdgeWrapperEllipseCenter
 tests.test_cad_objects.TestCadObjects::testPlaneMethods
 tests.test_cadquery.TestCadQuery::testCompSolid
 tests.test_cadquery.TestCadQuery::testExtrudeUntilFace

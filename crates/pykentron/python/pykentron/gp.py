@@ -664,6 +664,53 @@ class gp_Trsf:
         return f"gp_Trsf({self.rows})"
 
 
+class gp_Circ:
+    """A circle: in the plane of a frame, about its origin."""
+
+    def __init__(self, position=None, radius: float = 0.0):
+        self._position = position if position is not None else gp_Ax2()
+        self._radius = float(radius)
+
+    def Position(self) -> gp_Ax2:
+        return self._position
+
+    def Location(self) -> gp_Pnt:
+        return self._position.Location()
+
+    def Axis(self) -> gp_Ax1:
+        return self._position.Axis()
+
+    def Radius(self) -> float:
+        return self._radius
+
+    def SetRadius(self, radius: float) -> None:
+        self._radius = float(radius)
+
+
+class gp_Elips:
+    """An ellipse: in the plane of a frame, about its origin, the major radius along the
+    frame's X direction."""
+
+    def __init__(self, position=None, major: float = 0.0, minor: float = 0.0):
+        self._position = position if position is not None else gp_Ax2()
+        self._major, self._minor = float(major), float(minor)
+
+    def Position(self) -> gp_Ax2:
+        return self._position
+
+    def Location(self) -> gp_Pnt:
+        return self._position.Location()
+
+    def Axis(self) -> gp_Ax1:
+        return self._position.Axis()
+
+    def MajorRadius(self) -> float:
+        return self._major
+
+    def MinorRadius(self) -> float:
+        return self._minor
+
+
 class gp:
     """OCCT's `gp` package functions."""
 

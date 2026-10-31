@@ -679,18 +679,46 @@ pub fn approximate_with<P: ControlPoint>(points: &[P], options: ApproximationOpt
         return smoothed(points, &q, &params, weights, options);
     }
     let degree = options.min_degree.max(1).min(n - 1).min(options.max_degree.max(1));
-    // More poles until the curve passes within the tolerance (with n poles it interpolates).
+    let top = options.max_degree.max(degree).min(n - 1);
+    // More poles until the curve passes within the tolerance (with n poles it interpolates),
+    // each count tried of each degree allowed, lowest first (as OCCT raises the degree before
+    // adding pieces: a low degree with nearly as many poles as points swings wildly between
+    // them).
     for m in (degree + 1)..=n {
-        let Some(curve) = least_squares::<P>(&q, &params, degree, m) else { continue };
-        let worst = params.iter().zip(&q).map(|(&t, target)| {
-            let c = curve.point(t).coords();
-            (0..3).map(|k| (c[k] - target[k]).powi(2)).sum::<f64>().sqrt()
-        }).fold(0.0, f64::max);
-        if worst <= options.tolerance || m == n {
+        for d in degree..=top.min(m - 1) {
+            let Some(curve) = least_squares::<P>(&q, &params, d, m) else { continue };
+            let worst = params.iter().zip(&q).map(|(&t, target)| {
+                let c = curve.point(t).coords();
+                (0..3).map(|k| (c[k] - target[k]).powi(2)).sum::<f64>().sqrt()
+            }).fold(0.0, f64::max);
+            if worst <= options.tolerance && tame(&curve, &q, &params, options.tolerance) {
+                return Ok(curve);
+            }
+        }
+    }
+    // (None near enough without swinging away between the points: faired a little, as
+    // much as stays near enough.)
+    if let Ok(curve) = smoothed(points, &q, &params, [1e-4, 1e-4, 1e-4], options) {
+        if tame(&curve, &q, &params, options.tolerance) {
             return Ok(curve);
         }
     }
     interpolate_with_parameters(points, &params)
+}
+
+/// Whether `curve`, passing near the points `q` at `params`, keeps near them between them
+/// too: halfway between each two, within half the chord between them (and the tolerance) of
+/// it, not swinging away where few points hold it.
+fn tame<P: ControlPoint>(curve: &BSplineCurve<P>, q: &[[f64; 3]], params: &[f64], tolerance: f64) -> bool {
+    params.windows(2).zip(q.windows(2)).all(|(t, p)| {
+        let c = curve.point(0.5 * (t[0] + t[1])).coords();
+        let (a, b) = (p[0], p[1]);
+        let ab: Vec<f64> = (0..3).map(|k| b[k] - a[k]).collect();
+        let len2: f64 = ab.iter().map(|x| x * x).sum();
+        let s = if len2 > 0.0 { ((0..3).map(|k| (c[k] - a[k]) * ab[k]).sum::<f64>() / len2).clamp(0.0, 1.0) } else { 0.0 };
+        let off = (0..3).map(|k| (c[k] - a[k] - s * ab[k]).powi(2)).sum::<f64>().sqrt();
+        off <= 0.5 * len2.sqrt() + tolerance
+    })
 }
 
 /// [`approximate_with`] with smoothing: of the greatest degree, with the fewest poles (as
@@ -926,6 +954,27 @@ mod tests {
     use crate::geometry::surface::Surface;
     use crate::geometry::ParametricCurve;
     use crate::math::Point;
+
+    /// Points round a thin ellipse, closer near its ends (as an airfoil's), approximated
+    /// within 1e-6 from degree 2: the curve keeps near them between them too, as long as the
+    /// points' polyline (within a tenth of a percent), not swinging away where a low degree
+    /// with nearly as many poles as points leaves pieces unheld.
+    #[test]
+    fn a_tight_approximation_keeps_between_the_points() {
+        let points: Vec<Point> = (0..81)
+            .map(|i| {
+                let s = i as f64 / 80.0;
+                let t = 2.0 * PI * (s - 0.08 * (2.0 * PI * s).sin());
+                Point::new(t.cos(), 0.06 * t.sin(), 0.0)
+            })
+            .collect();
+        let options = ApproximationOptions { min_degree: 2, max_degree: 6, tolerance: 1e-6, ..Default::default() };
+        let curve = approximate_with(&points, options).unwrap();
+        let (a, b) = (curve.first_parameter(), curve.last_parameter());
+        let along: f64 = (0..4000).map(|k| curve.point(a + (b - a) * k as f64 / 4000.0).distance(curve.point(a + (b - a) * (k + 1) as f64 / 4000.0))).sum();
+        let polyline: f64 = points.windows(2).map(|w| w[0].distance(w[1])).sum();
+        assert!((along - polyline).abs() < 1e-3 * polyline, "{along} vs {polyline}");
+    }
 
     // CadQuery's spline tests (test_cadquery.py), whose expected points are OCCT's.
     #[test]
