@@ -891,13 +891,70 @@ fn fillet_solid_edges_as(model: &mut Model, shape: Shape, edges: &[(Shape, f64)]
         result = if corner.convex { boolean::difference(model, result, tool)? } else { boolean::union(model, result, tool)? };
         result = keep(model, result)?;
     }
-    // Where two convex fillets meet at a corner the material carries on past (a rim turning
-    // inward), not mitred (a straight one and a circular one): past the corner, what either
-    // takes away where the other would too, or where it lies beyond the other's wall, as the
-    // fillets run on until they cross. (Between two straight ones, what their mitre plane
-    // leaves.) (The solid's volume carried from one corner to the next.)
+    result = inward_corners(model, result, &corners, &meetings, &mitred, &runs, &keep, &|model: &mut Model, k: usize, run: [f64; 2]| corners[k].0.tool(model, corners[k].1, run))?;
+    for (tool, convex, local_shape, edge, radius, filleted) in rolling_tools {
+        record_tool(model, tool, &[edge.node]);
+        // (Where the close tool leaves the boolean taking it failed, or the solid unsound
+        // where it was sound, the loose one instead; neither leaving a sound solid sound,
+        // the fillet fails.)
+        let take = |model: &mut Model, tool: Shape| -> Result<Shape> {
+            let taken = if convex { boolean::difference(model, result, tool)? } else { boolean::union(model, result, tool)? };
+            keep(model, taken)
+        };
+        // (On an open shell, as it is: the tools are the same.)
+        if !(model.explore(local_shape, NodeKind::Solid).next().is_some() && boolean::closed_shells(model, local_shape)) {
+            result = take(model, tool)?;
+            continue;
+        }
+        let sound_before = crate::validity::check(model, result).is_valid();
+        let sound = |model: &Model, r: &Result<Shape>| r.as_ref().is_ok_and(|&r| !sound_before || crate::validity::check(model, r).is_valid());
+        let first = take(model, tool);
+        result = if sound(model, &first) {
+            first?
+        } else {
+            let second = ball::rolling_tool(model, local_shape, edge, &|_| radius, &filleted, true).and_then(|(loose, _)| take(model, loose.moved(&placement)));
+            match (first, second) {
+                (_, Ok(r)) if !sound_before || crate::validity::check(model, r).is_valid() => r,
+                (Ok(_), Ok(_)) => return Err(Error::Failed("a fillet's tool left the solid unsound".into())),
+                (Err(e), Err(_)) => return Err(e),
+                (Ok(r), Err(_)) | (Err(_), Ok(r)) if !sound_before => r,
+                (Err(e), _) | (_, Err(e)) => return Err(e),
+            }
+        };
+    }
+    for patch in patches {
+        let tool = patch.tool(model)?;
+        result = boolean::difference(model, result, tool)?;
+        result = keep(model, result)?;
+    }
+    for fill in fills {
+        result = boolean::union(model, result, fill)?;
+        result = keep(model, result)?;
+    }
+    Ok(result)
+}
+
+/// Where two convex fillets meet at a corner the material carries on past (a rim turning
+/// inward), not mitred (a straight one and a circular one): past the corner, what either
+/// takes away where the other would too, or where it lies beyond the other's wall, as the
+/// fillets run on until they cross. (Between two straight ones, what their mitre plane
+/// leaves.) (The solid's volume carried from one corner to the next.)
+/// `corners` (each with its size: a fillet's radius, a chamfer's larger distance) met in
+/// pairs at `meetings`, `mitred` and run past their ends as `runs`; `tool` makes corner
+/// `k`'s tool run past its ends as given; `keep` checks each step's result.
+fn inward_corners(
+    model: &mut Model,
+    shape: Shape,
+    corners: &[(Corner, f64)],
+    meetings: &[(Point, Vec<usize>)],
+    mitred: &[[Option<(Point, Vector)>; 2]],
+    runs: &[[f64; 2]],
+    keep: &dyn Fn(&Model, Shape) -> Result<Shape>,
+    tool: &dyn Fn(&mut Model, usize, [f64; 2]) -> Result<Shape>,
+) -> Result<Shape> {
+    let mut result = shape;
     let mut volume_now: Option<f64> = None;
-    for (p, at) in &meetings {
+    for (p, at) in meetings {
         let [i, j] = at[..] else { continue };
         let end_of = |c: &Corner| usize::from(c.origin.distance(*p) > tolerance::LINEAR);
         let (ki, kj) = (end_of(&corners[i].0), end_of(&corners[j].0));
@@ -930,10 +987,17 @@ fn fillet_solid_edges_as(model: &mut Model, shape: Shape, edges: &[(Shape, f64)]
             continue;
         }
         let reach = 3.0 * corners[i].1.max(corners[j].1);
-        let run_at = |k: usize| if k == 0 { [reach, 0.0] } else { [0.0, reach] };
+        // (Each run on past the corner no further than most of the other's edge: run on to
+        // that edge's far end, it would graze what the other's tool leaves there.)
+        let run_at = |k: usize, l: usize| {
+            let other = &corners[l].0;
+            let chord = other.origin.distance(other.end);
+            let run = if chord > tolerance::LINEAR { reach.min(0.6 * chord) } else { reach };
+            if k == 0 { [run, 0.0] } else { [0.0, run] }
+        };
         let mut on = Vec::with_capacity(2);
         for (k, l, end) in [(i, j, ki), (j, i, kj)] {
-            let tool = corners[k].0.tool(model, corners[k].1, run_at(end))?;
+            let tool = tool(model, k, run_at(end, l))?;
             let wall = corners[k].0.faces.iter().find(|f| !corners[l].0.faces.iter().any(|g| g.0 == f.0)).cloned();
             let Some(beyond) = (match wall {
                 Some(w) => beyond_wall(model, &w, *p, reach)?,
@@ -978,45 +1042,6 @@ fn fillet_solid_edges_as(model: &mut Model, shape: Shape, edges: &[(Shape, f64)]
             result = cut;
             volume_now = Some(after);
         }
-    }
-    for (tool, convex, local_shape, edge, radius, filleted) in rolling_tools {
-        record_tool(model, tool, &[edge.node]);
-        // (Where the close tool leaves the boolean taking it failed, or the solid unsound
-        // where it was sound, the loose one instead; neither leaving a sound solid sound,
-        // the fillet fails.)
-        let take = |model: &mut Model, tool: Shape| -> Result<Shape> {
-            let taken = if convex { boolean::difference(model, result, tool)? } else { boolean::union(model, result, tool)? };
-            keep(model, taken)
-        };
-        // (On an open shell, as it is: the tools are the same.)
-        if !(model.explore(local_shape, NodeKind::Solid).next().is_some() && boolean::closed_shells(model, local_shape)) {
-            result = take(model, tool)?;
-            continue;
-        }
-        let sound_before = crate::validity::check(model, result).is_valid();
-        let sound = |model: &Model, r: &Result<Shape>| r.as_ref().is_ok_and(|&r| !sound_before || crate::validity::check(model, r).is_valid());
-        let first = take(model, tool);
-        result = if sound(model, &first) {
-            first?
-        } else {
-            let second = ball::rolling_tool(model, local_shape, edge, &|_| radius, &filleted, true).and_then(|(loose, _)| take(model, loose.moved(&placement)));
-            match (first, second) {
-                (_, Ok(r)) if !sound_before || crate::validity::check(model, r).is_valid() => r,
-                (Ok(_), Ok(_)) => return Err(Error::Failed("a fillet's tool left the solid unsound".into())),
-                (Err(e), Err(_)) => return Err(e),
-                (Ok(r), Err(_)) | (Err(_), Ok(r)) if !sound_before => r,
-                (Err(e), _) | (_, Err(e)) => return Err(e),
-            }
-        };
-    }
-    for patch in patches {
-        let tool = patch.tool(model)?;
-        result = boolean::difference(model, result, tool)?;
-        result = keep(model, result)?;
-    }
-    for fill in fills {
-        result = boolean::union(model, result, fill)?;
-        result = keep(model, result)?;
     }
     Ok(result)
 }
@@ -1708,8 +1733,9 @@ fn chamfer_solid_edges(model: &mut Model, shape: Shape, edges: &[ChamferedEdge])
             mitred[i][usize::from(at_end)] = Some(plane);
         }
     }
+    let runs = extensions(model, shape, &sized);
     let mut tools = Vec::with_capacity(corners.len());
-    for (((corner, distances), extend), mitre) in corners.iter().zip(extensions(model, shape, &sized)).zip(&mitred) {
+    for (((corner, distances), &extend), mitre) in corners.iter().zip(&runs).zip(&mitred) {
         let section = corner.bevel_section(model, *distances)?;
         let tool = corner.sweep_section(model, section, mitre_runs(corner, distances[0].max(distances[1]), extend, mitre))?;
         let tool = mitred_tool(model, tool, mitre)?;
@@ -1728,6 +1754,21 @@ fn chamfer_solid_edges(model: &mut Model, shape: Shape, edges: &[ChamferedEdge])
     tools.extend(mixed.iter().filter_map(|m| m.cut).map(|t| (t, true)));
     tools.extend(mixed.iter().filter_map(|m| m.add).map(|t| (t, false)));
     let chamfered = with_tools(model, shape, &tools)?;
+    // (Where a straight and a circular chamfer meet at a corner turning inward, they run on
+    // until their faces cross, as fillets do there.)
+    let mut meetings: Vec<(Point, Vec<usize>)> = Vec::new();
+    for (i, (corner, _)) in sized.iter().enumerate() {
+        for p in corner.ends() {
+            match meetings.iter_mut().find(|(q, _)| q.distance(p) <= tolerance::LINEAR) {
+                Some((_, at)) => at.push(i),
+                None => meetings.push((p, vec![i])),
+            }
+        }
+    }
+    let chamfered = inward_corners(model, chamfered, &sized, &meetings, &mitred, &runs, &|_, s| Ok(s), &|model: &mut Model, k: usize, run: [f64; 2]| {
+        let section = corners[k].0.bevel_section(model, corners[k].1)?;
+        corners[k].0.sweep_section(model, section, run)
+    })?;
     // (The faces the caps, the chamfers ending at their sections and the tools' square ends
     // flush with a face at their edge's end split, one again.)
     let merged = crate::unify::unify_same_domain_with(model, chamfered, crate::unify::UnifyOptions { faces: true, edges: false, same_surface_only: false })?;
@@ -4298,6 +4339,43 @@ mod tests {
             let v = properties::volume(&model, bevelled).mass;
             assert!((v - occt).abs() < 1e-6 * occt, "{v} vs {occt}");
             assert_eq!(model.unique_subshapes(bevelled, NodeKind::Face).len(), faces);
+        }
+    }
+
+    /// The bar across the disc and across the ring below, their tops' edges chamfered 1:
+    /// where the bar's straight chamfers meet the circular ones at corners turning inward, the
+    /// chamfers run on until their faces cross (OCCT's volumes and areas), not each square at
+    /// the corner with a triangle of the wall left standing between them.
+    #[test]
+    fn straight_and_circular_chamfers_meet_where_they_cross() {
+        use crate::primitives::Cylinder;
+        for (ring, occt_volume, occt_area) in [(false, 1592.84695, 1943.63203), (true, 1242.00974, 2183.20399)] {
+            let mut model = Model::new();
+            let bar = Cuboid::from_corners(Point::new(-37.5, -1.5, 0.0), Point::new(37.5, 1.5, 2.0)).build(&mut model).unwrap();
+            let round = if ring {
+                let outer = Cylinder::new(30.0, 2.0).build(&mut model).unwrap();
+                let inner = Cylinder::new(27.0, 2.0).build(&mut model).unwrap();
+                boolean::difference(&mut model, outer, inner).unwrap()
+            } else {
+                Cylinder::new(15.0, 2.0).build(&mut model).unwrap()
+            };
+            let body = boolean::union(&mut model, bar, round).unwrap();
+            // (The tops one face, as CadQuery's union leaves them, cleaned.)
+            let body = crate::unify::unify_same_domain(&mut model, body).unwrap();
+            let top: Vec<Shape> = model
+                .unique_subshapes(body, NodeKind::Edge)
+                .into_iter()
+                .filter(|&e| {
+                    let (a, b) = model.edge_vertices(e);
+                    model.point(a).z > 1.9 && model.point(b).z > 1.9
+                })
+                .collect();
+            let bevelled = chamfer(&mut model, body, &top, 1.0).unwrap();
+            let report = validity::check(&model, bevelled);
+            assert!(report.problems.is_empty(), "{report:?}");
+            let (v, a) = (properties::volume(&model, bevelled).mass, properties::area(&model, bevelled).mass);
+            assert!((v - occt_volume).abs() < 1e-4, "{v} vs {occt_volume}");
+            assert!((a - occt_area).abs() < 1e-4, "{a} vs {occt_area}");
         }
     }
 
