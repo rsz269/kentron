@@ -16,7 +16,7 @@ use crate::geometry::surface::Surface;
 use crate::geometry::{ParametricCurve, ParametricSurface};
 use crate::math::{Direction, Point, Point2, Transform, Transform2, Transformable2, Vector, Vector2};
 use crate::tolerance;
-use crate::topology::{EdgeId, Model, NodeKind, Orientation, Shape, VertexId, WireId};
+use crate::topology::{NodeId, EdgeId, Model, NodeKind, Orientation, Shape, VertexId, WireId};
 
 /// What [`unify_same_domain_with`] merges.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -200,6 +200,8 @@ struct Use {
 /// A face to be: the original one while unchanged.
 struct Spec {
     original: Option<Shape>,
+    /// The original faces it is made of.
+    sources: Vec<NodeId>,
     /// In the shell.
     orientation: Orientation,
     surface: Surface,
@@ -208,10 +210,26 @@ struct Spec {
 }
 
 fn unify_shell(model: &mut Model, shell: Shape, options: UnifyOptions) -> Result<Shape> {
+    // (A merged face found unsound (a pcurve carried over from one piece astray from an edge
+    // of another, by more than the edge allows): its pieces left as they are, the rest merged
+    // still.)
+    let mut frozen: HashSet<NodeId> = HashSet::default();
+    loop {
+        let (out, unsound) = unify_shell_once(model, shell, options, &frozen)?;
+        if unsound.is_empty() {
+            return Ok(out);
+        }
+        frozen.extend(unsound);
+    }
+}
+
+/// [`unify_shell`] with the faces in `frozen` not merged; with the original faces of the
+/// merged faces found unsound (the shell then not to be used).
+fn unify_shell_once(model: &mut Model, shell: Shape, options: UnifyOptions, frozen: &HashSet<NodeId>) -> Result<(Shape, Vec<NodeId>)> {
     let mut specs: Vec<Spec> = Vec::new();
     for face in model.children_local(shell).collect::<Vec<_>>() {
         let node = Shape { orientation: Orientation::Forward, ..face };
-        let Some(surface) = model.surface(node).cloned() else { return Ok(shell) };
+        let Some(surface) = model.surface(node).cloned() else { return Ok((shell, Vec::new())) };
         let mut loops = Vec::new();
         for wire in model.children_local(node).collect::<Vec<_>>() {
             let id = WireId::try_from(wire.node).expect("a face holds wires");
@@ -231,25 +249,32 @@ fn unify_shell(model: &mut Model, shell: Shape, options: UnifyOptions) -> Result
             }
             loops.push(uses);
         }
-        specs.push(Spec { original: Some(node), orientation: face.orientation, tolerance: model.tolerance(node), surface, loops });
+        specs.push(Spec { original: Some(node), sources: vec![node.node], orientation: face.orientation, tolerance: model.tolerance(node), surface, loops });
     }
-    let mut changed = options.faces && merge_faces(model, &mut specs, options.same_surface_only);
+    let mut changed = options.faces && merge_faces(model, &mut specs, options.same_surface_only, frozen);
     if options.edges {
         changed |= drop_seams(&mut specs);
         changed |= merge_edges(model, &mut specs)?;
     }
     if !changed {
-        return Ok(shell);
+        return Ok((shell, Vec::new()));
     }
     let out = model.new_empty(NodeKind::Shell);
+    let mut unsound = Vec::new();
     for spec in specs {
         let face = match spec.original {
             Some(face) => face,
-            None => build_face(model, &spec)?,
+            None => {
+                let face = build_face(model, &spec)?;
+                if spec.sources.len() > 1 && !crate::validity::check(model, face).is_valid() {
+                    unsound.extend(spec.sources.iter().copied());
+                }
+                face
+            }
         };
         model.add(out, Shape { orientation: spec.orientation, ..face })?;
     }
-    Ok(out)
+    Ok((out, unsound))
 }
 
 fn build_face(model: &mut Model, spec: &Spec) -> Result<Shape> {
@@ -432,7 +457,7 @@ fn sign(o: Orientation) -> f64 {
 }
 
 /// Merges groups of neighbouring faces on the same surface. True if any were.
-fn merge_faces(model: &Model, specs: &mut Vec<Spec>, same_surface_only: bool) -> bool {
+fn merge_faces(model: &Model, specs: &mut Vec<Spec>, same_surface_only: bool, frozen: &HashSet<NodeId>) -> bool {
     // Where each edge is used.
     let mut uses_of: HashMap<EdgeId, Vec<usize>> = HashMap::default();
     for (fi, spec) in specs.iter().enumerate() {
@@ -457,6 +482,9 @@ fn merge_faces(model: &Model, specs: &mut Vec<Spec>, same_surface_only: bool) ->
         // (Pieces of one face, on the very same surface, merge whatever the surface: their
         // pcurves are on one parametrization.)
         let pieces = same_surface_only && specs[f].surface == specs[g].surface;
+        if [f, g].iter().any(|&k| specs[k].sources.iter().any(|n| frozen.contains(n))) {
+            continue;
+        }
         if f == g || (!pieces && (!elementary(&specs[f].surface) || !same_domain(&specs[f].surface, &specs[g].surface))) {
             continue;
         }
@@ -480,7 +508,8 @@ fn merge_faces(model: &Model, specs: &mut Vec<Spec>, same_surface_only: bool) ->
     }
     let mut merged: Vec<(Vec<usize>, Spec)> = Vec::new();
     for group in groups.into_values().filter(|g| g.len() > 1) {
-        if let Some(spec) = merge_group(model, specs, &group, &internal) {
+        if let Some(mut spec) = merge_group(model, specs, &group, &internal) {
+            spec.sources = group.iter().flat_map(|&i| specs[i].sources.iter().copied()).collect();
             merged.push((group, spec));
         }
     }
@@ -550,7 +579,16 @@ fn merge_group(model: &Model, specs: &[Spec], group: &[usize], internal: &HashSe
                     let in_shell = u.orientation.compose(spec.orientation);
                     // A closed-form pcurve, else (a section traced between faces of boolean
                     // operands) the face's own, on the very surface.
-                    let (pcurve, first, last) = match analytic_pcurve(&curve, &surface) {
+                    // (Not where it misses the edge's ends: a line a hair off the surface's
+                    // ruling, as a cut near tangency leaves one, takes the face's own.)
+                    let fits = |p: &Curve2| {
+                        let tolerance = model.tolerance(Shape::from(u.edge)).max(tolerance::LINEAR);
+                        [first, last].iter().all(|&t| {
+                            let uv = p.point(t);
+                            surface.point(uv.x, uv.y).distance(curve.point(t)) <= tolerance
+                        })
+                    };
+                    let (pcurve, first, last) = match analytic_pcurve(&curve, &surface).filter(|p| u.pcurve.is_none() || fits(p)) {
                         Some(p) => (p, first, last),
                         None if spec.surface == surface => (u.pcurve.clone()?, u.first, u.last),
                         None => (u.pcurve.as_ref()?.transformed(&reparametrization(&spec.surface, &surface)?), u.first, u.last),
@@ -579,7 +617,7 @@ fn merge_group(model: &Model, specs: &[Spec], group: &[usize], internal: &HashSe
     }
     gather(&mut loops, &surface);
     let tolerance = group.iter().map(|&i| specs[i].tolerance).fold(0.0, f64::max);
-    Some(Spec { original: None, orientation, surface, tolerance, loops })
+    Some(Spec { original: None, sources: Vec::new(), orientation, surface, tolerance, loops })
 }
 
 /// The map from `from`'s parameters to `to`'s, for a plane or cylinder on the very same
@@ -601,6 +639,18 @@ fn reparametrization(from: &Surface, to: &Surface) -> Option<Transform2> {
             let s = Vector::from(a.z()).dot(z).signum();
             let turn = Vector::from(a.x()).dot(y).atan2(Vector::from(a.x()).dot(x));
             Some(Transform2::orthogonal([[s, 0.0], [0.0, s]], Vector2::new(turn, (a.origin() - b.origin()).dot(z))))
+        }
+        // (One cone, its axis the same way: round from the one's start, and along its lines
+        // by how far apart their reference circles are.)
+        (Surface::Cone(a), Surface::Cone(b)) => {
+            let (fa, fb) = (a.frame(), b.frame());
+            let (x, y, z) = (Vector::from(fb.x()), Vector::from(fb.y()), Vector::from(fb.z()));
+            let cos = b.semi_angle().cos();
+            if Vector::from(fa.z()).dot(z) <= 0.0 || (a.semi_angle() - b.semi_angle()).abs() > 1e-9 || cos.abs() < 1e-9 {
+                return None;
+            }
+            let turn = Vector::from(fa.x()).dot(y).atan2(Vector::from(fa.x()).dot(x));
+            Some(Transform2::orthogonal([[1.0, 0.0], [0.0, 1.0]], Vector2::new(turn, (fa.origin() - fb.origin()).dot(z) / cos)))
         }
         _ => None,
     }

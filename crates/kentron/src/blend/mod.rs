@@ -4393,11 +4393,11 @@ mod tests {
     /// The bar across the disc and across the ring below, their tops' edges chamfered 1:
     /// where the bar's straight chamfers meet the circular ones at corners turning inward, the
     /// chamfers run on until their faces cross (OCCT's volumes and areas), not each square at
-    /// the corner with a triangle of the wall left standing between them.
+    /// the corner with a triangle of the wall left standing between them; OCCT's faces too.
     #[test]
     fn straight_and_circular_chamfers_meet_where_they_cross() {
         use crate::primitives::Cylinder;
-        for (ring, occt_volume, occt_area) in [(false, 1592.84695, 1943.63203), (true, 1242.00974, 2183.20399)] {
+        for (ring, occt_volume, occt_area, occt_faces) in [(false, 1592.84695, 1943.63203, 18), (true, 1242.00974, 2183.20399, 26)] {
             let mut model = Model::new();
             let bar = Cuboid::from_corners(Point::new(-37.5, -1.5, 0.0), Point::new(37.5, 1.5, 2.0)).build(&mut model).unwrap();
             let round = if ring {
@@ -4424,6 +4424,8 @@ mod tests {
             let (v, a) = (properties::volume(&model, bevelled).mass, properties::area(&model, bevelled).mass);
             assert!((v - occt_volume).abs() < 1e-4, "{v} vs {occt_volume}");
             assert!((a - occt_area).abs() < 1e-4, "{a} vs {occt_area}");
+            // (The chamfer faces one each, the pieces the tools cut them in merged.)
+            assert_eq!(model.unique_subshapes(bevelled, NodeKind::Face).len(), occt_faces);
         }
     }
 
