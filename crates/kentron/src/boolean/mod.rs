@@ -561,11 +561,13 @@ fn classified(model: &Model, graph: &mut Graph) -> (Vec<split::Piece>, Vec<Vec<s
     // Each face's regions and where they lie, found for all faces at once.
     let faces: Vec<usize> = (0..arcs_of.len()).collect();
     let graph: &Graph = graph;
-    // (Narrower, as twice its area over its perimeter, than a thousandth of its size.)
-    let thin = |polygon: &[geom::Uv]| {
-        let (lo, hi) = geom::polyline_box(polygon);
-        let perimeter: f64 = polygon.windows(2).map(|w| (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1])).sum();
-        2.0 * geom::signed_area(polygon).abs() < 1e-3 * (hi[0] - lo[0]).hypot(hi[1] - lo[1]) * perimeter
+    // (Narrower, as twice its area over its perimeter, than a thousandth of its size: its
+    // holes' areas and perimeters counted, as a ring's between circles close together.)
+    let thin = |polygons: &[Vec<geom::Uv>]| {
+        let (lo, hi) = geom::polyline_box(&polygons[0]);
+        let perimeter: f64 = polygons.iter().flat_map(|p| p.windows(2)).map(|w| (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1])).sum();
+        let area: f64 = polygons.iter().map(|p| geom::signed_area(p)).sum();
+        2.0 * area.abs() < 1e-3 * (hi[0] - lo[0]).hypot(hi[1] - lo[1]) * perimeter
     };
     let found = crate::parallel::map(&faces, |&fi| {
         let arcs = &arcs_of[fi];
@@ -590,7 +592,7 @@ fn classified(model: &Model, graph: &mut Graph) -> (Vec<split::Piece>, Vec<Vec<s
                 // (Regions thinner than their polylines' sampling: their interior points from
                 // denser ones, the coarse ones' possibly off the region.)
                 for r in &mut regions {
-                    if thin(&r.polygons[0]) {
+                    if thin(&r.polygons) {
                         if let Some(p) = graph.thin_interior(fi, arcs, &pieces, r) {
                             r.interior = p;
                         }
@@ -2364,5 +2366,29 @@ mod tests {
             assert!((v - volume).abs() < 1e-6 * volume, "{n}: {v} != {volume}");
             assert_eq!(model.unique_subshapes(result, NodeKind::Face).len(), faces, "{n}");
         }
+    }
+
+    /// A disc 2 thick with a recess of radius 62.495 from below to its middle, a hole of
+    /// radius 62.5 from above to the same plane (its seam turned 1 degree): left between them
+    /// on that plane, a ring 0.005 wide, narrower than the circles' polylines' sag. The hole's
+    /// bottom is split by the recess's circle into the ring and a disc on the recess's
+    /// ceiling; the ring's inner circle, its points off the bottom's polylines, is still its
+    /// hole, and its point is taken where it is that thin. OCCT's volume and faces.
+    #[test]
+    fn a_ring_left_between_a_hole_and_a_recess_a_hair_narrower() {
+        let mut model = Model::new();
+        let disc = cylinder(&mut model, (0.0, 0.0, 0.0), Direction::Z, 70.0, 2.0);
+        let recess = cylinder(&mut model, (0.0, 0.0, 0.0), Direction::Z, 62.495, 1.0);
+        let recessed = difference(&mut model, disc, recess).unwrap();
+        let turned = 1f64.to_radians();
+        let frame = Frame::new(Point::new(0.0, 0.0, 1.0), Direction::Z, Direction::new(turned.cos(), turned.sin(), 0.0));
+        let hole = Cylinder::new(62.5, 1.0).with_frame(frame).build(&mut model).unwrap();
+        let result = difference(&mut model, recessed, hole).unwrap();
+        let report = validity::check(&model, result);
+        assert!(report.problems.is_empty(), "{report:?}");
+        let volume = PI * (70.0f64.powi(2) * 2.0 - 62.495f64.powi(2) - 62.5f64.powi(2));
+        let v = properties::volume(&model, result).mass;
+        assert!((v - volume).abs() < 1e-6 * volume, "{v} != {volume}");
+        assert_eq!(model.unique_subshapes(result, NodeKind::Face).len(), 6);
     }
 }

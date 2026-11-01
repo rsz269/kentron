@@ -546,31 +546,47 @@ fn signed_area_in_parameters(model: &Model, loops: &[(Vec<CoEdgeId>, Orientation
 /// counter-clockwise), its coedges run as its wire's `orientation` in the face has them;
 /// `None` as for [`signed_area_in_parameters`].
 pub(crate) fn loop_area_in_parameters(model: &Model, coedges: &[CoEdgeId], orientation: Orientation, surface: &Surface) -> Option<f64> {
-    let mut points: Vec<Point2> = Vec::new();
+    // Half the integral of x dy - y dx along each coedge's pcurve (Gauss-Legendre over
+    // stretches of it: exact for lines, and for arcs however long, where a polygon through a
+    // few samples falls short of a circle by more than a narrow ring's whole area), and
+    // along the chords closing gaps between one coedge's end and the next one's start.
+    const NODES: [(f64, f64); 5] = [
+        (0.0, 0.568_888_888_888_888_9),
+        (-0.538_469_310_105_683_1, 0.478_628_670_499_366_5),
+        (0.538_469_310_105_683_1, 0.478_628_670_499_366_5),
+        (-0.906_179_845_938_664, 0.236_926_885_056_189_1),
+        (0.906_179_845_938_664, 0.236_926_885_056_189_1),
+    ];
+    const STRETCHES: usize = 16;
+    let mut twice = 0.0;
+    let mut ends: Vec<(Point2, Point2)> = Vec::with_capacity(coedges.len());
     for &c in coedges {
         let (pcurve, first, last) = model.effective_pcurve(c)?;
         let reversed = model.get(c)?.orientation == Orientation::Reversed;
-        const SAMPLES: usize = 16;
-        for i in 0..SAMPLES {
-            let s = i as f64 / SAMPLES as f64;
-            points.push(pcurve.point(if reversed { last - (last - first) * s } else { first + (last - first) * s }));
+        let (a, b) = if reversed { (last, first) } else { (first, last) };
+        let step = (b - a) / STRETCHES as f64;
+        for k in 0..STRETCHES {
+            let middle = a + step * (k as f64 + 0.5);
+            for (x, w) in NODES {
+                let (p, d) = pcurve.d1(middle + 0.5 * step * x);
+                twice += w * 0.5 * step * (p.x * d.y - p.y * d.x);
+            }
         }
+        ends.push((pcurve.point(a), pcurve.point(b)));
     }
     // (Closing in the parameters: back where it began, not a period away.)
-    let start = *points.first()?;
-    let end = {
-        let &c = coedges.last()?;
-        let (pcurve, first, last) = model.effective_pcurve(c)?;
-        let reversed = model.get(c)?.orientation == Orientation::Reversed;
-        pcurve.point(if reversed { first } else { last })
-    };
+    let (start, end) = (ends.first()?.0, ends.last()?.1);
     for (d, period) in [(end.x - start.x).abs(), (end.y - start.y).abs()].into_iter().zip([surface.u_period(), surface.v_period()]) {
         if period.is_some_and(|p| d > 0.5 * p) {
             return None;
         }
     }
-    let n = points.len();
-    let area = (0..n).map(|i| points[i].x * points[(i + 1) % n].y - points[(i + 1) % n].x * points[i].y).sum::<f64>() * 0.5;
+    let n = ends.len();
+    for i in 0..n {
+        let (p, q) = (ends[i].1, ends[(i + 1) % n].0);
+        twice += p.x * q.y - q.x * p.y;
+    }
+    let area = 0.5 * twice;
     // (A wire used reversed runs its coedges backwards.)
     Some(if orientation == Orientation::Reversed { -area } else { area })
 }
@@ -1281,5 +1297,28 @@ mod tests {
         let lifted = polygon_face(&mut model, &[p(0., 0., 0.), p(1., 0., 0.), p(1., 1., 0.5)]);
         let report = check(&model, lifted);
         assert!(report.has(ProblemKind::Geometry, Severity::Error), "{report:?}");
+    }
+
+    /// A ring 0.005 wide (radius 62.5 in one edge, 62.495 in 32 arcs) on a plane: valid,
+    /// running anticlockwise. (Its outer circle sampled as a polygon of 16 sides falls short
+    /// of it by far more than the ring's area, its inner one in 32 pieces by little: the ring
+    /// came out inside out.)
+    #[test]
+    fn a_narrow_ring_with_its_circles_in_unlike_pieces_is_not_inside_out() {
+        use crate::geometry::curve::{Circle, Curve};
+        use crate::math::{Direction, Frame};
+        let mut model = Model::new();
+        let circle = |r: f64| Curve::Circle(Circle::new(Frame::new(Point::ORIGIN, Direction::Z, Direction::X), r));
+        let outer = crate::make::edge_from_curve(&mut model, circle(62.5)).unwrap();
+        let outer = crate::make::wire(&mut model, &[outer]).unwrap();
+        let face = crate::make::planar_face(&mut model, outer).unwrap();
+        let step = std::f64::consts::TAU / 32.0;
+        let arcs: Vec<Shape> = (0..32).map(|k| crate::make::edge_from_curve_range(&mut model, circle(62.495), k as f64 * step, (k + 1) as f64 * step).unwrap()).collect();
+        let inner = crate::make::wire(&mut model, &arcs).unwrap();
+        let ring = crate::make::face_with_holes(&mut model, face, &[inner]).unwrap();
+        let report = check(&model, ring);
+        assert!(report.problems.is_empty(), "{report:?}");
+        let area = crate::properties::area(&model, ring).mass;
+        assert!((area - std::f64::consts::PI * (62.5f64.powi(2) - 62.495f64.powi(2))).abs() < 1e-6, "{area}");
     }
 }

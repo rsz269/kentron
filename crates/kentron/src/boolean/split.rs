@@ -692,14 +692,40 @@ pub(super) fn split_face(arcs: &[ArcOnFace], pieces: &[Piece], face_polylines: &
         // cycle round the outside of that loop, its point taken off it where the arcs' ends
         // are a little apart.)
         let along = |r: &Region| r.loops[0].iter().any(|&(a, _)| cycle.iter().any(|&(b, _)| a == b));
-        let container = regions
-            .iter()
-            .enumerate()
-            .filter(|&(i, _)| in_box(i))
-            .filter(|(_, r)| !along(r))
-            .filter(|(_, r)| geom::inside_polylines(&r.polygons[..1], probe) && !on_polyline(&r.polygons[0], probe, eps))
-            .min_by(|a, b| geom::signed_area(&a.1.polygons[0]).total_cmp(&geom::signed_area(&b.1.polygons[0])))
-            .map(|(i, _)| i);
+        let containing = |probe: Uv, in_box: &dyn Fn(usize) -> bool| {
+            regions
+                .iter()
+                .enumerate()
+                .filter(|&(i, _)| in_box(i))
+                .filter(|(_, r)| !along(r))
+                .filter(|(_, r)| geom::inside_polylines(&r.polygons[..1], probe) && !on_polyline(&r.polygons[0], probe, eps))
+                .min_by(|a, b| geom::signed_area(&a.1.polygons[0]).total_cmp(&geom::signed_area(&b.1.polygons[0])))
+                .map(|(i, _)| i)
+        };
+        // (Else by a point inside the hole: a hole's boundary closer to the region's than
+        // their polylines' sag, as a circle 0.005 inside another of radius 62.5, may have its
+        // points off the region's polylines. Not a hole met at its probe on another region's
+        // outline: a cycle touching that region there, round another face of the
+        // arrangement.)
+        let touching = || regions.iter().any(|r| !along(r) && on_polyline(&r.polygons[0], probe, eps));
+        let container = containing(probe, &in_box).or_else(|| {
+            if touching() {
+                return None;
+            }
+            let inner = geom::interior_point(std::slice::from_ref(&poly));
+            let in_inner_box = |i: usize| {
+                let (lo, hi) = boxes[i];
+                inner[0] >= lo[0] - eps && inner[0] <= hi[0] + eps && inner[1] >= lo[1] - eps && inner[1] <= hi[1] + eps
+            };
+            // (Only a region larger than the hole, its points all in it or within the sag of
+            // its outline: not one an arrangement's outer cycle, round everything, happens to
+            // hold the point of.)
+            let sag = 2.0 * geom::arc_sag(uv_scale.max(1.0));
+            containing(inner, &in_inner_box).filter(|&i| {
+                geom::signed_area(&poly).abs() < geom::signed_area(&regions[i].polygons[0])
+                    && poly.iter().all(|&q| geom::inside_polylines(&regions[i].polygons[..1], q) || on_polyline(&regions[i].polygons[0], q, sag))
+            })
+        });
         if let Some(i) = container {
             regions[i].loops.push(cycle);
             regions[i].polygons.push(poly);
