@@ -151,7 +151,9 @@ fn simple_pieces(model: &mut Model, face: Shape) -> Result<Vec<(Shape, i32)>> {
     Ok(out)
 }
 
-/// Whether the closed polygons' sides cross (other than where neighbours meet).
+/// Whether the closed polygons' sides cross or touch (other than where neighbours meet):
+/// loops running along one another (as a rim's outline and the hole cut out of it do where
+/// the face's neighbours were not moved) bound pieces they wind round no times.
 fn crosses_itself(polygons: &[Vec<Point2>]) -> bool {
     let sides: Vec<(usize, usize, Point2, Point2)> = polygons
         .iter()
@@ -159,6 +161,19 @@ fn crosses_itself(polygons: &[Vec<Point2>]) -> bool {
         .flat_map(|(k, p)| (0..p.len()).map(move |i| (k, i, p[i], p[(i + 1) % p.len()])))
         .collect();
     let cross = |a: Point2, b: Point2, c: Point2| (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+    let (mut lo, mut hi) = (Point2::new(f64::INFINITY, f64::INFINITY), Point2::new(f64::NEG_INFINITY, f64::NEG_INFINITY));
+    for p in polygons.iter().flatten() {
+        lo = Point2::new(lo.x.min(p.x), lo.y.min(p.y));
+        hi = Point2::new(hi.x.max(p.x), hi.y.max(p.y));
+    }
+    let near = 1e-7 * (hi - lo).length();
+    // (How far `p` is from the side `a`-`b`.)
+    let off = |p: Point2, a: Point2, b: Point2| {
+        let ab = b - a;
+        let l = ab.x * ab.x + ab.y * ab.y;
+        let t = if l > 0.0 { (((p.x - a.x) * ab.x + (p.y - a.y) * ab.y) / l).clamp(0.0, 1.0) } else { 0.0 };
+        (Point2::new(a.x + t * ab.x, a.y + t * ab.y) - p).length()
+    };
     for (i, &(k1, j1, a, b)) in sides.iter().enumerate() {
         for &(k2, j2, c, d) in &sides[i + 1..] {
             let n = polygons[k1].len();
@@ -168,6 +183,15 @@ fn crosses_itself(polygons: &[Vec<Point2>]) -> bool {
             let (d1, d2, d3, d4) = (cross(c, d, a), cross(c, d, b), cross(a, b, c), cross(a, b, d));
             if d1 * d2 < 0.0 && d3 * d4 < 0.0 {
                 return true;
+            }
+            // (Touching: an end of one on the other. Sides of one loop two apart meet only
+            // where the one between them is degenerate.)
+            if off(a, c, d) <= near || off(b, c, d) <= near || off(c, a, b) <= near || off(d, a, b) <= near {
+                let n = polygons[k1].len();
+                let two_apart = k1 == k2 && ((j1 + 2) % n == j2 || (j2 + 2) % n == j1);
+                if !two_apart {
+                    return true;
+                }
             }
         }
     }

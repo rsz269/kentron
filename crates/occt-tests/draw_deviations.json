@@ -1741,19 +1741,9 @@
       "note": "The offset changes the shape's topology (faces collide or vanish, e.g. where a narrow notch closes), which kentron's offset, keeping the faces and edges of the shape, does not handle: volume 1152 against 1116."
     }
   ],
-  "tests/offset/shape_type_i_c/V8": [
-    {
-      "note": "The offset changes the shape's topology (faces collide or vanish, e.g. where a narrow notch closes), which kentron's offset, keeping the faces and edges of the shape, does not handle: volume 4625.89 against 4536."
-    }
-  ],
   "tests/offset/shape_type_i_c/W1": [
     {
       "note": "The offset changes the shape's topology (faces collide or vanish, e.g. where a narrow notch closes), which kentron's offset, keeping the faces and edges of the shape, does not handle: volume 4617.97 against 4536."
-    }
-  ],
-  "tests/offset/shape_type_i_c/W6": [
-    {
-      "note": "The offset changes the shape's topology (faces collide or vanish, e.g. where a narrow notch closes), which kentron's offset, keeping the faces and edges of the shape, does not handle: volume 974.947 against 954.256."
     }
   ],
   "tests/offset/shape_type_i_c/W7": [

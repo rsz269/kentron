@@ -1891,9 +1891,6 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/offset/shape_type_i_c/V8
-notes:
-  - "kentron deviation: The offset changes the shape's topology (faces collide or vanish, e.g. where a narrow notch closes), which kentron's offset, keeping the faces and edges of the shape, does not handle: volume 4625.89 against 4536."
-expect: not_done
 build:
   - b1: {box: {size: [10, 6, 10]}}
   - p: {polyline: {points: [[2, 0, 5], [2, 2, 5], [2, 3, 3], [2, 3, 10], [2, 0, 10], [2, 0, 5]]}}
@@ -1986,9 +1983,6 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/offset/shape_type_i_c/W6
-notes:
-  - "kentron deviation: The offset changes the shape's topology (faces collide or vanish, e.g. where a narrow notch closes), which kentron's offset, keeping the faces and edges of the shape, does not handle: volume 974.947 against 954.256."
-expect: not_done
 build:
   - p: {polyline: {points: [[0, 0, 0], [11, 0, 0], [11, 0, 4], [10, 0, 4], [10, 0, 3], [9, 0, 2], [8, 0, 2], [7, 0, 3], [7, 0, 4], [4, 0, 4], [4, 0, 3], [3, 0, 2], [2, 0, 2], [1, 0, 3], [1, 0, 4], [0, 0, 4], [0, 0, 0]]}}
   - f: {face: {wire: p}}

@@ -1435,4 +1435,29 @@ mod tests {
         let v = volume(&model, grown).mass - before;
         assert!((v - 146.0900).abs() < 1e-3, "{v}");
     }
+
+    /// A plate 4.45 thick (a case's outline with bumps narrower than its walls), hollowed 3
+    /// inside, open at both its flat faces and four side faces in a row near x = 0: the side
+    /// faces between two removed ones are left as they are, their rims (the face with
+    /// itself cut out) bound nothing, and the flat faces' rims run along themselves there.
+    /// A wall open at one side (OCCT: 4279.7876, 32 faces).
+    #[test]
+    fn a_wall_open_along_side_faces_in_a_row_keeps_no_rims_there() {
+        let mut model = Model::new();
+        let plate = crate::io::brep::read(&mut model, &mut include_str!("tests/open_sided_plate.brep").as_bytes()).unwrap();
+        let removed: Vec<Shape> = model
+            .unique_subshapes(plate, NodeKind::Face)
+            .into_iter()
+            .filter(|&f| {
+                let c = crate::properties::area(&model, f).center_of_mass;
+                (c.z - 2.225).abs() > 1.0 || (c.x < 6.2 && c.y > -34.0 && c.y < 36.0)
+            })
+            .collect();
+        assert_eq!(removed.len(), 6);
+        let wall = thick_solid(&mut model, plate, &removed, -3.0, Join::Intersection).unwrap();
+        valid(&model, wall);
+        let v = volume(&model, wall).mass;
+        assert!((v - 4279.7876).abs() < 1e-2, "{v}");
+        assert_eq!(model.unique_subshapes(wall, NodeKind::Face).len(), 32);
+    }
 }

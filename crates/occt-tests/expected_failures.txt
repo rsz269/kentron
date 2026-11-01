@@ -1212,9 +1212,7 @@ tests/offset/shape_type_i_c/O8
 tests/offset/shape_type_i_c/P3
 tests/offset/shape_type_i_c/V4
 tests/offset/shape_type_i_c/V5
-tests/offset/shape_type_i_c/V8
 tests/offset/shape_type_i_c/V9
-tests/offset/shape_type_i_c/W6
 tests/offset/shape_type_i_c/XT2
 tests/offset/shape_type_i_c/Y2
 tests/offset/shape_type_i_c/Y5
