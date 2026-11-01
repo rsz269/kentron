@@ -630,70 +630,147 @@ fn boundary_crossing(model: &Model, coedges: &[CoEdgeId], surface: &Surface) -> 
         return None;
     }
     let size = (hi - lo).length().max(1e-12);
-    let n = ((sides.len() as f64).sqrt().ceil() as usize).clamp(1, 256);
+    let cross = |a: Point2, b: Point2, c: Point2| (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+    // Whether sides `k1` and `k2` show the pcurves crossing (away from a vertex they share).
+    let try_pair = |k1: usize, k2: usize| -> Option<(EdgeId, EdgeId, Point)> {
+        let ((r1, i1, _, _), (r2, i2, _, _)) = (sides[k1], sides[k2]);
+        let (run1, run2) = (&runs[r1], &runs[r2]);
+        if r1 == r2 && i1.abs_diff(i2) <= 1 || r1 != r2 && run1.edge == run2.edge {
+            return None;
+        }
+        let (a, b) = (run1.points[i1], run1.points[i1 + 1]);
+        let (c, d) = (run2.points[i2], run2.points[i2 + 1]);
+        let (d1, d2, d3, d4) = (cross(c, d, a), cross(c, d, b), cross(a, b, c), cross(a, b, d));
+        if !(d1 * d2 < 0.0 && d3 * d4 < 0.0) {
+            return None;
+        }
+        // Where the pcurves themselves cross, from where the sides do (none where
+        // they only come close).
+        let (alpha, beta) = (d1 / (d1 - d2), d3 / (d3 - d4));
+        let span = |run: &Run, i: usize, f: f64| run.params[i] + f * (run.params[i + 1] - run.params[i]);
+        let range = |r: &Run| (r.params[0], *r.params.last().unwrap());
+        let Some((s, t)) = pcurves_crossing((&run1.curve, range(run1)), (&run2.curve, range(run2)), span(run1, i1, alpha), span(run2, i2, beta), size) else {
+            return None;
+        };
+        if r1 == r2 && (s - t).abs() <= 1e-6 * (run1.params.last().unwrap() - run1.params[0]).abs() {
+            return None;
+        }
+        // (Not at a vertex the two edges share.)
+        let uv = run1.curve.point(s);
+        let p = surface.point(uv.x, uv.y);
+        let reach = model.get(run1.edge).map_or(0.0, |e| e.tolerance) + model.get(run2.edge).map_or(0.0, |e| e.tolerance);
+        let ends = |e: EdgeId| -> Vec<VertexId> {
+            model.get(e).map_or(Vec::new(), |e| [e.start, e.end].iter().filter_map(|&u| model.get(u).map(|u| u.vertex)).collect())
+        };
+        let (ends1, ends2) = (ends(run1.edge), ends(run2.edge));
+        let at_vertex = ends1.iter().filter(|v| ends2.contains(v)).filter_map(|&v| model.get(v)).any(|v| v.point.distance(p) <= v.tolerance + reach + LINEAR);
+        if at_vertex {
+            return None;
+        }
+        Some((run1.edge, run2.edge, p))
+    };
+    let all: Vec<usize> = (0..sides.len()).collect();
+    pairs_in_cells(&sides, &all, lo, hi, 0, &mut |k1, k2| try_pair(k1, k2))
+}
+
+/// Pairs of the sides `members` (indices into `sides`, each a box `(lo, hi)` in its last two
+/// fields) whose boxes overlap, within the box `lo`..`hi`, each tried once by `try_pair`
+/// until it finds something: the sides met in a grid of cells (each pair in the cell where
+/// their overlap starts), a cell holding many sides gridded again in turn (a boundary with
+/// many small edges crowded in a corner of a large face).
+fn pairs_in_cells<R>(
+    sides: &[(usize, usize, Point2, Point2)],
+    members: &[usize],
+    lo: Point2,
+    hi: Point2,
+    depth: usize,
+    try_pair: &mut dyn FnMut(usize, usize) -> Option<R>,
+) -> Option<R> {
+    // (Cells holding more sides than this are gridded again, a few levels deep at most:
+    // sides lying on one another cannot be told apart by any grid.)
+    const CROWDED: usize = 64;
+    const DEEPEST: usize = 4;
+    let n = ((members.len() as f64).sqrt().ceil() as usize).clamp(2, 256);
     let (wx, wy) = ((hi.x - lo.x).max(1e-300), (hi.y - lo.y).max(1e-300));
     let cell = |p: Point2| {
         let at = |t: f64| ((t * n as f64).floor().max(0.0) as usize).min(n - 1);
         (at((p.x - lo.x) / wx), at((p.y - lo.y) / wy))
     };
+    // (A grid within a cell that does not spread its sides out, most of them spanning it,
+    // gains nothing: its pairs tried directly. Told by how many cells the sides span before
+    // they are put in them.)
+    let spans = |k: usize| {
+        let ((x0, y0), (x1, y1)) = (cell(sides[k].2), cell(sides[k].3));
+        (x1 - x0 + 1) * (y1 - y0 + 1)
+    };
+    if depth > 0 && members.iter().map(|&k| spans(k)).sum::<usize>() > 8 * members.len() {
+        return all_pairs(sides, members, try_pair);
+    }
     let mut cells: Vec<Vec<usize>> = vec![Vec::new(); n * n];
-    for (k, side) in sides.iter().enumerate() {
-        let ((x0, y0), (x1, y1)) = (cell(side.2), cell(side.3));
+    for &k in members {
+        let ((x0, y0), (x1, y1)) = (cell(sides[k].2), cell(sides[k].3));
         for y in y0..=y1 {
             for x in x0..=x1 {
                 cells[y * n + x].push(k);
             }
         }
     }
-    let cross = |a: Point2, b: Point2, c: Point2| (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
-    for (here, members) in cells.iter().enumerate() {
-        for (j, &k1) in members.iter().enumerate() {
-            for &k2 in &members[j + 1..] {
-                let ((r1, i1, lo1, hi1), (r2, i2, lo2, hi2)) = (sides[k1], sides[k2]);
+    if depth > 0 && cells.iter().any(|c| 2 * c.len() > members.len()) {
+        return all_pairs(sides, members, try_pair);
+    }
+    for (here, inside) in cells.iter().enumerate() {
+        if inside.len() > CROWDED && depth < DEEPEST && inside.len() < members.len() {
+            // (The cell's own box: a pair whose overlap starts in it is tried within it,
+            // in the sub-cell where the overlap starts.)
+            let (x, y) = (here % n, here / n);
+            let corner = |i: usize, j: usize| Point2::new(lo.x + wx * i as f64 / n as f64, lo.y + wy * j as f64 / n as f64);
+            let (clo, chi) = (corner(x, y), corner(x + 1, y + 1));
+            let mut within = |k1: usize, k2: usize| -> Option<R> {
+                let ((_, _, lo1, hi1), (_, _, lo2, hi2)) = (sides[k1], sides[k2]);
                 let start = Point2::new(lo1.x.max(lo2.x), lo1.y.max(lo2.y));
-                if start.x > hi1.x.min(hi2.x) || start.y > hi1.y.min(hi2.y) || { let (x, y) = cell(start); y * n + x != here } {
+                if start.x > hi1.x.min(hi2.x) || start.y > hi1.y.min(hi2.y) || { let (cx, cy) = cell(start); cy * n + cx != here } {
+                    return None;
+                }
+                try_pair(k1, k2)
+            };
+            if let Some(found) = pairs_in_cells(sides, inside, clo, chi, depth + 1, &mut within) {
+                return Some(found);
+            }
+            continue;
+        }
+        for (j, &k1) in inside.iter().enumerate() {
+            for &k2 in &inside[j + 1..] {
+                let ((_, _, lo1, hi1), (_, _, lo2, hi2)) = (sides[k1], sides[k2]);
+                let start = Point2::new(lo1.x.max(lo2.x), lo1.y.max(lo2.y));
+                if start.x > hi1.x.min(hi2.x) || start.y > hi1.y.min(hi2.y) || { let (cx, cy) = cell(start); cy * n + cx != here } {
                     continue;
                 }
-                let (run1, run2) = (&runs[r1], &runs[r2]);
-                if r1 == r2 && i1.abs_diff(i2) <= 1 || r1 != r2 && run1.edge == run2.edge {
-                    continue;
+                if let Some(found) = try_pair(k1, k2) {
+                    return Some(found);
                 }
-                let (a, b) = (run1.points[i1], run1.points[i1 + 1]);
-                let (c, d) = (run2.points[i2], run2.points[i2 + 1]);
-                let (d1, d2, d3, d4) = (cross(c, d, a), cross(c, d, b), cross(a, b, c), cross(a, b, d));
-                if !(d1 * d2 < 0.0 && d3 * d4 < 0.0) {
-                    continue;
-                }
-                // Where the pcurves themselves cross, from where the sides do (none where
-                // they only come close).
-                let (alpha, beta) = (d1 / (d1 - d2), d3 / (d3 - d4));
-                let span = |run: &Run, i: usize, f: f64| run.params[i] + f * (run.params[i + 1] - run.params[i]);
-                let range = |r: &Run| (r.params[0], *r.params.last().unwrap());
-                let Some((s, t)) = pcurves_crossing((&run1.curve, range(run1)), (&run2.curve, range(run2)), span(run1, i1, alpha), span(run2, i2, beta), size) else {
-                    continue;
-                };
-                if r1 == r2 && (s - t).abs() <= 1e-6 * (run1.params.last().unwrap() - run1.params[0]).abs() {
-                    continue;
-                }
-                // (Not at a vertex the two edges share.)
-                let uv = run1.curve.point(s);
-                let p = surface.point(uv.x, uv.y);
-                let reach = model.get(run1.edge).map_or(0.0, |e| e.tolerance) + model.get(run2.edge).map_or(0.0, |e| e.tolerance);
-                let ends = |e: EdgeId| -> Vec<VertexId> {
-                    model.get(e).map_or(Vec::new(), |e| [e.start, e.end].iter().filter_map(|&u| model.get(u).map(|u| u.vertex)).collect())
-                };
-                let (ends1, ends2) = (ends(run1.edge), ends(run2.edge));
-                let at_vertex = ends1.iter().filter(|v| ends2.contains(v)).filter_map(|&v| model.get(v)).any(|v| v.point.distance(p) <= v.tolerance + reach + LINEAR);
-                if at_vertex {
-                    continue;
-                }
-                return Some((run1.edge, run2.edge, p));
             }
         }
     }
     None
 }
 
+
+/// Each pair of the sides `members` whose boxes overlap tried by `try_pair`, until it finds
+/// something.
+fn all_pairs<R>(sides: &[(usize, usize, Point2, Point2)], members: &[usize], try_pair: &mut dyn FnMut(usize, usize) -> Option<R>) -> Option<R> {
+    for (j, &k1) in members.iter().enumerate() {
+        for &k2 in &members[j + 1..] {
+            let ((_, _, lo1, hi1), (_, _, lo2, hi2)) = (sides[k1], sides[k2]);
+            if lo1.x.max(lo2.x) > hi1.x.min(hi2.x) || lo1.y.max(lo2.y) > hi1.y.min(hi2.y) {
+                continue;
+            }
+            if let Some(found) = try_pair(k1, k2) {
+                return Some(found);
+            }
+        }
+    }
+    None
+}
 
 /// Where two pcurves cross near the parameters `s` and `t` (Newton's method, within their
 /// ranges): none if it does not settle on a crossing (to `size`'s precision), or the

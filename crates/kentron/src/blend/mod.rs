@@ -505,13 +505,17 @@ fn fillet_solid_edges_once(model: &mut Model, shape: Shape, edges: &[(Shape, f64
     // that leaves the solid as sound as they found it.
     // (Nor changing what they enclose more than their surfaces moved, within the faces'
     // tolerance: a face turned the wrong way round would.)
-    let faults = fault_kinds(model, rounded);
-    let (volume, area) = (crate::properties::volume(model, rounded).mass, crate::properties::area(model, rounded).mass);
+    // (Measured only where some are: made, measured, undone, measured as rolled, and made
+    // again if they pass.)
     let done = exact::exact_faces(model, rounded, &before, &before_edges);
     if !done.is_empty() {
-        let moved = (crate::properties::volume(model, rounded).mass - volume).abs();
-        if !fault_kinds(model, rounded).is_subset(&faults) || moved > 1e-6 * volume.abs().max(1.0) + 1e-5 * area {
-            exact::undo(model, done);
+        let (exact_faults, exact_volume) = (fault_kinds(model, rounded), crate::properties::volume(model, rounded).mass);
+        exact::undo(model, done);
+        let faults = fault_kinds(model, rounded);
+        let (volume, area) = (crate::properties::volume(model, rounded).mass, crate::properties::area(model, rounded).mass);
+        let moved = (exact_volume - volume).abs();
+        if exact_faults.is_subset(&faults) && moved <= 1e-6 * volume.abs().max(1.0) + 1e-5 * area {
+            exact::exact_faces(model, rounded, &before, &before_edges);
         }
     }
     Ok(rounded)
@@ -850,7 +854,8 @@ fn fillet_solid_edges_as(model: &mut Model, shape: Shape, edges: &[(Shape, f64)]
     // inward), not mitred (a straight one and a circular one): past the corner, what either
     // takes away where the other would too, or where it lies beyond the other's wall, as the
     // fillets run on until they cross. (Between two straight ones, what their mitre plane
-    // leaves.)
+    // leaves.) (The solid's volume carried from one corner to the next.)
+    let mut volume_now: Option<f64> = None;
     for (p, at) in &meetings {
         let [i, j] = at[..] else { continue };
         let end_of = |c: &Corner| usize::from(c.origin.distance(*p) > tolerance::LINEAR);
@@ -920,11 +925,17 @@ fn fillet_solid_edges_as(model: &mut Model, shape: Shape, edges: &[(Shape, f64)]
             continue;
         }
         record_tool(model, taken, &[corners[i].0.edges.clone(), corners[j].0.edges.clone()].concat());
-        let before = crate::properties::volume(model, result).mass;
+        let before = match volume_now {
+            Some(v) => v,
+            None => crate::properties::volume(model, result).mass,
+        };
         let cut = boolean::difference(model, result, taken)?;
         let cut = keep(model, cut)?;
-        if before - crate::properties::volume(model, cut).mass <= size * (1.0 + 1e-6) + 1e-9 {
+        let after = crate::properties::volume(model, cut).mass;
+        volume_now = Some(before);
+        if before - after <= size * (1.0 + 1e-6) + 1e-9 {
             result = cut;
+            volume_now = Some(after);
         }
     }
     for (tool, convex, local_shape, edge, radius, filleted) in rolling_tools {

@@ -637,6 +637,18 @@ pub(super) fn fillet_along(model: &mut Model, shape: Shape, edge: Shape, law: &d
     let [shell] = shells[..] else {
         return Err(Error::Failed(format!("a run-over fillet whose pieces do not close ({} shells)", shells.len())));
     };
+    // (Open, its pieces not meeting edge to edge, it cannot come out right: told before
+    // the faces are merged and the result measured and checked.)
+    let mut uses: std::collections::HashMap<crate::topology::NodeId, (usize, usize)> = std::collections::HashMap::new();
+    for e in model.explore(shell, NodeKind::Edge) {
+        if !model.is_degenerate(e) {
+            let used = uses.entry(e.node).or_default();
+            if e.orientation == Orientation::Reversed { used.1 += 1 } else { used.0 += 1 }
+        }
+    }
+    if uses.values().any(|&used| used != (1, 1)) {
+        return Err(Error::Failed("a run-over fillet whose pieces leave the shell open".into()));
+    }
     let solid = solid_of(model, shell)?;
     let result = unify::unify_same_domain(model, solid)?;
     // (Checked: valid, and what it takes away (at a concave edge, adds) no more than the
