@@ -9,6 +9,7 @@ mod middle;
 mod pipe;
 pub use middle::middle_path;
 mod pipe_shell;
+mod skeleton;
 
 use std::collections::HashMap;
 use std::f64::consts::{FRAC_PI_2, TAU};

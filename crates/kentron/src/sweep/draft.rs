@@ -175,6 +175,17 @@ pub fn extrude_drafted(model: &mut Model, profile: Shape, v: Vector, angle: f64)
         match piece.kind {
             Kind::Line => {
                 if (top_end - top_start).dot(piece.tangent_start) <= tolerance::LINEAR {
+                    // (An outline of straight edges: by its straight skeleton, the edges the
+                    // draft closes ending where their neighbours meet.)
+                    if pieces.iter().all(|p| matches!(p.kind, Kind::Line)) {
+                        let mut corners: Vec<Point> = pieces.iter().map(|p| p.start).collect();
+                        if sense < 0.0 {
+                            corners.reverse();
+                        }
+                        let x = (pieces[0].end - pieces[0].start).normalized();
+                        let y = z_vector.cross(x);
+                        return super::skeleton::drafted_by_skeleton(model, profile, &corners, origin, x, y, v, d);
+                    }
                     return Err(Error::InvalidInput("the draft closes a straight edge of the profile".into()));
                 }
                 let mut corners = vec![piece.start, piece.end];
