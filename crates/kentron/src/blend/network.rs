@@ -1524,6 +1524,11 @@ fn patch(
     };
     let side_point = |(k, forward): (usize, bool), w: f64| sides[k].2.point(if forward { w } else { 1.0 - w });
     let (bottom, right, left) = (find(0, 1), find(1, 2), find(0, 2));
+    // (Where the three curves lie on one sphere, as where three fillets of one radius meet
+    // between planes square to one another: the patch is that sphere.)
+    if let Some(face) = sphere_patch(model, &sides, bottom, right, left, tolerance)? {
+        return Ok(face);
+    }
     let p = [0, 1, 2].map(|n| model[vertices[n]].point);
     let coons = |u: f64, v: f64| -> Point {
         let b = side_point(bottom, u);
@@ -1666,6 +1671,104 @@ fn gap_patch(model: &mut Model, gap: &Gap, vertices: &[VertexId; 5], edges: &[Ed
         worst = worst.max(surface.point(w, 0.0).distance(bottom(w))).max(surface.point(0.0, w).distance(up(&left, w))).max(surface.point(1.0, w).distance(up(&right, w))).max(surface.point(w, 1.0).distance(top(w)));
     }
     new_face(model, surface, vec![(uses, Orientation::Forward)], tolerance.max(2.0 * worst))
+}
+
+/// A corner patch on the sphere the three stop curves lie on (fitted to their points, all
+/// within the patch's tolerance of it): its seam and poles away from the patch, its boundary
+/// the three curves, bottom, right, then the left back down. `None` where they lie on no
+/// one sphere.
+fn sphere_patch(model: &mut Model, sides: &[(EdgeId, [usize; 2], BSplineCurve)], bottom: (usize, bool), right: (usize, bool), left: (usize, bool), tolerance: f64) -> Result<Option<Shape>> {
+    use crate::geometry::surface::Sphere;
+    use crate::math::{Direction, Frame, Vector};
+    let points: Vec<Point> = sides.iter().flat_map(|s| (0..=16).map(move |k| s.2.point(k as f64 / 16.0))).collect();
+    let n = points.len() as f64;
+    let mean = points.iter().fold(Vector::new(0.0, 0.0, 0.0), |a, p| a + (*p - Point::ORIGIN)) * (1.0 / n);
+    // Least squares on |q|² = 2 c·q + k, q about the mean.
+    let mut m = [[0.0f64; 4]; 4];
+    let mut b = [0.0f64; 4];
+    for p in &points {
+        let q = (*p - Point::ORIGIN) - mean;
+        let row = [2.0 * q.x, 2.0 * q.y, 2.0 * q.z, 1.0];
+        for i in 0..4 {
+            for j in 0..4 {
+                m[i][j] += row[i] * row[j];
+            }
+            b[i] += row[i] * q.dot(q);
+        }
+    }
+    let Some(x) = solve4(m, b) else { return Ok(None) };
+    let centre = Point::ORIGIN + mean + Vector::new(x[0], x[1], x[2]);
+    let radius = (x[3] + x[0] * x[0] + x[1] * x[1] + x[2] * x[2]).sqrt();
+    let size = points.iter().map(|p| p.distance(points[0])).fold(0.0, f64::max);
+    if !(radius.is_finite() && radius > 1e-9 && radius < 1e3 * size.max(1e-9)) {
+        return Ok(None);
+    }
+    let deviation = points.iter().map(|p| (p.distance(centre) - radius).abs()).fold(0.0, f64::max);
+    if deviation > tolerance.max(1e-7 * radius) {
+        return Ok(None);
+    }
+    let out = (Point::ORIGIN + mean) - centre;
+    let Some(out) = Direction::try_from_vector(out) else { return Ok(None) };
+    // (Only a patch well within the hemisphere about its middle: its poles and seam then far
+    // from it, its parameters' loop round it alone.)
+    if points.iter().any(|p| (*p - centre).normalized().dot(Vector::from(out)) < 15f64.to_radians().sin()) {
+        return Ok(None);
+    }
+    let z = crate::blend::perpendicular(Vector::from(out));
+    let surface = Surface::Sphere(Sphere::new(Frame::new(centre, Direction::from_vector(z), Direction::from_vector(-Vector::from(out))), radius));
+    // Each side's pcurve along its edge, and its use along the boundary.
+    let pcurve = |k: usize| project::pcurve_on_range_within(&Curve::BSpline(sides[k].2.clone()), &surface, 0.0, 1.0, &[1e-9, 1e-7, 1e-5]);
+    let mut uses: Vec<Use> = Vec::with_capacity(3);
+    for ((k, forward), along) in [(bottom, true), (right, true), (left, false)] {
+        let Some(p) = pcurve(k) else { return Ok(None) };
+        let orientation = if forward == along { Orientation::Forward } else { Orientation::Reversed };
+        uses.push((sides[k].0, orientation, Curve2::BSpline(p), 0.0, 1.0));
+    }
+    // (Counter-clockwise round the patch in (u, v).)
+    let mut area = 0.0;
+    for (_, orientation, p, a, b) in &uses {
+        let ws: Vec<f64> = (0..=16).map(|i| a + (b - a) * i as f64 / 16.0).collect();
+        let mut pts: Vec<Point2> = ws.iter().map(|&w| p.point(w)).collect();
+        if *orientation == Orientation::Reversed {
+            pts.reverse();
+        }
+        for w in pts.windows(2) {
+            area += w[0].x * w[1].y - w[1].x * w[0].y;
+        }
+    }
+    if area < 0.0 {
+        uses.reverse();
+        for u in &mut uses {
+            u.1 = u.1.reversed();
+        }
+    }
+    Ok(Some(new_face(model, surface, vec![(uses, Orientation::Forward)], tolerance.max(2.0 * deviation))?))
+}
+
+/// `m x = b` by elimination with partial pivoting; `None` where `m` is singular.
+fn solve4(mut m: [[f64; 4]; 4], mut b: [f64; 4]) -> Option<[f64; 4]> {
+    let scale = m.iter().flatten().fold(0.0f64, |a, x| a.max(x.abs()));
+    for col in 0..4 {
+        let pivot = (col..4).max_by(|&i, &j| m[i][col].abs().total_cmp(&m[j][col].abs()))?;
+        if !(m[pivot][col].abs() > 1e-14 * scale) {
+            return None;
+        }
+        m.swap(col, pivot);
+        b.swap(col, pivot);
+        for row in col + 1..4 {
+            let f = m[row][col] / m[col][col];
+            for k in col..4 {
+                m[row][k] -= f * m[col][k];
+            }
+            b[row] -= f * b[col];
+        }
+    }
+    let mut x = [0.0; 4];
+    for row in (0..4).rev() {
+        let rest: f64 = (row + 1..4).map(|k| m[row][k] * x[k]).sum();
+        x[row] = (b[row] - rest) / m[row][row];
+    }
+    Some(x)
 }
 
 /// How far the patch's boundary strays from the stop curves it is built through.

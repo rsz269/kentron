@@ -556,7 +556,8 @@ fn fillet_solid_edges_inner(model: &mut Model, shape: Shape, edges: &[(Shape, f6
 #[allow(clippy::type_complexity)]
 fn mixed_corner_stages(model: &Model, shape: Shape, edges: &[(Shape, f64)]) -> Option<(Vec<(Shape, f64)>, Vec<(Curve, f64, f64, f64)>)> {
     let edges = tangent_chains(model, shape, edges, 0.0);
-    let convex: Vec<Option<bool>> = edges.iter().map(|&(e, _)| Corner::of(model, shape, e, false).ok().flatten().map(|c| c.convex)).collect();
+    // (Which way each turns, from its curve: a trimmed one's basis too, as a chamfer's.)
+    let convex: Vec<Option<bool>> = edges.iter().map(|&(e, _)| Corner::of(model, shape, e, false).ok().flatten().or_else(|| Corner::of(model, shape, e, true).ok().flatten()).map(|c| c.convex)).collect();
     let mut at: Vec<(NodeId, Vec<usize>)> = Vec::new();
     for (i, &(edge, _)) in edges.iter().enumerate() {
         let (a, b) = model.edge_vertices(edge);
@@ -585,6 +586,46 @@ fn mixed_corner_stages(model: &Model, shape: Shape, edges: &[(Shape, f64)]) -> O
     }
     if odd.is_empty() || odd.iter().any(|i| paired.contains(i)) {
         return None;
+    }
+    // (With the edges going on from them tangentially, of the same turn, at vertices where
+    // only the two meet: rounded first along with them, else the first fillets would run on
+    // into them and they be lost.)
+    let direction_at = |i: usize, v: NodeId| -> Option<Vector> {
+        use crate::geometry::ParametricCurve;
+        let (curve, first, last) = model.edge_curve(Shape { orientation: Orientation::Forward, ..edges[i].0 })?;
+        let (a, b) = model.edge_vertices(Shape { orientation: Orientation::Forward, ..edges[i].0 });
+        let d = if a.node == v { curve.d1(first).1 } else if b.node == v { curve.d1(last).1 * -1.0 } else { return None };
+        Some(d.normalized())
+    };
+    loop {
+        let mut grown = false;
+        for (v, here) in &at {
+            let [x, y] = here[..] else { continue };
+            for (i, j) in [(x, y), (y, x)] {
+                if odd.contains(&i) && !odd.contains(&j) && !paired.contains(&j) && convex[i] == convex[j] {
+                    if let (Some(di), Some(dj)) = (direction_at(i, *v), direction_at(j, *v)) {
+                        if di.dot(dj) <= -1.0 + 1e-6 {
+                            odd.push(j);
+                            grown = true;
+                        }
+                    }
+                }
+            }
+        }
+        if !grown {
+            break;
+        }
+    }
+    // (All the odd edges of one kind, none paired: every edge of that kind first, as a
+    // pocket's concave edges all, its rim's convex ones going round their ends after.)
+    if let Some(kind) = convex[odd[0]] {
+        if odd.iter().all(|&i| convex[i] == Some(kind)) && paired.iter().all(|&i| convex[i] != Some(kind)) {
+            for i in 0..edges.len() {
+                if convex[i] == Some(kind) && !odd.contains(&i) {
+                    odd.push(i);
+                }
+            }
+        }
     }
     let first: Vec<(Shape, f64)> = edges.iter().enumerate().filter(|(i, _)| odd.contains(i)).map(|(_, &e)| e).collect();
     let mut then = Vec::new();
@@ -3665,6 +3706,41 @@ mod tests {
         assert!(report.is_valid(), "{report:?}");
         let volume = properties::volume(&model, result).mass;
         assert!(volume < before && volume > before - 10.0, "{volume} {before}");
+    }
+
+    /// A drawer pocket cut into a block's side, its top chamfered and the chamfer's inner edge
+    /// rounded: its 18 edges rounded R 1.5 at once. The pocket's concave edges go first, the
+    /// rim's convex ones then going round their ends (tori at the opening's corners); the
+    /// pocket's inner corners, three concave fillets of planes square to one another, are
+    /// spheres. OCCT's result encloses 1790797.9349.
+    #[test]
+    fn a_drawer_pockets_rim_goes_round_its_concave_fillets_ends() {
+        let mut model = Model::new();
+        let body = crate::io::brep::read(&mut model, &mut include_str!("tests/drawer_pocket.brep").as_bytes()).unwrap();
+        let within = |p: Point| p.x >= -107.0 - 1e-6 && p.x <= -45.0 + 1e-6 && p.y.abs() <= 47.0 + 1e-6 && p.z >= -33.5 - 1e-6 && p.z <= 13.5 + 1e-6;
+        let edges: Vec<Shape> = model
+            .unique_subshapes(body, NodeKind::Edge)
+            .into_iter()
+            .filter(|&e| {
+                let (a, b) = model.edge_vertices(e);
+                let mid = model.edge_curve(e).map(|(c, a, b)| crate::geometry::ParametricCurve::point(&c, 0.5 * (a + b)));
+                within(model.point(a)) && within(model.point(b)) && mid.is_some_and(within)
+            })
+            .collect();
+        assert_eq!(edges.len(), 18);
+        let result = fillet(&mut model, body, &edges, 1.5).unwrap();
+        let report = validity::check(&model, result);
+        assert!(report.is_valid(), "{report:?}");
+        let volume = properties::volume(&model, result).mass;
+        assert!((volume - 1790797.9349).abs() < 0.2, "{volume}");
+        let near = |f: Shape, p: Point| properties::area(&model, f).center_of_mass.distance(p) < 1.5;
+        let faces = model.unique_subshapes(result, NodeKind::Face);
+        for (y, z) in [(-46.25, -32.75), (46.25, -32.75), (-46.25, 2.75), (46.25, 2.75)] {
+            assert!(faces.iter().any(|&f| matches!(model.surface(f), Some(Surface::Sphere(_))) && near(f, Point::new(-45.75, y, z))), "no sphere at {y}, {z}");
+        }
+        for y in [-46.868, 46.868] {
+            assert!(faces.iter().any(|&f| matches!(model.surface(f), Some(Surface::Torus(_))) && near(f, Point::new(-106.551, y, -33.368))), "no torus at {y}");
+        }
     }
 
     /// A ring's top rim (a circle, rounded R 1) going on round the end of a tab's top fillet
