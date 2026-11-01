@@ -260,12 +260,20 @@ class Shape:
     def fuse(self, *toFuse: "Shape", glue: bool = False, tol: Optional[float] = None) -> "Shape":
         # (Pairwise, then pairs of pairs: each step a union of shapes of like size, not each
         # shape added in turn to a whole that grows with every one.)
+        if tol:
+            # (Fuzzy: each in turn made to meet what the ones before make.)
+            result = self.wrapped
+            for other in toFuse:
+                result = native.union(result, native.snapped(other.wrapped, result, tol))
+            return Shape.cast(result)
         shapes = [self.wrapped] + [other.wrapped for other in toFuse]
         while len(shapes) > 1:
             shapes = [native.union(shapes[i], shapes[i + 1]) if i + 1 < len(shapes) else shapes[i] for i in range(0, len(shapes), 2)]
         return Shape.cast(shapes[0])
 
     def cut(self, *toCut: "Shape", tol: Optional[float] = None) -> "Shape":
+        if tol:
+            toCut = tuple(Shape.cast(native.snapped(other.wrapped, self.wrapped, tol)) for other in toCut)
         # (Several at once, as OCCT takes them: one operation, not one each on the whole.)
         if len(toCut) > 1:
             return Shape.cast(_cut_solid_by_solid(self.wrapped, native.make_compound([other.wrapped for other in toCut])))
@@ -279,7 +287,8 @@ class Shape:
         if not toIntersect:
             return self
         tools = toIntersect[0] if len(toIntersect) == 1 else Shape.fuse(*toIntersect)
-        return Shape.cast(native.intersection(self.wrapped, tools.wrapped))
+        tool = native.snapped(tools.wrapped, self.wrapped, tol) if tol else tools.wrapped
+        return Shape.cast(native.intersection(self.wrapped, tool))
 
     def split(self, *splitters: "Shape") -> "Shape":
         """This shape cut into pieces by `splitters` (BRepAlgoAPI_Splitter): a compound of
@@ -2228,6 +2237,8 @@ class Compound(Shape, Mixin3D):
         # (A compound of solids and its tools: one union, which takes the compound's solids
         # clear of the tools as they are and fuses only those the tools meet, where the
         # pairwise tree would fuse the compound's own pieces with one another again.)
+        if tol:
+            return Shape.fuse(args[0], *args[1:], tol=tol)
         if toFuse and all(c.wrapped.kind() == "Solid" for c in self) and all(t.wrapped.kind() in ("Solid", "Compound") for t in toFuse):
             tools = toFuse[0] if len(toFuse) == 1 else Shape.fuse(*toFuse)
             return Shape.cast(native.union(self.wrapped, tools.wrapped))

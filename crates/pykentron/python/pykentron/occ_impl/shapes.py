@@ -474,17 +474,18 @@ def fuse(s1: Shape, s2: Shape, *shapes: Shape, tol: float = 0.0, glue=None, hist
     def run():
         result = s1
         for s in (s2,) + shapes:
-            result = Shape.cast(native.union(result.wrapped, s.wrapped))
+            tool = native.snapped(s.wrapped, result.wrapped, tol) if tol else s.wrapped
+            result = Shape.cast(native.union(result.wrapped, tool))
         return _compound_or_shape(result)
     return _recorded(history, name, [s1, s2, *shapes], run)
 
 
 def cut(s1: Shape, s2: Shape, tol: float = 0.0, glue=None, history=None, name=None) -> Shape:
-    return _recorded(history, name, [s1, s2], lambda: _compound_or_shape(Shape.cast(_cut_solid_by_solid(s1.wrapped, s2.wrapped))))
+    return _recorded(history, name, [s1, s2], lambda: _compound_or_shape(Shape.cast(_cut_solid_by_solid(s1.wrapped, native.snapped(s2.wrapped, s1.wrapped, tol) if tol else s2.wrapped))))
 
 
 def intersect(s1: Shape, s2: Shape, tol: float = 0.0, glue=None, history=None, name=None) -> Shape:
-    return _recorded(history, name, [s1, s2], lambda: _compound_or_shape(Shape.cast(native.intersection(s1.wrapped, s2.wrapped))))
+    return _recorded(history, name, [s1, s2], lambda: _compound_or_shape(Shape.cast(native.intersection(s1.wrapped, native.snapped(s2.wrapped, s1.wrapped, tol) if tol else s2.wrapped))))
 
 
 def split(s1: Shape, s2: Shape, tol: float = 0.0, history=None, name=None) -> Shape:

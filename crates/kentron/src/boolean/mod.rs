@@ -29,6 +29,7 @@ mod cells;
 mod classify;
 mod far;
 mod fuse;
+mod fuzzy;
 mod geom;
 mod graph;
 mod intersect;
@@ -43,6 +44,7 @@ use crate::topology::{Model, Shape};
 
 pub use arguments::{combine, Combination};
 pub use cells::{cells, Cell};
+pub use fuzzy::snapped;
 pub use volume::{enclosed_solids, enclosed_solids_unsplit};
 pub(crate) use cells::point_inside;
 

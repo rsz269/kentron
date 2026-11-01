@@ -973,6 +973,13 @@ fn intersection(a: Handle, b: Handle) -> PyResult<Handle> {
     with_model(|m| boolean::intersection(m, a.shape, b.shape)).map(handle)
 }
 
+/// `tool` with its plane faces within `tolerance` of plane faces of `reference` taken onto
+/// them (a fuzzy boolean's operand).
+#[pyfunction]
+fn snapped(tool: Handle, reference: Handle, tolerance: f64) -> PyResult<Handle> {
+    with_model(|m| boolean::snapped(m, tool.shape, reference.shape, tolerance)).map(handle)
+}
+
 #[pyfunction]
 fn section(a: Handle, b: Handle) -> PyResult<Handle> {
     with_model(|m| boolean::section(m, a.shape, b.shape)).map(handle)
@@ -1452,6 +1459,7 @@ fn _kentron(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(make_compound, m)?)?;
     m.add_function(wrap_pyfunction!(transformed, m)?)?;
     m.add_function(wrap_pyfunction!(union, m)?)?;
+    m.add_function(wrap_pyfunction!(snapped, m)?)?;
     m.add_function(wrap_pyfunction!(extrude_recorded, m)?)?;
     m.add_function(wrap_pyfunction!(revolve_recorded, m)?)?;
     m.add_function(wrap_pyfunction!(make_loft_recorded, m)?)?;
