@@ -90,7 +90,6 @@ tests/boolean/bopfuse_complex/H1
 tests/boolean/bopfuse_complex/J6
 tests/boolean/bopfuse_complex/K9
 tests/boolean/bopfuse_complex/L9
-tests/boolean/bopsection/C2
 tests/boolean/bopsection/D3
 tests/boolean/boptuc_complex/B5
 tests/boolean/boptuc_complex/C7
@@ -373,14 +372,8 @@ tests/bugs/modalg_5/bug23706_12
 tests/bugs/modalg_5/bug23706_13
 tests/bugs/modalg_5/bug23706_14
 tests/bugs/modalg_5/bug23706_15
-tests/bugs/modalg_5/bug23706_16
-tests/bugs/modalg_5/bug23706_17
 tests/bugs/modalg_5/bug23706_19
 tests/bugs/modalg_5/bug23706_2
-tests/bugs/modalg_5/bug23706_20
-tests/bugs/modalg_5/bug23706_21
-tests/bugs/modalg_5/bug23706_22
-tests/bugs/modalg_5/bug23706_24
 tests/bugs/modalg_5/bug23706_26
 tests/bugs/modalg_5/bug23706_28
 tests/bugs/modalg_5/bug23706_3
@@ -388,13 +381,9 @@ tests/bugs/modalg_5/bug23706_31
 tests/bugs/modalg_5/bug23706_33
 tests/bugs/modalg_5/bug23706_36
 tests/bugs/modalg_5/bug23706_38
-tests/bugs/modalg_5/bug23706_40
 tests/bugs/modalg_5/bug23706_43
-tests/bugs/modalg_5/bug23706_44
-tests/bugs/modalg_5/bug23706_45
 tests/bugs/modalg_5/bug23706_46
 tests/bugs/modalg_5/bug23706_48
-tests/bugs/modalg_5/bug23706_49
 tests/bugs/modalg_5/bug23706_50
 tests/bugs/modalg_5/bug23706_51
 tests/bugs/modalg_5/bug23706_52
@@ -1258,7 +1247,6 @@ tests/pipe/standard/G3
 tests/pipe/standard/G5
 tests/pipe/standard/G6
 tests/prism/seminf/A1
-tests/sewing/tol_0_01/Q8
 tests/sewing/tol_100/C3
 tests/sewing/tol_100/C5
 tests/sewing/tol_100/J5

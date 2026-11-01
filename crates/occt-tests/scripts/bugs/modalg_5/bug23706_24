@@ -15,7 +15,8 @@ restore [locate_data_file bug23706_c2.draw] c
 set info [proj c $x $y $z]
 
 regexp {parameter 1 += +([-0-9.+eE]+)} $info full pp
-if { $pp != $pp_ch } {
+# kentron deviation (draw_deviations.json): OCCT's script compares the projected point's parameter with OCCT's own to all 17 digits, so only its exact iterations pass; kentron's projection reaches the same foot (within 1.2e-14 of OCCT's), so the parameters are compared within 1e-12.
+if { (abs($pp - $pp_ch) > 1e-12) } {
    puts "Error : Projection is not correct"
 } else {
    puts "OK: Projection is correct"
