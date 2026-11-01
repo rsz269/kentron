@@ -1084,6 +1084,12 @@ class Edge(Shape, Mixin1D):
         """The edge's curve over `(u0, u1)`."""
         return Shape.cast(native.edge_trimmed(self.wrapped, u0, u1))
 
+    def hasPCurve(self, f: "Face") -> bool:
+        """Whether the edge lies on `f`'s surface (where it has a curve in the face's
+        parameters): its points, sampled, on the face."""
+        ts = [i / 8 for i in range(9)]
+        return all(native.distance(native.make_vertex(self.positionAt(t).toTuple()), f.wrapped)[0] <= 1e-6 for t in ts)
+
     def radius(self) -> float:
         circle = native.edge_circle(self.wrapped)
         if circle is None:
@@ -1869,7 +1875,16 @@ class Face(Shape):
         if len(args) in (4, 5) and all(isinstance(a, (int, float)) for a in args):
             u0, u1, v0, v1 = args[:4]
             return Shape.cast(native.face_trimmed(self.wrapped, u0, u1, v0, v1))
-        raise NotImplementedError("trimming faces by wires or parameter polygons")
+        # By wires on its surface: the outer one, then holes.
+        if args and all(isinstance(a, Shape) for a in args):
+            return Shape.cast(native.face_on_surface_of(self.wrapped, [w.wrapped for w in args]))
+        # By a polygon of points (u, v) in its parameters.
+        if len(args) >= 3 and all(isinstance(a, (list, tuple)) and len(a) == 2 for a in args):
+            points = [Vector(float(u), float(v), 0.0) for u, v in args]
+            sides = [Edge.makeLine(points[i], points[(i + 1) % len(points)]) for i in range(len(points))]
+            edges = [Shape.cast(native.edge_on_face(self.wrapped, e.wrapped)) for e in sides]
+            return self.trim(Wire.assembleEdges(edges))
+        raise NotImplementedError("trimming faces otherwise than by parameters, wires or a parameter polygon")
 
     def isoline(self, param: float, direction: str = "v") -> Edge:
         """The surface's line of constant u (`direction` "u") or v at `param`, over the face's

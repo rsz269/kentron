@@ -1229,13 +1229,31 @@ def closest(s1: Shape, s2: Shape) -> Tuple[Vector, Vector]:
     return Vector(a), Vector(b)
 
 
-def edgeOn(*args, **kwargs) -> Shape:
-    raise NotImplementedError("edges on faces from parameter-space curves")
+def edgeOn(base: Shape, *args, periodic: bool = False, tol: float = 1e-6, N: int = 20) -> Shape:
+    """Edges on a face from curves in its (u, v) parameters: points (u, v) interpolated
+    (closed round if `periodic`), or edges in the plane z = 0, x and y taken as u and v (each
+    followed exactly: lines, circles, ellipses and B-splines)."""
+    f = _get_one(base, "Face")
+    if args and isinstance(args[0], (list, tuple)) and args[0] and not isinstance(args[0][0], Shape):
+        points = [Vector(float(p[0]), float(p[1]), 0.0) for p in args[0]]
+        profile = Edge.makeSpline(points, periodic=periodic)
+        return Shape.cast(native.edge_on_face(f.wrapped, profile.wrapped))
+    edges = [e for el in args for e in (el if isinstance(el, (list, tuple)) else [el]) for e in e.Edges()]
+    made = [Shape.cast(native.edge_on_face(f.wrapped, e.wrapped)) for e in edges]
+    return _compound_or_shape(made)
 
 
-def wireOn(*args, **kwargs) -> Shape:
-    raise NotImplementedError("wires on faces from parameter-space curves")
+def wireOn(base: Shape, w: Shape, tol: float = 1e-6, N: int = 20) -> Wire:
+    """A wire mapped onto a face through its (u, v) parameters (see `edgeOn`)."""
+    return wire([edgeOn(base, e, tol=tol, N=N) for e in w.Edges()])
 
 
-def faceOn(*args, **kwargs) -> Shape:
-    raise NotImplementedError("faces on faces from parameter-space curves")
+def faceOn(base: Shape, *fcs: Shape, tol: float = 1e-6, N: int = 20) -> Shape:
+    """Faces on a face from planar faces mapped through its (u, v) parameters: each trimmed
+    from it by its outer and inner wires so mapped."""
+    fbase = _get_one(base, "Face")
+    made = []
+    for el in fcs:
+        for fc in el.Faces():
+            made.append(fbase.trim(wireOn(fbase, fc.outerWire(), tol=tol, N=N), *(wireOn(fbase, w, tol=tol, N=N) for w in fc.innerWires())))
+    return made[0] if len(made) == 1 else compound(made)

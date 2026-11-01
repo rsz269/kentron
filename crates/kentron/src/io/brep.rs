@@ -581,7 +581,7 @@ fn parse(text: &str) -> Result<File> {
 /// The 3D curve of `pcurve` on `surface` over `[first, last]`, at the same parameters:
 /// exact on a plane, otherwise interpolated through points of it (doubled until within
 /// 1e-9, relative, between them).
-fn curve_on_surface(pcurve: &Curve2, surface: &Surface, first: f64, last: f64) -> Result<Curve> {
+pub(crate) fn curve_on_surface(pcurve: &Curve2, surface: &Surface, first: f64, last: f64) -> Result<Curve> {
     use crate::geometry::ParametricSurface;
     if let Surface::Plane(plane) = surface {
         return Ok(pcurve.to_3d(plane.frame()));

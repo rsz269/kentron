@@ -77,6 +77,57 @@ pub fn edge_from_curve_range(model: &mut Model, curve: Curve, first: f64, last: 
     Ok(edge.into())
 }
 
+/// The edge on `face` whose curve in the face's parameters is `profile`'s (a planar edge
+/// in the plane z = 0, its x and y taken as u and v): its curve on the face's surface, at
+/// the same parameters (exact on a plane, otherwise fitted within 1e-9 relative). Lines,
+/// circles, ellipses and B-splines.
+#[doc(alias = "BRepBuilderAPI_MakeEdge")]
+pub fn edge_on_face(model: &mut Model, face: Shape, profile: Shape) -> Result<Shape> {
+    use crate::math::Transformable;
+    let (mut curve, first, last) = model.edge_curve(Shape { orientation: Orientation::Forward, ..profile }).ok_or_else(|| Error::InvalidInput("a profile edge without a curve".into()))?;
+    while let Curve::Trimmed(t) = curve {
+        curve = t.basis().clone();
+    }
+    let xy = Plane::from_frame(crate::math::Frame::new(Point::ORIGIN, Direction::Z, Direction::X));
+    let pcurve = crate::geometry::project::analytic_pcurve(&curve, &Surface::Plane(xy))
+        .ok_or_else(|| Error::InvalidInput("a profile edge that is not a curve in the plane z = 0".into()))?;
+    let surface = model.surface(face).ok_or_else(|| Error::InvalidInput("a face without a surface".into()))?.clone().transformed(&face.placement);
+    let on = crate::io::brep::curve_on_surface(&pcurve, &surface, first, last)?;
+    edge_from_curve_range(model, on, first, last)
+}
+
+/// The face on `surface` bounded by closed `wires` lying on it (the first its outer
+/// boundary, the rest holes): each edge's curve in the surface's parameters projected,
+/// placed across seams and poles, the outer boundary run counter-clockwise.
+#[doc(alias = "BRepBuilderAPI_MakeFace")]
+pub fn face_bounded_on(model: &mut Model, surface: Surface, wires: &[Shape]) -> Result<Shape> {
+    use crate::io::faces::{align_periods, finish_face, project, CurveSpan, Gaps};
+    let face = model.new_empty(NodeKind::Face);
+    model.set_face_surface(face, surface.clone(), tolerance::LINEAR)?;
+    let mut loops = Vec::with_capacity(wires.len());
+    for (k, &w) in wires.iter().enumerate() {
+        let mut order: Vec<Shape> = model.children(w).collect();
+        if w.orientation == Orientation::Reversed {
+            order.reverse();
+        }
+        let mut coedges = Vec::with_capacity(order.len());
+        for c in order {
+            let id = crate::topology::CoEdgeId::try_from(c.node).map_err(|n| Error::InvalidInput(format!("{n:?} is not a coedge")))?;
+            let forward = model[id].orientation.compose(c.orientation).compose(w.orientation) == Orientation::Forward;
+            let edge = model[id].edge;
+            let (curve, first, last) = model.edge_curve(Shape { placement: w.placement, ..Shape::from(edge) }).ok_or_else(|| Error::InvalidInput("an edge without a curve".into()))?;
+            let pcurve = project(&CurveSpan { curve: &curve, first, last }, &surface, false)?;
+            coedges.push((edge, forward, pcurve, first, last));
+        }
+        align_periods(&mut coedges, &surface);
+        loops.push((k == 0, coedges));
+    }
+    let mut gaps = Gaps::default();
+    let face = finish_face(model, &mut gaps, face, &surface, loops, true)?;
+    gaps.apply(model)?;
+    Ok(face)
+}
+
 /// A wire through `edges`, in order. Consecutive edges must meet: share a vertex, or have
 /// end vertices within their tolerances, which are then merged (the later edge is made to
 /// use the earlier one's vertex), as are the wire's two ends if they meet.
@@ -583,6 +634,29 @@ mod tests {
             let expected = 2.0 * std::f64::consts::PI * 5.0 * 10.0 - 5.0 * (b - a) * 3.0;
             assert!((area - expected).abs() < 1e-6, "{area} != {expected}");
         }
+    }
+
+    /// A circle of radius 0.3 about (0, 0) in the parameters of a torus (radii 5 and 2), made
+    /// an edge on it and the face it bounds there (across both seams): its area the integral
+    /// of r (R + r cos v) over the disc, r (R pi 0.09 + r 2 pi 0.3 J1(0.3)).
+    #[test]
+    fn a_circle_in_a_toruss_parameters_bounds_a_face_on_it() {
+        use crate::geometry::curve::Circle;
+        use crate::math::Frame;
+        let mut model = Model::new();
+        let torus = crate::primitives::Torus::new(5.0, 2.0).build(&mut model).unwrap();
+        let face = model.unique_subshapes(torus, NodeKind::Face)[0];
+        let circle = edge_from_curve(&mut model, Curve::Circle(Circle::new(Frame::new(Point::ORIGIN, Direction::Z, Direction::X), 0.3))).unwrap();
+        let edge = edge_on_face(&mut model, face, circle).unwrap();
+        let wire = wire(&mut model, &[edge]).unwrap();
+        let surface = model.surface(face).unwrap().clone();
+        let made = face_bounded_on(&mut model, surface, &[wire]).unwrap();
+        let report = crate::validity::check(&model, made);
+        assert!(report.problems.is_empty(), "{report:?}");
+        let j1 = 0.15 - 0.3f64.powi(3) / 16.0 + 0.3f64.powi(5) / 384.0 - 0.3f64.powi(7) / 18432.0;
+        let expected = 2.0 * (5.0 * std::f64::consts::PI * 0.09 + 2.0 * 2.0 * std::f64::consts::PI * 0.3 * j1);
+        let area = crate::properties::area(&model, made).mass;
+        assert!((area - expected).abs() < 1e-4 * expected, "{area} vs {expected}");
     }
 }
 

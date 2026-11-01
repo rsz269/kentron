@@ -399,6 +399,26 @@ pub fn feature_prism(base: Handle, profile: Handle, direction: Option<Xyz>, angl
     with_model(|m| kentron::feature::feature(m, base.shape, profile.shape, sweep, mode, extent)).map(handle)
 }
 
+/// The edge on `face` whose curve in the face's parameters is `profile`'s (a planar edge in
+/// the plane z = 0, its x and y taken as u and v).
+#[pyfunction]
+pub fn edge_on_face(face: Handle, profile: Handle) -> PyResult<Handle> {
+    with_model(|m| make::edge_on_face(m, face.shape, profile.shape)).map(handle)
+}
+
+/// The face on `face`'s surface bounded by the closed `wires` lying on it (the first its
+/// outer boundary, the rest holes).
+#[pyfunction]
+pub fn face_on_surface_of(face: Handle, wires: Vec<Handle>) -> PyResult<Handle> {
+    use kentron::math::Transformable;
+    let wires: Vec<Shape> = wires.iter().map(|w| w.shape).collect();
+    with_model(|m| {
+        let surface = m.surface(face.shape).ok_or_else(|| kentron::Error::InvalidInput("a face without a surface".into()))?.clone().transformed(&face.shape.placement);
+        make::face_bounded_on(m, surface, &wires)
+    })
+    .map(handle)
+}
+
 /// `face` with the closed wires `holes` (on its surface, within it) cut out.
 #[pyfunction]
 pub fn face_with_holes(face: Handle, holes: Vec<Handle>) -> PyResult<Handle> {
@@ -804,6 +824,8 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(draft_faces, m)?)?;
     m.add_function(wrap_pyfunction!(feature_prism, m)?)?;
     m.add_function(wrap_pyfunction!(face_with_holes, m)?)?;
+    m.add_function(wrap_pyfunction!(edge_on_face, m)?)?;
+    m.add_function(wrap_pyfunction!(face_on_surface_of, m)?)?;
     m.add_function(wrap_pyfunction!(line_intersections, m)?)?;
     m.add_function(wrap_pyfunction!(make_bezier, m)?)?;
     m.add_function(wrap_pyfunction!(make_ellipse, m)?)?;
