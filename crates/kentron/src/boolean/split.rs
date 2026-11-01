@@ -714,11 +714,15 @@ pub(super) fn split_face(arcs: &[ArcOnFace], pieces: &[Piece], face_polylines: &
     }
     // Within the face: its point inside the face's boundary, or, a sliver along the boundary
     // (thinner than its sampling), running along an arc of that boundary the way the face
-    // does, the face on its left.
+    // does, the face on its left. (Thin, as a narrow ring's piece between circles a
+    // thousandth of their radius apart, the point taken from the polylines may lie off the
+    // face's own, sampled apart.)
     let sliver = |r: &Region| {
         let polygon = &r.polygons[0];
         let perimeter: f64 = polygon.windows(2).map(|w| ((w[1][0] - w[0][0]).powi(2) + (w[1][1] - w[0][1]).powi(2)).sqrt()).sum();
-        2.0 * geom::signed_area(polygon).abs() <= 1e-5 * uv_scale.max(1.0) * perimeter
+        let (lo, hi) = geom::polyline_box(polygon);
+        let size = (hi[0] - lo[0]).hypot(hi[1] - lo[1]).min(uv_scale.max(1.0));
+        2.0 * geom::signed_area(polygon).abs() <= (1e-5 * uv_scale.max(1.0)).max(1e-3 * size) * perimeter
     };
     // (The face's boundary indexed where many regions are tested against a long one.)
     let segments: usize = face_polylines.iter().map(Vec::len).sum();

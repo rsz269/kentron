@@ -2305,4 +2305,32 @@ mod tests {
         let result = difference(&mut model, a, b).unwrap();
         check(&model, result, 4.0 - 1.0, 2.0 * 3.0 + 8.0 + 4.0 * 1.0, 1);
     }
+
+    /// A disc with a groove 0.002 deep round its side (radius 16.448 between z 1.05 and 1.95,
+    /// 16.45 below and above), a box cut into its rim across the groove's upper step: that
+    /// step, a ring 0.002 wide, is split into a C and the box's square, the C (thinner than
+    /// its polylines' sampling, its point taken from them off the ring's own) kept.
+    #[test]
+    fn a_ring_a_thousandth_of_its_radius_wide_cut_across_keeps_its_rest() {
+        let mut model = Model::new();
+        let (r, groove) = (16.45, 16.448);
+        let below = cylinder(&mut model, (0.0, 0.0, 0.0), Direction::Z, r, 1.05);
+        let middle = cylinder(&mut model, (0.0, 0.0, 1.05), Direction::Z, groove, 0.9);
+        let above = cylinder(&mut model, (0.0, 0.0, 1.95), Direction::Z, r, 1.55);
+        let disc = union(&mut model, below, middle).unwrap();
+        let disc = union(&mut model, disc, above).unwrap();
+        let block = cuboid(&mut model, (-0.7, 15.75, 1.2), (1.4, 1.4, 3.5));
+        let result = difference(&mut model, disc, block).unwrap();
+        // The block's part inside: |x| <= 0.7, y >= 15.75, within the circle at each height.
+        let section = |r: f64| {
+            let f = |x: f64| 0.5 * x * (r * r - x * x).sqrt() + 0.5 * r * r * (x / r).asin();
+            f(0.7) - f(-0.7) - 1.4 * 15.75
+        };
+        let volume = PI * (r * r * 2.6 + groove * groove * 0.9) - 0.75 * section(groove) - 1.55 * section(r);
+        let report = validity::check(&model, result);
+        assert!(report.problems.is_empty(), "{report:?}");
+        let v = properties::volume(&model, result).mass;
+        assert!((v - volume).abs() < 1e-6 * volume, "{v} != {volume}");
+        assert_eq!(model.unique_subshapes(result, NodeKind::Face).len(), 12);
+    }
 }
