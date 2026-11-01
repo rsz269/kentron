@@ -93,6 +93,25 @@ impl FaceData {
                 return Location::Boundary;
             }
         }
+        // (Within the polylines' sag of an arc of the boundary, its chords cutting across the
+        // bend, the polylines cannot tell: on the boundary, as far as they know, and a ray
+        // through there is taken again another way.)
+        for e in &self.edges {
+            let sag = match &e.curve {
+                Some(Curve::Circle(c)) => geom::arc_sag(c.radius()),
+                Some(Curve::Ellipse(c)) => geom::arc_sag(c.major_radius()),
+                _ => continue,
+            };
+            let near = 2.0 * sag;
+            let (lo, hi) = e.bbox;
+            if p.x < lo.x - near || p.x > hi.x + near || p.y < lo.y - near || p.y > hi.y + near || p.z < lo.z - near || p.z > hi.z + near {
+                continue;
+            }
+            let curve = e.curve.as_ref().expect("an arc");
+            if geom::project(curve, e.first, e.last, p).1 <= near {
+                return Location::Boundary;
+            }
+        }
         let sample = &self.sample;
         // (Beyond the surface's edge, as in Face::locate.)
         let reach = 1e-3 * sample.extent.0.distance(sample.extent.1) + on_tol();

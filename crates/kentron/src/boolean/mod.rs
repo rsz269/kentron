@@ -2333,4 +2333,36 @@ mod tests {
         assert!((v - volume).abs() < 1e-6 * volume, "{v} != {volume}");
         assert_eq!(model.unique_subshapes(result, NodeKind::Face).len(), 12);
     }
+
+    /// A prism on a regular polygon of 32 and of 128 sides (corners at radius 62.5, 1 high),
+    /// a cylinder 1 high standing on it, its radius halfway into the sides' sag: the two
+    /// faces on the plane between them cross at two points by each side. The union's faces
+    /// there are the polygon's corners past the circle and the disc's rims past the sides,
+    /// each a few thousandths across, thinner than the polylines' sag (the disc far from the
+    /// polygon's side faces, its circle's chords cutting inside the corners' points; its
+    /// rims' points off the disc's own polylines). OCCT's volumes and faces.
+    #[test]
+    fn a_cylinder_standing_on_a_polygon_just_past_its_sides() {
+        for (n, faces) in [(32usize, 99usize), (128, 387)] {
+            let mut model = Model::new();
+            let big = 62.5f64;
+            let r = big * (1.0 - 0.5 * (1.0 - (PI / n as f64).cos()));
+            let corners: Vec<Point> = (0..n).map(|i| {
+                let a = 2.0 * PI * i as f64 / n as f64;
+                Point::new(big * a.cos(), big * a.sin(), 0.0)
+            }).collect();
+            let edges: Vec<Shape> = (0..n).map(|i| crate::make::edge_between(&mut model, corners[i], corners[(i + 1) % n]).unwrap()).collect();
+            let wire = crate::make::wire(&mut model, &edges).unwrap();
+            let face = crate::make::planar_face(&mut model, wire).unwrap();
+            let polygon = crate::sweep::extrude(&mut model, face, Vector::new(0.0, 0.0, 1.0)).unwrap().shape;
+            let disc = cylinder(&mut model, (0.0, 0.0, 1.0), Direction::Z, r, 1.0);
+            let result = union(&mut model, polygon, disc).unwrap();
+            let report = validity::check(&model, result);
+            assert!(report.problems.is_empty(), "{n}: {report:?}");
+            let volume = 0.5 * n as f64 * big * big * (2.0 * PI / n as f64).sin() + PI * r * r;
+            let v = properties::volume(&model, result).mass;
+            assert!((v - volume).abs() < 1e-6 * volume, "{n}: {v} != {volume}");
+            assert_eq!(model.unique_subshapes(result, NodeKind::Face).len(), faces, "{n}");
+        }
+    }
 }
