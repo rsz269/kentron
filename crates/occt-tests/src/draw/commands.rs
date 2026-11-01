@@ -2164,8 +2164,8 @@ impl Draw {
     /// Example: `checkprops result -s 59527.9`
     pub fn checkprops(&mut self, args: &[&str]) -> DrawResult {
         // `checkprops shape [-l|-s|-v value] [-eps e] [-deps d]`: compares the length, area or
-        // volume with the expected value within the relative tolerance `-deps` (1e-2), as
-        // OCCT's CheckCommands.tcl does; `empty` expects exactly zero. `-eps` is a computation
+        // volume, to six significant digits, with the expected value within the relative
+        // tolerance `-deps` (1e-2), as OCCT's CheckCommands.tcl does; `empty` expects exactly zero. `-eps` is a computation
         // precision and is ignored.
         need(args, 1, "checkprops shape [-l|-s|-v value] [-eps e] [-deps d]")?;
         let shape = self.shape_var(args[0])?;
@@ -2194,6 +2194,9 @@ impl Draw {
                 "-v" => ("volume", properties::solid_volume(&self.model, shape).map_or_else(|| properties::volume(&self.model, shape).mass, |(v, _)| v)),
                 _ => return self.not_implemented("checkprops", args),
             };
+            // (As OCCT's checkprops reads it: from `sprops`'s output, printed to the stream's
+            // default six significant digits.)
+            let printed: f64 = format!("{actual:.5e}").parse().unwrap_or(actual);
             match expected {
                 None if actual != 0.0 => {
                     return Err(DrawError::Failed(format!("Error : The command is not valid. The {name} is {actual}")));
@@ -2202,7 +2205,7 @@ impl Draw {
                     return Err(DrawError::Failed(format!("Error : The command is not valid. The {name} is 0.")));
                 }
                 Some(expected)
-                    if (expected != 0.0 && ((expected - actual) / expected).abs() > relative)
+                    if (expected != 0.0 && ((expected - printed) / expected).abs() > relative)
                         || (expected == 0.0 && actual != 0.0) =>
                 {
                     return Err(DrawError::Failed(format!(
@@ -4151,6 +4154,7 @@ impl Draw {
             kentron::offset::thick_solid(&mut self.model, shape, &faces, distance, join)?
         };
         let r = if self.offset_merge { kentron::unify::unify_same_domain(&mut self.model, r)? } else { r };
+        self.flag_offset_solids_closed(r);
         self.set_shape_var(result, r)
     }
     /// DRAW command `offsetshape`: 9 uses in 9 converted scripts.
@@ -4182,7 +4186,14 @@ impl Draw {
         } else {
             kentron::offset::thick_solid(&mut self.model, shape, &faces, distance, join)?
         };
+        self.flag_offset_solids_closed(r);
         self.set_shape_var(args[0], r)
+    }
+
+    /// (OCCT's offsets flag their solids closed: `BRepOffset_MakeOffset`'s `Closed(true)`.)
+    fn flag_offset_solids_closed(&mut self, r: kentron::topology::Shape) {
+        let solids: Vec<_> = self.model.explore(r, NodeKind::Solid).map(|s| s.node).collect();
+        self.closed_solids.extend(solids);
     }
     /// DRAW command `offsetshapesimple`: 2 uses in 1 converted scripts.
     ///
