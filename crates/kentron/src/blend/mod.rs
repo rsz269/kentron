@@ -1609,6 +1609,54 @@ fn concave_ends(model: &mut Model, shape: Shape, corners: &[(Corner, f64)], i: u
         run[k] = 2.0 * radius;
         beyond.push(solid);
     }
+    // Within a face's outline carried out from it, where the fillet's contact on it runs
+    // off it (as a fillet up a leg whose top corners are rounded, its contact passing above
+    // where the leg's front ends at them): the fillet adds material over the face only, as
+    // far as the radius from it, and there the material is bounded by the outline's rounding
+    // carried out, not by the fillet's end planes. (Planes without holes only.)
+    let between = corner.into[0].dot(corner.into[1]).clamp(-1.0, 1.0).acos();
+    let along = if between > 1e-3 { radius / (0.5 * between).tan() } else { *radius };
+    for (k, (node, surface, sign)) in corner.faces.iter().enumerate() {
+        let Surface::Plane(plane) = untrimmed(surface) else { continue };
+        let Some(face) = model.explore(shape, NodeKind::Face).find(|f| f.node == *node) else { continue };
+        if model.unique_subshapes(face, NodeKind::Wire).len() != 1 {
+            continue;
+        }
+        let out = Vector::from(plane.normal()) * *sign;
+        let copy = crate::modify::copy(model, face, false)?;
+        // (Its lines and circles as such, not trimmed as a file may have them: the prism's
+        // sides planes and cylinders, one with the faces they carry on.)
+        for edge in model.unique_subshapes(copy, NodeKind::Edge) {
+            if let Some((Curve::Trimmed(t), first, last)) = model.edge_curve(Shape { orientation: Orientation::Forward, ..edge }) {
+                if matches!(t.basis(), Curve::Line(_) | Curve::Circle(_)) {
+                    let tolerance = model.tolerance(edge);
+                    model.set_edge_curve(edge, t.basis().clone(), tolerance)?;
+                    model.set_edge_range(edge, first, last)?;
+                }
+            }
+        }
+        let prism = crate::sweep::extrude(model, copy, out * (2.0 * radius))?.shape;
+        // (Swept from the face as the solid uses it, against its surface's normal or with it:
+        // turned outward.)
+        let prism = if crate::properties::volume(model, prism).mass < 0.0 { prism.reversed() } else { prism };
+        // (The contact on the face in the edge's middle, but off the face's outline carried
+        // out a tenth of the edge in from either end: run off the face's sides. Nearer the
+        // ends, a leaning edge's contact may stand past the face's own ends; and off it in the
+        // middle too, the face is narrower than the fillet, which runs on over its far edge.)
+        let length = match corner.path {
+            Path::Line { length } => length,
+            Path::Arc { radius, angle, .. } => radius * angle.abs(),
+        };
+        let outside = |model: &Model, at_end: bool, s: f64| {
+            let (p, into) = corner.past(at_end, s);
+            let q = p + into[k] * along + out * (0.5 * radius);
+            matches!(crate::boolean::classify_point(model, prism, q), Ok(crate::boolean::PointLocation::Outside))
+        };
+        let off = !outside(model, false, -0.5 * length) && (outside(model, false, -0.1 * length) || outside(model, true, -0.1 * length));
+        if off {
+            beyond.push((prism, true));
+        }
+    }
     Ok((run, beyond))
 }
 
@@ -5022,6 +5070,37 @@ mod tests {
         assert!((wide - narrower).abs() <= 1e-3, "{wide} against {narrower}");
     }
 
+    /// An L bracket (a leg 52 high on a foot 60 deep, both 15 wide, 8 thick), its leg's top
+    /// edges rounded (R 5): the inside edge between foot and leg rounded R 51.9, its contact
+    /// up the leg at 59.9, past where the leg's front ends at its rounded corners. The fillet's
+    /// material there is bounded by those corners carried on forward (the corner cylinders
+    /// grow), not by the fillet's end planes standing up past them (OCCT's volume, area and
+    /// 11 faces).
+    #[test]
+    fn a_fillet_running_up_past_a_legs_rounded_corners_is_bounded_by_them() {
+        let mut model = Model::new();
+        let bracket = crate::io::brep::read(&mut model, &mut include_str!("tests/bracket_with_rounded_leg.brep").as_bytes()).unwrap();
+        let inside: Vec<Shape> = model
+            .unique_subshapes(bracket, NodeKind::Edge)
+            .into_iter()
+            .filter(|&e| {
+                let (a, b) = model.edge_vertices(e);
+                let (a, b) = (model.point(a), model.point(b));
+                (a.y + 8.0).abs() < 1e-6 && (b.y + 8.0).abs() < 1e-6 && (a.z - 8.0).abs() < 1e-6 && (b.z - 8.0).abs() < 1e-6
+            })
+            .collect();
+        assert_eq!(inside.len(), 1);
+        let rounded = fillet(&mut model, bracket, &inside, 51.9).unwrap();
+        // (Cleaned, as CadQuery's fillet leaves it: the corner cylinders and their carried
+        // on pieces one face each.)
+        let rounded = crate::unify::unify_same_domain(&mut model, rounded).unwrap();
+        let report = validity::check(&model, rounded);
+        assert!(report.problems.is_empty(), "{report:?}");
+        let (v, a) = (properties::volume(&model, rounded).mass, properties::area(&model, rounded).mass);
+        assert!((v - 22024.7682).abs() < 1e-2, "{v}");
+        assert!((a - 6158.2201).abs() < 1e-2, "{a}");
+        assert_eq!(model.unique_subshapes(rounded, NodeKind::Face).len(), 11);
+    }
 }
 
 #[cfg(test)]
