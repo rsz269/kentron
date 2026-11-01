@@ -51,6 +51,38 @@ enum End {
     /// Narrowed to nothing at its edge's vertex, where the faces are tangent: both contacts
     /// end there (at `v`), the fillet's face closing on a degenerate edge.
     Point { vertex: VertexId, v: [f64; 2] },
+    /// At the gap `gap` between two fillets whose edges go on into one another but whose
+    /// sections there are apart: stopping across its section at the vertex (`v`), at the
+    /// gap's points `at` (0 the common face's, 1 or 2 the far one's).
+    Gap { gap: usize, v: [f64; 2], at: [usize; 2] },
+}
+
+/// Two fillets along edges going on into one another at a vertex, sharing one face, whose
+/// far contacts there do not meet (their far faces going on into one another other than
+/// across the fillets' sections, as a plane into a cylinder tangent to it): each stops across
+/// its section at the vertex, and a patch closes the gap between them, from the point the
+/// two share on the common face to their far contacts' ends and, between those, across both
+/// far faces through `seam`, the point of the edge between them where it is cut.
+struct Gap {
+    /// The first's common contact's end, its far contact's end, the second's far contact's
+    /// end, the seam point (one of the far ends where that fillet's far contact crosses the
+    /// edge between the far faces before its end, and stops there), and the second's common
+    /// contact's end (where it is apart from the first's: the gap's side on the common face).
+    points: [Point; 5],
+    /// From the first's common end to the second's on the common face (none where they
+    /// meet): (face, curve, pcurve).
+    common: Option<(Shape, BSplineCurve, BSplineCurve2)>,
+    /// From the first's far end to the second's across the far faces, through the seam (a
+    /// piece of no length left out): (face, curve over [0, 1], pcurve over [0, 1], from and to
+    /// points by index).
+    pieces: Vec<(Shape, BSplineCurve, BSplineCurve2, usize, usize)>,
+    /// The seam point's index.
+    seam: usize,
+    /// The edge between the far faces: its vertex at the gap and the seam point's parameter.
+    third: (EdgeId, VertexId, f64),
+    /// The fillets (by index) with their ends there.
+    stripes: [(usize, usize); 2],
+    deviation: f64,
 }
 
 /// Three fillets meeting at a vertex: the points where they stop on each face (with the
@@ -125,6 +157,7 @@ fn blend_network_past(model: &mut Model, shape: Shape, edges: &[(Shape, Profile)
     let mut ends: Vec<[Option<End>; 2]> = stripes.iter().map(|_| [None, None]).collect();
     let mut corners: Vec<Corner> = Vec::new();
     let mut mitres: Vec<Mitre> = Vec::new();
+    let mut gaps: Vec<Gap> = Vec::new();
     let mut vertices: Vec<(VertexId, Vec<(usize, usize)>)> = at_vertex.into_iter().collect();
     vertices.sort_by_key(|(v, _)| v.index());
     for (vertex, meeting) in vertices {
@@ -147,7 +180,17 @@ fn blend_network_past(model: &mut Model, shape: Shape, edges: &[(Shape, Profile)
                 // (Edges going on into one another: the fillets join across, else they meet
                 // in a mitre.)
                 let (m, ea, eb) = match joint(model, shape, vertex, &stripes, a, b) {
-                    Some(joined) => joined?,
+                    Some(Ok(joined)) => joined,
+                    // (Edges going on into one another, the fillets' sections there apart:
+                    // closed by a patch between them.)
+                    Some(Err(e)) => {
+                        let g = gap(model, vertex, &stripes, a, b).map_err(|_| e)?;
+                        for (n, &(i, k)) in g.0.stripes.iter().enumerate() {
+                            ends[i][k] = Some(End::Gap { gap: gaps.len(), v: g.1[n].0, at: g.1[n].1 });
+                        }
+                        gaps.push(g.0);
+                        continue;
+                    }
                     None => mitre(model, shape, vertex, &stripes, a, b)?,
                 };
                 ends[a.0][a.1] = Some(ea.into_end(mitres.len()));
@@ -165,7 +208,149 @@ fn blend_network_past(model: &mut Model, shape: Shape, edges: &[(Shape, Profile)
         }
     }
     let ends: Vec<[End; 2]> = ends.into_iter().map(|[a, b]| [a.expect("an end"), b.expect("an end")]).collect();
-    build(model, shape, &stripes, &ends, &corners, &mitres)
+    build(model, shape, &stripes, &ends, &corners, &mitres, &gaps)
+}
+
+/// The gap between fillets `a` and `b` (fillet, end) at `vertex` (see [`Gap`]), with each
+/// one's stop there: its contacts' parameters and the gap's points at its two sides.
+#[allow(clippy::type_complexity)]
+fn gap(model: &Model, vertex: VertexId, stripes: &[Stripe], a: (usize, usize), b: (usize, usize)) -> Result<(Gap, [([f64; 2], [usize; 2]); 2])> {
+    let (sa, sb) = (&stripes[a.0], &stripes[b.0]);
+    let common: Vec<(usize, usize)> = (0..2).flat_map(|i| (0..2).map(move |j| (i, j))).filter(|&(i, j)| sa.rolling.sides[i].face.node == sb.rolling.sides[j].face.node).collect();
+    let [(ia, ib)] = common[..] else {
+        return Err(Error::InvalidInput("a gap between fillets without one common face".into()));
+    };
+    let (fa, fb) = (1 - ia, 1 - ib);
+    let v_node: crate::topology::NodeId = vertex.into();
+    let at_vertex = |e: Shape| {
+        let (p, q) = model.edge_vertices(e);
+        p.node == v_node || q.node == v_node
+    };
+    let edges_of = |face: Shape| -> Vec<EdgeId> { model.explore(face, NodeKind::Edge).filter(|&e| at_vertex(e)).filter_map(|e| EdgeId::try_from(e.node).ok()).collect() };
+    let (on_a, on_b) = (edges_of(sa.rolling.sides[fa].face), edges_of(sb.rolling.sides[fb].face));
+    let shared: Vec<EdgeId> = on_a.iter().copied().filter(|e| on_b.contains(e) && *e != sa.rolling.id && *e != sb.rolling.id).collect();
+    let [third] = shared[..] else {
+        return Err(Error::InvalidInput("a gap between fillets whose far faces do not meet along an edge there".into()));
+    };
+    let at_end = |s: &Stripe, k: usize| if k == 0 { s.rolling.t0 } else { s.rolling.t1 };
+    let (va, vb) = (at_end(sa, a.1), at_end(sb, b.1));
+    let (pa, pb) = (sa.rolling.contacts[ia].point(va), sb.rolling.contacts[ib].point(vb));
+    let (curve3, first3, last3) = model.edge_curve(Shape::from(third)).ok_or_else(|| Error::InvalidInput("a degenerate edge at a gap".into()))?;
+    let size = sa.rolling.contacts[0].point(va).distance(sa.rolling.contacts[1].point(va)).max(1e-9);
+    // Where a fillet's far contact crosses the edge between the far faces over its run (the
+    // crossing nearest the vertex): it stops there, its contact beyond on the far face's
+    // surface carried on past that edge, where the other's far face is.
+    let crossing = |s: &Stripe, far: usize, k: usize| -> Option<f64> {
+        let contact = &s.rolling.contacts[far];
+        let (start, end) = (at_end(s, 1 - k), at_end(s, k));
+        let gap = |w: f64| crate::geometry::extrema::nearest_on_curve(contact.point(w), &curve3, first3, last3).distance;
+        let n = 512;
+        let ws: Vec<f64> = (0..=n).map(|j| start + (end - start) * j as f64 / n as f64).collect();
+        let gs: Vec<f64> = ws.iter().map(|&w| gap(w)).collect();
+        let step = (end - start).abs() / n as f64;
+        let (lo, hi) = (start.min(end), start.max(end));
+        // (Local least gaps, from the vertex end back.)
+        for j in (1..n).rev() {
+            if !(gs[j] <= gs[j - 1] && gs[j] <= gs[j + 1]) {
+                continue;
+            }
+            let (mut x, mut y) = ((ws[j] - step).max(lo), (ws[j] + step).min(hi));
+            for _ in 0..100 {
+                let (p, q) = (x + (y - x) / 3.0, y - (y - x) / 3.0);
+                if gap(p) < gap(q) { y = q } else { x = p }
+            }
+            let w = 0.5 * (x + y);
+            if gap(w) <= 1e-6 * size {
+                // (Crossing short of the end: at the end itself the far contacts would meet.)
+                return ((w - end).abs() > 1e-6 * (s.rolling.t1 - s.rolling.t0).abs()).then_some(w);
+            }
+        }
+        None
+    };
+    let (wa, wb) = (crossing(sa, fa, a.1), crossing(sb, fb, b.1));
+    if wa.is_some() && wb.is_some() {
+        return Err(Error::InvalidInput("a gap between fillets both crossing the edge between their far faces".into()));
+    }
+    let (ua, ub) = (wa.unwrap_or(va), wb.unwrap_or(vb));
+    let (qa, qb) = (sa.rolling.contacts[fa].point(ua), sb.rolling.contacts[fb].point(ub));
+    // (The seam point: where a far contact crosses the edge; else the edge's point nearest
+    // the middle of the far ends.)
+    let (seam, seam_index) = match (wa, wb) {
+        (Some(_), _) => (qa, 1),
+        (_, Some(_)) => (qb, 2),
+        _ => (crate::geometry::extrema::nearest_on_curve(qa + (qb - qa) * 0.5, &curve3, first3, last3).point, 3),
+    };
+    let seam_t = crate::geometry::extrema::nearest_on_curve(seam, &curve3, first3, last3).parameter;
+    let seam = curve3.point(seam_t);
+    if !(qa.distance(qb) > 1e-6 * size) {
+        return Err(Error::InvalidInput("a gap between fillets whose far contacts meet".into()));
+    }
+    // Each piece straight in its far face's parameters, from one point to the other.
+    let piece = |face: Shape, surface: &crate::geometry::surface::Surface, from: Point, to: Point| -> Result<(BSplineCurve, BSplineCurve2, f64)> {
+        let uv = |p: Point| {
+            surface.parameters(p).unwrap_or_else(|| {
+                let (u, v, _) = crate::geometry::extrema::nearest_on_surface(p, surface, None);
+                (u, v)
+            })
+        };
+        let (mut u0, mut v0) = uv(from);
+        // (In the face's own periods: its other pcurves' there.)
+        let (fu0, fu1, fv0, fv1) = model.face_uv_bounds(face);
+        if let Some(period) = surface.u_period() {
+            u0 -= ((u0 - 0.5 * (fu0 + fu1)) / period).round() * period;
+        }
+        if let Some(period) = surface.v_period() {
+            v0 -= ((v0 - 0.5 * (fv0 + fv1)) / period).round() * period;
+        }
+        let (mut u1, mut v1) = uv(to);
+        if let Some(period) = surface.u_period() {
+            u1 -= ((u1 - u0) / period).round() * period;
+        }
+        if let Some(period) = surface.v_period() {
+            v1 -= ((v1 - v0) / period).round() * period;
+        }
+        let n = 16;
+        let ws: Vec<f64> = (0..=n).map(|k| k as f64 / n as f64).collect();
+        let points: Vec<Point> = ws.iter().map(|&w| surface.point(u0 + (u1 - u0) * w, v0 + (v1 - v0) * w)).collect();
+        let curve = fit::interpolate_with_parameters(&points, &ws)?;
+        let pcurve = BSplineCurve2::new(vec![Point2::new(u0, v0), Point2::new(u1, v1)], vec![0.0, 1.0], vec![2, 2], 1);
+        let deviation = points[0].distance(from).max(points[n].distance(to));
+        Ok((curve, pcurve, deviation))
+    };
+    let mut pieces = Vec::new();
+    let mut deviation: f64 = 0.0;
+    // (On the common face, from one fillet's contact to the other's, where they are apart.)
+    let common = if pa.distance(pb) > 1e-7 * size.max(1.0) {
+        let (c, p, d) = piece(sa.rolling.sides[ia].face, &sa.rolling.sides[ia].surface, pa, pb)?;
+        deviation = deviation.max(d);
+        Some((sa.rolling.sides[ia].face, c, p))
+    } else {
+        None
+    };
+    if seam_index != 1 {
+        let (c, p, d) = piece(sa.rolling.sides[fa].face, &sa.rolling.sides[fa].surface, qa, seam)?;
+        pieces.push((sa.rolling.sides[fa].face, c, p, 1, seam_index));
+        deviation = deviation.max(d);
+    }
+    if seam_index != 2 {
+        let (c, p, d) = piece(sb.rolling.sides[fb].face, &sb.rolling.sides[fb].surface, seam, qb)?;
+        pieces.push((sb.rolling.sides[fb].face, c, p, seam_index, 2));
+        deviation = deviation.max(d);
+    }
+    deviation = deviation.max(if seam_index == 1 { qa.distance(seam) } else if seam_index == 2 { qb.distance(seam) } else { 0.0 });
+    let side_v = |common: usize, far: usize, vc: f64, vf: f64| { let mut v = [0.0; 2]; v[common] = vc; v[far] = vf; v };
+    let ends_a = (side_v(ia, fa, va, ua), { let mut at = [0; 2]; at[ia] = 0; at[fa] = 1; at });
+    let ends_b = (side_v(ib, fb, vb, ub), { let mut at = [0; 2]; at[ib] = 4; at[fb] = 2; at });
+    let g = Gap {
+        points: [pa, qa, qb, seam, pb],
+        common,
+        pieces,
+        seam: seam_index,
+        third: (third, vertex, seam_t),
+        stripes: [a, b],
+        deviation,
+    };
+    Ok((g, [ends_a, ends_b]))
 }
 
 /// A fillet's end at a mitre, before the mitre is numbered.
@@ -913,7 +1098,7 @@ fn stop_curve(stripe: &Stripe, v0: f64, v1: f64) -> Result<(BSplineCurve, BSplin
 }
 
 /// Builds the rounded solid.
-fn build(model: &mut Model, shape: Shape, stripes: &[Stripe], ends: &[[End; 2]], corners: &[Corner], mitres: &[Mitre]) -> Result<Shape> {
+fn build(model: &mut Model, shape: Shape, stripes: &[Stripe], ends: &[[End; 2]], corners: &[Corner], mitres: &[Mitre], gaps: &[Gap]) -> Result<Shape> {
     // Within twice the contact curves' distance from their faces (between the fillet's
     // ends: past them the contacts run on through sections past the edge's ends, which may
     // stray from the faces' surfaces).
@@ -921,7 +1106,7 @@ fn build(model: &mut Model, shape: Shape, stripes: &[Stripe], ends: &[[End; 2]],
     let mut size: f64 = 1.0;
     let v_of = |end: &End| match end {
         End::Face(cut) => cut.v,
-        End::Free { v, .. } | End::Mitre { v, .. } | End::Corner { v, .. } | End::Point { v, .. } => *v,
+        End::Free { v, .. } | End::Mitre { v, .. } | End::Corner { v, .. } | End::Point { v, .. } | End::Gap { v, .. } => *v,
     };
     for (s, ends) in stripes.iter().zip(ends) {
         let (from, to) = (v_of(&ends[0]), v_of(&ends[1]));
@@ -935,6 +1120,7 @@ fn build(model: &mut Model, shape: Shape, stripes: &[Stripe], ends: &[[End; 2]],
         }
     }
     let deviation = mitres.iter().fold(deviation, |d, m| d.max(m.deviation));
+    let deviation = gaps.iter().fold(deviation, |d, g| d.max(g.deviation));
     let tolerance = (deviation * 2.0).max(crate::tolerance::LINEAR).max(1e-8 * size);
     // The mitres' points as vertices, their curves as edges (each shared by two fillets).
     let mitre_vertices: Vec<Vec<VertexId>> = mitres.iter().map(|m| m.points.iter().map(|&p| model.add_vertex(p, tolerance)).collect()).collect();
@@ -954,6 +1140,34 @@ fn build(model: &mut Model, shape: Shape, stripes: &[Stripe], ends: &[[End; 2]],
             edges.push(e);
         }
         mitre_edges.push(edges);
+    }
+    // The gaps' points as vertices; their pieces across the far faces as edges, put into
+    // those faces.
+    let gap_vertices: Vec<[VertexId; 5]> = gaps
+        .iter()
+        .map(|g| {
+            let mut vs = g.points.map(|p| model.add_vertex(p, tolerance));
+            // (A seam at a far end is that end; the common ends one where they meet.)
+            vs[3] = vs[g.seam];
+            if g.common.is_none() {
+                vs[4] = vs[0];
+            }
+            vs
+        })
+        .collect();
+    let mut gap_edges: Vec<Vec<EdgeId>> = Vec::with_capacity(gaps.len());
+    for (g, vs) in gaps.iter().zip(&gap_vertices) {
+        let mut edges = Vec::new();
+        let common = g.common.as_ref().map(|(face, curve, on_face)| (*face, curve, on_face, 0, 4));
+        for (face, curve, on_face, from, to) in g.pieces.iter().map(|(f, c, p, a, b)| (*f, c, p, *a, *b)).chain(common) {
+            let (from, to) = (vs[from], vs[to]);
+            let e = model.add_edge(from, to, tolerance)?;
+            model.set_edge_curve(e.into(), Curve::BSpline(curve.clone()), tolerance)?;
+            model.set_edge_range(e.into(), 0.0, 1.0)?;
+            inserts.push((face, (e, Curve2::BSpline(on_face.clone()), [from, to])));
+            edges.push(e);
+        }
+        gap_edges.push(edges);
     }
     // The corners' points as vertices.
     let corner_vertices: Vec<Vec<VertexId>> = corners.iter().map(|c| c.points.iter().map(|&(_, p)| model.add_vertex(p, tolerance)).collect()).collect();
@@ -1020,6 +1234,10 @@ fn build(model: &mut Model, shape: Shape, stripes: &[Stripe], ends: &[[End; 2]],
                     let (curve, on_fillet) = stop_curve(s, v[0], v[1])?;
                     Stop { v: *v, vertices: [*vertex, *vertex], curve, on_fillet: Curve2::BSpline(on_fillet), mitre: None }
                 }
+                End::Gap { gap, v, at } => {
+                    let (curve, on_fillet) = stop_curve(s, v[0], v[1])?;
+                    Stop { v: *v, vertices: [gap_vertices[*gap][at[0]], gap_vertices[*gap][at[1]]], curve, on_fillet: Curve2::BSpline(on_fillet), mitre: None }
+                }
             });
         }
         let [a, b]: [Stop; 2] = pair.try_into().map_err(|_| Error::Failed("a fillet's ends".into()))?;
@@ -1052,6 +1270,10 @@ fn build(model: &mut Model, shape: Shape, stripes: &[Stripe], ends: &[[End; 2]],
         for &(edge, vertex, t, k) in &m.edges {
             trims.push((edge, vertex, vs[k], t));
         }
+    }
+    for (g, vs) in gaps.iter().zip(&gap_vertices) {
+        let (edge, vertex, t) = g.third;
+        trims.push((edge, vertex, vs[3], t));
     }
     // The contact curves as edges, between the fillets' stops.
     let mut contact_edges: Vec<[EdgeId; 2]> = Vec::with_capacity(stripes.len());
@@ -1177,6 +1399,21 @@ fn build(model: &mut Model, shape: Shape, stripes: &[Stripe], ends: &[[End; 2]],
     for (c, corner) in corners.iter().enumerate() {
         let face = patch(model, corner, &corner_vertices[c], &stops.iter().map(|s| [(s[0].vertices, s[0].curve.clone()), (s[1].vertices, s[1].curve.clone())]).collect::<Vec<_>>(), &across_edges, tolerance)?;
         let (i, k) = corner.stripes[0];
+        let edge = across_edges[i][k];
+        let used = |model: &Model, face: Shape| -> Option<Orientation> {
+            model.explore(face, NodeKind::CoEdge).find(|c| model[crate::topology::CoEdgeId::try_from(c.node).expect("a coedge")].edge == edge).map(|c| {
+                let id = crate::topology::CoEdgeId::try_from(c.node).expect("a coedge");
+                model[id].orientation.compose(c.orientation)
+            })
+        };
+        let (a, b) = (used(model, fillet_faces[i]), used(model, face));
+        added.push(if a.is_some() && a == b { face.reversed() } else { face });
+    }
+    // The gaps' patches, oriented as the fillets beside them.
+    for (g, gap) in gaps.iter().enumerate() {
+        let (i, k) = gap.stripes[0];
+        let stop_pairs: Vec<[Stop2; 2]> = stops.iter().map(|s| [(s[0].vertices, s[0].curve.clone()), (s[1].vertices, s[1].curve.clone())]).collect();
+        let face = gap_patch(model, gap, &gap_vertices[g], &gap_edges[g], &stop_pairs, &across_edges, tolerance)?;
         let edge = across_edges[i][k];
         let used = |model: &Model, face: Shape| -> Option<Orientation> {
             model.explore(face, NodeKind::CoEdge).find(|c| model[crate::topology::CoEdgeId::try_from(c.node).expect("a coedge")].edge == edge).map(|c| {
@@ -1338,6 +1575,97 @@ fn patch(
     ];
     let tolerance = tolerance.max(deviation_from_sides(&surface, &sides, bottom, right, left));
     new_face(model, surface, vec![(uses, Orientation::Forward)], tolerance)
+}
+
+/// A fillet's stop: its vertices at its two sides and the curve across between them.
+type Stop2 = ([VertexId; 2], BSplineCurve);
+
+/// The patch closing a gap: a Coons surface from its far side (the two pieces across the
+/// far faces, from the first fillet's far end to the second's) up the fillets' stop curves to
+/// the common face's point, the top collapsed there.
+#[allow(clippy::too_many_arguments)]
+fn gap_patch(model: &mut Model, gap: &Gap, vertices: &[VertexId; 5], edges: &[EdgeId], stops: &[[Stop2; 2]], across: &[[EdgeId; 2]], tolerance: f64) -> Result<Shape> {
+    let pieces = &edges[..gap.pieces.len()];
+    // The far side: its pieces in turn, each over a share of [0, 1] by its length.
+    let length = |c: &BSplineCurve| (0..32).map(|k| c.point(k as f64 / 32.0).distance(c.point((k + 1) as f64 / 32.0))).sum::<f64>();
+    let lengths: Vec<f64> = gap.pieces.iter().map(|p| length(&p.1)).collect();
+    let total = lengths.iter().sum::<f64>().max(1e-300);
+    let mut breaks = vec![0.0];
+    for l in &lengths {
+        breaks.push(breaks.last().expect("a break") + l / total);
+    }
+    *breaks.last_mut().expect("a break") = 1.0;
+    let bottom = |u: f64| {
+        let k = (0..gap.pieces.len()).find(|&k| u <= breaks[k + 1]).unwrap_or(gap.pieces.len() - 1);
+        gap.pieces[k].1.point(((u - breaks[k]) / (breaks[k + 1] - breaks[k])).clamp(0.0, 1.0))
+    };
+    // The sides: each fillet's stop curve from its far end (point 1 or 2) to the common
+    // point (0), with its edge and whether the edge runs that way.
+    let side = |n: usize| -> (EdgeId, bool, BSplineCurve) {
+        let (i, k) = gap.stripes[n];
+        let (vs, curve) = &stops[i][k];
+        // (Running from the far end up to the common one: its first vertex not a common end.)
+        (across[i][k], vs[0] != vertices[0] && vs[0] != vertices[4], curve.clone())
+    };
+    let (left, right) = (side(0), side(1));
+    let up = |s: &(EdgeId, bool, BSplineCurve), w: f64| s.2.point(if s.1 { w } else { 1.0 - w });
+    // The top: across the common face from the first's common end to the second's, or the
+    // one point.
+    let top = |u: f64| match &gap.common {
+        Some((_, c, _)) => c.point(u),
+        None => gap.points[0],
+    };
+    let coons = |u: f64, v: f64| -> Point {
+        let (b, l, r, t) = (bottom(u), up(&left, v), up(&right, v), top(u));
+        let (p0, p1, p2, p3) = (bottom(0.0), bottom(1.0), top(1.0), top(0.0));
+        let o = |p: Point| p - Point::ORIGIN;
+        let sum = o(b) * (1.0 - v) + o(t) * v + o(l) * (1.0 - u) + o(r) * u
+            - (o(p0) * ((1.0 - u) * (1.0 - v)) + o(p1) * (u * (1.0 - v)) + o(p2) * (u * v) + o(p3) * ((1.0 - u) * v));
+        Point::ORIGIN + sum
+    };
+    let params: Vec<f64> = (0..=PATCH).map(|k| k as f64 / PATCH as f64).collect();
+    let rows: Vec<BSplineCurve> = params
+        .iter()
+        .map(|&v| fit::interpolate_with_parameters(&params.iter().map(|&u| coons(u, v)).collect::<Vec<_>>(), &params))
+        .collect::<Result<_>>()?;
+    let count = rows[0].poles().len();
+    let columns: Vec<BSplineCurve> = (0..count)
+        .map(|n| fit::interpolate_with_parameters(&rows.iter().map(|r| r.poles()[n]).collect::<Vec<_>>(), &params))
+        .collect::<Result<_>>()?;
+    let poles: Vec<Vec<Point>> = columns.iter().map(|c| c.poles().to_vec()).collect();
+    let u = KnotVector::new(rows[0].knots().to_vec(), rows[0].multiplicities().to_vec(), rows[0].degree());
+    let v = KnotVector::new(columns[0].knots().to_vec(), columns[0].multiplicities().to_vec(), columns[0].degree());
+    let surface = Surface::BSpline(BSplineSurface::try_new(poles, u, v)?);
+    let segment = |a: (f64, f64), b: (f64, f64)| Curve2::BSpline(BSplineCurve2::new(vec![Point2::new(a.0, a.1), Point2::new(b.0, b.1)], vec![0.0, 1.0], vec![2, 2], 1));
+    // A side's use from (u, 0) up to (u, 1), or down.
+    let along = |s: &(EdgeId, bool, BSplineCurve), u: f64, rising: bool| -> Use {
+        let (lo, hi) = ((u, 0.0), (u, 1.0));
+        match (s.1, rising) {
+            (true, true) => (s.0, Orientation::Forward, segment(lo, hi), 0.0, 1.0),
+            (false, true) => (s.0, Orientation::Reversed, segment(hi, lo), 0.0, 1.0),
+            (true, false) => (s.0, Orientation::Reversed, segment(lo, hi), 0.0, 1.0),
+            (false, false) => (s.0, Orientation::Forward, segment(hi, lo), 0.0, 1.0),
+        }
+    };
+    // (The top: the common piece, run from (0, 1) to (1, 1), used the other way; or a
+    // degenerate edge where the common ends meet.)
+    let top_use: Use = match &gap.common {
+        Some(_) => (edges[gap.pieces.len()], Orientation::Reversed, segment((0.0, 1.0), (1.0, 1.0)), 0.0, 1.0),
+        None => (model.add_edge(vertices[0], vertices[0], tolerance)?, Orientation::Forward, segment((1.0, 1.0), (0.0, 1.0)), 0.0, 1.0),
+    };
+    let mut uses: Vec<Use> = pieces.iter().enumerate().map(|(k, &e)| (e, Orientation::Forward, segment((breaks[k], 0.0), (breaks[k + 1], 0.0)), 0.0, 1.0)).collect();
+    uses.extend([
+        along(&right, 1.0, true),
+        top_use,
+        along(&left, 0.0, false),
+    ]);
+    // (Within twice how far its boundary strays from the curves it is built through.)
+    let mut worst: f64 = 0.0;
+    for n in 0..=64 {
+        let w = n as f64 / 64.0;
+        worst = worst.max(surface.point(w, 0.0).distance(bottom(w))).max(surface.point(0.0, w).distance(up(&left, w))).max(surface.point(1.0, w).distance(up(&right, w))).max(surface.point(w, 1.0).distance(top(w)));
+    }
+    new_face(model, surface, vec![(uses, Orientation::Forward)], tolerance.max(2.0 * worst))
 }
 
 /// How far the patch's boundary strays from the stop curves it is built through.

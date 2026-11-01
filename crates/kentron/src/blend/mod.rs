@@ -3667,6 +3667,41 @@ mod tests {
         assert!(volume < before && volume > before - 10.0, "{volume} {before}");
     }
 
+    /// A ring's top rim (a circle, rounded R 1) going on round the end of a tab's top fillet
+    /// (R 2.2) into the edge where that fillet meets the ring (a short B-spline), then up the
+    /// fillet's end (an ellipse): the edges go on into one another tangent, but the fillets'
+    /// far faces (the top plane, the tab fillet's cylinder) meet along a tangent seam away
+    /// from the fillets' ends, their sections there apart. Patches close the gaps between
+    /// them; OCCT's result encloses 2200396.6066.
+    #[test]
+    fn fillets_going_on_round_a_tangent_seam_meet_across_a_patch() {
+        let mut model = Model::new();
+        let body = crate::io::brep::read(&mut model, &mut include_str!("tests/tab_on_a_rim.brep").as_bytes()).unwrap();
+        let near = Point::new(14.6, -54.4, 41.3);
+        let lengths = [159.241, 3.337, 0.914, 42.639];
+        let edges: Vec<Shape> = model
+            .unique_subshapes(body, NodeKind::Edge)
+            .into_iter()
+            .filter(|&e| {
+                let (a, b) = model.edge_vertices(e);
+                let length = properties::length(&model, e).mass;
+                model.point(a).distance(near).min(model.point(b).distance(near)) < 2.5 && lengths.iter().any(|l| (length - l).abs() < 0.01)
+            })
+            .collect();
+        assert_eq!(edges.len(), 4);
+        let result = fillet(&mut model, body, &edges, 1.0).unwrap();
+        let report = validity::check(&model, result);
+        assert!(report.is_valid(), "{report:?}");
+        let volume = properties::volume(&model, result).mass;
+        assert!((volume - 2200396.6066).abs() < 0.01, "{volume}");
+        // (No flat slivers where the fillets meet: the tools' end caps left showing.)
+        let slivers = model.unique_subshapes(result, NodeKind::Face).into_iter().filter(|&f| {
+            let a = properties::area(&model, f);
+            matches!(model.surface(f), Some(Surface::Plane(_))) && a.mass < 1.0 && a.center_of_mass.distance(near) < 3.0
+        }).count();
+        assert_eq!(slivers, 0);
+    }
+
     /// A plate (100 x 76.2, 10 thick) whose back edge bulges into an arc (25.4 high, of a
     /// circle 61.9 across that comes back into the plate near its front corners): the arc's
     /// top edge bevelled (3) or rounded (R 3) is cut only along the arc, run past its ends

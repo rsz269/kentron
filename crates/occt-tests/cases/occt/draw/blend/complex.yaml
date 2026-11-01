@@ -542,7 +542,6 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/complex/G9
-expect: not_done
 build:
   - c1: {cylinder: {radius: 10, height: 20}}
   - c1_1: {select: {of: c1, edge: [-3.81180682888e-15, 6.69834513413e-16, 20.0], length: 62.8318466122}}
