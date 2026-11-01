@@ -1019,9 +1019,19 @@ class Mixin1D:
         return [self.curvatureAt(d, mode, resolution) for d in ds]
 
     def project(self, face: "Face", d, closest: bool = True):
-        """The curve projected onto the face's surface along `d` (the projection nearest it):
-        a wire."""
-        return Shape.cast(native.project_along(self.wrapped, face.wrapped, Vector(d).toTuple()))
+        """The curve projected onto the face's surface along `d`: the projection nearest it, a
+        wire; or, not `closest`, every projection the face takes (as many wires, as where the
+        lines along `d` pass through a sphere twice)."""
+        if closest:
+            return Shape.cast(native.project_along(self.wrapped, face.wrapped, Vector(d).toTuple()))
+        # (The wire swept along `d` from well before both to well past them, met by the face.)
+        direction = Vector(d).normalized()
+        a, b = self.BoundingBox(), face.BoundingBox()
+        reach = 2.0 * (1.0 + max(a.DiagonalLength, b.DiagonalLength) + (a.center - b.center).Length)
+        start = self.translate(direction * -reach)
+        sweep = Shape.cast(native.extrude(start.wrapped, (direction * (2.0 * reach)).toTuple()))
+        edges = Shape.cast(native.section(sweep.wrapped, face.wrapped)).Edges()
+        return _edges_to_wires(edges, 1e-6) if edges else []
 
     Closed = IsClosed
 

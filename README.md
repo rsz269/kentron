@@ -56,7 +56,7 @@ it honest. Every change is checked against the test sources below before it is c
 and no change may make a passing test fail.
 
 <!-- effort -->
-So far (2026-09-25 to 2026-11-01): about 273 hours of the agent's active work, 18.4 million
+So far (2026-09-25 to 2026-11-01): about 274 hours of the agent's active work, 18.5 million
 tokens written by it, and 10.5 billion tokens processed in all (nearly all of them its
 conversation's context, read back from the cache).
 <!-- /effort -->
@@ -71,13 +71,14 @@ conversation's context, read back from the cache).
 - **OCCT's GTests:** the computational-geometry and topology toolkits, translated by hand.
 - **BRL-CAD:** NIST's MBE PMI test parts and other STEP files from its source tree, with
   OCCT's reading of them as the reference, plus its `libbg` geometry tests.
-- **CadQuery's own test suite** (v2.8.0), run unchanged against pykentron: 624 of the 674
-  tests that test CadQuery's behaviour pass. The 53 left out test OCCT's own ways instead
-  (its document and binary formats, its STL and glTF writers' layout and mesh density, its
-  approximations', fillet surfaces' and vertex orders' particulars:
-  `crates/pykentron/tests/cadquery_excluded.txt`); about half the rest are
-  assembly features (colours of fused parts, names, JSON and VTK.js export), the others
-  exporters kentron lacks (VRML, VTK), NURBS fitting, and a few operations.
+- **CadQuery's own test suite** (v2.8.0), run unchanged against pykentron: 635 of the 659
+  tests that test CadQuery's behaviour pass. The 68 left out test OCCT's own ways instead
+  (its document and binary formats and its assembly documents' classes, its STL and glTF
+  writers' layout and mesh density, its approximations', fillet surfaces' and vertex
+  orders' particulars: `crates/pykentron/tests/cadquery_excluded.txt`); of the rest, about
+  half need libraries the tests' environment lacks (VTK, IPython) or CadQuery's NURBS
+  module, the others fuzzy booleans, fillings constrained by curves, curves on faces from
+  their parameters, perspective SVG views and a few operations.
 - **44 CadQuery models from a private project** build on pykentron; for the 42 that return
   their parts, every part is valid and within 0.1% of CadQuery's volume.
 - **746 CadQuery scripts from 113 public projects** (5 more open render windows or wait and

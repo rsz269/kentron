@@ -711,6 +711,94 @@ class gp_Elips:
         return self._minor
 
 
+class gp_Pnt2d:
+    """A point in the plane."""
+
+    def __init__(self, x: float = 0.0, y: float = 0.0):
+        self._x, self._y = float(x), float(y)
+
+    def X(self) -> float:
+        return self._x
+
+    def Y(self) -> float:
+        return self._y
+
+    def SetX(self, x: float) -> None:
+        self._x = float(x)
+
+    def SetY(self, y: float) -> None:
+        self._y = float(y)
+
+    def Coord(self):
+        return self._x, self._y
+
+    def Distance(self, other: "gp_Pnt2d") -> float:
+        return math.hypot(self._x - other._x, self._y - other._y)
+
+    def __repr__(self) -> str:
+        return f"gp_Pnt2d({self._x}, {self._y})"
+
+
+class gp_Vec2d(gp_Pnt2d):
+    """A vector in the plane."""
+
+    def __init__(self, *args):
+        if len(args) == 2 and all(isinstance(a, gp_Pnt2d) for a in args):
+            a, b = args
+            super().__init__(b.X() - a.X(), b.Y() - a.Y())
+        else:
+            super().__init__(*args)
+
+    def Magnitude(self) -> float:
+        return math.hypot(self._x, self._y)
+
+    def SquareMagnitude(self) -> float:
+        return self._x * self._x + self._y * self._y
+
+    def Dot(self, other: "gp_Vec2d") -> float:
+        return self._x * other._x + self._y * other._y
+
+    def Crossed(self, other: "gp_Vec2d") -> float:
+        return self._x * other._y - self._y * other._x
+
+    def Angle(self, other: "gp_Vec2d") -> float:
+        """The signed angle from this vector to `other`, in (-pi, pi]; raises on a null one,
+        as OCCT's (gp_VectorWithNullMagnitude)."""
+        if self.Magnitude() <= 1e-300 or other.Magnitude() <= 1e-300:
+            raise ValueError("gp_VectorWithNullMagnitude")
+        return math.atan2(self.Crossed(other), self.Dot(other))
+
+    def Normalized(self) -> "gp_Vec2d":
+        m = self.Magnitude()
+        return gp_Vec2d(self._x / m, self._y / m)
+
+    def Reversed(self) -> "gp_Vec2d":
+        return gp_Vec2d(-self._x, -self._y)
+
+    def Added(self, other: "gp_Vec2d") -> "gp_Vec2d":
+        return gp_Vec2d(self._x + other._x, self._y + other._y)
+
+    def Subtracted(self, other: "gp_Vec2d") -> "gp_Vec2d":
+        return gp_Vec2d(self._x - other._x, self._y - other._y)
+
+    def Multiplied(self, k: float) -> "gp_Vec2d":
+        return gp_Vec2d(self._x * k, self._y * k)
+
+    def __repr__(self) -> str:
+        return f"gp_Vec2d({self._x}, {self._y})"
+
+
+class gp_Dir2d(gp_Vec2d):
+    """A unit vector in the plane."""
+
+    def __init__(self, *args):
+        super().__init__(*args)
+        m = self.Magnitude()
+        if m <= 1e-300:
+            raise ValueError("gp_Dir2d of a null vector")
+        self._x, self._y = self._x / m, self._y / m
+
+
 class gp:
     """OCCT's `gp` package functions."""
 

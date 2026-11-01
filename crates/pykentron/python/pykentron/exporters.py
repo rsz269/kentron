@@ -124,6 +124,28 @@ def export(w, fname, exportType: Optional[str] = None, tolerance: float = 0.1, a
         from .occ_impl.exporters.dxf import exportDXF
 
         exportDXF(w, fname, **opt)
+    elif kind == "VTP":
+        # (VTK's XML PolyData: the edges as polylines and the faces as triangles, in one.)
+        from .occ_impl.exporters.vtk import _edges, _polydata
+
+        points, lines = _edges(shape, tolerance)
+        polys = []
+        if shape.Faces():
+            face_points, triangles = native.triangulate(shape.wrapped, tolerance, angularTolerance)
+            polys = [[len(points) + k for k in t] for t in triangles]
+            points = list(points) + list(face_points)
+        with open(fname, "w") as f:
+            f.write(_polydata(points, lines, polys))
+    elif kind == "VRML":
+        # (VRML 2.0, as OCCT's writer: the shape's mesh as one indexed face set.)
+        points, triangles = native.triangulate(shape.wrapped, tolerance, angularTolerance) if shape.Faces() else ([], [])
+        lines = ["#VRML V2.0 utf8", "", "Shape {", "  appearance Appearance { material Material { diffuseColor 0.8 0.8 0.8 } }", "  geometry IndexedFaceSet {", "    solid FALSE", "    coord Coordinate { point ["]
+        lines.extend(f"      {p[0]:.9g} {p[1]:.9g} {p[2]:.9g}," for p in points)
+        lines.extend(["    ] }", "    coordIndex ["])
+        lines.extend(f"      {t[0]}, {t[1]}, {t[2]}, -1," for t in triangles)
+        lines.extend(["    ]", "  }", "}"])
+        with open(fname, "w") as f:
+            f.write("\n".join(lines) + "\n")
     else:
         raise NotImplementedError(f"exporting {kind} files")
 

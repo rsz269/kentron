@@ -37,6 +37,7 @@ tests.test_exporters::test_stl_binary[4-opt4-STL Exported by Open CASCADE]
 # OCCT's own file formats: its documents' (OCAF: XBF, XML, CAF) and its binary BREP's
 # (BinTools).
 tests.test_assembly::test_assembly_multi_subshape_import[xbf]
+tests.test_assembly::test_native_export
 tests.test_assembly::test_assembly_multi_subshape_import[xml]
 tests.test_assembly::test_assembly_step_import_roundtrip[boxes0_assy-xbf]
 tests.test_assembly::test_assembly_step_import_roundtrip[boxes0_assy-xml]
@@ -82,3 +83,25 @@ tests.test_free_functions::test_imprint_error
 
 # How OCCT's glTF writer lays out its JSON (compact, "accessors" first).
 tests.test_assembly::test_exportGLTF
+
+# OCCT's assembly documents (XCAF) read back through its own document classes
+# (XCAFPrs_DocumentExplorer, TDF labels and TDataStd_Name attributes): the documents
+# CadQuery's toCAF and toFusedCAF build, their nodes' names, leaves and faces' colours.
+tests.test_assembly::test_assy_root_name[nested_assy-TOP]
+tests.test_assembly::test_assy_root_name[simple_assy-None]
+tests.test_assembly::test_colors_fused_assy[boxes2_assy-expected4]
+tests.test_assembly::test_colors_fused_assy[chassis0_assy-expected5]
+tests.test_assembly::test_colors_fused_assy[empty_top_assy-expected0]
+tests.test_assembly::test_colors_fused_assy[single_compound0_assy-expected1]
+tests.test_assembly::test_colors_fused_assy[single_compound1_assy-expected2]
+tests.test_assembly::test_colors_fused_assy[spheres0_assy-expected3]
+tests.test_assembly::test_leaf_node_count[empty_top_assy-1]
+tests.test_assembly::test_leaf_node_count[nested_assy-3]
+tests.test_assembly::test_leaf_node_count[simple_assy-3]
+tests.test_assembly::test_shallow_assy
+
+# OCCT's own classes and builders called directly: CadQuery's private helper turning an OCCT
+# curve adaptor into an edge, its result an OCP TopoDS_Edge (of gp_Hypr and gp_Parab curves);
+# and OCCT's prism of a shell, a compsolid of the solids each face sweeps.
+tests.test_free_functions::test_adaptor_curve_to_edge
+tests.test_cadquery.TestCadQuery::testCompSolid

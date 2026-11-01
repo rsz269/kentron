@@ -1,4 +1,5 @@
-"""CadQuery's `occ_impl.exporters.assembly` on pykentron: assemblies written to STEP and glTF files."""
+"""CadQuery's `occ_impl.exporters.assembly` on pykentron: assemblies written to STEP, glTF and
+VRML files."""
 
 from __future__ import annotations
 
@@ -120,7 +121,61 @@ def exportCAF(assy, path: str, binary: bool = True) -> bool:
 
 
 def exportVRML(assy, path: str, tolerance: float = 1e-3, angularTolerance: float = 0.1) -> None:
-    raise NotImplementedError("exporting assemblies to VRML files")
+    """Writes the assembly to a VRML 2.0 file: each part's mesh placed where the assembly puts
+    it, in its colour (white where it has none), as CadQuery's (by VTK)."""
+    import math
+
+    out = ["#VRML V2.0 utf8", ""]
+    number = lambda x: f"{round(x, 12) + 0.0:.12g}"
+    for shape, name, loc, color in assy:
+        rows = loc.rows
+        # (The placement's rotation as an axis and angle, from its quaternion.)
+        x, y, z, w = _quaternion(rows)
+        angle = 2.0 * math.acos(max(-1.0, min(1.0, w)))
+        s = math.sqrt(max(0.0, 1.0 - w * w))
+        axis = (x / s, y / s, z / s) if s > 1e-12 else (0.0, 0.0, 1.0)
+        rgb = color.toTuple()[:3] if color is not None else (1.0, 1.0, 1.0)
+        alpha = color.toTuple()[3] if color is not None else 1.0
+        appearance = f"appearance Appearance {{ material Material {{ diffuseColor {rgb[0]:.6g} {rgb[1]:.6g} {rgb[2]:.6g} emissiveColor {rgb[0]:.6g} {rgb[1]:.6g} {rgb[2]:.6g} transparency {1.0 - alpha:.6g} }} }}"
+        out.append(f"# {name}")
+        out.append("Transform {")
+        out.append(f"  translation {number(rows[0][3])} {number(rows[1][3])} {number(rows[2][3])}")
+        out.append(f"  rotation {number(axis[0])} {number(axis[1])} {number(axis[2])} {angle!r}")
+        out.append("  children [ Shape {")
+        out.append(f"    {appearance}")
+        if shape.Faces():
+            points, tris = native.triangulate(shape.wrapped, tolerance, angularTolerance)
+            out.append("    geometry IndexedFaceSet {")
+            out.append("      solid FALSE")
+            out.append("      coord Coordinate { point [")
+            out.extend(f"        {p[0]:.9g} {p[1]:.9g} {p[2]:.9g}," for p in points)
+            out.append("      ] }")
+            out.append("      coordIndex [")
+            out.extend(f"        {t[0]}, {t[1]}, {t[2]}, -1," for t in tris)
+            out.append("      ]")
+            out.append("    }")
+        elif shape.Edges():
+            # (Edges alone as polylines.)
+            from .vtk import _edges
+
+            points, lines = _edges(shape, tolerance)
+            out.append("    geometry IndexedLineSet {")
+            out.append("      coord Coordinate { point [")
+            out.extend(f"        {p[0]:.9g} {p[1]:.9g} {p[2]:.9g}," for p in points)
+            out.append("      ] }")
+            out.append("      coordIndex [")
+            out.extend("        " + ", ".join(str(k) for k in line) + ", -1," for line in lines)
+            out.append("      ]")
+            out.append("    }")
+        else:
+            # (Vertices alone as points.)
+            out.append("    geometry PointSet { coord Coordinate { point [")
+            out.extend(f"      {v.X:.9g} {v.Y:.9g} {v.Z:.9g}," for v in shape.Vertices())
+            out.append("    ] } }")
+        out.append("  } ]")
+        out.append("}")
+    with open(path, "w") as f:
+        f.write("\n".join(out) + "\n")
 
 
 def _quaternion(rows) -> list:

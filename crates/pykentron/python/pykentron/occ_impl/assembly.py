@@ -1,8 +1,9 @@
-"""CadQuery's `occ_impl.assembly` on pykentron: colours and materials of assembly nodes."""
+"""CadQuery's `occ_impl.assembly` on pykentron: colours and materials of assembly nodes, the
+assembly as JSON for VTK.js (`toJSON`) and its solids imprinted on one another (`imprint`)."""
 
 from __future__ import annotations
 
-from typing import Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from ..geom import Color  # noqa: F401
 
@@ -62,3 +63,48 @@ class _VisualMaterial:
 
     def IsEmpty(self) -> bool:
         return True
+
+
+def toJSON(assy, color=(1.0, 1.0, 1.0, 1.0), edgecolor=(0.0, 0.0, 0.0, 1.0), tolerance: float = 1e-3) -> List[Dict[str, Any]]:
+    """For each part of the assembly, its edges and its faces (VTK XML PolyData text), with
+    their colours and the part's position and orientation (radians), as CadQuery's."""
+    from math import radians
+
+    from .exporters.vtk import toString
+
+    rv = []
+    for shape, _, loc, col in assy:
+        edges, faces = toString(shape, tolerance)
+        trans, rot = loc.toTuple()
+        orientation = tuple(radians(r) for r in rot)
+        rv.append({"shape": edges, "color": edgecolor, "position": trans, "orientation": orientation})
+        rv.append({"shape": faces, "color": col.toTuple() if col else color, "position": trans, "orientation": orientation})
+    return rv
+
+
+def imprint(assy) -> Tuple[Any, Dict[Any, Tuple[str, ...]]]:
+    """The assembly's solids, placed, split where they meet and sharing the faces they touch
+    along (OCCT's BOPAlgo_MakeConnected), and for each solid of the result the names of the
+    parts it comes from."""
+    from .. import _kentron as native
+    from ..shapes import Shape, Vertex
+    from .shapes import _compound_or_shape
+
+    named = []
+    for obj, name, loc, _ in assy:
+        for s in obj.moved(loc).Solids():
+            named.append((s, name))
+    if not named:
+        raise ValueError("an assembly without solids")
+    cells = [Shape.cast(h) for _, h in native.cells([s.wrapped for s, _ in named])]
+    result = _compound_or_shape(cells)
+    origins: Dict[Any, Tuple[str, ...]] = {}
+    for piece in result.Solids():
+        # (The parts holding its centre; where none does (a piece not convex), the nearest.)
+        centre = piece.Center()
+        names = tuple(name for s, name in named if s.isInside(centre))
+        if not names:
+            point = Vertex.makeVertex(*centre.toTuple())
+            names = (min(named, key=lambda n: n[0].distance(point))[1],)
+        origins[piece] = names
+    return result, origins
