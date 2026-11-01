@@ -524,6 +524,32 @@ fn make_polygon(points: Vec<Xyz>, close: bool) -> PyResult<Handle> {
     .map(handle)
 }
 
+/// The face's surface over its range of parameters, extended by about `length` (along the
+/// surface) across each side asked for, joined with continuous tangents (OCCT's
+/// `BRepLib::ExtendFace`): the whole extended surface as a face.
+#[pyfunction]
+fn face_extended_by(face: Handle, length: f64, sides: [bool; 4]) -> PyResult<Handle> {
+    use kentron::geometry::extend::{surface_by_length, SurfaceSide};
+    use kentron::geometry::surface::{Surface, TrimmedSurface};
+    use kentron::geometry::ParametricSurface;
+    use kentron::math::Transformable;
+    with_model(|m| {
+        let surface = m.surface(face.shape).ok_or_else(|| kentron::Error::InvalidInput("a face without a surface".into()))?.clone();
+        let (u0, u1, v0, v1) = m.face_uv_bounds(face.shape);
+        let mut extended = Surface::Trimmed(TrimmedSurface::new(surface, u0, u1, v0, v1));
+        for (side, wanted) in [SurfaceSide::UMin, SurfaceSide::UMax, SurfaceSide::VMin, SurfaceSide::VMax].into_iter().zip(sides) {
+            if wanted {
+                let b = surface_by_length(&extended, length, 1, side).ok_or_else(|| kentron::Error::InvalidInput("a face whose surface cannot be extended".into()))?;
+                extended = Surface::BSpline(b);
+            }
+        }
+        let (a0, a1, b0, b1) = extended.bounds();
+        let placed = extended.transformed(&face.shape.placement);
+        make::face_on_domain(m, placed, a0, a1, b0, b1)
+    })
+    .map(handle)
+}
+
 /// A face on `face`'s surface (placed as it is) covering all of the surface where it is
 /// bounded, round the whole of it where it closes, and the face's own range widened by
 /// `reach` (in the surface's parameters) where it runs on without end: the surface a feature
@@ -1401,6 +1427,7 @@ fn _kentron(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(make_polygon, m)?)?;
     m.add_function(wrap_pyfunction!(make_face, m)?)?;
     m.add_function(wrap_pyfunction!(extended_face, m)?)?;
+    m.add_function(wrap_pyfunction!(face_extended_by, m)?)?;
     m.add_function(wrap_pyfunction!(extrude, m)?)?;
     m.add_function(wrap_pyfunction!(extrude_drafted, m)?)?;
     m.add_function(wrap_pyfunction!(revolve, m)?)?;

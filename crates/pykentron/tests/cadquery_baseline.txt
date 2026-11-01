@@ -4,16 +4,12 @@
 tests.test_assembly::test_export_vtkjs
 tests.test_assembly::test_save_vtkjs
 tests.test_assembly::test_vtkjs_export
-tests.test_cadquery.TestCadQuery::testExtrudeUntilFace
 tests.test_cadquery.TestCadQuery::testFuzzyBoolOp
 tests.test_cadquery.TestCadQuery::test_makeNSidedSurface
 tests.test_cadquery.TestCadQuery::test_toVtk
-tests.test_exporters.TestExporters::testSVGOptions
 tests.test_exporters::test_toVTK
 tests.test_free_functions::test_cap
 tests.test_free_functions::test_operators
-tests.test_free_functions::test_project
 tests.test_free_functions::test_solid
 tests.test_jupyter.TestJupyter::test_display_error
 tests.test_jupyter.TestJupyter::test_repr_javascript
-tests.test_shapes::test_extend

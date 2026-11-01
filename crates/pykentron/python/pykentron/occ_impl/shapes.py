@@ -902,8 +902,30 @@ def _loft_recorded(s, cap: bool, ruled: bool, parametrization: str, history, nam
     return result
 
 
-def project(s: Shape, base: Shape, *args, **kwargs) -> Shape:
-    raise NotImplementedError("projecting curves onto shapes")
+def project(s: Shape, base: Shape, *args, continuity: str = "C2", degree: int = 3, maxseg: int = 30, tol: float = 1e-4) -> Shape:
+    """`s`'s curves projected onto `base`: along `direction` (a cylindrical projection,
+    `project(s, base, direction)`), every projection each edge has there; else by normal
+    projection (each point to the nearest of `base`), a curve through the feet of points
+    spread along each wire, closed where the wire is."""
+    if args and args[0] is not None and not isinstance(args[0], str):
+        direction = Vector(args[0])
+        made = []
+        for e in _get_edges(s):
+            for w in Wire.assembleEdges([e]).project(base, direction, closest=False):
+                made.extend(w.Edges() if len(w.Edges()) == 1 else [w])
+        return _normalize(compound(made))
+    made = []
+    for w in _get_wires(s):
+        closed = w.IsClosed()
+        n = max(64, 32 * len(w.Edges()))
+        ts = [i / n for i in range(n if closed else n + 1)]
+        feet = []
+        for t in ts:
+            p = w.positionAt(t)
+            _, _, foot = native.distance(native.make_vertex(p.toTuple()), base.wrapped)
+            feet.append(Vector(foot))
+        made.append(Edge.makeSpline(feet, periodic=closed))
+    return _compound_or_shape(made)
 
 
 def hollow(s: Shape, *args, tol: float = 1e-3, kind: str = "intersection", history=None, name=None) -> Shape:

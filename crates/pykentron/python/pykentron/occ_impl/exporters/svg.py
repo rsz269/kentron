@@ -78,7 +78,7 @@ def guessUnitOfMeasure(shape) -> str:
 class _DepthTest:
     """The shape's triangles seen along the view, bucketed on a grid of the view plane."""
 
-    def __init__(self, shape: Shape, x: Vector, y: Vector, z: Vector, size: float):
+    def __init__(self, shape: Shape, view, size: float):
         self.cells: Dict[Tuple[int, int], list] = {}
         self.tolerance = 1e-3 * size
         self.slack = 2 * self.tolerance + 1e-9 * size
@@ -86,7 +86,7 @@ class _DepthTest:
         if not shape.Faces():
             return
         points, triangles = native.triangulate(shape.wrapped, self.tolerance, 0.2)
-        view = [(x.dot(p), y.dot(p), z.dot(p)) for p in map(Vector, points)]
+        view = [view(p) for p in map(Vector, points)]
         for a, b, c in triangles:
             t = (view[a], view[b], view[c])
             u0, u1 = min(p[0] for p in t), max(p[0] for p in t)
@@ -115,14 +115,25 @@ class _DepthTest:
         return False
 
 
-def _projected_runs(shape: Shape, direction) -> Tuple[List[list], List[list]]:
+def _projected_runs(shape: Shape, direction, focus=None) -> Tuple[List[list], List[list]]:
     """The edges projected along `direction` (towards the viewer), split into visible and
-    hidden runs of 2D points."""
+    hidden runs of 2D points; seen from `focus` along it (a perspective view, as OCCT's
+    projector with a focus), where given. (In perspective, points are mapped by the
+    projective (x, y, z) -> (x, y, z) f / (f - z), which keeps planes planar and depths in
+    order and makes the rays to the eye parallel: the same depth test then serves.)"""
     z = Vector(direction).normalized()
     x = _default_x(z)
     y = z.cross(x)
     size = shape.BoundingBox().DiagonalLength
-    depth = _DepthTest(shape, x, y, z, size)
+
+    def view(p: Vector):
+        u, v, w = x.dot(p), y.dot(p), z.dot(p)
+        if focus:
+            k = focus / max(focus - w, 1e-9 * (1.0 + abs(focus)))
+            return (u * k, v * k, w * k)
+        return (u, v, w)
+
+    depth = _DepthTest(shape, view, size)
     visible, hidden = [], []
     for e in shape.Edges():
         u0, u1 = e.bounds()
@@ -131,8 +142,9 @@ def _projected_runs(shape: Shape, direction) -> Tuple[List[list], List[list]]:
         pts = [Vector(d[0]) for d in e._derivatives([u0 + (u1 - u0) * i / n for i in range(n + 1)])]
         run, run_hidden = [], None
         for p in pts:
-            q = (x.dot(p), y.dot(p))
-            h = depth.hidden(q[0], q[1], z.dot(p))
+            u, v, w = view(p)
+            q = (u, v)
+            h = depth.hidden(u, v, w)
             if run_hidden is not None and h != run_hidden:
                 (hidden if run_hidden else visible).append(run)
                 run = [run[-1]]
@@ -150,8 +162,8 @@ def _path(run) -> str:
 
 def getSVG(shape, opts=None) -> str:
     """The shape drawn as SVG text (CadQuery's options: width, height, marginLeft,
-    marginTop, projectionDir, showAxes, strokeWidth, strokeColor, hiddenColor, showHidden;
-    focus, for a perspective view, is not supported)."""
+    marginTop, projectionDir, showAxes, strokeWidth, strokeColor, hiddenColor, showHidden,
+    and focus, for a perspective view from that far along projectionDir)."""
     d = {
         "width": 800,
         "height": 240,
@@ -178,10 +190,9 @@ def getSVG(shape, opts=None) -> str:
     strokeColor = tuple(d["strokeColor"])
     hiddenColor = tuple(d["hiddenColor"])
     showHidden = bool(d["showHidden"])
-    if d.get("focus"):
-        raise NotImplementedError("perspective SVG views")
+    focus = float(d["focus"]) if d.get("focus") else None
 
-    visible, hidden = _projected_runs(shape, projectionDir)
+    visible, hidden = _projected_runs(shape, projectionDir, focus)
     points = [p for run in visible + hidden for p in run] or [(0.0, 0.0)]
     xmin, xmax = min(p[0] for p in points), max(p[0] for p in points)
     ymin, ymax = min(p[1] for p in points), max(p[1] for p in points)

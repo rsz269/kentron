@@ -1898,9 +1898,9 @@ class Face(Shape):
         """The face's surface over its range of parameters widened by `d` each way (OCCT's
         BRepLib::ExtendFace, which bounds the result by that box). Planes only, extended
         every way (their parameters are lengths)."""
-        if self.geomType() != "PLANE" or not (umin and umax and vmin and vmax):
-            raise NotImplementedError("extending faces other than planes, or not every way")
-        return Face(native.extended_face(self.wrapped, float(d)))
+        if self.geomType() == "PLANE" and umin and umax and vmin and vmax:
+            return Face(native.extended_face(self.wrapped, float(d)))
+        return Face(native.face_extended_by(self.wrapped, float(d), [bool(umin), bool(umax), bool(vmin), bool(vmax)]))
 
     def addHole(self, *inner) -> "Face":
         wires = [w if w.ShapeType() == "Wire" else Wire.assembleEdges([w]) for w in inner]
@@ -1962,11 +1962,17 @@ class Mixin3D:
     def dprism(self, basis, profiles, depth=None, taper=0, upToFace=None, thruAll=True, additive=True):
         """A prism feature (BRepFeat_MakeDPrism): each profile (faces, or wires grouped into
         faces) extruded along its normal up to `upToFace` (its plane), by `depth`, or through
-        everything both ways, and fused with the solid (or cut from it unless `additive`).
-        Tapered prisms are not supported."""
-        if taper:
-            raise NotImplementedError("tapered prism features")
+        everything both ways, and fused with the solid (or cut from it unless `additive`);
+        tapered by `taper` degrees (narrowing for a positive one, as a tapered extrusion; then
+        through everything only onwards from the profile)."""
         profiles = list(profiles)
+
+        def swept(f, v):
+            # (Drafted where tapered: the profile's outline offset along the way.)
+            if taper:
+                return Solid.extrudeLinear(f, Vector(v), taper=taper).wrapped
+            return native.extrude(f.wrapped, _tuple(v))
+
         if profiles and isinstance(profiles[0], Wire):
             from .occ_impl.shapes import sortWiresByBuildOrder
 
@@ -1981,7 +1987,7 @@ class Mixin3D:
                 origin, normal = upToFace.Center(), upToFace.normalAt()
                 size = 4.0 * (reach + face.BoundingBox().DiagonalLength + (origin - face.Center()).Length)
                 towards = n if (origin - face.Center()).dot(n) >= 0 else -n
-                far = Shape.cast(native.extrude(face.wrapped, (towards * size).toTuple()))
+                far = Shape.cast(swept(face, towards * size))
                 side = 1.0 if (face.Center() - origin).dot(normal) >= 0 else -1.0
                 slab = Shape.cast(native.extrude(Face.makePlane(size, size, origin, normal).wrapped, (normal * (side * size)).toTuple()))
                 prism = far.intersect(slab).wrapped
@@ -1992,7 +1998,7 @@ class Mixin3D:
                 # does not cut across, to the depth of the face's centre.)
                 towards = n if (upToFace.Center() - face.Center()).dot(n) >= 0 else -n
                 size = 2.0 * (reach + face.BoundingBox().DiagonalLength + (upToFace.Center() - face.Center()).Length)
-                far = Shape.cast(native.extrude(face.wrapped, (towards * size).toTuple()))
+                far = Shape.cast(swept(face, towards * size))
                 until = Shape.cast(native.extended_face(upToFace.wrapped, size))
                 pieces = [p for p in _split_pieces(far, [until]) if p.Solids()]
                 tol = 1e-6 * (1.0 + size)
@@ -2000,12 +2006,12 @@ class Mixin3D:
                 if len(pieces) > 1 and start:
                     prism = (start[0] if len(start) == 1 else Compound.makeCompound(start)).wrapped
                 else:
-                    prism = native.extrude(face.wrapped, (n * (upToFace.Center() - face.Center()).dot(n)).toTuple())
+                    prism = swept(face, n * (upToFace.Center() - face.Center()).dot(n))
             elif thruAll or depth is None:
                 d = n * (reach + face.BoundingBox().DiagonalLength)
-                prism = native.extrude(face.moved(Location(-d)).wrapped, (d * 2).toTuple())
+                prism = swept(face, d) if taper else native.extrude(face.moved(Location(-d)).wrapped, (d * 2).toTuple())
             else:
-                prism = native.extrude(face.wrapped, (n * depth).toTuple())
+                prism = swept(face, n * depth)
             prism = Shape.cast(prism)
             result = result.fuse(prism) if additive else result.cut(prism)
         return result
