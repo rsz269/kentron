@@ -235,7 +235,6 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/boolean/bopsection/C2
-expect: not_done
 build:
   - a: {load: {brep: "CTO909_fus-object1.brep"}}
   - b: {load: {brep: "CTO909_fus-object2.brep"}}

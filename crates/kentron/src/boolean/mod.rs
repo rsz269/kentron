@@ -1435,6 +1435,24 @@ mod tests {
         assert!((v - both).abs() <= 1e-6 * both, "volume {v} against {both}");
     }
 
+    /// A strip of rays from the origin through a glyph's quadratic edge (the sweep a conical
+    /// projection sections a sphere with), 1.4 wide and 90 long, and a sphere of radius 50
+    /// about the origin: one arc across it, 1.081 long. (Sampled by spans alone, the strip's
+    /// grid has cells 22 long and 0.25 wide; the foot of a point on its side edge, found from
+    /// the nearest sample 8.8 away, settled 1.0 off, and the arc was lost.)
+    #[test]
+    fn a_long_ray_strip_sectioned_by_a_sphere() {
+        let mut model = Model::new();
+        let mut read = |text: &str| crate::io::brep::read(&mut model, &mut text.as_bytes()).unwrap();
+        let strip = read(include_str!("tests/ray_strip_on_sphere_a.brep"));
+        let sphere = read(include_str!("tests/ray_strip_on_sphere_b.brep"));
+        let result = section(&mut model, strip, sphere).unwrap();
+        let edges = model.unique_subshapes(result, NodeKind::Edge);
+        assert_eq!(edges.len(), 1);
+        let length = properties::length(&model, result).mass;
+        assert!((length - 1.081).abs() < 1e-3, "{length}");
+    }
+
     /// A box and a slab under a wave (a B-spline) rising just through the box's top, by 2e-5
     /// over 0.013, and again by 5e-4: the top meets the wave in pairs of lines close
     /// together, and is kept between them.

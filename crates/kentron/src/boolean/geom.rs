@@ -180,7 +180,17 @@ pub(super) fn foot_on(surface: &Surface, p: Point) -> crate::geometry::extrema::
         let best = grid.nearest_of_all(p);
         (best, (grid.samples[best.1].0, grid.samples[best.1].1))
     });
-    let foot = crate::geometry::extrema::newton_foot_from_sample(p, surface, start);
+    let mut foot = crate::geometry::extrema::newton_foot_from_sample(p, surface, start);
+    // (From a sample far off compared with the foot found, as on a long narrow strip
+    // sampled only by its spans, the steps may settle off the true foot: the general search
+    // too, kept where it finds the point on the surface.)
+    if foot.point.distance(p) > on_tol() && best.0.sqrt() > 2.0 * foot.point.distance(p) {
+        let (u, v, d) = crate::geometry::extrema::nearest_on_surface(p, surface, Some(start));
+        if d <= on_tol() {
+            let (point, du, dv) = surface.d1(u, v);
+            foot = crate::geometry::extrema::SurfaceFoot { u, v, point, du, dv };
+        }
+    }
     let (u0, u1, v0, v1) = surface.bounds();
     let on_bound = |x: f64, a: f64, b: f64, periodic: bool| !periodic && ((x - a).abs() <= 1e-12 * (b - a).abs().max(1.0) || (x - b).abs() <= 1e-12 * (b - a).abs().max(1.0));
     let distance = foot.point.distance(p);
