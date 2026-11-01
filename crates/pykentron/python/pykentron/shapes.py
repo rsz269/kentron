@@ -67,6 +67,32 @@ def _selector(selector):
     return module.StringSyntaxSelector(selector)
 
 
+def _filling_points(constraints, per_edge: int) -> List[Tuple[float, float, float]]:
+    """The points a filling passes through for its `constraints`: points as they are, and
+    for edges and wires `per_edge` points along each edge (as OCCT's filling takes a curve
+    constraint: by points along it), each point once."""
+    from .gp import gp_Pnt
+
+    points: List[Tuple[float, float, float]] = []
+
+    def add(p):
+        if not any(abs(p[0] - q[0]) + abs(p[1] - q[1]) + abs(p[2] - q[2]) <= 1e-9 for q in points):
+            points.append(p)
+
+    for c in constraints:
+        if isinstance(c, Shape):
+            for e in c.Edges():
+                closed = e.IsClosed()
+                n = max(per_edge, 2)
+                for i in range(n):
+                    add(e.positionAt(i / (n if closed else n - 1)).toTuple())
+        elif isinstance(c, (Vector, gp_Pnt, tuple)):
+            add(_tuple(c))
+        else:
+            raise ValueError(f"a filling's constraint must be a point or a shape, not {c!r}")
+    return points
+
+
 def _tuple(v) -> Tuple[float, float, float]:
     v = _vector(v)
     return (v.x, v.y, v.z)
@@ -1826,14 +1852,10 @@ class Face(Shape):
         `constraints`, of least bending energy (OCCT's filling: `degree` the energy's order,
         `nbPtsOnCur` the points taken along each edge on average; the other settings, its
         approximation's, are not needed)."""
-        points = []
-        for c in constraints:
-            if isinstance(c, Shape):
-                raise NotImplementedError("filling surfaces constrained by curves within them")
-            points.append(_tuple(c))
         # (nbPtsOnCur, after degree: points along each edge on average.)
-        per_edge = kwargs.get("nbPtsOnCur", args[0] if args else 15)
-        return Shape.cast(native.make_filling([e.wrapped for e in edges], points, int(degree), int(per_edge)))
+        per_edge = int(kwargs.get("nbPtsOnCur", args[0] if args else 15))
+        points = _filling_points(constraints, per_edge)
+        return Shape.cast(native.make_filling([e.wrapped for e in edges], points, int(degree), per_edge))
 
     @classmethod
     def makeSplineApprox(cls, points, tol: float = 1e-2, smoothing=None, minDeg: int = 1, maxDeg: int = 3) -> "Face":

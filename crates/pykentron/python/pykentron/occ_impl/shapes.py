@@ -518,7 +518,10 @@ def fill(s: Shape, constraints=()) -> Shape:
 
 
 def cap(s: Shape, ctx: Shape, constraints=()) -> Shape:
-    raise NotImplementedError("filling surfaces")
+    """A face closing the loop of `s`'s edges, through `constraints` (points, or edges and
+    wires it passes along). (kentron's filling meets `ctx`'s faces along the edges, not
+    tangent to them as OCCT's.)"""
+    return Face.makeNSidedSurface(list(_get_edges(s)), [c if isinstance(c, Shape) else Vector(c) for c in constraints])
 
 
 def fillet(s: Shape, edges: Shape, r: float, history=None, name=None) -> Shape:
