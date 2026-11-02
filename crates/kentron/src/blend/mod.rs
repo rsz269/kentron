@@ -539,7 +539,16 @@ fn fillet_solid_edges_inner(model: &mut Model, shape: Shape, edges: &[(Shape, f6
                 let edge = find_edge(model, rounded, curve, *a, *b).ok_or_else(|| Error::Failed("a filleted edge was lost by another fillet".into()))?;
                 found.push((edge, *radius));
             }
-            fillet_solid_edges_unstaged(model, rounded, &found)
+            // (Not carried on, round the first fillets' ends, onto edges of the solid not to be
+            // rounded: a pocket's floor edges beside rounded corners stay sharp.)
+            let chosen: Vec<NodeId> = tangent_chains(model, shape, edges, 0.0).iter().map(|e| e.0.node).collect();
+            let sharp: Vec<(Curve, f64, f64)> = model
+                .unique_subshapes(shape, NodeKind::Edge)
+                .into_iter()
+                .filter(|e| !chosen.contains(&e.node))
+                .filter_map(|e| model.edge_curve(Shape { orientation: Orientation::Forward, ..e }))
+                .collect();
+            fillet_solid_edges_keeping(model, rounded, &found, &sharp)
         });
         if let Ok(rounded) = staged.and_then(|r| sound(model, &before, r)) {
             return Ok(rounded);
@@ -640,17 +649,23 @@ fn mixed_corner_stages(model: &Model, shape: Shape, edges: &[(Shape, f64)]) -> O
 
 /// [`fillet_solid_edges`] all at once.
 fn fillet_solid_edges_unstaged(model: &mut Model, shape: Shape, edges: &[(Shape, f64)]) -> Result<Shape> {
+    fillet_solid_edges_keeping(model, shape, edges, &[])
+}
+
+/// [`fillet_solid_edges_unstaged`], not carried on onto edges lying along the pieces of
+/// curves `sharp` (edges to stay sharp).
+fn fillet_solid_edges_keeping(model: &mut Model, shape: Shape, edges: &[(Shape, f64)], sharp: &[(Curve, f64, f64)]) -> Result<Shape> {
     let before = fault_kinds(model, shape);
     // (Where the edges go on at a slight kink between faces as nearly tangent, as between the
     // faces of a loft through rounded outlines, the fillets carried on over it first: ending
     // there, on a face so nearly its own face's continuation, a fillet can hardly be ended
     // on it. Ended there where that fails.)
-    let kinked = tangent_chains(model, shape, edges, KINK).len() > tangent_chains(model, shape, edges, 0.0).len();
-    let carried = if kinked { fillet_solid_edges_as(model, shape, edges, true, true).and_then(|r| sound(model, &before, r)).ok() } else { None };
+    let kinked = tangent_chains_keeping(model, shape, edges, KINK, sharp).len() > tangent_chains_keeping(model, shape, edges, 0.0, sharp).len();
+    let carried = if kinked { fillet_solid_edges_as(model, shape, edges, true, true, sharp).and_then(|r| sound(model, &before, r)).ok() } else { None };
     let over_kinks = carried.is_some();
     let rounded = match carried {
         Some(r) => r,
-        None => fillet_solid_edges_as(model, shape, edges, true, false)?,
+        None => fillet_solid_edges_as(model, shape, edges, true, false, sharp)?,
     };
     // (Where the cylinder and torus fillets' tools leave a face's boundary crossing itself,
     // as where a fillet runs over another feature of its faces: all rolled instead, which
@@ -658,7 +673,7 @@ fn fillet_solid_edges_unstaged(model: &mut Model, shape: Shape, edges: &[(Shape,
     // (Either taken only where it leaves the solid as sound as it was.)
     let crossing = crate::validity::ProblemKind::SelfIntersection;
     if !before.contains(&crossing) && crosses_itself(model, rounded) {
-        if let Ok(rolled) = fillet_solid_edges_as(model, shape, edges, false, over_kinks).and_then(|r| sound(model, &before, r)) {
+        if let Ok(rolled) = fillet_solid_edges_as(model, shape, edges, false, over_kinks, sharp).and_then(|r| sound(model, &before, r)) {
             return Ok(rolled);
         }
     }
@@ -671,12 +686,12 @@ pub(crate) const KINK: f64 = 2e-5;
 
 /// [`fillet_solid_edges`], the cylinder and torus fillets made as tools for boolean
 /// operations where `elementary`, else rolled as the others; carried on over slight kinks
-/// (within [`KINK`]) where `over_kinks`.
-fn fillet_solid_edges_as(model: &mut Model, shape: Shape, edges: &[(Shape, f64)], elementary: bool, over_kinks: bool) -> Result<Shape> {
+/// (within [`KINK`]) where `over_kinks`; not onto edges along the curves `sharp`.
+fn fillet_solid_edges_as(model: &mut Model, shape: Shape, edges: &[(Shape, f64)], elementary: bool, over_kinks: bool, sharp: &[(Curve, f64, f64)]) -> Result<Shape> {
     if edges.is_empty() {
         return Err(Error::InvalidInput("no edges to fillet".into()));
     }
-    let edges = &tangent_chains(model, shape, edges, if over_kinks { KINK } else { 0.0 });
+    let edges = &tangent_chains_keeping(model, shape, edges, if over_kinks { KINK } else { 0.0 }, sharp);
     // The edges' geometry and adjacent faces, all taken from the original shape. Edges
     // whose fillet is a cylinder or a torus get a tool for a boolean operation; the others
     // a rolling-ball fillet, built first (it keeps the other edges).
@@ -2383,7 +2398,20 @@ fn normal_at(model: &Model, shape: Shape, face: NodeId, p: Point) -> Option<Vect
 /// zero, within that much (one less the cosine of the angle between them, and between their
 /// faces).
 fn tangent_chains(model: &Model, shape: Shape, edges: &[(Shape, f64)], kink: f64) -> Vec<(Shape, f64)> {
+    tangent_chains_keeping(model, shape, edges, kink, &[])
+}
+
+/// [`tangent_chains`], not carried on onto edges lying along the pieces of curves `sharp`
+/// (their middles on one).
+fn tangent_chains_keeping(model: &Model, shape: Shape, edges: &[(Shape, f64)], kink: f64, sharp: &[(Curve, f64, f64)]) -> Vec<(Shape, f64)> {
     use crate::geometry::ParametricCurve;
+    let kept_sharp = |edge: Shape| {
+        !sharp.is_empty()
+            && model.edge_curve(Shape { orientation: Orientation::Forward, ..edge }).is_some_and(|(c, a, b)| {
+                let middle = c.point(0.5 * (a + b));
+                sharp.iter().any(|(curve, first, last)| crate::geometry::extrema::nearest_on_curve(middle, curve, *first, *last).distance <= 1e-6)
+            })
+    };
     let all: Vec<Shape> = model.explore(shape, NodeKind::Edge).collect();
     // Each edge's end vertices with its direction there, out of the edge (away from the
     // vertex along it), and its faces.
@@ -2416,7 +2444,7 @@ fn tangent_chains(model: &Model, shape: Shape, edges: &[(Shape, f64)], kink: f64
             if !mine.iter().any(|(v, _)| theirs.iter().any(|(w, _)| w == v)) {
                 continue;
             }
-            if out.iter().any(|(e, _)| e.node == other.node) {
+            if out.iter().any(|(e, _)| e.node == other.node) || kept_sharp(other) {
                 continue;
             }
             let their_faces = faces_of(other);
@@ -5102,6 +5130,65 @@ mod tests {
         assert!((v - 22024.7682).abs() < 1e-2, "{v}");
         assert!((a - 6158.2201).abs() < 1e-2, "{a}");
         assert_eq!(model.unique_subshapes(rounded, NodeKind::Face).len(), 11);
+    }
+
+    /// A rectangular frame on a plate, its edges rounded but for the long edges along the
+    /// floor of its middle (the plate's top, inside it): the corners inside are rounded
+    /// first (where they meet the rim, convex, and the floor's short edges, concave), and the
+    /// floor's short fillets are not carried on round their feet onto the long floor edges,
+    /// which stay sharp (OCCT's volume, to its digits but the last).
+    #[test]
+    fn a_frames_floor_edges_left_sharp_stay_sharp() {
+        let mut model = Model::new();
+        let frame = crate::io::brep::read(&mut model, &mut include_str!("tests/frame_on_a_plate.brep").as_bytes()).unwrap();
+        let middles = [
+            (-45.0000, 0.0000, 3.0000),
+            (0.0000, -12.0000, 3.0000),
+            (22.7000, 1.7000, 4.5000),
+            (-25.7000, 0.0000, 6.0000),
+            (0.0000, 1.7000, 6.0000),
+            (22.7000, 0.0000, 6.0000),
+            (-45.0000, 12.0000, 1.5000),
+            (-25.7000, 4.7000, 4.5000),
+            (0.0000, 12.0000, 3.0000),
+            (25.7000, -4.7000, 4.5000),
+            (0.0000, -1.7000, 6.0000),
+            (-22.7000, -1.7000, 4.5000),
+            (45.0000, -12.0000, 1.5000),
+            (-25.7000, 0.0000, 3.0000),
+            (25.7000, 4.7000, 4.5000),
+            (-25.7000, -4.7000, 4.5000),
+            (-22.7000, 0.0000, 6.0000),
+            (22.7000, 0.0000, 3.0000),
+            (45.0000, 0.0000, 3.0000),
+            (0.0000, 4.7000, 3.0000),
+            (25.7000, 0.0000, 6.0000),
+            (-22.7000, 1.7000, 4.5000),
+            (45.0000, 12.0000, 1.5000),
+            (25.7000, 0.0000, 3.0000),
+            (0.0000, -4.7000, 6.0000),
+            (-22.7000, 0.0000, 3.0000),
+            (0.0000, -4.7000, 3.0000),
+            (0.0000, 4.7000, 6.0000),
+            (22.7000, -1.7000, 4.5000),
+            (-45.0000, -12.0000, 1.5000)
+        ];
+        use crate::geometry::ParametricCurve;
+        let chosen: Vec<Shape> = model
+            .unique_subshapes(frame, NodeKind::Edge)
+            .into_iter()
+            .filter(|&e| {
+                let (c, a, b) = model.edge_curve(e).unwrap();
+                let m = c.point(0.5 * (a + b));
+                middles.iter().any(|&(x, y, z)| m.distance(Point::new(x, y, z)) < 1e-3)
+            })
+            .collect();
+        assert_eq!(chosen.len(), 30);
+        let rounded = fillet(&mut model, frame, &chosen, 0.5).unwrap();
+        let report = validity::check(&model, rounded);
+        assert!(report.problems.is_empty(), "{report:?}");
+        let v = properties::volume(&model, rounded).mass;
+        assert!((v - 7448.7719).abs() < 0.1, "{v}");
     }
 }
 
