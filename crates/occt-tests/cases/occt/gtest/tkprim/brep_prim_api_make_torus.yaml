@@ -78,11 +78,11 @@ ported_from:
   test: BRepPrimAPI_MakeTorusTest.PartialTorus_ZeroTo180
 notes:
   - "Equal end heights. OCCT asserts these partial tori are invalid, documenting a known limitation of its implementation (a degenerate edge on the axis). The cross-section is well defined (the region between the arc and its chord; OCCT builds it for a full revolution), so kentron expects a valid solid."
-expect: not_done
 build:
   - shape: {torus: {major: 10, minor: 2, tube: [0, 180], angle: 45}}
 checks:
   - {valid: shape}
+  - {volume: shape, eq: 49.34802200544679, abs: 1.0e-7}
 ---
 case: partial_torus_minus180_to_zero
 ported_from:
@@ -93,7 +93,6 @@ ported_from:
   test: BRepPrimAPI_MakeTorusTest.PartialTorus_Minus180ToZero
 notes:
   - "Equal end heights. OCCT asserts these partial tori are invalid, documenting a known limitation of its implementation (a degenerate edge on the axis). The cross-section is well defined (the region between the arc and its chord; OCCT builds it for a full revolution), so kentron expects a valid solid."
-expect: not_done
 build:
   - shape: {torus: {major: 10, minor: 2, tube: [-180, 0], angle: 45}}
 checks:
@@ -108,7 +107,6 @@ ported_from:
   test: BRepPrimAPI_MakeTorusTest.PartialTorus_180To360
 notes:
   - "Equal end heights. OCCT asserts these partial tori are invalid, documenting a known limitation of its implementation (a degenerate edge on the axis). The cross-section is well defined (the region between the arc and its chord; OCCT builds it for a full revolution), so kentron expects a valid solid."
-expect: not_done
 build:
   - shape: {torus: {major: 10, minor: 2, tube: [180, 360], angle: 45}}
 checks:
@@ -123,7 +121,6 @@ ported_from:
   test: BRepPrimAPI_MakeTorusTest.PartialTorus_PositiveRange
 notes:
   - "Equal end heights. OCCT asserts these partial tori are invalid, documenting a known limitation of its implementation (a degenerate edge on the axis). The cross-section is well defined (the region between the arc and its chord; OCCT builds it for a full revolution), so kentron expects a valid solid."
-expect: not_done
 build:
   - shape: {torus: {major: 10, minor: 2, tube: [45, 135], angle: 45}}
 checks:
@@ -138,7 +135,6 @@ ported_from:
   test: BRepPrimAPI_MakeTorusTest.PartialTorus_NegativeRange
 notes:
   - "Equal end heights. OCCT asserts these partial tori are invalid, documenting a known limitation of its implementation (a degenerate edge on the axis). The cross-section is well defined (the region between the arc and its chord; OCCT builds it for a full revolution), so kentron expects a valid solid."
-expect: not_done
 build:
   - shape: {torus: {major: 10, minor: 2, tube: [-135, -45], angle: 45}}
 checks:
@@ -177,7 +173,6 @@ ported_from:
   test: BRepPrimAPI_MakeTorusTest.RootCause_HeightOrderingAssumption
 notes:
   - "The order of the cross-section's end heights: increasing, decreasing (bug 23612) and equal (where OCCT expects an invalid result, kentron a valid one) must work."
-expect: not_done
 build:
   - increasing: {torus: {major: 10, minor: 2, tube: [-90, 90], angle: 45}}
   - decreasing: {torus: {major: 10, minor: 2, tube: [90, 270], angle: 45}}

@@ -698,30 +698,24 @@ fn bug26295() -> DrawResult<()> {
 
 /// `tests/bugs/modalg_7/bug26558_1`
 #[test]
-#[should_panic]
-fn bug26558_1() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.restore(&[data_file("bug26558_s.brep").as_str(), "s"])?;
-        d.mksurface(&["sur", "s"])?;
-        d.offset(&["o", "sur", "0.5"])?;
-        d.uiso(&["icur", "o", "0"])?;
-        Ok(())
-    })
+fn bug26558_1() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.restore(&[data_file("bug26558_s.brep").as_str(), "s"])?;
+    d.mksurface(&["sur", "s"])?;
+    d.offset(&["o", "sur", "0.5"])?;
+    d.uiso(&["icur", "o", "0"])?;
+    Ok(())
 }
 
 /// `tests/bugs/modalg_7/bug26558_2`
 #[test]
-#[should_panic]
-fn bug26558_2() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.restore(&[data_file("bug26558_s.brep").as_str(), "s"])?;
-        d.mksurface(&["sur", "s"])?;
-        d.offset(&["o", "sur", "-0.5"])?;
-        d.uiso(&["icur", "o", "0"])?;
-        Ok(())
-    })
+fn bug26558_2() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.restore(&[data_file("bug26558_s.brep").as_str(), "s"])?;
+    d.mksurface(&["sur", "s"])?;
+    d.offset(&["o", "sur", "-0.5"])?;
+    d.uiso(&["icur", "o", "0"])?;
+    Ok(())
 }
 
 /// `tests/bugs/modalg_7/bug26563`

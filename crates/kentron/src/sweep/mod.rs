@@ -71,8 +71,9 @@ impl Sweep {
 /// Sweeps `profile` along the vector `v`.
 ///
 /// A vertex sweeps a straight edge, an edge a face, a wire a shell and a face a solid,
-/// closed by the profile at the start and a translated copy at the end; a compound a
-/// compound of its parts' sweeps. Straight edges
+/// closed by the profile at the start and a translated copy at the end; a shell a
+/// compsolid (a solid for each face, sharing the faces their common edges sweep); a
+/// compound a compound of its parts' sweeps. Straight edges
 /// sweep planes and circles swept along their axis cylinders; other edges are not
 /// supported yet.
 #[doc(alias = "BRepPrimAPI_MakePrism")]
@@ -144,7 +145,20 @@ pub fn extrude(model: &mut Model, profile: Shape, v: Vector) -> Result<Sweep> {
             }
             return Ok(Sweep { shape: compound, generated, ends, copies });
         }
-        kind => todo!("extruding a {kind:?}"),
+        // A shell: each of its faces swept into a solid, those of neighbouring faces sharing
+        // the face their common edge sweeps, as a compsolid (as OCCT's).
+        NodeKind::Shell => {
+            let faces: Vec<Shape> = x.model.children(profile).collect();
+            let out = x.model.new_empty(NodeKind::CompSolid);
+            for f in faces {
+                let face = FaceId::try_from(f.node).map_err(|_| Error::InvalidInput("a shell holds faces".into()))?;
+                x.check(face)?;
+                let solid = x.face_solid(face, f.orientation.compose(profile.orientation))?;
+                x.model.add(out, solid)?;
+            }
+            out
+        }
+        kind => return Err(Error::InvalidInput(format!("extruding a {kind:?}"))),
     };
     let generated = std::mem::take(&mut x.generated);
     let ends = std::mem::take(&mut x.ends);
@@ -397,7 +411,9 @@ fn placing(model: &Model, profile: Shape, pieces: &[pipe::SpinePiece], options: 
 /// an edge a face, a wire a shell and a face a solid. A partial revolution of a face is
 /// closed by the profile itself at the start and by a rotated copy at the end; a full one
 /// has no caps (the swept faces close on themselves along seams). Edges lying on
-/// the axis sweep nothing. A negative angle revolves the other way.
+/// the axis sweep nothing. A negative angle revolves the other way. A shell sweeps a
+/// compsolid (a solid for each face, sharing the faces their common edges sweep), a
+/// compound a compound of its parts' sweeps.
 pub fn revolve(model: &mut Model, profile: Shape, axis: Axis, angle: f64) -> Result<Sweep> {
     if !(angle.is_finite() && angle != 0.0 && angle.abs() <= TAU + tolerance::PARAMETRIC) {
         return Err(Error::InvalidInput(format!("revolution angle must be non-zero and at most 2π in size, got {angle}")));
@@ -457,7 +473,34 @@ pub fn revolve(model: &mut Model, profile: Shape, axis: Axis, angle: f64) -> Res
             r.check(face)?;
             r.face_solid(face, profile.orientation)?
         }
-        kind => todo!("revolving a {kind:?}"),
+        // A shell: each of its faces swept into a solid, those of neighbouring faces sharing
+        // the face their common edge sweeps, as a compsolid (as OCCT's).
+        NodeKind::Shell => {
+            let faces: Vec<Shape> = r.model.children(profile).collect();
+            let out = r.model.new_empty(NodeKind::CompSolid);
+            for f in faces {
+                let face = FaceId::try_from(f.node).map_err(|_| Error::InvalidInput("a shell holds faces".into()))?;
+                r.check(face)?;
+                let solid = r.face_solid(face, f.orientation.compose(profile.orientation))?;
+                r.model.add(out, solid)?;
+            }
+            out
+        }
+        // A compound: each of its parts swept, as a compound.
+        NodeKind::Compound => {
+            let parts: Vec<Shape> = r.model.children(profile).collect();
+            let compound = r.model.new_empty(NodeKind::Compound);
+            let (mut generated, mut ends, mut copies) = (Vec::new(), Vec::new(), Vec::new());
+            for part in parts {
+                let sweep = revolve(r.model, part, axis, angle)?;
+                generated.extend(sweep.generated);
+                ends.extend(sweep.ends);
+                copies.extend(sweep.copies);
+                r.model.add(compound, sweep.shape)?;
+            }
+            return Ok(Sweep { shape: compound, generated, ends, copies });
+        }
+        kind => return Err(Error::InvalidInput(format!("revolving a {kind:?}"))),
     };
     let generated = std::mem::take(&mut r.generated);
     let (ends, copies) = (std::mem::take(&mut r.ends), std::mem::take(&mut r.copies));
@@ -1177,6 +1220,73 @@ mod tests {
         let expected = PI * h / 3.0 * (0..=n).map(|i| radius(i as f64 * h).powi(2) * if i == 0 || i == n { 1.0 } else if i % 2 == 1 { 4.0 } else { 2.0 }).sum::<f64>();
         let volume = properties::volume(&model, solid).mass;
         assert!((volume - expected).abs() < 1e-5 * expected, "{volume} vs {expected}");
+    }
+
+    /// Two unit squares side by side in the XZ plane (x from 1 to 3), sewn into a shell
+    /// sharing their middle edge.
+    fn two_squares(model: &mut Model) -> Shape {
+        let a = polygon(model, &[(1.0, 0.0), (2.0, 0.0), (2.0, 1.0), (1.0, 1.0)]);
+        let b = polygon(model, &[(2.0, 0.0), (3.0, 0.0), (3.0, 1.0), (2.0, 1.0)]);
+        let sewn = crate::sew::sew(model, &[a, b], &Default::default()).unwrap();
+        model.unique_subshapes(sewn, NodeKind::Shell)[0]
+    }
+
+    /// The solids of a compsolid share the faces between them: a face used by two solids.
+    fn shared_faces(model: &Model, compsolid: Shape) -> usize {
+        let all: Vec<NodeId> = model.unique_subshapes(compsolid, NodeKind::Solid).iter().flat_map(|&s| model.unique_subshapes(s, NodeKind::Face)).map(|f| f.node).collect();
+        let unique: std::collections::HashSet<NodeId> = all.iter().copied().collect();
+        all.len() - unique.len()
+    }
+
+    /// A shell of two squares extruded: a compsolid of two unit cubes sharing the face their
+    /// common edge sweeps (as OCCT's).
+    #[test]
+    fn a_shell_extruded_into_solids_sharing_a_face() {
+        let mut model = Model::new();
+        let shell = two_squares(&mut model);
+        let sweep = extrude(&mut model, shell, Vector::new(0.0, 1.0, 0.0)).unwrap();
+        assert_eq!(sweep.shape.kind(), NodeKind::CompSolid);
+        let solids = model.unique_subshapes(sweep.shape, NodeKind::Solid);
+        assert_eq!(solids.len(), 2);
+        assert_eq!(shared_faces(&model, sweep.shape), 1);
+        for s in solids {
+            assert!(validity::check(&model, s).is_valid());
+            assert!((properties::volume(&model, s).mass - 1.0).abs() < 1e-9);
+        }
+    }
+
+    /// The same shell revolved a quarter turn about Z: two solids sharing the face of the
+    /// common edge, each a quarter ring (π/4 · (r2² - r1²) · 1).
+    #[test]
+    fn a_shell_revolved_into_solids_sharing_a_face() {
+        let mut model = Model::new();
+        let shell = two_squares(&mut model);
+        let sweep = revolve(&mut model, shell, Axis::new(Point::ORIGIN, Direction::Z), FRAC_PI_2).unwrap();
+        assert_eq!(sweep.shape.kind(), NodeKind::CompSolid);
+        let solids = model.unique_subshapes(sweep.shape, NodeKind::Solid);
+        assert_eq!(solids.len(), 2);
+        assert_eq!(shared_faces(&model, sweep.shape), 1);
+        let mut volumes: Vec<f64> = solids.iter().map(|&s| properties::volume(&model, s).mass).collect();
+        volumes.sort_by(f64::total_cmp);
+        for (v, (r1, r2)) in volumes.iter().zip([(1.0, 2.0), (2.0, 3.0)]) {
+            assert!((v - PI / 4.0 * (r2 * r2 - r1 * r1)).abs() < 1e-9, "{v}");
+        }
+        assert!(solids.iter().all(|&s| validity::check(&model, s).is_valid()));
+    }
+
+    /// A compound of two faces apart revolved: a compound of two solids.
+    #[test]
+    fn a_compound_revolved_part_by_part() {
+        let mut model = Model::new();
+        let a = polygon(&mut model, &[(1.0, 0.0), (2.0, 0.0), (2.0, 1.0), (1.0, 1.0)]);
+        let b = polygon(&mut model, &[(3.0, 0.0), (4.0, 0.0), (4.0, 1.0), (3.0, 1.0)]);
+        let compound = model.new_empty(NodeKind::Compound);
+        model.add(compound, a).unwrap();
+        model.add(compound, b).unwrap();
+        let sweep = revolve(&mut model, compound, Axis::new(Point::ORIGIN, Direction::Z), PI).unwrap();
+        assert_eq!(sweep.shape.kind(), NodeKind::Compound);
+        let volume: f64 = model.unique_subshapes(sweep.shape, NodeKind::Solid).iter().map(|&s| properties::volume(&model, s).mass).sum();
+        assert!((volume - PI / 2.0 * ((4.0 - 1.0) + (16.0 - 9.0))).abs() < 1e-9, "{volume}");
     }
 
     /// The face of the polygon through `points` (in the XY plane).

@@ -66,7 +66,6 @@ tests/boolean/bcut_complex/E3
 tests/boolean/bcut_complex/F1
 tests/boolean/bcut_complex/F2
 tests/boolean/bcut_complex/F7
-tests/boolean/bcut_complex/N6
 tests/boolean/bcut_complex/O5
 tests/boolean/bcut_complex/Q9
 tests/boolean/bcut_simple/G8
@@ -108,7 +107,6 @@ tests/boolean/cells_test/J4
 tests/boolean/cells_test/J5
 tests/boolean/cells_test/J6
 tests/boolean/cells_test/K1
-tests/boolean/gdml_public/A9
 tests/boolean/gdml_public/B2
 tests/boolean/history/A7
 tests/boolean/volumemaker/A4
@@ -155,7 +153,6 @@ tests/bugs/heal/bug24008_1
 tests/bugs/heal/bug24008_2
 tests/bugs/heal/bug24370
 tests/bugs/heal/bug24658
-tests/bugs/heal/bug24934
 tests/bugs/heal/bug25553_1
 tests/bugs/heal/bug25553_2
 tests/bugs/heal/bug25553_3
@@ -244,7 +241,6 @@ tests/bugs/modalg_1/bug10605_4
 tests/bugs/modalg_1/bug10605_5
 tests/bugs/modalg_1/bug108
 tests/bugs/modalg_1/bug12213
-tests/bugs/modalg_1/bug1243_2
 tests/bugs/modalg_1/bug12918
 tests/bugs/modalg_1/bug13211_2
 tests/bugs/modalg_1/bug13211_3
@@ -452,7 +448,6 @@ tests/bugs/modalg_6/bug25152
 tests/bugs/modalg_6/bug25214
 tests/bugs/modalg_6/bug25880
 tests/bugs/modalg_6/bug25908
-tests/bugs/modalg_6/bug26016
 tests/bugs/modalg_6/bug26063
 tests/bugs/modalg_6/bug26075
 tests/bugs/modalg_6/bug26180
@@ -465,7 +460,6 @@ tests/bugs/modalg_6/bug26313
 tests/bugs/modalg_6/bug26330
 tests/bugs/modalg_6/bug26387
 tests/bugs/modalg_6/bug26393
-tests/bugs/modalg_6/bug26406
 tests/bugs/modalg_6/bug26420_1
 tests/bugs/modalg_6/bug26420_2
 tests/bugs/modalg_6/bug26420_3
@@ -553,9 +547,6 @@ tests/bugs/modalg_7/bug25023
 tests/bugs/modalg_7/bug25968
 tests/bugs/modalg_7/bug25983_2
 tests/bugs/modalg_7/bug25994
-tests/bugs/modalg_7/bug26516
-tests/bugs/modalg_7/bug26558_1
-tests/bugs/modalg_7/bug26558_2
 tests/bugs/modalg_7/bug26563
 tests/bugs/modalg_7/bug26795
 tests/bugs/modalg_7/bug27087
@@ -605,7 +596,6 @@ tests/bugs/modalg_7/bug29484
 tests/bugs/modalg_7/bug29530
 tests/bugs/modalg_7/bug29573
 tests/bugs/modalg_7/bug29580_2
-tests/bugs/modalg_7/bug29586
 tests/bugs/modalg_7/bug29734
 tests/bugs/modalg_7/bug29807_b3a
 tests/bugs/modalg_7/bug29807_b3b
@@ -709,7 +699,6 @@ tests/bugs/moddata_1/bug119
 tests/bugs/moddata_1/bug14782
 tests/bugs/moddata_1/bug16
 tests/bugs/moddata_1/bug163
-tests/bugs/moddata_1/bug17046
 tests/bugs/moddata_1/bug175
 tests/bugs/moddata_1/bug18541_2
 tests/bugs/moddata_1/bug19777
@@ -790,7 +779,6 @@ tests/bugs/moddata_3/bug25706_3
 tests/bugs/moddata_3/bug25892_01
 tests/bugs/moddata_3/bug25892_02
 tests/bugs/moddata_3/bug26560
-tests/bugs/moddata_3/bug26837
 tests/bugs/moddata_3/bug27457
 tests/bugs/moddata_3/bug27534
 tests/bugs/moddata_3/bug27565
@@ -941,7 +929,6 @@ tests/heal/split_angle/F2
 tests/heal/split_angle_advanced/S8
 tests/heal/split_angle_advanced/ZA2
 tests/heal/split_angle_standard/F5
-tests/heal/split_angle_standard/R4
 tests/heal/split_angle_standard/ZR7
 tests/heal/split_angle_standard/ZV7
 tests/heal/split_closed_faces/C9
@@ -952,7 +939,6 @@ tests/heal/split_closed_faces/G5
 tests/heal/split_continuity_standard/C2
 tests/heal/split_continuity_standard/C3
 tests/heal/split_continuity_standard/C9
-tests/heal/split_continuity_standard/R4
 tests/heal/surface_to_bezier/A3
 tests/heal/surface_to_bezier/A4
 tests/heal/surface_to_bezier/A5
@@ -978,7 +964,6 @@ tests/heal/surface_to_revolution_standard/G7
 tests/heal/surface_to_revolution_standard/I8
 tests/heal/surface_to_revolution_standard/K5
 tests/heal/surface_to_revolution_standard/M5
-tests/heal/surface_to_revolution_standard/R4
 tests/heal/surface_to_revolution_standard/R7
 tests/heal/surface_to_revolution_standard/U7
 tests/heal/surface_to_revolution_standard/ZP1

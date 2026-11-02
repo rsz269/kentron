@@ -475,6 +475,23 @@ impl Torus {
                 return Err(Error::InvalidInput(format!("invalid torus tube angles [{v1}, {v2}]")));
             }
             let end = |v: f64| ((big + small * v.cos()).max(0.0), small * v.sin());
+            // (Ends at one height, off the axis, in a partial revolution: the region between
+            // the arc and its chord revolved, the chord sweeping a flat sector of a ring.)
+            let (e1, e2) = (end(v1), end(v2));
+            let partial = self.angle < TAU - tolerance::PARAMETRIC;
+            if partial && e1.0 > tolerance::LINEAR && e2.0 > tolerance::LINEAR && (e1.1 - e2.1).abs() <= tolerance::LINEAR {
+                check_angle(self.angle)?;
+                let f = self.frame;
+                let center = f.origin() + Vector::from(f.x()) * big;
+                // (Round from the frame's X towards its Z: the tube's angle.)
+                let circle = Circle::new(Frame::new(center, -f.y(), f.x()), small);
+                let arc = crate::make::edge_from_curve_range(model, Curve::Circle(circle), v1, v2)?;
+                let (start, stop) = model.edge_vertices(arc);
+                let chord = crate::make::edge(model, stop, start)?;
+                let wire = crate::make::wire(model, &[arc, chord])?;
+                let section = crate::make::planar_face(model, wire)?;
+                return Ok(crate::sweep::revolve(model, section, f.z_axis(), self.angle)?.shape);
+            }
             return Revolved {
                 frame: self.frame,
                 surface: Surface::Torus(TorusSurface::new(self.frame, big, small)),
@@ -544,7 +561,7 @@ impl Revolved {
             .sum();
         let flip = twice_area < 0.0;
         if !full && !is_point(0) && !is_point(1) && (self.ends[0].1 - self.ends[1].1).abs() <= tolerance::LINEAR {
-            todo!("solids of revolution whose profile's ends are at the same height");
+            return Err(Error::InvalidInput("a partial solid of revolution whose profile's ends are at one height".into()));
         }
 
         let mut b = Builder::new(model);

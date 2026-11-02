@@ -92,20 +92,17 @@ fn k5() -> DrawResult<()> {
 
 /// `tests/boolean/bcut_complex/N6`
 #[test]
-#[should_panic]
-fn n6() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.dset(&["SCALE", "100"])?;
-        d.restore(&[data_file("CIN900_pro14hma.rle").as_str(), "a"])?;
-        d.restore(&[data_file("pro14928b.rle").as_str(), "aface"])?;
-        d.prism(&["b", "aface", "0", "500", "0"])?;
-        d.explode(&["b"])?;
-        d.bcut(&["result", "a", "b_1"])?;
-        d.checkprops(&["result", "-s", "562034"])?;
-        d.checkshape(&["result"])?;
-        Ok(())
-    })
+fn n6() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.dset(&["SCALE", "100"])?;
+    d.restore(&[data_file("CIN900_pro14hma.rle").as_str(), "a"])?;
+    d.restore(&[data_file("pro14928b.rle").as_str(), "aface"])?;
+    d.prism(&["b", "aface", "0", "500", "0"])?;
+    d.explode(&["b"])?;
+    d.bcut(&["result", "a", "b_1"])?;
+    d.checkprops(&["result", "-s", "562034"])?;
+    d.checkshape(&["result"])?;
+    Ok(())
 }
 
 /// `tests/boolean/bcut_complex/O2`

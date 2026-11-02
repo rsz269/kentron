@@ -668,6 +668,15 @@ impl Draw {
         // `add what where`: adds a shape to a container (in place).
         need(args, 2, "add what where")?;
         let (what, container) = (self.shape_var(args[0])?, self.shape_var(args[1])?);
+        // (A placed shape (moved by `ttranslate`, say) in anything but a compound: a copy
+        // with its geometry moved instead, kentron's shells and solids holding their
+        // children unplaced.)
+        let what = if what.placement != kentron::math::Transform::IDENTITY && container.kind() != NodeKind::Compound {
+            let placement = what.placement;
+            modify::transform(&mut self.model, Shape { placement: kentron::math::Transform::IDENTITY, ..what }, &placement, Default::default())?
+        } else {
+            what
+        };
         self.model.add(container, what)?;
         Ok(String::new())
     }
@@ -4922,6 +4931,8 @@ impl Draw {
             .ok_or_else(|| DrawError::Failed("revol: null axis direction".into()))?;
         let axis = Axis::new(Point::new(values[0], values[1], values[2]), direction);
         let result = sweep::revolve(&mut self.model, profile, axis, values[6].to_radians())?;
+        // (Its history: what each part of the profile swept.)
+        self.last_history = DrawHistory { generated: result.history().to_vec(), ..Default::default() };
         self.set_shape_var(args[0], result.shape)
     }
     /// DRAW command `revsurf`: 30 uses in 30 converted scripts.

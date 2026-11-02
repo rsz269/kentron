@@ -2069,15 +2069,12 @@ fn bug26396() -> DrawResult<()> {
 
 /// `tests/bugs/modalg_6/bug26406`
 #[test]
-#[should_panic]
-fn bug26406() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.restore(&[data_file("OCC26406-Paraboloid.brep").as_str(), "p"])?;
-        d.revol(&["r", "p", "0", "0", "0", "0", "0", "1", "180", "c"])?;
-        d.checkshape(&["r"])?;
-        Ok(())
-    })
+fn bug26406() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.restore(&[data_file("OCC26406-Paraboloid.brep").as_str(), "p"])?;
+    d.revol(&["r", "p", "0", "0", "0", "0", "0", "1", "180", "c"])?;
+    d.checkshape(&["r"])?;
+    Ok(())
 }
 
 /// `tests/bugs/modalg_6/bug26418_1`

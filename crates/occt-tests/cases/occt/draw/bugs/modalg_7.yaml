@@ -330,7 +330,6 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/bugs/modalg_7/bug26516
-expect: not_done
 build:
   - a: {load: {brep: "bug26516_tmp.brep"}}
   - result: {revolve: {profile: a, axis: {origin: [0, 0, 0], direction: [1, 0, 0]}, angle: 45}}

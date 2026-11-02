@@ -970,31 +970,41 @@ impl<'a> Builder<'a> {
                 _ => {}
             }
         }
-        let (start, end) = match (start, end) {
-            (Some(s), Some(e)) => (s, e),
-            (Some(v), None) | (None, Some(v)) => (v, v),
-            (None, None) => todo!("BRep edges without vertices"),
-        };
-        let edge = self.model.add_edge(start, end, *tolerance)?;
-        match curve {
+        // The 3D curve: the edge's own, else made from its first curve on a surface (as
+        // OCCT's BRepLib::BuildCurves3d does); none for a degenerate edge.
+        let geometry: Option<(Curve, f64, f64)> = match curve {
             Some((c, l, first, last)) if !degenerate => {
                 let t = self.transform(path)? * self.location(*l)?;
                 let raw_curve = self.file.curves.get(c.wrapping_sub(1)).ok_or_else(|| bad(format!("no curve {c}")))?;
-                self.model.set_edge_curve(edge.into(), raw_curve.build()?.transformed(&t), *tolerance)?;
-                self.model.set_edge_range(edge.into(), *first, *last)?;
+                Some((raw_curve.build()?.transformed(&t), *first, *last))
             }
-            _ if *degenerate => {}
+            _ if *degenerate => None,
             _ => {
-                // Only curves on surfaces: the 3D curve made from the first (as OCCT's
-                // BRepLib::BuildCurves3d does).
                 let o = on_surfaces.first().ok_or_else(|| bad("an edge without curves"))?;
                 let t = self.transform(path)? * self.location(o.location)?;
                 let raw_surface = self.file.surfaces.get(o.surface.wrapping_sub(1)).ok_or_else(|| bad(format!("no surface {}", o.surface)))?;
                 let raw_curve = self.file.curves2.get(o.curve.wrapping_sub(1)).ok_or_else(|| bad(format!("no 2D curve {}", o.curve)))?;
                 let curve = curve_on_surface(&raw_curve.build()?, &raw_surface.build()?.transformed(&t), o.first, o.last)?;
-                self.model.set_edge_curve(edge.into(), curve, *tolerance)?;
-                self.model.set_edge_range(edge.into(), o.first, o.last)?;
+                Some((curve, o.first, o.last))
             }
+        };
+        let (start, end) = match (start, end) {
+            (Some(s), Some(e)) => (s, e),
+            (Some(v), None) | (None, Some(v)) => (v, v),
+            // (An edge without vertices (OCCT allows them, on an infinite line, say): vertices
+            // made at the ends of its range, one where they meet.)
+            (None, None) => {
+                let Some((c, first, last)) = &geometry else { return Err(bad("a degenerate edge without vertices")) };
+                let (a, b) = (c.point(*first), c.point(*last));
+                let start = self.model.add_vertex(a, *tolerance);
+                let end = if a.distance(b) <= *tolerance { start } else { self.model.add_vertex(b, *tolerance) };
+                (start, end)
+            }
+        };
+        let edge = self.model.add_edge(start, end, *tolerance)?;
+        if let Some((c, first, last)) = geometry {
+            self.model.set_edge_curve(edge.into(), c, *tolerance)?;
+            self.model.set_edge_range(edge.into(), first, last)?;
         }
         self.edges.insert(index, placed, edge);
         Ok(edge)

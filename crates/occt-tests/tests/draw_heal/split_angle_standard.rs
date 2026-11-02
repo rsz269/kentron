@@ -1497,15 +1497,12 @@ fn r3() -> DrawResult<()> {
 
 /// `tests/heal/split_angle_standard/R4`
 #[test]
-#[should_panic]
-fn r4() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.restore(&[data_file("pro5363axe.brep").as_str(), "a"])?;
-        d.DT_SplitAngle(&["result", "a"])?;
-        d.checkshape(&["result"])?;
-        Ok(())
-    })
+fn r4() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.restore(&[data_file("pro5363axe.brep").as_str(), "a"])?;
+    d.DT_SplitAngle(&["result", "a"])?;
+    d.checkshape(&["result"])?;
+    Ok(())
 }
 
 /// `tests/heal/split_angle_standard/R6`
