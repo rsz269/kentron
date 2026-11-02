@@ -609,6 +609,34 @@ pub fn boundary_crossings(model: &Model, shape: Shape) -> Vec<(Shape, [Shape; 2]
 /// Two edges whose pcurves cross on `surface` (or one crossing itself), and where, among the
 /// coedges `coedges` of a face: away from a vertex they share, and not only touching.
 fn boundary_crossing(model: &Model, coedges: &[CoEdgeId], surface: &Surface) -> Option<(EdgeId, EdgeId, Point)> {
+    boundary_crossing_near(model, coedges, surface).map(|(e1, e2, p, _)| (e1, e2, p))
+}
+
+/// Where the boundaries of the faces `faces` cross themselves just beside a vertex the two
+/// edges share (within `reach` of it, past the tolerances): the vertex's tolerance raised to
+/// cover the crossing, as where two edges meet it at a shallow angle, their curves found only
+/// to their tolerances, they cross a little way from it. Crossings farther away are left.
+pub(crate) fn cover_crossings_at_vertices(model: &mut Model, faces: &[Shape], reach: f64) {
+    for &face in faces {
+        let Some(surface) = model.surface(face).cloned() else { continue };
+        let Ok(id) = FaceId::try_from(face.node) else { continue };
+        let Some(record) = model.get(id) else { continue };
+        let coedges: Vec<CoEdgeId> = record.wires.iter().filter_map(|&u| model.get(u)).filter_map(|u| model.get(u.wire)).flat_map(|w| w.coedges.iter().copied()).collect();
+        // (A few rounds: each covers one crossing.)
+        for _ in 0..4 {
+            match boundary_crossing_near(model, &coedges, &surface) {
+                Some((_, _, _, Some((vertex, distance)))) if distance <= reach => {
+                    let _ = model.set_vertex_tolerance(vertex, 1.01 * distance);
+                }
+                _ => break,
+            }
+        }
+    }
+}
+
+/// [`boundary_crossing`], with the vertex the two edges share nearest the crossing and how
+/// far it lies from it (past which the crossing is one).
+fn boundary_crossing_near(model: &Model, coedges: &[CoEdgeId], surface: &Surface) -> Option<(EdgeId, EdgeId, Point, Option<(VertexId, f64)>)> {
     // Each pcurve as a polyline; the crossings of their sides refined on the pcurves.
     struct Run {
         edge: EdgeId,
@@ -649,7 +677,7 @@ fn boundary_crossing(model: &Model, coedges: &[CoEdgeId], surface: &Surface) -> 
     let size = (hi - lo).length().max(1e-12);
     let cross = |a: Point2, b: Point2, c: Point2| (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
     // Whether sides `k1` and `k2` show the pcurves crossing (away from a vertex they share).
-    let try_pair = |k1: usize, k2: usize| -> Option<(EdgeId, EdgeId, Point)> {
+    let try_pair = |k1: usize, k2: usize| -> Option<(EdgeId, EdgeId, Point, Option<(VertexId, f64)>)> {
         let ((r1, i1, _, _), (r2, i2, _, _)) = (sides[k1], sides[k2]);
         let (run1, run2) = (&runs[r1], &runs[r2]);
         if r1 == r2 && i1.abs_diff(i2) <= 1 || r1 != r2 && run1.edge == run2.edge {
@@ -680,11 +708,12 @@ fn boundary_crossing(model: &Model, coedges: &[CoEdgeId], surface: &Surface) -> 
             model.get(e).map_or(Vec::new(), |e| [e.start, e.end].iter().filter_map(|&u| model.get(u).map(|u| u.vertex)).collect())
         };
         let (ends1, ends2) = (ends(run1.edge), ends(run2.edge));
-        let at_vertex = ends1.iter().filter(|v| ends2.contains(v)).filter_map(|&v| model.get(v)).any(|v| v.point.distance(p) <= v.tolerance + reach + LINEAR);
-        if at_vertex {
+        let shared: Vec<(VertexId, f64, f64)> = ends1.iter().filter(|v| ends2.contains(v)).filter_map(|&v| model.get(v).map(|x| (v, x.point.distance(p), x.tolerance))).collect();
+        if shared.iter().any(|&(_, d, tolerance)| d <= tolerance + reach + LINEAR) {
             return None;
         }
-        Some((run1.edge, run2.edge, p))
+        let nearest = shared.iter().min_by(|a, b| a.1.total_cmp(&b.1)).map(|&(v, d, _)| (v, d));
+        Some((run1.edge, run2.edge, p, nearest))
     };
     let all: Vec<usize> = (0..sides.len()).collect();
     pairs_in_cells(&sides, &all, lo, hi, 0, &mut |k1, k2| try_pair(k1, k2))

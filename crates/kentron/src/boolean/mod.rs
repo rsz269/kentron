@@ -2281,6 +2281,23 @@ mod tests {
         assert!((volume - 1387.559).abs() < 1e-2, "{volume}");
     }
 
+    /// A block with chamfered curved edges fused to a frame whose free-form face comes down
+    /// onto the block's flat side, touching it: the section along that touch and the one
+    /// across the chamfer meet the side's corner at a shallow angle, their pcurves crossing
+    /// a few millionths from the vertex they share. The vertex covers it: a valid solid.
+    #[test]
+    fn a_chamfered_block_fused_where_a_curved_face_touches_it() {
+        let mut model = Model::new();
+        let mut read = |text: &str| crate::io::brep::read(&mut model, &mut text.as_bytes()).unwrap();
+        let block = read(include_str!("tests/chamfered_block_on_curved_frame_a.brep"));
+        let frame = read(include_str!("tests/chamfered_block_on_curved_frame_b.brep"));
+        let result = union(&mut model, block, frame).unwrap();
+        let report = validity::check(&model, result);
+        assert!(report.is_valid(), "{report:?}");
+        let volume = properties::volume(&model, result).mass;
+        assert!((volume - 31.72242).abs() < 1e-4, "{volume}");
+    }
+
     /// A cylinder with a window through its side, the window's pcurves kept a period off the
     /// rest of the face (as a model may keep them): its window is still a hole in the face,
     /// not a face of its own, when the solid meets another (the same volume as without the

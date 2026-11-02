@@ -65,6 +65,11 @@ pub(super) fn build(
         return Ok(None);
     }
     out.set_tolerances(model, graph, pieces)?;
+    // (Free-form faces' boundaries crossing themselves just beside a vertex, where sections
+    // traced where the surfaces touch meet edges at a shallow angle: the vertex widened to
+    // cover it, as far as such sections are found.)
+    let freeform: Vec<Shape> = faces.iter().copied().filter(|&f| model.surface(f).is_some_and(super::geom::freeform)).collect();
+    crate::validity::cover_crossings_at_vertices(model, &freeform, 1e3 * super::geom::on_tol());
     let vectors = |edge: EdgeId, u: &EdgeUse| -> (Vector, Vector) {
         let (curve, first, last) = model.edge_curve(Shape::from(edge)).expect("uses are of edges with curves");
         let (p, tangent) = curve.d1(0.5 * (first + last));
