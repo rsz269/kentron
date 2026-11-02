@@ -57,7 +57,7 @@ and no change may make a passing test fail.
 
 <!-- effort -->
 So far (2026-09-25 to 2026-11-01): about 282 hours of the agent's active work, 19.3 million
-tokens written by it, and 11.0 billion tokens processed in all (nearly all of them its
+tokens written by it, and 11.1 billion tokens processed in all (nearly all of them its
 conversation's context, read back from the cache).
 <!-- /effort -->
 
