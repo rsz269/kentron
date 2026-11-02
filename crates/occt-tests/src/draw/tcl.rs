@@ -56,7 +56,7 @@ const IGNORED: &[&str] = &[
     "vcamera", "vviewparams", "vrenderparams", "vlight", "vdrawparray", "vtrihedron", "vzbufftrihedron", "vfps", "vglinfo",
     "vcaps", "vsetmaterial", "vsettransparency", "vshowfaceboundary", "vdefaults", "vclose", "vraytrace", "vupdate", "vredraw",
     "vexport", "vdump", "dtyp", "disp", "pick", "checkdisplay", "tclean_display", "checktrinfo_display", "chkfi", "dhistory",
-    "dfreemem", "dmalloc", "dputs", "dsetenv", "testgrid", "help",
+    "dfreemem", "dmalloc", "dputs", "dsetenv", "testgrid", "help", "clpoles", "clknots", "shpoles", "shknots", "clpoles", "clknots", "shpoles", "shknots",
     // (Boolean operations' history, and fillets' tolerances: kentron keeps no history and
     // uses its own tolerances.)
     "setfillhistory", "tolblend",

@@ -272,6 +272,8 @@ pub struct Draw {
     pub(crate) sweep_spine: Option<Shape>,
     pub(crate) sweep_mode: Vec<String>,
     pub(crate) sweep_profiles: Vec<(Shape, bool, bool)>,
+    /// What `buildsweep` last built (for `errorsweep`).
+    pub(crate) sweep_result: Option<Shape>,
     /// Whether `bapibop` unifies its result's edges and faces (`bsimplify -e`, `-f`).
     pub(crate) simplify: (bool, bool),
     /// The history of the last operation that keeps one (`savehistory` saves it).

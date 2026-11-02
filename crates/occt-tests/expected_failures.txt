@@ -68,7 +68,6 @@ tests/boolean/bcut_complex/F2
 tests/boolean/bcut_complex/F7
 tests/boolean/bcut_complex/O5
 tests/boolean/bcut_complex/Q9
-tests/boolean/bcut_simple/G8
 tests/boolean/bcut_simple/L9
 tests/boolean/bcut_simple/M1
 tests/boolean/bfuse_complex/M2
@@ -200,7 +199,6 @@ tests/bugs/mesh/bug31449_2
 tests/bugs/mesh/bug31461
 tests/bugs/mesh/bug31926
 tests/bugs/mesh/bug32053
-tests/bugs/mesh/bug32241
 tests/bugs/mesh/bug32422
 tests/bugs/mesh/bug32471
 tests/bugs/mesh/bug32692_2
@@ -285,7 +283,6 @@ tests/bugs/modalg_2/bug302_1
 tests/bugs/modalg_2/bug302_2
 tests/bugs/modalg_2/bug302_3
 tests/bugs/modalg_2/bug317
-tests/bugs/modalg_2/bug318
 tests/bugs/modalg_2/bug327_1
 tests/bugs/modalg_2/bug327_2
 tests/bugs/modalg_2/bug327_3
@@ -333,7 +330,6 @@ tests/bugs/modalg_4/bug620_2
 tests/bugs/modalg_4/bug6334
 tests/bugs/modalg_4/bug745_11
 tests/bugs/modalg_4/bug745_5
-tests/bugs/modalg_4/bug78
 tests/bugs/modalg_4/bug8842_1
 tests/bugs/modalg_4/bug8842_10
 tests/bugs/modalg_4/bug8842_13
@@ -434,7 +430,6 @@ tests/bugs/modalg_5/bug25722
 tests/bugs/modalg_5/bug25886
 tests/bugs/modalg_5/bug25980
 tests/bugs/modalg_5/bug25982
-tests/bugs/modalg_6/bug10234
 tests/bugs/modalg_6/bug14531
 tests/bugs/modalg_6/bug21246
 tests/bugs/modalg_6/bug21727
@@ -1058,7 +1053,6 @@ tests/lowalgos/intss/bug29972_2
 tests/lowalgos/intss/bug29972_3
 tests/lowalgos/intss/bug30082_1
 tests/lowalgos/intss/bug30082_2
-tests/lowalgos/intss/bug30703
 tests/lowalgos/intss/bug31552
 tests/lowalgos/intss/bug32701
 tests/lowalgos/intss/bug32849
@@ -1182,13 +1176,7 @@ tests/offset/wire_unclosed_outside_0_005/B6
 tests/offset/wire_unclosed_outside_0_025/B3
 tests/offset/wire_unclosed_outside_0_025/B6
 tests/offset/wire_unclosed_outside_0_075/B6
-tests/pipe/bugs/bug24049
-tests/pipe/bugs/bug30003
-tests/pipe/bugs/bug31147
-tests/pipe/bugs/bug31631
-tests/pipe/bugs/bug32818
 tests/pipe/specific/K2
-tests/prism/seminf/A1
 tests/sewing/tol_100/C3
 tests/sewing/tol_100/C5
 tests/sewing/tol_100/J5

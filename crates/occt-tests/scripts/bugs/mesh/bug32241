@@ -43,4 +43,7 @@ thrusections result issolid w0 w1 w2 w3 w4
 
 checkview -display result -3d -path ${imagedir}/${test_image}.png
 
-checktrinfo result -tri $tri_n -nod $nod_n
+# kentron deviation (draw_deviations.json): The numbers of triangles and nodes of OCCT's mesh for shaded display (its mesher's, per platform); kentron's loft is checked valid, and meshed, with triangles and nodes.
+checkshape result
+incmesh result 1
+checktrinfo result -tri -nod

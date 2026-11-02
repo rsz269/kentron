@@ -18,16 +18,17 @@ checkshape result
 checkprops result -s 45.9872
 
 set nbshapes_expected "
+# kentron deviation (draw_deviations.json): OCCT's two faces (OCCT 7.9, OCP) meet at the mitre along an ellipse edge and, beside it, an ellipse edge 1.2e-5 long between two vertices as far apart: a sliver where the ends of the mitre meet. kentron's meet along the one edge, of the same area and tolerances: 6 vertices and 7 edges (OCCT 7 and 8).
 Number of shapes in result
- VERTEX    : 7
- EDGE      : 8
+ VERTEX    : 6
+ EDGE      : 7
  WIRE      : 2
  FACE      : 2
  SHELL     : 1
  SOLID     : 0
  COMPSOLID : 0
  COMPOUND  : 0
- SHAPE     : 20
+ SHAPE     : 18
 "
 checknbshapes result -ref ${nbshapes_expected} -t -m "Result obtained by Boolean cut operation"
 

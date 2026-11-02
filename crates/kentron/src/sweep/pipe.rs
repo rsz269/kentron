@@ -13,7 +13,7 @@ use crate::geometry::ParametricCurve;
 use crate::math::{Direction, Direction2, Frame, Point, Point2, Transform, Transformable, Vector};
 use crate::properties;
 use crate::tolerance;
-use crate::topology::{EdgeId, FaceId, Model, NodeId, NodeKind, Orientation, Shape, VertexId, WireId};
+use crate::topology::{CoEdgeId, EdgeId, FaceId, Model, NodeId, NodeKind, Orientation, Shape, VertexId, WireId};
 
 use super::Sweep;
 
@@ -22,6 +22,9 @@ pub(super) struct SpinePiece {
     pub curve: Curve,
     pub first: f64,
     pub last: f64,
+    /// How far its start may lie from the previous piece's end: the tolerance of the
+    /// vertex they share, if they share one (else nothing beyond kentron's own).
+    pub gap: f64,
 }
 
 impl SpinePiece {
@@ -221,7 +224,7 @@ pub(super) fn motions(pieces: &[SpinePiece], samples: usize, anchor: (usize, f64
     for (k, piece) in pieces.iter().enumerate() {
         let (p, tangent) = piece.point_tangent(0.0)?;
         if k > 0 {
-            if p.distance(x) > 1e3 * tolerance::LINEAR {
+            if p.distance(x) > (1e3 * tolerance::LINEAR).max(2.0 * piece.gap) {
                 return Err(Error::InvalidInput("a pipe's spine whose edges do not meet".into()));
             }
             // The raw frame turned the least onto the new tangent; the correction then
@@ -703,20 +706,70 @@ pub(super) fn pipe_along(model: &mut Model, profile: Shape, pieces: &[SpinePiece
             piper.face_solid(face, profile.orientation)?
         }
         NodeKind::Shell | NodeKind::Compound => {
-            // Each face (or sub-shape) swept on its own, together.
+            // Each face (or sub-shape) swept on its own, together: a face's solid, a loose
+            // wire's or edge's shell (sharing what their shared vertices sweep, as OCCT's).
             let compound = piper.model.new_empty(NodeKind::Compound);
             let faces: Vec<Shape> = piper.model.explore(profile, NodeKind::Face).collect();
             for f in faces {
                 let solid = piper.face_solid(FaceId::from_index(f.node.index), f.orientation)?;
                 piper.model.add(compound, solid)?;
             }
+            if profile.kind() == NodeKind::Compound {
+                let loose: Vec<Shape> = piper.model.children(profile).filter(|c| matches!(c.kind(), NodeKind::Wire | NodeKind::Edge)).collect();
+                for part in loose {
+                    let edges: Vec<(EdgeId, Orientation)> = match part.kind() {
+                        NodeKind::Wire => {
+                            let wire = WireId::from_index(part.node.index);
+                            piper.model[wire].coedges.clone().into_iter().map(|c| (piper.model[c].edge, piper.model[c].orientation.compose(part.orientation))).collect()
+                        }
+                        _ => vec![(EdgeId::from_index(part.node.index), part.orientation)],
+                    };
+                    let shell = piper.model.new_empty(NodeKind::Shell);
+                    for (edge, orientation) in edges {
+                        for f in piper.edge_faces(edge, orientation)? {
+                            piper.model.add(shell, f)?;
+                        }
+                    }
+                    piper.model.add(compound, shell)?;
+                }
+            }
             compound
         }
         kind => return Err(Error::InvalidInput(format!("a pipe of a {kind:?}"))),
     };
+    // (Where the spine's edges meet only within their shared vertices' tolerances, the
+    // pieces' sweeps meet as closely: the tolerances raised to cover that.)
+    if pieces.iter().any(|p| p.gap > 1e3 * tolerance::LINEAR) {
+        cover_gaps(piper.model, shape)?;
+    }
     let generated = std::mem::take(&mut piper.generated);
     let ends = std::mem::take(&mut piper.ends);
     Ok(Sweep { shape, generated, ends, copies: Vec::new() })
+}
+
+/// Raises the tolerances of `shape`'s edges to cover how far their faces' surfaces along
+/// their pcurves stray from them, then the rest to match (as OCCT updates tolerances where
+/// pieces of a sweep meet only so closely).
+fn cover_gaps(model: &mut Model, shape: Shape) -> Result<()> {
+    for face in model.unique_subshapes(shape, NodeKind::Face) {
+        let Some(surface) = model.surface(face).cloned() else { continue };
+        let face_tolerance = model.tolerance(face);
+        let coedges: Vec<CoEdgeId> = model.explore(face, NodeKind::CoEdge).map(|c| CoEdgeId::from_index(c.node.index)).collect();
+        for coedge in coedges {
+            let Some((pcurve, first, last)) = model.effective_pcurve(coedge) else { continue };
+            let edge = model[coedge].edge;
+            let Some((curve, a, b)) = model.edge_curve(Shape::from(edge)) else { continue };
+            if (a - first).abs() > 1e-9 || (b - last).abs() > 1e-9 {
+                continue;
+            }
+            let deviation = crate::geometry::measure::curve_on_surface_deviation(&curve, &pcurve, &surface, first, last).max_distance;
+            let needed = 1.01 * (deviation - face_tolerance);
+            if needed > model.tolerance(Shape::from(edge)) {
+                model.set_edge_tolerance(edge, needed)?;
+            }
+        }
+    }
+    crate::modify::update_tolerances(model, shape)
 }
 
 /// Where along the spine the profile stands, as OCCT places it (GeomFill_SectionPlacement):

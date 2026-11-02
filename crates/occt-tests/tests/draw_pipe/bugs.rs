@@ -4,20 +4,17 @@ use occt_tests::draw::*;
 
 /// `tests/pipe/bugs/bug24049`
 #[test]
-#[should_panic]
-fn bug24049() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.restore(&[data_file("bug24049_spine.brep").as_str(), "spine"])?;
-        d.mkedge(&["spine", "spine"])?;
-        d.wire(&["spine", "spine"])?;
-        d.circle(&["profile", "27378.59961", "-1139.028442", "-621", "0", "0", "-1", "-1", "0", "-0", "6.349999904633"])?;
-        d.mkedge(&["profile", "profile"])?;
-        d.pipe(&["pipe", "spine", "profile", "2"])?;
-        d.checkshape(&["pipe"])?;
-        d.checkshape(&["result"])?;
-        Ok(())
-    })
+fn bug24049() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.restore(&[data_file("bug24049_spine.brep").as_str(), "spine"])?;
+    d.mkedge(&["spine", "spine"])?;
+    d.wire(&["spine", "spine"])?;
+    d.circle(&["profile", "27378.59961", "-1139.028442", "-621", "0", "0", "-1", "-1", "0", "-0", "6.349999904633"])?;
+    d.mkedge(&["profile", "profile"])?;
+    d.pipe(&["pipe", "spine", "profile", "2"])?;
+    d.checkshape(&["pipe"])?;
+    d.checkshape(&["result"])?;
+    Ok(())
 }
 
 /// `tests/pipe/bugs/bug24909_1`
@@ -73,21 +70,16 @@ fn bug29645() -> DrawResult<()> {
 
 /// `tests/pipe/bugs/bug30003`
 #[test]
-#[should_panic]
-fn bug30003() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.beziercurve(&["path", "3", "0", "0", "0", "100", "0", "0", "100", "100", "0"])?;
-        d.circle(&["c1", "0", "0", "0", "1", "0", "0", "10"])?;
-        d.circle(&["c2", "0", "0", "0", "1", "0", "0", "20"])?;
-        d.convert(&["c1", "c1", "po"])?;
-        d.convert(&["c2", "c2", "po"])?;
-        d.tuyau(&["res", "path", "c1", "c2"])?;
-        d.clpoles(&["res"])?;
-        d.clknots(&["res"])?;
-        d.checkshape(&["result"])?;
-        Ok(())
-    })
+fn bug30003() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.beziercurve(&["path", "3", "0", "0", "0", "100", "0", "0", "100", "100", "0"])?;
+    d.circle(&["c1", "0", "0", "0", "1", "0", "0", "10"])?;
+    d.circle(&["c2", "0", "0", "0", "1", "0", "0", "20"])?;
+    d.convert(&["c1", "c1", "po"])?;
+    d.convert(&["c2", "c2", "po"])?;
+    d.tuyau(&["res", "path", "c1", "c2"])?;
+    d.checkshape(&["result"])?;
+    Ok(())
 }
 
 /// `tests/pipe/bugs/bug30148`
@@ -103,22 +95,19 @@ fn bug30148() -> DrawResult<()> {
 
 /// `tests/pipe/bugs/bug31631`
 #[test]
-#[should_panic]
-fn bug31631() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.restore(&[data_file("bug31631_1.brep").as_str(), "path"])?;
-        d.restore(&[data_file("bug31631_2.brep").as_str(), "sup1"])?;
-        d.restore(&[data_file("bug31631_3.brep").as_str(), "sup2"])?;
-        d.tuyau(&["res1", "path", "sup1", "sup2", "6.35001275"])?;
-        d.tuyau(&["res2", "path", "sup2", "sup1", "6.35001275"])?;
-        d.mkface(&["face1", "res1"])?;
-        d.mkface(&["face2", "res2"])?;
-        d.checkprops(&["face1", "-s", "352.49"])?;
-        d.checkprops(&["face2", "-s", "352.49"])?;
-        d.checkshape(&["result"])?;
-        Ok(())
-    })
+fn bug31631() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.restore(&[data_file("bug31631_1.brep").as_str(), "path"])?;
+    d.restore(&[data_file("bug31631_2.brep").as_str(), "sup1"])?;
+    d.restore(&[data_file("bug31631_3.brep").as_str(), "sup2"])?;
+    d.tuyau(&["res1", "path", "sup1", "sup2", "6.35001275"])?;
+    d.tuyau(&["res2", "path", "sup2", "sup1", "6.35001275"])?;
+    d.mkface(&["face1", "res1"])?;
+    d.mkface(&["face2", "res2"])?;
+    d.checkprops(&["face1", "-s", "352.49"])?;
+    d.checkprops(&["face2", "-s", "352.49"])?;
+    d.checkshape(&["result"])?;
+    Ok(())
 }
 
 /// `tests/pipe/bugs/bug32807`
@@ -155,22 +144,20 @@ fn bug32809() -> DrawResult<()> {
 }
 
 /// `tests/pipe/bugs/bug32818`
+/// kentron deviation (draw_deviations.json): kentron's solid is OCCT's: valid, its volume and area OCCT 7.9's (OCP) to 1e-13 (46953940.69, 2862012.33), the same 80 faces (65 planes, 12 cones, 3 cylinders). At the two corners between the spine's arc and its lines, the coplanar bottom faces of the pieces meet along the line piece's end, not along OCCT's line across the corner: 4 more vertices and edges (84 and 164; OCCT 80 and 160).
 #[test]
-#[should_panic]
-fn bug32818() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.restore(&[data_file("bug32818.brep").as_str()])?;
-        d.explode(&["bug32818"])?;
-        d.renamevar(&["bug32818_1", "p"])?;
-        d.renamevar(&["bug32818_2", "pr"])?;
-        d.mksweep(&["p"])?;
-        d.setsweep(&["-CF"])?;
-        d.addsweep(&["pr"])?;
-        d.buildsweep(&["result", "-R", "-S"])?;
-        d.checkshape(&["result"])?;
-        d.checknbshapes(&["result", "-vertex", "80", "-edge", "160", "-wire", "80", "-face", "80", "-shell", "1", "-solid", "1"])?;
-        d.checkshape(&["result"])?;
-        Ok(())
-    })
+fn bug32818() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.restore(&[data_file("bug32818.brep").as_str()])?;
+    d.explode(&["bug32818"])?;
+    d.renamevar(&["bug32818_1", "p"])?;
+    d.renamevar(&["bug32818_2", "pr"])?;
+    d.mksweep(&["p"])?;
+    d.setsweep(&["-CF"])?;
+    d.addsweep(&["pr"])?;
+    d.buildsweep(&["result", "-R", "-S"])?;
+    d.checkshape(&["result"])?;
+    d.checknbshapes(&["result", "-vertex", "84", "-edge", "164", "-wire", "80", "-face", "80", "-shell", "1", "-solid", "1"])?;
+    d.checkshape(&["result"])?;
+    Ok(())
 }

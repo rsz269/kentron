@@ -5,7 +5,7 @@ OCCT: `V8_0_1-42-g3d097a0328`; groups: blend, boolean, bugs, chamfer, cr, draft,
 - scripts considered: 16420
 - converted: 10254 (2866 ignored for missing data), 6373 of them as YAML cases (cases/occt/draw)
 - skipped: 6166
-- distinct DRAW commands used by converted scripts: 347
+- distinct DRAW commands used by converted scripts: 345
 
 ## Skip reasons
 
@@ -421,5 +421,3 @@ OCCT: `V8_0_1-42-g3d097a0328`; groups: blend, boolean, bugs, chamfer, cr, draft,
 | `2dinterpole` | 1 | 1 |
 | `disp` | 1 | 1 |
 | `mkoffsetshape` | 1 | 1 |
-| `clpoles` | 1 | 1 |
-| `clknots` | 1 | 1 |

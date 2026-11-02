@@ -2520,5 +2520,26 @@
       "to": "d.checkprops(&[\"result\", \"-s\", \"36.851\"])?;",
       "reason": "The spine's corners turn nearly back (by about 177°, where two arcs of nearly the same circles cross), a 0.05 profile swept round them: OCCT's mitred pipe (OCCT 7.9, OCP) has surfaces reaching 0.20 from the spine there, four times the profile's radius, and OCCT builds no mitred pipe at all with circles closer still (G2, G3, G6). A mitre's plane would lie nearly along the curved pieces and cut them again near the corner; kentron joins them as round a round corner, its pipe within 0.05 of the spine, valid, of the area of OCCT's own round-cornered pipe (36.851; OCCT's mitred 37.4358)."
     }
+  ],
+  "tests/bugs/mesh/bug32241": [
+    {
+      "from": "checktrinfo result -tri $tri_n -nod $nod_n",
+      "to": "checkshape result\nincmesh result 1\nchecktrinfo result -tri -nod",
+      "reason": "The numbers of triangles and nodes of OCCT's mesh for shaded display (its mesher's, per platform); kentron's loft is checked valid, and meshed, with triangles and nodes."
+    }
+  ],
+  "tests/pipe/bugs/bug32818": [
+    {
+      "from": "d.checknbshapes(&[\"result\", \"-vertex\", \"80\", \"-edge\", \"160\", \"-wire\", \"80\", \"-face\", \"80\", \"-shell\", \"1\", \"-solid\", \"1\"])?;",
+      "to": "d.checknbshapes(&[\"result\", \"-vertex\", \"84\", \"-edge\", \"164\", \"-wire\", \"80\", \"-face\", \"80\", \"-shell\", \"1\", \"-solid\", \"1\"])?;",
+      "reason": "kentron's solid is OCCT's: valid, its volume and area OCCT 7.9's (OCP) to 1e-13 (46953940.69, 2862012.33), the same 80 faces (65 planes, 12 cones, 3 cylinders). At the two corners between the spine's arc and its lines, the coplanar bottom faces of the pieces meet along the line piece's end, not along OCCT's line across the corner: 4 more vertices and edges (84 and 164; OCCT 80 and 160)."
+    }
+  ],
+  "tests/bugs/modalg_6/bug10234": [
+    {
+      "from": "Number of shapes in result\n VERTEX    : 7\n EDGE      : 8\n WIRE      : 2\n FACE      : 2\n SHELL     : 1\n SOLID     : 0\n COMPSOLID : 0\n COMPOUND  : 0\n SHAPE     : 20",
+      "to": "Number of shapes in result\n VERTEX    : 6\n EDGE      : 7\n WIRE      : 2\n FACE      : 2\n SHELL     : 1\n SOLID     : 0\n COMPSOLID : 0\n COMPOUND  : 0\n SHAPE     : 18",
+      "reason": "OCCT's two faces (OCCT 7.9, OCP) meet at the mitre along an ellipse edge and, beside it, an ellipse edge 1.2e-5 long between two vertices as far apart: a sliver where the ends of the mitre meet. kentron's meet along the one edge, of the same area and tolerances: 6 vertices and 7 edges (OCCT 7 and 8)."
+    }
   ]
 }

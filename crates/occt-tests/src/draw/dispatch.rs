@@ -179,6 +179,7 @@ pub fn dispatch(d: &mut Draw, name: &str, args: &[&str]) -> Option<DrawResult> {
         "ellipse" => d.ellipse(args),
         "emptycopy" => d.emptycopy(args),
         "encoderegularity" => d.encoderegularity(args),
+        "errorsweep" => d.errorsweep(args),
         "evolved" => d.evolved(args),
         "exchuv" => d.exchuv(args),
         "explode" => d.explode(args),

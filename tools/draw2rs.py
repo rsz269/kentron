@@ -78,6 +78,8 @@ DROPPED_COMMANDS = {
     "vcircle", "vpoint", "vdrawsph", "vdrawparray", "dmode", "triedron", "nbiso", "discretisation",
     "chkfi", "tclean_display", "checktrinfo_display", "dtyp", "whatis", "dump", "pick",
     "checkdisplay",
+    # (Showing or hiding curves' and surfaces' poles and knots.)
+    "clpoles", "clknots", "shpoles", "shknots",
 }
 # Commands whose result depends on an interactive viewer: the whole script is skipped.
 VIEWER_COMMANDS = {

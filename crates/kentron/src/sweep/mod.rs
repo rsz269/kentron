@@ -10,6 +10,8 @@ mod pipe;
 pub use middle::middle_path;
 mod pipe_shell;
 mod skeleton;
+mod tube;
+pub use tube::tube_between;
 
 use std::collections::HashMap;
 use std::f64::consts::{FRAC_PI_2, TAU};
@@ -208,7 +210,7 @@ fn pipe_framed(model: &mut Model, profile: Shape, spine: Shape, options: &PipeOp
     if profile.placement != Transform::IDENTITY {
         // Sweep the shape where it is defined, then place the result like the profile.
         let inverse = profile.placement.inverse();
-        let local: Vec<pipe::SpinePiece> = pieces.iter().map(|p| pipe::SpinePiece { curve: p.curve.transformed(&inverse), first: p.first, last: p.last }).collect();
+        let local: Vec<pipe::SpinePiece> = pieces.iter().map(|p| pipe::SpinePiece { curve: p.curve.transformed(&inverse), first: p.first, last: p.last, gap: p.gap }).collect();
         let local_options = PipeOptions { guide: options.guide.map(|g| g.moved(&inverse)), ..*options };
         let framing = self::framing(model, &local, &local_options)?;
         let sweep = pipe::pipe_along(model, Shape { placement: Transform::IDENTITY, ..profile }, &local, &framing)?;
@@ -235,10 +237,19 @@ fn spine_pieces(model: &Model, spine: Shape) -> Result<Vec<pipe::SpinePiece>> {
         kind => return Err(Error::InvalidInput(format!("a pipe's spine is an edge or a wire, not a {kind:?}"))),
     };
     let mut pieces = Vec::with_capacity(edges.len());
+    // (The vertex each edge starts at and the one it ends at, as it runs.)
+    let ends = |edge: Shape| model.edge_vertices(edge);
+    let mut previous_end = None;
     for edge in edges {
         let (curve, first, last) = model.edge_curve(edge).ok_or_else(|| Error::InvalidInput("a pipe's spine has no curve".into()))?;
         let (first, last) = if edge.orientation == Orientation::Reversed { (last, first) } else { (first, last) };
-        pieces.push(pipe::SpinePiece { curve, first, last });
+        let (start, end) = ends(edge);
+        let gap = match previous_end {
+            Some::<Shape>(v) if v.node == start.node => model.tolerance(start),
+            _ => 0.0,
+        };
+        previous_end = Some(end);
+        pieces.push(pipe::SpinePiece { curve, first, last, gap });
     }
     Ok(pieces)
 }
@@ -336,6 +347,18 @@ pub fn pipe_cornered(model: &mut Model, profile: Shape, spine: Shape, options: &
 #[doc(alias = "BRepOffsetAPI_MakePipeShell")]
 pub fn pipe_through(model: &mut Model, sections: &[(Shape, PipeOptions)], spine: Shape, solid: bool) -> Result<Shape> {
     pipe_through_with(model, sections, spine, solid, None).map(|s| s.shape)
+}
+
+/// A pipe from `first` to `last`, both sections given where the spine starts: `last`
+/// carried by the spine's frame to its end, the sections then blended along it (as OCCT's
+/// pipe surface of an evolving section is). A shell.
+#[doc(alias = "GeomFill_Pipe")]
+pub fn pipe_evolving(model: &mut Model, first: Shape, last: Shape, spine: Shape) -> Result<Shape> {
+    let pieces = spine_pieces(model, spine)?;
+    let (motion, _) = pipe::motions(&pieces, 64, (0, 0.0), &pipe::Framing::Minimal)?;
+    let to_end = *motion.last().and_then(|m| m.transforms.last()).ok_or_else(|| Error::InvalidInput("a pipe needs a spine".into()))?;
+    let options = PipeOptions::default();
+    pipe_through(model, &[(first, options), (last.moved(&to_end), options)], spine, false)
 }
 
 /// [`pipe_through`], the frames turned by `guide` (if any), with its history: the faces

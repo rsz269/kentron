@@ -1783,6 +1783,7 @@ impl Draw {
             let profile = if solid && profile.kind() == NodeKind::Wire { make::planar_face(&mut self.model, profile)? } else { profile };
             let options = kentron::sweep::PipeOptions { contact, correction, ..Default::default() };
             let r = kentron::sweep::pipe_cornered(&mut self.model, profile, spine, &options, corner)?;
+            self.sweep_result = Some(r);
             return self.set_shape_var(args[0], r);
         }
         let frenet = self.sweep_mode == ["-FR"];
@@ -1795,6 +1796,7 @@ impl Draw {
                 self.sweep_profiles.iter().map(|&(s, contact, correction)| (s, kentron::sweep::PipeOptions { contact, correction, frenet, ..Default::default() })).collect();
             kentron::sweep::pipe_through(&mut self.model, &sections, spine, solid)?
         };
+        self.sweep_result = Some(r);
         self.set_shape_var(args[0], r)
     }
     /// DRAW command `isbbinterf`.
@@ -4434,14 +4436,19 @@ impl Draw {
     ///
     /// Example: `pipe s w profile`
     pub fn pipe(&mut self, args: &[&str]) -> DrawResult {
-        // `pipe name spine profile [mode]`: the profile swept along the spine (mode 0, the
-        // default corrected Frenet trihedron, is how kentron sweeps).
-        need(args, 3, "pipe name spine profile")?;
-        if args.len() > 4 || (args.len() == 4 && args[3] != "0") {
-            return self.not_implemented("pipe", args);
-        }
+        // `pipe name spine profile [mode [approx]]`: the profile swept along the spine. Mode 0,
+        // the corrected Frenet trihedron (the default), and 2, the discrete trihedron, are
+        // the rotation-minimizing frame kentron sweeps with; 1 is Frenet's. Forcing C1
+        // approximation changes nothing in kentron.
+        need(args, 3, "pipe name spine profile [mode [approx]]")?;
+        let frenet = match args.get(3).copied() {
+            None | Some("0") | Some("2") => false,
+            Some("1") => true,
+            Some(_) => return self.not_implemented("pipe", args),
+        };
         let (spine, profile) = (self.shape_var(args[1])?, self.shape_var(args[2])?);
-        let shape = sweep::pipe(&mut self.model, profile, spine)?.shape;
+        let options = kentron::sweep::PipeOptions { frenet, ..Default::default() };
+        let shape = kentron::sweep::pipe_with(&mut self.model, profile, spine, &options)?.shape;
         self.set_shape_var(args[0], shape)
     }
     /// DRAW command `pl`: 28 uses in 10 converted scripts.
@@ -4551,13 +4558,27 @@ impl Draw {
     /// Example: `prism s w 2 0 10`
     pub fn prism(&mut self, args: &[&str]) -> DrawResult {
         // `prism result base dx dy dz [Copy | Inf | SemiInf]`: the copy flag changes nothing in
-        // kentron; infinite prisms are not supported.
+        // kentron; an infinite prism (both ways with Inf, from the base with SemiInf) reaches
+        // as far as OCCT's infinite edges do, 2e100 (Precision::Infinite).
         need(args, 5, "prism result base dx dy dz [Copy | Inf | SemiInf]")?;
-        if args.len() > 5 && !args[5].eq_ignore_ascii_case("copy") {
-            return self.not_implemented("prism", args);
+        let mut base = self.shape_var(args[1])?;
+        let mut v = Vector::new(self.number(args[2])?, self.number(args[3])?, self.number(args[4])?);
+        match args.get(5).map(|a| a.to_ascii_lowercase()).as_deref() {
+            None | Some("copy") => {}
+            Some(mode @ ("inf" | "semiinf")) => {
+                const INFINITE: f64 = 2e100;
+                if !(v.length() > 0.0) {
+                    return Err(DrawError::Failed("prism: no direction".into()));
+                }
+                let unit = v * (1.0 / v.length());
+                v = unit * INFINITE;
+                if mode == "inf" {
+                    base = base.moved(&kentron::math::Transform::translation(unit * -INFINITE));
+                    v = unit * (2.0 * INFINITE);
+                }
+            }
+            Some(_) => return self.not_implemented("prism", args),
         }
-        let base = self.shape_var(args[1])?;
-        let v = Vector::new(self.number(args[2])?, self.number(args[3])?, self.number(args[4])?);
         let result = sweep::extrude(&mut self.model, base, v)?;
         self.set_shape_var(args[0], result.shape)
     }
@@ -4861,8 +4882,14 @@ impl Draw {
     ///
     /// Example: `restore … s`
     pub fn restore(&mut self, args: &[&str]) -> DrawResult {
-        // `restore file name`: a shape, or a point, curve or surface DRAW saved.
-        let [file, name] = args else { return self.not_implemented("restore", args) };
+        // `restore file [name]`: a shape, or a point, curve or surface DRAW saved (named, if
+        // not given a name, after the file, without its extension; that name returned).
+        let (file, name) = match args {
+            [file, name] => (*file, name.to_string()),
+            [file] => (*file, std::path::Path::new(file).file_stem().and_then(|s| s.to_str()).unwrap_or(file).to_string()),
+            _ => return self.not_implemented("restore", args),
+        };
+        let name = name.as_str();
         let bytes = std::fs::read(file).map_err(|e| DrawError::Failed(format!("restore: {file}: {e}")))?;
         use kentron::io::brep::SavedGeometry;
         let object = match kentron::io::brep::read_saved_geometry(&mut bytes.as_slice())? {
@@ -4873,11 +4900,12 @@ impl Draw {
             Some(SavedGeometry::Surface(s)) => DrawObject::Surface(s),
             None => {
                 let shape = kentron::io::brep::read(&mut self.model, &mut bytes.as_slice())?;
-                return self.set_shape_var(name, shape);
+                self.set_shape_var(name, shape)?;
+                return Ok(if args.len() == 1 { name.to_string() } else { String::new() });
             }
         };
         self.set(name, object);
-        Ok(String::new())
+        Ok(if args.len() == 1 { name.to_string() } else { String::new() })
     }
     /// DRAW command `save`.
     ///
@@ -5071,7 +5099,7 @@ impl Draw {
     ///
     /// Example: `setsweep -FR`
     pub fn setsweep(&mut self, args: &[&str]) -> DrawResult {
-        // `setsweep -CF|-DT|-FR|...`: the trihedron's mode. The rotation-minimizing frame
+        // `setsweep -CF|-DT|-FR|-SM n|-DM n|...`: the trihedron's mode. The rotation-minimizing frame
         // kentron sweeps with is OCCT's corrected Frenet (`-CF`) and what its discrete
         // trihedron (`-DT`) approximates; Frenet's (`-FR`) is the same along a plane curve.
         // Fixed, constant-binormal, guided and surface modes are not supported.
@@ -5080,8 +5108,23 @@ impl Draw {
                 self.sweep_mode = args.iter().map(|a| a.to_string()).collect();
                 Ok(String::new())
             }
+            // (The approximation's most segments and degree: kentron fits as it does.)
+            ["-SM" | "-DM", n] if n.parse::<u32>().is_ok() => Ok(String::new()),
             _ => self.not_implemented("setsweep", args),
         }
+    }
+    /// DRAW command `errorsweep`.
+    ///
+    /// Example: `errorsweep`
+    pub fn errorsweep(&mut self, args: &[&str]) -> DrawResult {
+        // `errorsweep`: how closely the last sweep's surfaces follow it (OCCT's approximation
+        // error; kentron's faces' greatest tolerance).
+        let _ = args;
+        let Some(result) = self.sweep_result else {
+            return Ok("Sweep is not done\n".into());
+        };
+        let error = self.model.unique_subshapes(result, NodeKind::Face).into_iter().map(|f| self.model.tolerance(f)).fold(0.0, f64::max);
+        Ok(format!("Tolerance on surfaces = {error}\n"))
     }
     /// DRAW command `settolerance`: 145 uses in 45 converted scripts.
     ///
@@ -5336,8 +5379,9 @@ impl Draw {
         if args.len() < 5 {
             return self.not_implemented("thrusections", &args);
         }
-        let flag = |a: &str| a.parse::<f64>().map(|x| x != 0.0).map_err(|_| DrawError::Failed(format!("thrusections: {a} is not 0 or 1")));
-        let options = kentron::loft::LoftOptions { solid: flag(args[1])?, ruled: flag(args[2])?, matching: if as_given { kentron::loft::Matching::AsGiven } else { kentron::loft::Matching::ByRays }, ..Default::default() };
+        // (As DRAW reads them: set only by 1, anything not a number reading as 0.)
+        let flag = |a: &str| a.parse::<f64>().is_ok_and(|x| x.trunc() == 1.0);
+        let options = kentron::loft::LoftOptions { solid: flag(args[1]), ruled: flag(args[2]), matching: if as_given { kentron::loft::Matching::AsGiven } else { kentron::loft::Matching::ByRays }, ..Default::default() };
         let sections = args[3..].iter().map(|a| self.shape_var(a)).collect::<Result<Vec<_>, _>>()?;
         let result = kentron::loft::loft(&mut self.model, &sections, &options)?;
         let generated = sections.iter().flat_map(|&s| {
@@ -5702,7 +5746,54 @@ impl Draw {
     ///
     /// Example: `tuyau t curve c1 c2`
     pub fn tuyau(&mut self, args: &[&str]) -> DrawResult {
-        self.not_implemented("tuyau", args)
+        // `tuyau [-NS] result path radius | section | first last | side1 side2 radius`: the
+        // pipe surface along a curve: of a circle of the radius, of a section (given where the
+        // path starts), evolving from one section to another (both given there), or of the
+        // radius between two curves on it. `-NS` (no smoothing) changes nothing in kentron.
+        let args: Vec<&str> = args.iter().copied().filter(|a| *a != "-NS").collect();
+        need(&args, 3, "tuyau result path radius | section | first last | side1 side2 radius")?;
+        let path = self.curve_var(args[1])?;
+        let (first, last) = (path.first_parameter(), path.last_parameter());
+        let edge_of = |d: &mut Self, c: Curve| -> DrawResult<Shape> {
+            let edge = make::edge_from_curve(&mut d.model, c)?;
+            Ok(make::wire(&mut d.model, &[edge])?)
+        };
+        // The one face of a swept shell, its surface.
+        let surface_of = |d: &Self, swept: Shape| -> DrawResult<Surface> {
+            let faces = d.model.unique_subshapes(swept, NodeKind::Face);
+            let [face] = faces[..] else { return Err(DrawError::Failed("tuyau: the pipe is not one surface".into())) };
+            d.model.surface(face).cloned().ok_or_else(|| DrawError::Failed("tuyau: a face without a surface".into()))
+        };
+        let surface = match &args[2..] {
+            [radius] if self.curve_var(radius).is_err() => {
+                let r = self.number(radius)?;
+                let (p, d) = path.d1(first);
+                let t = Direction::try_from_vector(d).ok_or_else(|| DrawError::Failed("tuyau: a path without a tangent".into()))?;
+                let circle = Circle::new(Frame::from_z(p, t), r);
+                let (spine, section) = (edge_of(self, path.clone())?, edge_of(self, Curve::Circle(circle))?);
+                let swept = sweep::pipe(&mut self.model, section, spine)?.shape;
+                surface_of(self, swept)?
+            }
+            [section] => {
+                let section = self.curve_var(section)?;
+                let (spine, section) = (edge_of(self, path.clone())?, edge_of(self, section)?);
+                let swept = sweep::pipe(&mut self.model, section, spine)?.shape;
+                surface_of(self, swept)?
+            }
+            [a, b] => {
+                let (a, b) = (self.curve_var(a)?, self.curve_var(b)?);
+                let (spine, a, b) = (edge_of(self, path.clone())?, edge_of(self, a)?, edge_of(self, b)?);
+                let swept = sweep::pipe_evolving(&mut self.model, a, b, spine)?;
+                surface_of(self, swept)?
+            }
+            [a, b, radius] if self.number(radius).is_ok_and(|r| r != 0.0) => {
+                let (a, b, r) = (self.curve_var(a)?, self.curve_var(b)?, self.number(radius)?);
+                sweep::tube_between(&path, first, last, &a, &b, r)?
+            }
+            _ => return self.not_implemented("tuyau", &args),
+        };
+        self.set(args[0], DrawObject::Surface(surface));
+        Ok(String::new())
     }
     /// DRAW command `uiso`: 5 uses in 5 converted scripts.
     ///

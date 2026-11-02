@@ -37,7 +37,7 @@ pub(super) fn pipe_cornered(model: &mut Model, profile: Shape, pieces: &[SpinePi
     let pieces: Vec<SpinePiece> = pieces
         .iter()
         .filter(|p| length(p) > 1e-6 * total)
-        .map(|p| SpinePiece { curve: p.curve.clone(), first: p.first, last: p.last })
+        .map(|p| SpinePiece { curve: p.curve.clone(), first: p.first, last: p.last, gap: p.gap })
         .collect();
     let pieces = &pieces[..];
     let n = pieces.len();
@@ -55,12 +55,8 @@ pub(super) fn pipe_cornered(model: &mut Model, profile: Shape, pieces: &[SpinePi
     let wanted_shell = profile.kind() == NodeKind::Wire;
     let face = match profile.kind() {
         NodeKind::Face => profile,
-        // (An open wire is swept as it is round round corners.)
-        NodeKind::Wire => match make::planar_face(model, profile) {
-            Ok(face) => face,
-            Err(_) if corner == Corner::Rounded => profile,
-            Err(_) => return Err(Error::InvalidInput("a pipe round corners needs a closed planar profile".into())),
-        },
+        // (An open wire is swept as it is: its shell's pieces cut at mitres and sewn.)
+        NodeKind::Wire => make::planar_face(model, profile).unwrap_or(profile),
         kind => return Err(Error::InvalidInput(format!("a pipe round corners sweeps a wire or a face, not a {kind:?}"))),
     };
     // Where the profile stands at the start of each piece.
@@ -87,7 +83,16 @@ pub(super) fn pipe_cornered(model: &mut Model, profile: Shape, pieces: &[SpinePi
     let turns_back = corners.iter().any(|&k| {
         ends[k].3.dot(ends[(k + 1) % n].1) < 150f64.to_radians().cos() && !(straight(&pieces[k]) && straight(&pieces[(k + 1) % n]))
     });
-    if corner == Corner::Rounded || turns_back {
+    // Round corners the profile lies all inside of (up to the axis at most) have no knee:
+    // OCCT trims the pieces against each other there, as at a mitre. Where all are so, the
+    // pipe is mitred.
+    let all_inside = face.kind() == NodeKind::Face
+        && !corners.is_empty()
+        && corners.iter().all(|&k| {
+            let (p, t1, t2) = (ends[k].2, ends[k].3, ends[(k + 1) % n].1);
+            carried(&pieces[k], 0.0, 1.0).is_ok_and(|t| section_beyond(model, face, &(t * starts[k]), p, t1, t2) <= 0.0)
+        });
+    if (corner == Corner::Rounded && !all_inside) || turns_back {
         return rounded(model, face, pieces, &ends, &starts, &corners, closed, wanted_shell);
     }
     for &k in &corners {
@@ -209,6 +214,12 @@ pub(super) fn pipe_cornered(model: &mut Model, profile: Shape, pieces: &[SpinePi
     let options = crate::sew::SewOptions { tolerance: (2.0 * gap).clamp(1e-6, 1e-3 * reach.max(1e-9)), ..Default::default() };
     let sewn = crate::sew::sew(model, &faces, &options)?;
     let shells = model.unique_subshapes(sewn, NodeKind::Shell);
+    if face.kind() == NodeKind::Wire {
+        let [shell] = shells[..] else {
+            return Err(Error::Failed("a pipe of an open profile round mitred corners whose pieces do not sew".into()));
+        };
+        return Ok(shell);
+    }
     let closed_up = |model: &Model, shell: Shape| {
         let mut uses: std::collections::HashMap<crate::topology::NodeId, usize> = std::collections::HashMap::new();
         for e in model.explore(shell, NodeKind::Edge) {
@@ -229,21 +240,36 @@ pub(super) fn pipe_cornered(model: &mut Model, profile: Shape, pieces: &[SpinePi
             }
         }
         // Where the pieces' sections at a corner differ (curved pieces, each cut by the
-        // plane on its own): the pieces carried on past the corners fused, what is left of
-        // either beyond a plane dropped.
+        // plane on its own): the pieces carried on past those corners fused, what is left of
+        // either beyond a plane dropped (cut by the plane at corners between straight pieces,
+        // whose sections there are one: their faces meeting along it, as OCCT's).
         _ => {
             let joint = |k: usize, toward_next: bool| {
                 let (p, normal) = bisector(k);
                 let length = extended[k].1 .1.max(extended[(k + 1) % n].1 .0);
                 (p, if toward_next { normal } else { -normal }, 2.0 * (reach + length))
             };
-            let mut result = extended[0].0;
+            let straight = |k: usize| matches!(pieces[k].curve, Curve::Line(_));
+            let flat = |c: usize| straight(c) && straight((c + 1) % n);
+            let mut carried_on = Vec::with_capacity(n);
+            for (k, &(swept, (before, after))) in extended.iter().enumerate() {
+                let previous = (k + n - 1) % n;
+                let mut part = swept;
+                if before > 0.0 && flat(previous) {
+                    part = cut(model, part, bisector(previous), false)?;
+                }
+                if after > 0.0 && flat(k) {
+                    part = cut(model, part, bisector(k), true)?;
+                }
+                carried_on.push(part);
+            }
+            let mut result = carried_on[0];
             for k in 1..n {
                 let mut planes = vec![joint(k - 1, true)];
                 if closed && k == n - 1 {
                     planes.push(joint(k, false));
                 }
-                result = joined(model, result, extended[k].0, &planes)?;
+                result = joined(model, result, carried_on[k], &planes)?;
             }
             let options = crate::unify::UnifyOptions { same_surface_only: true, ..Default::default() };
             let result = crate::unify::unify_same_domain_with(model, result, options)?;
@@ -293,21 +319,34 @@ fn rounded(
     // A face swept: the union of the pieces' solids (overlapping inside each corner) and
     // the knees (filling it outside), less the ends for a shell.
     if face.kind() == NodeKind::Face {
+        // Each corner: its point, tangents, the direction out of it (square to the tangent
+        // before, away from the one after) and how far the section at it reaches that way.
+        let corner_at = |model: &Model, k: usize| -> Result<(Point, Vector, Vector, Vector, f64, f64)> {
+            let (p, t1, t2) = (ends[k].2, ends[k].3, ends[(k + 1) % n].1);
+            let away = t1 * t1.dot(t2) - t2;
+            let outside = away * (1.0 / away.length().max(1e-300));
+            let at_end = carried(&pieces[k], 0.0, 1.0)? * starts[k];
+            let b = properties::bounding_box(model, face.moved(&at_end));
+            let size = (b.max - b.min).length().max(1e-9);
+            let beyond = section_beyond(model, face, &at_end, p, t1, t2);
+            Ok((p, t1, t2, outside, size, beyond))
+        };
+        // (No knee at a corner the section lies all inside of, up to the axis at most.)
+        let mut knee = vec![false; n];
+        for &k in corners {
+            knee[k] = corner_at(model, k)?.5 > 0.0;
+        }
         let mut solid: Option<Shape> = None;
         for (k, piece) in pieces.iter().enumerate() {
             let spine = carried_on_edge(model, piece, 0.0, 0.0)?;
             let mut parts = vec![super::pipe(model, face.moved(&starts[k]), spine)?.shape];
-            if corners.contains(&k) {
-                let (p, t1, t2) = (ends[k].2, ends[k].3, ends[(k + 1) % n].1);
+            if corners.contains(&k) && knee[k] {
+                // The part of the section outside the corner, past the axis, turned round it
+                // (the rest turns inside the pieces, which overlap there).
+                let (p, t1, t2, outside, size, _) = corner_at(model, k)?;
                 let axis = t1.cross(t2);
                 let angle = axis.length().atan2(t1.dot(t2));
-                let at_end = carried(piece, 0.0, 1.0)? * starts[k];
-                // (The part of the section outside the corner, past the axis: the rest turns
-                // inside the pieces, which overlap there.)
-                let outside = (t1 * t1.dot(t2) - t2) * (1.0 / (t1 * t1.dot(t2) - t2).length().max(1e-300));
-                let section = face.moved(&at_end);
-                let b = properties::bounding_box(model, section);
-                let size = (b.max - b.min).length().max(1e-9);
+                let section = face.moved(&(carried(piece, 0.0, 1.0)? * starts[k]));
                 let plane = crate::geometry::surface::Plane::new(p, Direction::from_vector(outside));
                 let (u, v) = plane.parameters(p);
                 let bound = make::face_on_domain(model, crate::geometry::surface::Surface::Plane(plane), u - 4.0 * size, u + 4.0 * size, v - 4.0 * size, v + 4.0 * size)?;
@@ -394,6 +433,22 @@ fn rounded(
     Ok(solid)
 }
 
+/// How far the profile `face` placed by `at_end` reaches out of the corner at `p` (from the
+/// tangent `t1` to `t2`), past the axis through it square to both (beyond the tolerance:
+/// zero or less where it lies all inside, up to the axis at most).
+fn section_beyond(model: &Model, face: Shape, at_end: &Transform, p: Point, t1: Vector, t2: Vector) -> f64 {
+    let away = t1 * t1.dot(t2) - t2;
+    let outside = away * (1.0 / away.length().max(1e-300));
+    let points: Vec<Point> = model
+        .unique_subshapes(face, NodeKind::Edge)
+        .into_iter()
+        .filter_map(|e| model.edge_curve(e).map(|(c, a, b)| (c.transformed(at_end), a, b)))
+        .flat_map(|(c, a, b)| (0..=32).map(move |i| c.point(a + (b - a) * i as f64 / 32.0)).collect::<Vec<_>>())
+        .collect();
+    let size = points.iter().map(|q| q.distance(p)).fold(0.0, f64::max).max(1e-9);
+    points.iter().map(|&q| (q - p).dot(outside)).fold(f64::NEG_INFINITY, f64::max) - tolerance::LINEAR.max(1e-9 * size)
+}
+
 /// The least rotation at a corner at `p` taking the tangent `t1` onto `t2`.
 fn turn(p: Point, t1: Vector, t2: Vector) -> Transform {
     let axis = t1.cross(t2);
@@ -411,7 +466,7 @@ fn carried(piece: &SpinePiece, from: f64, to: f64) -> Result<Transform> {
         Curve::Line(_) => Ok(Transform::translation(piece.curve.point(at(to)) - piece.curve.point(at(from)))),
         Curve::Circle(c) => Ok(Transform::rotation(c.frame().z_axis(), at(to) - at(from))),
         _ => {
-            let single = [SpinePiece { curve: piece.curve.clone(), first: piece.first, last: piece.last }];
+            let single = [SpinePiece { curve: piece.curve.clone(), first: piece.first, last: piece.last, gap: 0.0 }];
             let (motions, _) = super::pipe::motions(&single, 16, (0, from), &super::pipe::Framing::Minimal)?;
             let transforms = &motions[0].transforms;
             Ok(if to <= 0.0 { transforms[0] } else { *transforms.last().expect("samples") })
