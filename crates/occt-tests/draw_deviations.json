@@ -2506,5 +2506,19 @@
       "to": "d.checkprops(&[\"result\", \"-s\", \"48261.7\"])?;",
       "reason": "OCCT's pipe of the face leaves out its two ends (21 faces, 43132.08 in OCCT 7.9 (OCP), the shape invalid, as the script's TODO says); kentron's has the same 21 side faces, each of the same area as OCCT's, closed by the two copies of the face (2564.8 each): valid, its area 48261.7."
     }
+  ],
+  "tests/pipe/standard/G1": [
+    {
+      "from": "d.checkprops(&[\"result\", \"-s\", \"32.412\"])?;",
+      "to": "d.checkprops(&[\"result\", \"-s\", \"31.5678\"])?;",
+      "reason": "The spine's corners turn nearly back (by about 177°, where two arcs of nearly the same circles cross), a 0.05 profile swept round them: OCCT's mitred pipe (OCCT 7.9, OCP) has surfaces reaching 0.20 from the spine there, four times the profile's radius, and OCCT builds no mitred pipe at all with circles closer still (G2, G3, G6). A mitre's plane would lie nearly along the curved pieces and cut them again near the corner; kentron joins them as round a round corner, its pipe within 0.05 of the spine, valid, of the area of OCCT's own round-cornered pipe (31.5678; OCCT's mitred 32.412)."
+    }
+  ],
+  "tests/pipe/standard/G5": [
+    {
+      "from": "d.checkprops(&[\"result\", \"-s\", \"37.4358\"])?;",
+      "to": "d.checkprops(&[\"result\", \"-s\", \"36.851\"])?;",
+      "reason": "The spine's corners turn nearly back (by about 177°, where two arcs of nearly the same circles cross), a 0.05 profile swept round them: OCCT's mitred pipe (OCCT 7.9, OCP) has surfaces reaching 0.20 from the spine there, four times the profile's radius, and OCCT builds no mitred pipe at all with circles closer still (G2, G3, G6). A mitre's plane would lie nearly along the curved pieces and cut them again near the corner; kentron joins them as round a round corner, its pipe within 0.05 of the spine, valid, of the area of OCCT's own round-cornered pipe (36.851; OCCT's mitred 37.4358)."
+    }
   ]
 }

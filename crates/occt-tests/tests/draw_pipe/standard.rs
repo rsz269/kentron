@@ -3,100 +3,92 @@
 use occt_tests::draw::*;
 
 /// `tests/pipe/standard/G1`
+/// kentron deviation (draw_deviations.json): The spine's corners turn nearly back (by about 177°, where two arcs of nearly the same circles cross), a 0.05 profile swept round them: OCCT's mitred pipe (OCCT 7.9, OCP) has surfaces reaching 0.20 from the spine there, four times the profile's radius, and OCCT builds no mitred pipe at all with circles closer still (G2, G3, G6). A mitre's plane would lie nearly along the curved pieces and cut them again near the corner; kentron joins them as round a round corner, its pipe within 0.05 of the spine, valid, of the area of OCCT's own round-cornered pipe (31.5678; OCCT's mitred 32.412).
 /// kentron: sub-shapes named by OCCT's enumeration are selected by position (draw_selectors.json)
 #[test]
-#[should_panic]
-fn g1() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.circle(&["c1", "0", "10", "0", "10"])?;
-        d.circle(&["c2", "0", "9", "0", "9.1"])?;
-        d.circle(&["c3", "10", "10", "0", "0", "10", "0", "0.05"])?;
-        d.mkedge(&["e1", "c1"])?;
-        d.mkedge(&["e2", "c2"])?;
-        d.mkedge(&["profile", "c3"])?;
-        d.bclearobjects(&[])?;
-        d.baddobjects(&["e1", "e2"])?;
-        d.bfillds(&[])?;
-        d.bbuild(&["result"])?;
-        d.explode(&["result", "e"])?;
-        d.nearest(&["result_1", "result", "E", "-2.12317805593", "13.3048834513", "0.0", "42.8367214458"])?;
-        d.nearest(&["result_3", "result", "E", "7.96354227514", "4.88392905367", "0.0", "11.4207969181"])?;
-        d.nearest(&["result_4", "result", "E", "-1.91011032923", "12.1281541114", "0.0", "38.5655679343"])?;
-        d.nearest(&["result_6", "result", "E", "7.3833751672", "4.49157085318", "0.0", "9.97707655917"])?;
-        d.wire(&["path", "result_1", "result_3", "result_4", "result_6"])?;
-        d.wire(&["profile", "profile"])?;
-        d.mksweep(&["path"])?;
-        d.addsweep(&["profile"])?;
-        d.buildsweep(&["result", "-C", "-R"])?;
-        d.checkprops(&["result", "-s", "32.412"])?;
-        d.checkshape(&["result"])?;
-        Ok(())
-    })
+fn g1() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.circle(&["c1", "0", "10", "0", "10"])?;
+    d.circle(&["c2", "0", "9", "0", "9.1"])?;
+    d.circle(&["c3", "10", "10", "0", "0", "10", "0", "0.05"])?;
+    d.mkedge(&["e1", "c1"])?;
+    d.mkedge(&["e2", "c2"])?;
+    d.mkedge(&["profile", "c3"])?;
+    d.bclearobjects(&[])?;
+    d.baddobjects(&["e1", "e2"])?;
+    d.bfillds(&[])?;
+    d.bbuild(&["result"])?;
+    d.explode(&["result", "e"])?;
+    d.nearest(&["result_1", "result", "E", "-2.12317805593", "13.3048834513", "0.0", "42.8367214458"])?;
+    d.nearest(&["result_3", "result", "E", "7.96354227514", "4.88392905367", "0.0", "11.4207969181"])?;
+    d.nearest(&["result_4", "result", "E", "-1.91011032923", "12.1281541114", "0.0", "38.5655679343"])?;
+    d.nearest(&["result_6", "result", "E", "7.3833751672", "4.49157085318", "0.0", "9.97707655917"])?;
+    d.wire(&["path", "result_1", "result_3", "result_4", "result_6"])?;
+    d.wire(&["profile", "profile"])?;
+    d.mksweep(&["path"])?;
+    d.addsweep(&["profile"])?;
+    d.buildsweep(&["result", "-C", "-R"])?;
+    d.checkprops(&["result", "-s", "31.5678"])?;
+    d.checkshape(&["result"])?;
+    Ok(())
 }
 
 /// `tests/pipe/standard/G2`
 /// kentron: sub-shapes named by OCCT's enumeration are selected by position (draw_selectors.json)
 #[test]
-#[should_panic]
-fn g2() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.circle(&["c1", "0", "10", "0", "10"])?;
-        d.circle(&["c2", "0", "9", "0", "9.01"])?;
-        d.circle(&["c3", "10", "10", "0", "0", "10", "0", "0.05"])?;
-        d.mkedge(&["e1", "c1"])?;
-        d.mkedge(&["e2", "c2"])?;
-        d.mkedge(&["profile", "c3"])?;
-        d.bclearobjects(&[])?;
-        d.baddobjects(&["e1", "e2"])?;
-        d.bfillds(&[])?;
-        d.bbuild(&["result"])?;
-        d.explode(&["result", "e"])?;
-        d.nearest(&["result_1", "result", "E", "-2.16464857655", "12.4767961451", "0.0", "45.7808647772"])?;
-        d.nearest(&["result_3", "result", "E", "6.89870572586", "3.97072966257", "0.0", "14.3649406628"])?;
-        d.nearest(&["result_4", "result", "E", "-1.95255525563", "11.267910871", "0.0", "41.1146553773"])?;
-        d.nearest(&["result_6", "result", "E", "6.26740780099", "3.60408246315", "0.0", "12.8089077305"])?;
-        d.wire(&["path", "result_1", "result_3", "result_4", "result_6"])?;
-        d.wire(&["profile", "profile"])?;
-        d.mksweep(&["path"])?;
-        d.addsweep(&["profile"])?;
-        d.buildsweep(&["result", "-C", "-R"])?;
-        d.checkshape(&["result"])?;
-        Ok(())
-    })
+fn g2() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.circle(&["c1", "0", "10", "0", "10"])?;
+    d.circle(&["c2", "0", "9", "0", "9.01"])?;
+    d.circle(&["c3", "10", "10", "0", "0", "10", "0", "0.05"])?;
+    d.mkedge(&["e1", "c1"])?;
+    d.mkedge(&["e2", "c2"])?;
+    d.mkedge(&["profile", "c3"])?;
+    d.bclearobjects(&[])?;
+    d.baddobjects(&["e1", "e2"])?;
+    d.bfillds(&[])?;
+    d.bbuild(&["result"])?;
+    d.explode(&["result", "e"])?;
+    d.nearest(&["result_1", "result", "E", "-2.16464857655", "12.4767961451", "0.0", "45.7808647772"])?;
+    d.nearest(&["result_3", "result", "E", "6.89870572586", "3.97072966257", "0.0", "14.3649406628"])?;
+    d.nearest(&["result_4", "result", "E", "-1.95255525563", "11.267910871", "0.0", "41.1146553773"])?;
+    d.nearest(&["result_6", "result", "E", "6.26740780099", "3.60408246315", "0.0", "12.8089077305"])?;
+    d.wire(&["path", "result_1", "result_3", "result_4", "result_6"])?;
+    d.wire(&["profile", "profile"])?;
+    d.mksweep(&["path"])?;
+    d.addsweep(&["profile"])?;
+    d.buildsweep(&["result", "-C", "-R"])?;
+    d.checkshape(&["result"])?;
+    Ok(())
 }
 
 /// `tests/pipe/standard/G3`
 /// kentron: sub-shapes named by OCCT's enumeration are selected by position (draw_selectors.json)
 #[test]
-#[should_panic]
-fn g3() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.circle(&["c1", "0", "10", "0", "10"])?;
-        d.circle(&["c2", "0", "9", "0", "9.001"])?;
-        d.circle(&["c3", "10", "10", "0", "0", "10", "0", "0.05"])?;
-        d.mkedge(&["e1", "c1"])?;
-        d.mkedge(&["e2", "c2"])?;
-        d.mkedge(&["profile", "c3"])?;
-        d.bclearobjects(&[])?;
-        d.baddobjects(&["e1", "e2"])?;
-        d.bfillds(&[])?;
-        d.bbuild(&["result"])?;
-        d.explode(&["result", "e"])?;
-        d.nearest(&["result_1", "result", "E", "-2.13941922204", "12.232178259", "0.0", "46.6995794691"])?;
-        d.nearest(&["result_3", "result", "E", "6.53704823603", "3.73460134949", "0.0", "15.2836554924"])?;
-        d.nearest(&["result_4", "result", "E", "-1.92722939924", "11.0202964879", "0.0", "41.9918732928"])?;
-        d.nearest(&["result_6", "result", "E", "5.90094968453", "3.37088378693", "0.0", "13.7144001149"])?;
-        d.wire(&["path", "result_1", "result_3", "result_4", "result_6"])?;
-        d.wire(&["profile", "profile"])?;
-        d.mksweep(&["path"])?;
-        d.addsweep(&["profile"])?;
-        d.buildsweep(&["result", "-C", "-R"])?;
-        d.checkshape(&["result"])?;
-        Ok(())
-    })
+fn g3() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.circle(&["c1", "0", "10", "0", "10"])?;
+    d.circle(&["c2", "0", "9", "0", "9.001"])?;
+    d.circle(&["c3", "10", "10", "0", "0", "10", "0", "0.05"])?;
+    d.mkedge(&["e1", "c1"])?;
+    d.mkedge(&["e2", "c2"])?;
+    d.mkedge(&["profile", "c3"])?;
+    d.bclearobjects(&[])?;
+    d.baddobjects(&["e1", "e2"])?;
+    d.bfillds(&[])?;
+    d.bbuild(&["result"])?;
+    d.explode(&["result", "e"])?;
+    d.nearest(&["result_1", "result", "E", "-2.13941922204", "12.232178259", "0.0", "46.6995794691"])?;
+    d.nearest(&["result_3", "result", "E", "6.53704823603", "3.73460134949", "0.0", "15.2836554924"])?;
+    d.nearest(&["result_4", "result", "E", "-1.92722939924", "11.0202964879", "0.0", "41.9918732928"])?;
+    d.nearest(&["result_6", "result", "E", "5.90094968453", "3.37088378693", "0.0", "13.7144001149"])?;
+    d.wire(&["path", "result_1", "result_3", "result_4", "result_6"])?;
+    d.wire(&["profile", "profile"])?;
+    d.mksweep(&["path"])?;
+    d.addsweep(&["profile"])?;
+    d.buildsweep(&["result", "-C", "-R"])?;
+    d.checkshape(&["result"])?;
+    Ok(())
 }
 
 /// `tests/pipe/standard/G4`
@@ -130,66 +122,61 @@ fn g4() -> DrawResult<()> {
 }
 
 /// `tests/pipe/standard/G5`
+/// kentron deviation (draw_deviations.json): The spine's corners turn nearly back (by about 177°, where two arcs of nearly the same circles cross), a 0.05 profile swept round them: OCCT's mitred pipe (OCCT 7.9, OCP) has surfaces reaching 0.20 from the spine there, four times the profile's radius, and OCCT builds no mitred pipe at all with circles closer still (G2, G3, G6). A mitre's plane would lie nearly along the curved pieces and cut them again near the corner; kentron joins them as round a round corner, its pipe within 0.05 of the spine, valid, of the area of OCCT's own round-cornered pipe (36.851; OCCT's mitred 37.4358).
 /// kentron: sub-shapes named by OCCT's enumeration are selected by position (draw_selectors.json)
 #[test]
-#[should_panic]
-fn g5() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.circle(&["c1", "0", "10", "0", "10"])?;
-        d.circle(&["c2", "0", "-9", "0", "9.01"])?;
-        d.circle(&["c3", "10", "10", "0", "0", "10", "0", "0.05"])?;
-        d.mkedge(&["e1", "c1"])?;
-        d.mkedge(&["e2", "c2"])?;
-        d.mkedge(&["profile", "c3"])?;
-        d.bclearobjects(&[])?;
-        d.baddobjects(&["e1", "e2"])?;
-        d.bfillds(&[])?;
-        d.bbuild(&["result"])?;
-        d.explode(&["result", "e"])?;
-        d.nearest(&["result_1", "result", "E", "-2.13500932873", "12.2017775185", "0.0", "46.8159959786"])?;
-        d.nearest(&["result_3", "result", "E", "6.4903984399", "3.70642078957", "0.0", "15.4000720197"])?;
-        d.nearest(&["result_4", "result", "E", "5.86008400122", "-3.33682961831", "0.0", "13.8449723834"])?;
-        d.nearest(&["result_6", "result", "E", "-1.92482332511", "-10.9917511945", "0.0", "42.150719875"])?;
-        d.wire(&["path", "result_1", "result_3", "result_4", "result_6"])?;
-        d.wire(&["profile", "profile"])?;
-        d.mksweep(&["path"])?;
-        d.addsweep(&["profile"])?;
-        d.buildsweep(&["result", "-C", "-R"])?;
-        d.checkprops(&["result", "-s", "37.4358"])?;
-        d.checkshape(&["result"])?;
-        Ok(())
-    })
+fn g5() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.circle(&["c1", "0", "10", "0", "10"])?;
+    d.circle(&["c2", "0", "-9", "0", "9.01"])?;
+    d.circle(&["c3", "10", "10", "0", "0", "10", "0", "0.05"])?;
+    d.mkedge(&["e1", "c1"])?;
+    d.mkedge(&["e2", "c2"])?;
+    d.mkedge(&["profile", "c3"])?;
+    d.bclearobjects(&[])?;
+    d.baddobjects(&["e1", "e2"])?;
+    d.bfillds(&[])?;
+    d.bbuild(&["result"])?;
+    d.explode(&["result", "e"])?;
+    d.nearest(&["result_1", "result", "E", "-2.13500932873", "12.2017775185", "0.0", "46.8159959786"])?;
+    d.nearest(&["result_3", "result", "E", "6.4903984399", "3.70642078957", "0.0", "15.4000720197"])?;
+    d.nearest(&["result_4", "result", "E", "5.86008400122", "-3.33682961831", "0.0", "13.8449723834"])?;
+    d.nearest(&["result_6", "result", "E", "-1.92482332511", "-10.9917511945", "0.0", "42.150719875"])?;
+    d.wire(&["path", "result_1", "result_3", "result_4", "result_6"])?;
+    d.wire(&["profile", "profile"])?;
+    d.mksweep(&["path"])?;
+    d.addsweep(&["profile"])?;
+    d.buildsweep(&["result", "-C", "-R"])?;
+    d.checkprops(&["result", "-s", "36.851"])?;
+    d.checkshape(&["result"])?;
+    Ok(())
 }
 
 /// `tests/pipe/standard/G6`
 /// kentron: sub-shapes named by OCCT's enumeration are selected by position (draw_selectors.json)
 #[test]
-#[should_panic]
-fn g6() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.circle(&["c1", "0", "10", "0", "10"])?;
-        d.circle(&["c2", "0", "-9", "0", "9.001"])?;
-        d.circle(&["c3", "10", "10", "0", "0", "10", "0", "0.05"])?;
-        d.mkedge(&["e1", "c1"])?;
-        d.mkedge(&["e2", "c2"])?;
-        d.mkedge(&["profile", "c3"])?;
-        d.bclearobjects(&[])?;
-        d.baddobjects(&["e1", "e2"])?;
-        d.bfillds(&[])?;
-        d.bbuild(&["result"])?;
-        d.explode(&["result", "e"])?;
-        d.nearest(&["result_1", "result", "E", "-2.12635719955", "12.1471556836", "0.0", "47.026551155"])?;
-        d.nearest(&["result_3", "result", "E", "6.40558893173", "3.65645898589", "0.0", "15.6106272283"])?;
-        d.nearest(&["result_4", "result", "E", "5.76959950945", "-3.29245767396", "0.0", "14.0414013478"])?;
-        d.nearest(&["result_6", "result", "E", "-1.91435265899", "-10.9351671054", "0.0", "42.3188744757"])?;
-        d.wire(&["path", "result_1", "result_3", "result_4", "result_6"])?;
-        d.wire(&["profile", "profile"])?;
-        d.mksweep(&["path"])?;
-        d.addsweep(&["profile"])?;
-        d.buildsweep(&["result", "-C", "-R"])?;
-        d.checkshape(&["result"])?;
-        Ok(())
-    })
+fn g6() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.circle(&["c1", "0", "10", "0", "10"])?;
+    d.circle(&["c2", "0", "-9", "0", "9.001"])?;
+    d.circle(&["c3", "10", "10", "0", "0", "10", "0", "0.05"])?;
+    d.mkedge(&["e1", "c1"])?;
+    d.mkedge(&["e2", "c2"])?;
+    d.mkedge(&["profile", "c3"])?;
+    d.bclearobjects(&[])?;
+    d.baddobjects(&["e1", "e2"])?;
+    d.bfillds(&[])?;
+    d.bbuild(&["result"])?;
+    d.explode(&["result", "e"])?;
+    d.nearest(&["result_1", "result", "E", "-2.12635719955", "12.1471556836", "0.0", "47.026551155"])?;
+    d.nearest(&["result_3", "result", "E", "6.40558893173", "3.65645898589", "0.0", "15.6106272283"])?;
+    d.nearest(&["result_4", "result", "E", "5.76959950945", "-3.29245767396", "0.0", "14.0414013478"])?;
+    d.nearest(&["result_6", "result", "E", "-1.91435265899", "-10.9351671054", "0.0", "42.3188744757"])?;
+    d.wire(&["path", "result_1", "result_3", "result_4", "result_6"])?;
+    d.wire(&["profile", "profile"])?;
+    d.mksweep(&["path"])?;
+    d.addsweep(&["profile"])?;
+    d.buildsweep(&["result", "-C", "-R"])?;
+    d.checkshape(&["result"])?;
+    Ok(())
 }

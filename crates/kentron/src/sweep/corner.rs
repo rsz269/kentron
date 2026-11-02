@@ -79,7 +79,15 @@ pub(super) fn pipe_cornered(model: &mut Model, profile: Shape, pieces: &[SpinePi
         .filter(|&k| k + 1 < n || closed)
         .filter(|&k| ends[k].3.dot(ends[(k + 1) % n].1) < 1.0 - 1e-12)
         .collect();
-    if corner == Corner::Rounded {
+    // A corner turning nearly back (by more than 150°) between pieces not both straight has
+    // no mitre to speak of: the plane bisecting it lies nearly along both pieces, and a curved
+    // one crosses it again near the corner. There the pieces are joined as round a round
+    // corner.
+    let straight = |p: &SpinePiece| matches!(p.curve, Curve::Line(_));
+    let turns_back = corners.iter().any(|&k| {
+        ends[k].3.dot(ends[(k + 1) % n].1) < 150f64.to_radians().cos() && !(straight(&pieces[k]) && straight(&pieces[(k + 1) % n]))
+    });
+    if corner == Corner::Rounded || turns_back {
         return rounded(model, face, pieces, &ends, &starts, &corners, closed, wanted_shell);
     }
     for &k in &corners {
@@ -539,6 +547,28 @@ mod tests {
         let shell = pipe_cornered(&mut model, wire, spine, &PipeOptions::default(), Corner::Mitred).unwrap();
         assert_eq!(shell.kind(), NodeKind::Shell);
         assert_eq!(model.unique_subshapes(shell, NodeKind::Face).len(), 2);
+    }
+
+    #[test]
+    fn a_tube_mitred_round_a_corner_turning_nearly_back() {
+        // Down an arc of a circle of radius 10 and back up one of radius 9.1 crossing it, a
+        // corner turning by 177°: joined as round a round corner (a mitre's plane would cut
+        // the curved pieces near it), a sound solid of a little less than the tube along the
+        // spine (the pieces overlap near the corner).
+        let mut model = Model::new();
+        let (y, x) = (0.905, (100.0f64 - 9.095 * 9.095).sqrt());
+        let down = Circle::new(Frame::new(Point::new(0.0, 10.0, 0.0), -Direction::Z, Direction::X), 10.0);
+        let up = Circle::new(Frame::new(Point::new(0.0, 9.0, 0.0), Direction::Z, Direction::X), 9.1);
+        let (a, b) = ((x / 10.0).acos(), -((9.0 - y) / 9.1f64).asin());
+        let first = make::edge_from_curve_range(&mut model, Curve::Circle(down), 0.0, a).unwrap();
+        let second = make::edge_from_curve_range(&mut model, Curve::Circle(up), b, 0.0).unwrap();
+        let spine = make::wire(&mut model, &[first, second]).unwrap();
+        let face = disc(&mut model, Point::new(10.0, 10.0, 0.0), -Direction::Y, 0.05, true);
+        let solid = pipe_cornered(&mut model, face, spine, &PipeOptions::default(), Corner::Mitred).unwrap();
+        assert!(crate::validity::check(&model, solid).is_valid());
+        let tube = std::f64::consts::PI * 0.0025 * (10.0 * a - 9.1 * b);
+        let volume = properties::volume(&model, solid).mass;
+        assert!(volume < tube && volume > 0.95 * tube, "{volume} {tube}");
     }
 
     #[test]

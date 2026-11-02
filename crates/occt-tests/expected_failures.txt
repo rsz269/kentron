@@ -1188,11 +1188,6 @@ tests/pipe/bugs/bug31147
 tests/pipe/bugs/bug31631
 tests/pipe/bugs/bug32818
 tests/pipe/specific/K2
-tests/pipe/standard/G1
-tests/pipe/standard/G2
-tests/pipe/standard/G3
-tests/pipe/standard/G5
-tests/pipe/standard/G6
 tests/prism/seminf/A1
 tests/sewing/tol_100/C3
 tests/sewing/tol_100/C5
