@@ -1433,6 +1433,8 @@ impl Section {
                 // (A marched section's samples are spaced as its steps were, unevenly: its
                 // points taken evenly along it instead, by the lengths between the samples.)
                 let along = self.even_parameters(t0, t1);
+                // (A traced section's best fit so far and its error, kept while refining it.)
+                let mut first_fit: Option<(crate::geometry::curve::BSplineCurve, f64)> = None;
                 let curve = loop {
                     let mut params: Vec<f64> = (0..=n).map(|i| along.as_ref().map_or(t0 + (t1 - t0) * i as f64 / n as f64, |f| f(i as f64 / n as f64))).collect();
                     let mut points: Vec<Point> = params.iter().map(|&t| self.point(t)).collect();
@@ -1487,20 +1489,52 @@ impl Section {
                         Ok(curve) => curve,
                         Err(_) => break fit::interpolate(&[a, b], false, 0.0).unwrap_or_else(|_| straight()),
                     };
-                    if matches!(self, Section::Sampled(..)) {
-                        break curve;
-                    }
+                    // (A traced section's points between its samples are found on both
+                    // surfaces, but only so far as they converge where the surfaces nearly
+                    // touch: its first fit stands, unless it strays from them clearly (by a
+                    // ten-thousandth, as a section of a plane with a torus through a few dozen
+                    // samples), then refined as far as the tolerance, the samples doubled to a
+                    // few hundred.)
+                    let traced = matches!(self, Section::Sampled(..));
                     let as_curve = Curve::BSpline(curve.clone());
                     let (c0, c1) = (curve.first_parameter(), curve.last_parameter());
                     let samples = geom::projection_samples(&as_curve, c0, c1);
-                    let error = kept_params
-                        .windows(2)
-                        .map(|w| geom::project_among(&as_curve, c0, c1, Some(&samples), self.point(0.5 * (w[0] + w[1]))).1)
-                        .fold(0.0, f64::max);
-                    // (A traced section is a polyline in the base's parameters between its
-                    // samples, not an exact curve to converge to: its first fit stands.)
-                    if error <= 1e-9 * size || n >= 3072 || matches!(self, Section::Sampled(..)) {
+                    // (A traced section's error: how far the curve strays from both surfaces
+                    // between its samples. Its points between them, found only as far as they
+                    // converge, are no measure.)
+                    let error = match self {
+                        Section::Sampled(_, _, t) => {
+                            let m = kept.len().max(2) * 2;
+                            (0..m)
+                                .map(|i| {
+                                    let p = curve.point(c0 + (c1 - c0) * (i as f64 + 0.5) / m as f64);
+                                    geom::signed_distance(&t.base, p).abs().max(geom::signed_distance(&t.other, p).abs())
+                                })
+                                .fold(0.0, f64::max)
+                        }
+                        _ => kept_params
+                            .windows(2)
+                            .map(|w| geom::project_among(&as_curve, c0, c1, Some(&samples), self.point(0.5 * (w[0] + w[1]))).1)
+                            .fold(0.0, f64::max),
+                    };
+                    if error <= 1e-9 * size || n >= 3072 || (traced && ((n == 48 && error <= 1e-4) || error <= 0.1 * on_tol())) {
                         break curve;
+                    }
+                    // (Refined only while that converges, the error at least halving with each
+                    // doubling, to a few hundred samples: else the first fit stands, the
+                    // section's points between its samples not consistent enough.)
+                    if traced {
+                        match first_fit.take() {
+                            None => first_fit = Some((curve, error)),
+                            Some((best, best_error)) => {
+                                let halved = error <= 0.5 * best_error;
+                                let best = if error < best_error { (curve, error) } else { (best, best_error) };
+                                if !halved || n >= 768 {
+                                    break best.0;
+                                }
+                                first_fit = Some(best);
+                            }
+                        }
                     }
                     n *= 2;
                 };

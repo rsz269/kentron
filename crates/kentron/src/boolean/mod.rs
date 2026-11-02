@@ -2316,6 +2316,23 @@ mod tests {
         assert!((volume - 0.181326).abs() < 1e-5, "{volume}");
     }
 
+    /// A few degrees of a revolved ring cut by a thick disc square to it: the disc's flat end
+    /// meets the ring's torus in a closed curve, traced on a grid; through its first few dozen
+    /// samples it strayed from the torus by thousandths, the disc's end face its area off by
+    /// a tenth. Refined until it follows both surfaces (OCCT's volume).
+    #[test]
+    fn a_ring_segment_cut_by_a_disc() {
+        let mut model = Model::new();
+        let mut read = |text: &str| crate::io::brep::read(&mut model, &mut text.as_bytes()).unwrap();
+        let ring = read(include_str!("tests/ring_segment_cut_by_a_disc_a.brep"));
+        let disc = read(include_str!("tests/ring_segment_cut_by_a_disc_b.brep"));
+        let result = difference(&mut model, ring, disc).unwrap();
+        let report = validity::check(&model, result);
+        assert!(report.is_valid(), "{report:?}");
+        let volume = properties::volume(&model, result).mass;
+        assert!((volume - 56644.4472).abs() < 0.02, "{volume}");
+    }
+
     /// A cylinder with a window through its side, the window's pcurves kept a period off the
     /// rest of the face (as a model may keep them): its window is still a hole in the face,
     /// not a face of its own, when the solid meets another (the same volume as without the

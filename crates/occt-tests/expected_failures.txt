@@ -663,9 +663,6 @@ tests/bugs/modalg_8/bug31601
 tests/bugs/modalg_8/bug32214_3
 tests/bugs/modalg_8/bug32915
 tests/bugs/modalg_8/bug32929
-tests/bugs/modalg_8/bug32942
-tests/bugs/modalg_8/bug32943
-tests/bugs/modalg_8/bug32944
 tests/bugs/modalg_8/bug33104
 tests/bugs/modalg_8/bug33156_2
 tests/bugs/modalg_8/bug33173
@@ -818,7 +815,6 @@ tests/draft/angle/F6
 tests/draft/angle/F9
 tests/draft/angle/H6
 tests/draft/angle/H7
-tests/draft/angle/I9
 tests/draft/angle/J9
 tests/draft/angle/K3
 tests/draft/angle/K5
@@ -1054,7 +1050,6 @@ tests/lowalgos/intss/bug29972_3
 tests/lowalgos/intss/bug30082_1
 tests/lowalgos/intss/bug30082_2
 tests/lowalgos/intss/bug31552
-tests/lowalgos/intss/bug32701
 tests/lowalgos/intss/bug32849
 tests/lowalgos/intss/bug333
 tests/lowalgos/intss/bug565
