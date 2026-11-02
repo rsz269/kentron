@@ -47,8 +47,15 @@ pub fn unify_same_domain(model: &mut Model, shape: Shape) -> Result<Shape> {
 
 /// [`unify_same_domain`], merging only faces or only edges if `options` say so.
 pub fn unify_same_domain_with(model: &mut Model, shape: Shape, options: UnifyOptions) -> Result<Shape> {
+    unify_same_domain_keeping(model, shape, options, &HashSet::default())
+}
+
+/// [`unify_same_domain_with`], the faces in `kept` left as they are (not merged with
+/// others): OCCT's `ShapeUpgrade_UnifySameDomain::KeepShapes`.
+#[doc(alias = "KeepShapes")]
+pub(crate) fn unify_same_domain_keeping(model: &mut Model, shape: Shape, options: UnifyOptions, kept: &HashSet<NodeId>) -> Result<Shape> {
     let local = Shape { orientation: Orientation::Forward, placement: Transform::IDENTITY, ..shape };
-    let result = rebuild(model, local, options)?;
+    let result = rebuild(model, local, options, kept)?;
     // A valid shape is not traded for an invalid one (OCCT's safe mode).
     if result.node != local.node && !crate::validity::check(model, result).is_valid() && crate::validity::check(model, local).is_valid() {
         return Ok(shape);
@@ -56,9 +63,9 @@ pub fn unify_same_domain_with(model: &mut Model, shape: Shape, options: UnifyOpt
     Ok(Shape { orientation: shape.orientation, placement: shape.placement, ..result })
 }
 
-fn rebuild(model: &mut Model, shape: Shape, options: UnifyOptions) -> Result<Shape> {
+fn rebuild(model: &mut Model, shape: Shape, options: UnifyOptions, kept: &HashSet<NodeId>) -> Result<Shape> {
     match shape.kind() {
-        NodeKind::Shell => unify_shell(model, shape, options),
+        NodeKind::Shell => unify_shell(model, shape, options, kept),
         NodeKind::Compound | NodeKind::CompSolid | NodeKind::Solid => {
             let mut children: Vec<Shape> = model.children_local(shape).collect();
             // A compound's own faces are unified together, as if in one shell.
@@ -68,7 +75,7 @@ fn rebuild(model: &mut Model, shape: Shape, options: UnifyOptions) -> Result<Sha
                 for &f in &faces {
                     model.add(together, f)?;
                 }
-                let unified = unify_shell(model, together, options)?;
+                let unified = unify_shell(model, together, options, kept)?;
                 if unified.node != together.node {
                     let out = model.new_empty(NodeKind::Compound);
                     for c in children.iter().filter(|c| !faces.contains(c)) {
@@ -77,14 +84,14 @@ fn rebuild(model: &mut Model, shape: Shape, options: UnifyOptions) -> Result<Sha
                     for f in model.children_local(unified).collect::<Vec<_>>() {
                         model.add(out, f)?;
                     }
-                    return rebuild(model, out, options);
+                    return rebuild(model, out, options, kept);
                 }
                 children = model.children_local(shape).collect();
             }
             let mut rebuilt = Vec::with_capacity(children.len());
             for child in &children {
                 let local = Shape { orientation: Orientation::Forward, placement: Transform::IDENTITY, ..*child };
-                rebuilt.push(rebuild(model, local, options)?);
+                rebuilt.push(rebuild(model, local, options, kept)?);
             }
             if rebuilt.iter().zip(&children).all(|(r, c)| r.node == c.node) {
                 return Ok(shape);
@@ -99,7 +106,7 @@ fn rebuild(model: &mut Model, shape: Shape, options: UnifyOptions) -> Result<Sha
         NodeKind::Face => {
             let alone = model.new_empty(NodeKind::Shell);
             model.add(alone, shape)?;
-            let unified = unify_shell(model, alone, options)?;
+            let unified = unify_shell(model, alone, options, kept)?;
             match model.children_local(unified).collect::<Vec<_>>()[..] {
                 [face] if unified.node != alone.node => Ok(face),
                 _ => Ok(shape),
@@ -209,11 +216,11 @@ struct Spec {
     loops: Vec<Vec<Use>>,
 }
 
-fn unify_shell(model: &mut Model, shell: Shape, options: UnifyOptions) -> Result<Shape> {
+fn unify_shell(model: &mut Model, shell: Shape, options: UnifyOptions, kept: &HashSet<NodeId>) -> Result<Shape> {
     // (A merged face found unsound (a pcurve carried over from one piece astray from an edge
     // of another, by more than the edge allows): its pieces left as they are, the rest merged
     // still.)
-    let mut frozen: HashSet<NodeId> = HashSet::default();
+    let mut frozen: HashSet<NodeId> = kept.clone();
     loop {
         let (out, unsound) = unify_shell_once(model, shell, options, &frozen)?;
         if unsound.is_empty() {
@@ -255,6 +262,7 @@ fn unify_shell_once(model: &mut Model, shell: Shape, options: UnifyOptions, froz
     if options.edges {
         changed |= drop_seams(&mut specs);
         changed |= merge_edges(model, &mut specs)?;
+        changed |= merge_degenerate(model, &mut specs)?;
     }
     if !changed {
         return Ok((shell, Vec::new()));
@@ -524,7 +532,7 @@ fn merge_faces(model: &Model, specs: &mut Vec<Spec>, same_surface_only: bool, fr
 }
 
 /// One face for a group, on its first face's surface; `None` where that does not work out
-/// (degenerate edges, no closed-form pcurves, a loop closing round a period).
+/// (no closed-form pcurves, a loop closing round a period).
 fn merge_group(model: &Model, specs: &[Spec], group: &[usize], internal: &HashSet<EdgeId>) -> Option<Spec> {
     let base = &specs[group[0]];
     let surface = base.surface.clone();
@@ -575,23 +583,30 @@ fn merge_group(model: &Model, specs: &[Spec], group: &[usize], internal: &HashSe
                     let (fs, fl, fi) = at;
                     let spec = &specs[fs];
                     let u = &spec.loops[fl][fi];
-                    let (curve, first, last) = model.edge_curve(Shape::from(u.edge))?;
                     let in_shell = u.orientation.compose(spec.orientation);
-                    // A closed-form pcurve, else (a section traced between faces of boolean
-                    // operands) the face's own, on the very surface.
-                    // (Not where it misses the edge's ends: a line a hair off the surface's
-                    // ruling, as a cut near tangency leaves one, takes the face's own.)
-                    let fits = |p: &Curve2| {
-                        let tolerance = model.tolerance(Shape::from(u.edge)).max(tolerance::LINEAR);
-                        [first, last].iter().all(|&t| {
-                            let uv = p.point(t);
-                            surface.point(uv.x, uv.y).distance(curve.point(t)) <= tolerance
-                        })
-                    };
-                    let (pcurve, first, last) = match analytic_pcurve(&curve, &surface).filter(|p| u.pcurve.is_none() || fits(p)) {
-                        Some(p) => (p, first, last),
+                    let (pcurve, first, last) = match model.edge_curve(Shape::from(u.edge)) {
+                        // (A degenerate edge, at a pole: no curve in space, its pcurve the
+                        // face's own, carried onto the group's surface.)
                         None if spec.surface == surface => (u.pcurve.clone()?, u.first, u.last),
                         None => (u.pcurve.as_ref()?.transformed(&reparametrization(&spec.surface, &surface)?), u.first, u.last),
+                        Some((curve, first, last)) => {
+                            // A closed-form pcurve, else (a section traced between faces of boolean
+                            // operands) the face's own, on the very surface.
+                            // (Not where it misses the edge's ends: a line a hair off the surface's
+                            // ruling, as a cut near tangency leaves one, takes the face's own.)
+                            let fits = |p: &Curve2| {
+                                let tolerance = model.tolerance(Shape::from(u.edge)).max(tolerance::LINEAR);
+                                [first, last].iter().all(|&t| {
+                                    let uv = p.point(t);
+                                    surface.point(uv.x, uv.y).distance(curve.point(t)) <= tolerance
+                                })
+                            };
+                            match analytic_pcurve(&curve, &surface).filter(|p| u.pcurve.is_none() || fits(p)) {
+                                Some(p) => (p, first, last),
+                                None if spec.surface == surface => (u.pcurve.clone()?, u.first, u.last),
+                                None => (u.pcurve.as_ref()?.transformed(&reparametrization(&spec.surface, &surface)?), u.first, u.last),
+                            }
+                        }
                     };
                     chain.push(Use { edge: u.edge, orientation: in_shell.compose(orientation), pcurve: Some(pcurve), first, last });
                     // The next use, across edges between the group's faces.
@@ -721,6 +736,56 @@ fn align(uses: &mut [Use], surface: &Surface) -> bool {
 
 /// Merges chains of edges joined at vertices of no other edge, along one line or circle,
 /// into single edges. True if any were.
+/// Merges degenerate edges one after another in a loop (at a pole, where faces round it
+/// were merged): one edge, its pcurve the line along both. True if any were.
+fn merge_degenerate(model: &mut Model, specs: &mut [Spec]) -> Result<bool> {
+    let mut uses: HashMap<EdgeId, usize> = HashMap::default();
+    for u in specs.iter().flat_map(|s| s.loops.iter().flatten()) {
+        *uses.entry(u.edge).or_default() += 1;
+    }
+    let degenerate = |model: &Model, e: EdgeId| model.is_degenerate(Shape::from(e));
+    let mut changed = false;
+    for spec in specs.iter_mut() {
+        for l in 0..spec.loops.len() {
+            loop {
+                let n = spec.loops[l].len();
+                if n < 3 {
+                    break;
+                }
+                // Two degenerate uses in a row, each the edge's only one, their pcurves
+                // continuing one another along a line.
+                let found = (0..n).find_map(|i| {
+                    let (a, b) = (&spec.loops[l][i], &spec.loops[l][(i + 1) % n]);
+                    if a.edge == b.edge || uses[&a.edge] != 1 || uses[&b.edge] != 1 || !degenerate(model, a.edge) || !degenerate(model, b.edge) {
+                        return None;
+                    }
+                    let (va, vb) = (ends(model, a.edge, Orientation::Forward).0, ends(model, b.edge, Orientation::Forward).0);
+                    let ((s, m), (m2, e)) = (uv_ends(a)?, uv_ends(b)?);
+                    let (along, rest) = (m - s, e - m2);
+                    let length = (e - s).length();
+                    let straight = (va == vb && m.distance(m2) <= 1e-9 && length > 1e-12)
+                        .then(|| along.cross(rest).abs() <= 1e-9 * along.length().max(1e-12) * rest.length().max(1e-12) && along.dot(rest) >= 0.0)
+                        .unwrap_or(false);
+                    straight.then_some((i, va, s, e, length))
+                });
+                let Some((i, vertex, start, end, length)) = found else { break };
+                let tolerance = model.tolerance(Shape::from(spec.loops[l][i].edge)).max(model.tolerance(Shape::from(spec.loops[l][(i + 1) % n].edge)));
+                // (No curve in space: its range is its pcurve's.)
+                let edge = model.add_edge(vertex, vertex, tolerance)?;
+                let line = crate::geometry::curve2::Line2::new(start, crate::math::Direction2::from_vector(end - start));
+                let merged = Use { edge, orientation: Orientation::Forward, pcurve: Some(Curve2::Line(line)), first: 0.0, last: length };
+                let j = (i + 1) % n;
+                spec.loops[l][i] = merged;
+                spec.loops[l].remove(j);
+                *uses.entry(edge).or_default() = 1;
+                spec.original = None;
+                changed = true;
+            }
+        }
+    }
+    Ok(changed)
+}
+
 fn merge_edges(model: &mut Model, specs: &mut [Spec]) -> Result<bool> {
     // The edges at each vertex, and each edge's ends.
     let mut at_vertex: HashMap<VertexId, Vec<EdgeId>> = HashMap::default();
@@ -1000,8 +1065,9 @@ fn merge_chain(
         _ => return merge_general_chain(model, specs, chain, head, tail, curves),
     };
     let members: HashSet<EdgeId> = chain.iter().copied().collect();
-    // Each loop's run of the chain's edges: where it starts, how long, and the new use.
-    let mut replacements: Vec<(usize, usize, usize, usize, Use)> = Vec::new();
+    // Each loop's runs of the chain's edges (two on a seam, one each side of it): where each
+    // starts, and the new use.
+    let mut replacements: Vec<(usize, usize, Vec<(usize, Use)>)> = Vec::new();
     for (si, spec) in specs.iter().enumerate() {
         for (li, l) in spec.loops.iter().enumerate() {
             let n = l.len();
@@ -1011,25 +1077,30 @@ fn merge_chain(
             if n <= chain.len() {
                 return Ok(false);
             }
-            // The run starts after a use not in the chain.
-            let Some(begin) = (0..n).find(|&i| members.contains(&l[i].edge) && !members.contains(&l[(i + n - 1) % n].edge)) else {
-                return Ok(false);
-            };
-            let count = (0..n).take_while(|&k| members.contains(&l[(begin + k) % n].edge)).count();
-            if count != chain.len() || l.iter().filter(|u| members.contains(&u.edge)).count() != count {
+            // A run starts after a use not in the chain.
+            let begins: Vec<usize> = (0..n).filter(|&i| members.contains(&l[i].edge) && !members.contains(&l[(i + n - 1) % n].edge)).collect();
+            if begins.is_empty() || begins.len() > 2 || l.iter().filter(|u| members.contains(&u.edge)).count() != begins.len() * chain.len() {
                 return Ok(false);
             }
-            let first_use = &l[begin];
-            let orientation = if ends(model, first_use.edge, first_use.orientation).0 == head { Orientation::Forward } else { Orientation::Reversed };
-            let Some(pcurve) = analytic_pcurve(&curve, &spec.surface) else { return Ok(false) };
-            let mut u = Use { edge: chain[0], orientation, pcurve: Some(pcurve), first, last };
-            let (Some((start, _)), Some((new_start, _))) = (uv_ends(first_use), uv_ends(&u)) else { return Ok(false) };
-            let shift = |period: Option<f64>, target: f64, at: f64| period.map_or(0.0, |p| ((target - at) / p).round() * p);
-            let (du, dv) = (shift(spec.surface.u_period(), start.x, new_start.x), shift(spec.surface.v_period(), start.y, new_start.y));
-            if du != 0.0 || dv != 0.0 {
-                u.pcurve = u.pcurve.map(|p| p.transformed(&Transform2::translation(Vector2::new(du, dv))));
+            let mut runs = Vec::new();
+            for &begin in &begins {
+                let count = (0..n).take_while(|&k| members.contains(&l[(begin + k) % n].edge)).count();
+                if count != chain.len() {
+                    return Ok(false);
+                }
+                let first_use = &l[begin];
+                let orientation = if ends(model, first_use.edge, first_use.orientation).0 == head { Orientation::Forward } else { Orientation::Reversed };
+                let Some(pcurve) = analytic_pcurve(&curve, &spec.surface) else { return Ok(false) };
+                let mut u = Use { edge: chain[0], orientation, pcurve: Some(pcurve), first, last };
+                let (Some((start, _)), Some((new_start, _))) = (uv_ends(first_use), uv_ends(&u)) else { return Ok(false) };
+                let shift = |period: Option<f64>, target: f64, at: f64| period.map_or(0.0, |p| ((target - at) / p).round() * p);
+                let (du, dv) = (shift(spec.surface.u_period(), start.x, new_start.x), shift(spec.surface.v_period(), start.y, new_start.y));
+                if du != 0.0 || dv != 0.0 {
+                    u.pcurve = u.pcurve.map(|p| p.transformed(&Transform2::translation(Vector2::new(du, dv))));
+                }
+                runs.push((begin, u));
             }
-            replacements.push((si, li, begin, count, u));
+            replacements.push((si, li, runs));
         }
     }
     if replacements.is_empty() {
@@ -1039,16 +1110,21 @@ fn merge_chain(
     let edge = model.add_edge(head, tail, tolerance)?;
     model.set_edge_curve(edge.into(), curve, tolerance)?;
     model.set_edge_range(edge.into(), first, last)?;
-    for (si, li, begin, count, mut u) in replacements {
-        u.edge = edge;
+    for (si, li, runs) in replacements {
         let spec = &mut specs[si];
         spec.original = None;
         let l = &mut spec.loops[li];
         let n = l.len();
-        // The run's uses replaced by the one (rotating so the run does not wrap round).
-        l.rotate_left(begin);
-        l.splice(0..count, std::iter::once(u));
-        let _ = n;
+        // Each run's uses replaced by the one (rotated so that the first run starts the
+        // loop: no run wraps round; the later ones replaced first, so that the earlier ones'
+        // places hold).
+        let offset = runs[0].0;
+        l.rotate_left(offset);
+        let mut runs: Vec<(usize, Use)> = runs.into_iter().map(|(b, u)| ((b + n - offset) % n, Use { edge, ..u })).collect();
+        runs.sort_by_key(|r| std::cmp::Reverse(r.0));
+        for (begin, u) in runs {
+            l.splice(begin..begin + chain.len(), std::iter::once(u));
+        }
     }
     Ok(true)
 }

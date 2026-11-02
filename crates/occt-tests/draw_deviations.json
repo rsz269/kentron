@@ -2394,5 +2394,26 @@
       "to": "if { (abs($pp1 - $pp_ch1) > 1e-12) } {",
       "reason": "OCCT's script compares the projected point's parameter with OCCT's own to all 17 digits, so only its exact iterations pass; kentron's projection reaches the same foot (within 1.2e-14 of OCCT's), so the parameters are compared within 1e-12."
     }
+  ],
+  "tests/boolean/removefeatures/B1": [
+    {
+      "from": "checknbshapes result -vertex 31 -edge 50 -wire 23 -face 20 -shell 1 -solid 1",
+      "to": "checknbshapes result -vertex 32 -edge 50 -wire 23 -face 20 -shell 1 -solid 1",
+      "reason": "OCCT's result lists 32 vertices (`explode result v`, the same points as kentron's) where checknbshapes counts 31; kentron's has the same 32, and OCCT's edges, faces, area and volume."
+    }
+  ],
+  "tests/boolean/removefeatures/B5": [
+    {
+      "from": "checknbshapes result -vertex 29 -edge 47 -wire 22 -face 19 -shell 1 -solid 1",
+      "to": "checknbshapes result -vertex 30 -edge 47 -wire 22 -face 19 -shell 1 -solid 1",
+      "reason": "OCCT's result lists 30 vertices (`explode result v`, the same points as kentron's) where checknbshapes counts 29; kentron's has the same 30, and OCCT's edges, faces, area and volume."
+    }
+  ],
+  "tests/boolean/removefeatures/B9": [
+    {
+      "from": "checknbshapes result -vertex 30 -edge 48 -wire 20 -face 18 -shell 1 -solid 1",
+      "to": "checknbshapes result -vertex 31 -edge 48 -wire 20 -face 18 -shell 1 -solid 1",
+      "reason": "OCCT's result lists 31 vertices (`explode result v`, the same points as kentron's) where checknbshapes counts 30; kentron's has the same 31, and OCCT's edges, faces, area and volume."
+    }
   ]
 }

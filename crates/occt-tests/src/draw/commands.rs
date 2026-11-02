@@ -2169,6 +2169,33 @@ impl Draw {
         // precision and is ignored.
         need(args, 1, "checkprops shape [-l|-s|-v value] [-eps e] [-deps d]")?;
         let shape = self.shape_var(args[0])?;
+        // (`-equal other` or `-notequal other`: the property, or properties, flagged (the
+        // length if none) compared with the other shape's as printed, not with values.)
+        let compared = args.iter().position(|a| *a == "-equal" || *a == "-notequal");
+        if let Some(k) = compared {
+            let other = self.shape_var(args.get(k + 1).ok_or_else(|| DrawError::Failed("checkprops: -equal needs a shape".into()))?)?;
+            let equal = args[k] == "-equal";
+            let mut kinds: Vec<&str> = args.iter().copied().filter(|a| matches!(*a, "-l" | "-s" | "-v")).collect();
+            if kinds.is_empty() {
+                kinds.push("-l");
+            }
+            for kind in kinds {
+                let of = |s: Shape| -> f64 {
+                    let m = match kind {
+                        "-l" => properties::length(&self.model, s).mass,
+                        "-s" => properties::area(&self.model, s).mass,
+                        _ => properties::volume(&self.model, s).mass,
+                    };
+                    format!("{m:.5e}").parse().unwrap_or(m)
+                };
+                let same = of(shape) == of(other);
+                if same != equal {
+                    let (a, b) = (args[0], args[k + 1]);
+                    return Err(DrawError::Failed(if equal { format!("Error: Shape {b} is not equal to shape {a}") } else { format!("Error: Shape {b} is equal shape to {a}") }));
+                }
+            }
+            return Ok(String::new());
+        }
         let mut checks = Vec::new();
         let mut relative = 1.0e-2;
         let mut i = 1;
@@ -3859,6 +3886,21 @@ impl Draw {
         let input = self.shape_var(args[1])?;
         Ok(if history.deleted.contains(&input.node) { "Deleted." } else { "Not deleted." }.into())
     }
+    /// DRAW command `compare`.
+    ///
+    /// Example: `compare m3 m5`
+    pub fn compare(&mut self, args: &[&str]) -> DrawResult {
+        // `compare shape1 shape2`: whether they are the same shape ("same shapes"), and also
+        // equally oriented ("equal shapes"), as OCCT's IsSame and IsEqual.
+        need(args, 2, "compare shape1 shape2")?;
+        let (a, b) = (self.shape_var(args[0])?, self.shape_var(args[1])?);
+        Ok(if a.node == b.node && a.placement == b.placement {
+            if a.orientation == b.orientation { "same shapes\nequal shapes\n" } else { "same shapes\n" }
+        } else {
+            "shapes are not same\n"
+        }
+        .into())
+    }
     /// DRAW command `removefeatures`.
     ///
     /// Example: `removefeatures result s s_2 s_3`
@@ -3876,10 +3918,15 @@ impl Draw {
             faces.extend(self.model.unique_subshapes(feature, NodeKind::Face));
         }
         let removed = kentron::defeature::remove_faces(&mut self.model, shape, &faces)?;
-        let shapes_of = |model: &kentron::topology::Model, nodes: &[kentron::topology::NodeId]| -> Vec<Shape> {
-            nodes.iter().filter_map(|&n| model.unique_subshapes(removed.shape, n.kind).into_iter().find(|s| s.node == n)).collect()
-        };
+        // (The result's faces, edges and vertices, by node, found once.)
+        let in_result: std::collections::HashMap<kentron::topology::NodeId, Shape> = [NodeKind::Face, NodeKind::Edge, NodeKind::Vertex]
+            .iter()
+            .flat_map(|&k| self.model.unique_subshapes(removed.shape, k))
+            .map(|s| (s.node, s))
+            .collect();
+        let shapes_of = |_: &kentron::topology::Model, nodes: &[kentron::topology::NodeId]| -> Vec<Shape> { nodes.iter().filter_map(|n| in_result.get(n).copied()).collect() };
         let mut modified = Vec::new();
+        let mut generated = Vec::new();
         let mut deleted = Vec::new();
         for kind in [NodeKind::Face, NodeKind::Edge, NodeKind::Vertex] {
             for s in self.model.unique_subshapes(shape, kind) {
@@ -3888,9 +3935,12 @@ impl Draw {
                 } else if let Some(images) = removed.history.modified(s.node) {
                     modified.push((s.node, shapes_of(&self.model, images)));
                 }
+                if let Some(made) = removed.history.generated(s.node) {
+                    generated.push((s.node, shapes_of(&self.model, made)));
+                }
             }
         }
-        self.last_history = DrawHistory { modified, deleted, ..Default::default() };
+        self.last_history = DrawHistory { modified, generated, deleted, ..Default::default() };
         self.set_shape_var(names[0], removed.shape)
     }
     /// DRAW command `movep`: 4 uses in 4 converted scripts.

@@ -149,6 +149,7 @@ pub fn dispatch(d: &mut Draw, name: &str, args: &[&str]) -> Option<DrawResult> {
         "clknots" => d.clknots(args),
         "clpoles" => d.clpoles(args),
         "cmovetangent" => d.cmovetangent(args),
+        "compare" => d.compare(args),
         "comphelix" => d.comphelix(args),
         "comphelix2" => d.comphelix2(args),
         "compound" => d.compound(args),

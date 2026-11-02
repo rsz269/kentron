@@ -958,15 +958,12 @@ fn bug24390_2() -> DrawResult<()> {
 
 /// `tests/bugs/modalg_5/bug24397_1`
 #[test]
-#[should_panic]
-fn bug24397_1() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.restore(&[data_file("case_1_wire3.brep").as_str(), "result"])?;
-        d.tcopy(&["result", "result1"])?;
-        d.checkprops(&["result1", "-equal", "result"])?;
-        Ok(())
-    })
+fn bug24397_1() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.restore(&[data_file("case_1_wire3.brep").as_str(), "result"])?;
+    d.tcopy(&["result", "result1"])?;
+    d.checkprops(&["result1", "-equal", "result"])?;
+    Ok(())
 }
 
 /// `tests/bugs/modalg_5/bug24397_2`

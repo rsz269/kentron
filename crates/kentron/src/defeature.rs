@@ -12,7 +12,7 @@
 use crate::error::{Error, Result};
 use crate::geometry::surface::Surface;
 use crate::geometry::ParametricSurface;
-use crate::math::{BoundingBox, Point};
+use crate::math::{BoundingBox, Point, Transformable};
 use crate::topology::{History, Model, NodeId, NodeKind, Shape};
 
 /// A solid with features removed: the result, and what became of the solid's faces, edges
@@ -84,6 +84,20 @@ pub fn remove_faces(model: &mut Model, solid: Shape, faces: &[Shape]) -> Result<
     }
     let options = crate::unify::UnifyOptions { same_surface_only: true, ..Default::default() };
     let result = crate::unify::unify_same_domain_with(model, result, options)?;
+    // (Then, as OCCT's removal, the faces it made or changed merged where their surfaces
+    // are alike (a face carried on and the piece of another on the same sphere); the
+    // solid's other faces kept as they are.)
+    let untouched: crate::hashing::FastSet<NodeId> = model
+        .unique_subshapes(solid, NodeKind::Face)
+        .into_iter()
+        .map(|f| f.node)
+        .collect::<crate::hashing::FastSet<NodeId>>()
+        .intersection(&model.unique_subshapes(result, NodeKind::Face).into_iter().map(|f| f.node).collect())
+        .copied()
+        .filter(|n| !around.iter().any(|a| a.node == *n))
+        .collect();
+    let options = crate::unify::UnifyOptions { faces: true, edges: false, same_surface_only: false };
+    let result = crate::unify::unify_same_domain_keeping(model, result, options, &untouched)?;
     // (Then edges running on one curve merged, wherever they came from: an edge of a face
     // carried on meets the one it continues end to end.)
     let options = crate::unify::UnifyOptions { faces: false, edges: true, same_surface_only: false };
@@ -168,7 +182,8 @@ fn history(model: &Model, solid: Shape, removed: &[Shape], result: Shape) -> His
         .map(|s| s.node)
         .collect();
     let result_faces = model.unique_subshapes(result, NodeKind::Face);
-    for kind in [NodeKind::Face, NodeKind::Edge, NodeKind::Vertex] {
+    // (Edges below.)
+    for kind in [NodeKind::Face, NodeKind::Vertex] {
         for s in model.unique_subshapes(solid, kind) {
             if in_result.contains(&s.node) {
                 continue;
@@ -190,5 +205,100 @@ fn history(model: &Model, solid: Shape, removed: &[Shape], result: Shape) -> His
             }
         }
     }
+    // Edges: an edge of the solid's that is gone, modified into the result's edges along it
+    // (the parts of it left, carried on); and the edges of a modified face reaching off the
+    // solid's edges (made where features were, or carried on past them) generated from that
+    // face (as OCCT's).
+    let originals: Vec<Shape> = model.unique_subshapes(solid, NodeKind::Edge);
+    let boxes: Vec<BoundingBox> = originals.iter().map(|&o| crate::properties::bounding_box(model, o).enlarged(1e-6)).collect();
+    let result_edges: Vec<Shape> = model.unique_subshapes(result, NodeKind::Edge).into_iter().filter(|e| !model.is_degenerate(*e)).collect();
+    let samples = |model: &Model, e: Shape| -> Vec<Point> {
+        let Some((curve, first, last)) = model.edge_curve(e) else { return Vec::new() };
+        (1..8).map(|k| crate::geometry::ParametricCurve::point(&curve, first + (last - first) * k as f64 / 8.0).transformed(&e.placement)).collect()
+    };
+    for &o in &originals {
+        if in_result.contains(&o.node) {
+            continue;
+        }
+        let along = samples(model, o);
+        let near = BoundingBox::from_points(along.iter().copied()).enlarged(1e-6);
+        let images: Vec<NodeId> = result_edges
+            .iter()
+            .filter(|e| !in_result_before(model, solid, e.node))
+            .filter(|&&e| crate::properties::bounding_box(model, e).enlarged(1e-6).overlaps(&near))
+            .filter(|&&e| along.iter().any(|&p| on_edge(model, p, e)) || samples(model, e).iter().any(|&p| on_edge(model, p, o)))
+            .filter(|&&e| samples(model, e).iter().all(|&p| on_carrier(model, p, o)))
+            .map(|e| e.node)
+            .collect();
+        if images.is_empty() {
+            history.record_deleted("removefeatures", &[o.node]);
+        } else {
+            history.record("removefeatures", o.node, &images);
+        }
+    }
+    // (Each result face's original, where it is a modified face's image.)
+    let modified_from: Vec<(NodeId, NodeId)> = model
+        .unique_subshapes(solid, NodeKind::Face)
+        .into_iter()
+        .filter_map(|f| history.modified(f.node).map(|images| images.iter().map(|&i| (i, f.node)).collect::<Vec<_>>()))
+        .flatten()
+        .collect();
+    for f in model.unique_subshapes(solid, NodeKind::Face) {
+        let Some(images) = history.modified(f.node).map(|i| i.to_vec()) else { continue };
+        let mut made: Vec<NodeId> = Vec::new();
+        for image in result_faces.iter().filter(|g| images.contains(&g.node)) {
+            for e in model.unique_subshapes(*image, NodeKind::Edge) {
+                if in_result_before(model, solid, e.node) || model.is_degenerate(e) || made.contains(&e.node) {
+                    continue;
+                }
+                // (Between this face and another modified one: not a seam of its own.)
+                let others = result_faces
+                    .iter()
+                    .filter(|g| !images.contains(&g.node) && model.unique_subshapes(**g, NodeKind::Edge).iter().any(|x| x.node == e.node))
+                    .filter(|g| modified_from.iter().any(|(i, o)| *i == g.node && *o != f.node))
+                    .count();
+                if others == 0 {
+                    continue;
+                }
+                if samples(model, e).iter().any(|&p| !originals.iter().zip(&boxes).any(|(&o, b)| b.contains(p) && on_edge(model, p, o))) {
+                    made.push(e.node);
+                }
+            }
+        }
+        if !made.is_empty() {
+            history.record_as("removefeatures", f.node, &made, crate::topology::ChangeKind::Generated);
+        }
+    }
     history
+}
+
+/// Whether `p` lies on `edge`.
+fn on_edge(model: &Model, p: Point, edge: Shape) -> bool {
+    let Some((curve, first, last)) = model.edge_curve(edge) else { return false };
+    let local = p.transformed(&edge.placement.inverse());
+    crate::geometry::extrema::nearest_on_curve(local, &curve, first.min(last), first.max(last)).distance <= 1e-6
+}
+
+/// Whether `p` lies on the curve `edge` runs along (anywhere along it).
+fn on_carrier(model: &Model, p: Point, edge: Shape) -> bool {
+    use crate::geometry::ParametricCurve;
+    let Some((curve, first, last)) = model.edge_curve(edge) else { return false };
+    // (A trimmed curve as the curve it trims.)
+    let curve = match curve {
+        crate::geometry::curve::Curve::Trimmed(t) => t.basis().clone(),
+        c => c,
+    };
+    let local = p.transformed(&edge.placement.inverse());
+    let span = (last - first).abs().max(1.0);
+    let (lo, hi) = match (curve.is_periodic(), &curve) {
+        (true, _) => (curve.first_parameter(), curve.last_parameter()),
+        (false, crate::geometry::curve::Curve::Line(_)) => (first.min(last) - 1e6 * span, first.max(last) + 1e6 * span),
+        _ => (curve.first_parameter().max(first.min(last) - span), curve.last_parameter().min(first.max(last) + span)),
+    };
+    crate::geometry::extrema::nearest_on_curve(local, &curve, lo, hi).distance <= 1e-6
+}
+
+/// Whether `node` is one of `solid`'s own (kept as it was).
+fn in_result_before(model: &Model, solid: Shape, node: NodeId) -> bool {
+    model.unique_subshapes(solid, node.kind).iter().any(|s| s.node == node)
 }

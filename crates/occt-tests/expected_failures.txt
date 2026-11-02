@@ -112,14 +112,7 @@ tests/boolean/gdml_public/A9
 tests/boolean/gdml_public/B2
 tests/boolean/history/A7
 tests/boolean/removefeatures/A9
-tests/boolean/removefeatures/B1
-tests/boolean/removefeatures/B2
-tests/boolean/removefeatures/B3
-tests/boolean/removefeatures/B4
-tests/boolean/removefeatures/B5
 tests/boolean/removefeatures/B7
-tests/boolean/removefeatures/B8
-tests/boolean/removefeatures/B9
 tests/boolean/removefeatures/C1
 tests/boolean/removefeatures/C3
 tests/boolean/removefeatures/C4
@@ -404,7 +397,6 @@ tests/bugs/modalg_5/bug24012
 tests/bugs/modalg_5/bug24086
 tests/bugs/modalg_5/bug24220
 tests/bugs/modalg_5/bug24347
-tests/bugs/modalg_5/bug24397_1
 tests/bugs/modalg_5/bug24532
 tests/bugs/modalg_5/bug24597
 tests/bugs/modalg_5/bug24618_2
@@ -674,8 +666,6 @@ tests/bugs/modalg_7/bug31430
 tests/bugs/modalg_7/bug31469
 tests/bugs/modalg_7/bug31470
 tests/bugs/modalg_7/bug31496
-tests/bugs/modalg_7/bug31835_1
-tests/bugs/modalg_7/bug31835_2
 tests/bugs/modalg_7/bug31836
 tests/bugs/modalg_7/bug31850_1
 tests/bugs/modalg_7/bug31850_2
