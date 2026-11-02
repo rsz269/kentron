@@ -620,7 +620,7 @@ fn classified(model: &Model, graph: &mut Graph) -> (Vec<split::Piece>, Vec<Vec<s
         let at = |uv: geom::Uv| {
             let p = geom::surface_point(&face.surface, uv);
             let outward = geom::normal_at(&face.surface, uv) * face.outward;
-            graph.classify(p, outward, 1 - face.operand, face.drift)
+            graph.classify_on(p, outward, 1 - face.operand, face.drift, Some(&face.surface))
         };
         let state = at(region.interior);
         if !matches!(state, State::OnSame | State::OnOpposite) {
@@ -2296,6 +2296,24 @@ mod tests {
         assert!(report.is_valid(), "{report:?}");
         let volume = properties::volume(&model, result).mass;
         assert!((volume - 31.72242).abs() < 1e-4, "{volume}");
+    }
+
+    /// Two lattice nodes fused, each cut flat at the same height into a small square cap,
+    /// one cap turned 45° to the other, and struts whose cylinders touch the caps' plane
+    /// along the squares' sides: the corners of each cap beyond the other lie near those
+    /// cylinders within the tolerance, but a plane only touches a cylinder, so they are not
+    /// on it. The caps' union is kept whole (an octagon and eight corners, as OCCT).
+    #[test]
+    fn lattice_node_caps_turned_to_one_another_fused() {
+        let mut model = Model::new();
+        let mut read = |text: &str| crate::io::brep::read(&mut model, &mut text.as_bytes()).unwrap();
+        let a = read(include_str!("tests/lattice_node_caps_a.brep"));
+        let b = read(include_str!("tests/lattice_node_caps_b.brep"));
+        let result = union(&mut model, a, b).unwrap();
+        let report = validity::check(&model, result);
+        assert!(report.is_valid(), "{report:?}");
+        let volume = properties::volume(&model, result).mass;
+        assert!((volume - 0.181326).abs() < 1e-5, "{volume}");
     }
 
     /// A cylinder with a window through its side, the window's pcurves kept a period off the

@@ -1,6 +1,7 @@
 //! Where pieces of one operand's boundary lie with respect to the other operand.
 
 use crate::math::{Point, Vector};
+use crate::geometry::surface::Surface;
 
 use super::geom::{self, on_tol};
 use super::graph::{Graph, Location};
@@ -33,9 +34,25 @@ impl Graph {
     /// Where `p`, inside a piece with outward normal `outward`, lies with respect to
     /// operand `operand`; `drift`, how far the piece's own face's edges may stray from it.
     pub fn classify(&self, p: Point, outward: Vector, operand: usize, drift: f64) -> State {
+        self.classify_on(p, outward, operand, drift, None)
+    }
+
+    /// [`Graph::classify`], for a point of a face on `own` surface: not on a face of the
+    /// other operand that surface cannot lie on (a plane and a quadric only touch, along a
+    /// line or at a point; a point near where they touch is only near it).
+    pub fn classify_on(&self, p: Point, outward: Vector, operand: usize, drift: f64, own: Option<&Surface>) -> State {
+        let quadric = |s: &Surface| matches!(s, Surface::Cylinder(_) | Surface::Cone(_) | Surface::Sphere(_) | Surface::Torus(_));
+        let only_touching = |other: &Surface| {
+            own.is_some_and(|own| (matches!(own, Surface::Plane(_)) && quadric(other)) || (quadric(own) && matches!(other, Surface::Plane(_))))
+        };
         let faces = self.faces_of(operand);
+        let mut touching = false;
         for g in self.index().faces_containing(operand, p) {
             let face = &self.faces[g];
+            if only_touching(&face.surface) {
+                touching |= geom::signed_distance(&face.surface, p).abs() <= on_tol() && face.locate(p, &self.edges, &self.vertices) != Location::Outside;
+                continue;
+            }
             // (On it within the usual distance where the piece lies along it (faces a little
             // apart taken as one); across it, as a sliver of a face standing on the other,
             // within a few times the tolerances of the faces' edges, at least the linear
@@ -49,6 +66,9 @@ impl Graph {
                 return if outward.dot(face.outward_normal(p)) > 0.0 { State::OnSame } else { State::OnOpposite };
             }
         }
+        // (Where it lies on a face only touching it, from a point just off the piece along
+        // its outward normal: clear of that face, which the piece leaves there.)
+        let p = if touching { p + outward * (10.0 * on_tol() / outward.length().max(1e-300)) } else { p };
         let inside = if self.open[operand] { self.behind(faces, p) } else { self.contains(operand, faces, p) };
         if inside { State::Inside } else { State::Outside }
     }
