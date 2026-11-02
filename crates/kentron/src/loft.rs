@@ -835,6 +835,9 @@ struct Grid {
     curves: Vec<Vec<BSplineCurve>>,
     /// Whether edge `i`'s curves are its sections' arcs exactly (rational), not samples.
     exact: Vec<bool>,
+    /// Whether edge `i`'s curves are its sections' B-spline edges as they are (made alike),
+    /// not samples.
+    alike: Vec<bool>,
     /// The sections' positions across the loft, from 0 to 1.
     across: Vec<f64>,
 }
@@ -844,9 +847,16 @@ impl Grid {
         let edges = sections.iter().find_map(|s| if let Section::Wire(w) = s { Some(w.pieces.len()) } else { None }).expect("a wire");
         let mut curves: Vec<Vec<BSplineCurve>> = Vec::with_capacity(edges);
         let mut exact = vec![false; edges];
+        let mut alike_rows = vec![false; edges];
         // (The rows a mean spacing across is measured on: the sampled ones also where the
         // surface has exact rows, which have far fewer poles.)
         let mut measured: Vec<Option<Vec<BSplineCurve>>> = Vec::with_capacity(edges);
+        // Where B-spline sections are lofted, their edges as they are (made alike as OCCT
+        // makes them), for those the samples would not follow.
+        let alike = match made_alike(sections, edges) {
+            MadeAlike::Splines(splines) => Some(splines),
+            MadeAlike::Poles(_) => None,
+        };
         for i in 0..edges {
             let exact_row = exact_arcs.then(|| exact_rows(sections, i)).flatten();
             let straight = sections.iter().all(|s| match s {
@@ -891,6 +901,40 @@ impl Grid {
                 curve
             };
             let sampled: Vec<BSplineCurve> = sections.iter().zip(&counts).map(row).collect();
+            // (Sampled, unless that strays from a section's B-spline edge, as one whose knots
+            // crowd where the samples are too far apart to follow it does.)
+            let strays = |rows: &[BSplineCurve]| -> bool {
+                sections.iter().zip(rows).zip(&counts).any(|((s, r), &n)| match s {
+                    Section::Wire(w) if exact_spline(&w.pieces[i]).is_some() => {
+                        let piece = &w.pieces[i];
+                        let size = piece.length().max(crate::tolerance::LINEAR);
+                        let worst = (0..4 * n).map(|j| {
+                            let t = (j as f64 + 0.5) / (4 * n) as f64;
+                            r.point(t).distance(piece.at(t))
+                        }).fold(0.0, f64::max);
+                        // (Far, a hundredth of the edge's length: nearer, the samples are as
+                        // others lofted from the edge take them.)
+                        worst > 1e-2 * size
+                    }
+                    _ => false,
+                })
+            };
+            let sampled: Vec<BSplineCurve> = match alike.as_ref().filter(|_| strays(&sampled)) {
+                Some(splines) => {
+                    alike_rows[i] = true;
+                    let like = splines.iter().flatten().next().map(|cs| cs[i].clone()).expect("a wire section");
+                    splines
+                        .iter()
+                        .zip(sections)
+                        .map(|(cs, s)| match (cs, s) {
+                            (Some(cs), _) => cs[i].clone(),
+                            (None, Section::Point(p, _)) => BSplineCurve::new(vec![*p; like.poles().len()], like.knots().to_vec(), like.multiplicities().to_vec(), like.degree()),
+                            (None, Section::Wire(_)) => unreachable!("a wire section's splines"),
+                        })
+                        .collect()
+                }
+                None => sampled,
+            };
             match exact_row {
                 Some(rows) => {
                     curves.push(rows);
@@ -936,7 +980,7 @@ impl Grid {
         for v in &mut across {
             *v /= total;
         }
-        Grid { curves, exact, across }
+        Grid { curves, exact, alike: alike_rows, across }
     }
 
     /// The surface of edge `i` over sections `from..=to`: its poles interpolated across the
@@ -1017,6 +1061,38 @@ impl Grid {
 /// most any has; the edges' poles in turn, where they meet once. (Fitted by least squares
 /// to points along each edge: the poles of OCCT's approximation within the tolerance.)
 fn section_poles(sections: &[Section], edges: usize) -> Vec<Vec<Point>> {
+    match made_alike(sections, edges) {
+        MadeAlike::Poles(poles) => poles,
+        MadeAlike::Splines(splines) => {
+            let count = splines.iter().flatten().next().map_or(1, |cs| cs.iter().map(|c| c.poles().len() - 1).sum::<usize>() + 1);
+            sections
+                .iter()
+                .zip(&splines)
+                .map(|(s, cs)| match (s, cs) {
+                    (_, Some(cs)) => {
+                        let mut out: Vec<Point> = Vec::with_capacity(count);
+                        for c in cs {
+                            out.extend(c.poles().iter().copied().skip(if out.is_empty() { 0 } else { 1 }));
+                        }
+                        out
+                    }
+                    (Section::Point(p, _), None) => vec![*p; count],
+                    (Section::Wire(_), None) => unreachable!("a wire section's splines"),
+                })
+                .collect()
+        }
+    }
+}
+
+/// The sections made alike as OCCT's loft makes them ([`section_poles`]): their edges as
+/// B-splines sharing degree and, edge by edge, knots (none for a point section) where any
+/// edge is a B-spline (or Bézier) curve, taken as it is; else only their poles.
+enum MadeAlike {
+    Splines(Vec<Option<Vec<BSplineCurve>>>),
+    Poles(Vec<Vec<Point>>),
+}
+
+fn made_alike(sections: &[Section], edges: usize) -> MadeAlike {
     const TOLERANCE: f64 = 1e-7;
     const MOST: usize = 14;
     const SAMPLES: usize = 64;
@@ -1099,6 +1175,55 @@ fn section_poles(sections: &[Section], edges: usize) -> Vec<Vec<Point>> {
             spans *= 2;
         }
     };
+    // Where B-spline (or Bézier) edges are among the sections, OCCT takes those as they are:
+    // their poles over their ranges, with their own knots, made alike with the others'.
+    let has_exact = sections.iter().any(|s| matches!(s, Section::Wire(w) if w.pieces.iter().any(|p| exact_spline(p).is_some())));
+    if has_exact {
+        // Each edge a B-spline over [0, 1]: as it is, a line of degree one, or (others) its
+        // polynomial spans fitted as above, joined where they meet.
+        let as_spline = |piece: &Piece| -> BSplineCurve {
+            if piece.straight() {
+                return BSplineCurve::new(vec![piece.at(0.0), piece.at(1.0)], vec![0.0, 1.0], vec![2, 2], 1);
+            }
+            if let Some(c) = exact_spline(piece) {
+                return c;
+            }
+            let (n, spans) = shape(piece);
+            let mut poles: Vec<Point> = Vec::with_capacity(spans * n + 1);
+            for k in 0..spans {
+                let (fitted, _) = fit(&span_points(piece, spans, k), n);
+                poles.extend(fitted.into_iter().skip(if poles.is_empty() { 0 } else { 1 }));
+            }
+            let knots: Vec<f64> = (0..=spans).map(|k| k as f64 / spans as f64).collect();
+            let mut multiplicities = vec![n; spans + 1];
+            multiplicities[0] = n + 1;
+            multiplicities[spans] = n + 1;
+            BSplineCurve::new(poles, knots, multiplicities, n)
+        };
+        let mut splines: Vec<Option<Vec<BSplineCurve>>> =
+            sections.iter().map(|s| match s { Section::Wire(w) => Some(w.pieces.iter().map(as_spline).collect()), Section::Point(..) => None }).collect();
+        let degree = splines.iter().flatten().flatten().map(|c| c.degree()).max().unwrap_or(1);
+        for c in splines.iter_mut().flatten().flatten() {
+            c.increase_degree(degree);
+        }
+        // Each edge's knots, all the sections' together (the greatest multiplicity of each).
+        for i in 0..edges {
+            let mut knots: Vec<(f64, usize)> = Vec::new();
+            for c in splines.iter().flatten().map(|cs| &cs[i]) {
+                for (&k, &m) in c.knots().iter().zip(c.multiplicities()) {
+                    match knots.iter_mut().find(|(u, _)| (u - k).abs() <= 1e-9) {
+                        Some((_, mm)) => *mm = (*mm).max(m),
+                        None => knots.push((k, m)),
+                    }
+                }
+            }
+            let inner: Vec<(f64, usize)> = knots.into_iter().filter(|&(u, _)| u > 1e-9 && u < 1.0 - 1e-9).collect();
+            for c in splines.iter_mut().flatten().map(|cs| &mut cs[i]) {
+                c.insert_knots(&inner);
+            }
+        }
+        return MadeAlike::Splines(splines);
+    }
     let mut degree = 1;
     let mut spans = vec![1; edges];
     for s in sections {
@@ -1111,7 +1236,7 @@ fn section_poles(sections: &[Section], edges: usize) -> Vec<Vec<Point>> {
         }
     }
     let count: usize = spans.iter().map(|k| k * degree).sum::<usize>() + 1;
-    sections
+    MadeAlike::Poles(sections
         .iter()
         .map(|s| match s {
             Section::Wire(w) => {
@@ -1126,7 +1251,38 @@ fn section_poles(sections: &[Section], edges: usize) -> Vec<Vec<Point>> {
             }
             Section::Point(p, _) => vec![*p; count],
         })
-        .collect()
+        .collect())
+}
+
+/// A B-spline (or Bézier) piece as OCCT's loft takes it: its curve over the piece's range,
+/// as it runs, reparametrized to [0, 1]; `None` for other curves, rational or periodic ones.
+fn exact_spline(piece: &Piece) -> Option<BSplineCurve> {
+    let mut curve = match &piece.curve {
+        Curve::BSpline(c) => c.clone(),
+        Curve::Bezier(b) => b.to_bspline(),
+        _ => return None,
+    };
+    if curve.is_rational() || crate::geometry::ParametricCurve::is_periodic(&curve) {
+        return None;
+    }
+    let (lo, hi) = (piece.first.min(piece.last), piece.first.max(piece.last));
+    if !(hi > lo) {
+        return None;
+    }
+    let (k0, k1) = (curve.knots()[0], curve.knots()[curve.knots().len() - 1]);
+    if lo > k0 || hi < k1 {
+        curve.segment(lo.max(k0), hi.min(k1));
+    }
+    let (k0, k1) = (curve.knots()[0], curve.knots()[curve.knots().len() - 1]);
+    let mut knots: Vec<f64> = curve.knots().iter().map(|&k| (k - k0) / (k1 - k0)).collect();
+    let mut multiplicities = curve.multiplicities().to_vec();
+    let mut poles = curve.poles().to_vec();
+    if piece.first > piece.last {
+        knots = knots.iter().rev().map(|&k| 1.0 - k).collect();
+        multiplicities.reverse();
+        poles.reverse();
+    }
+    BSplineCurve::try_new(poles, knots, multiplicities, curve.degree()).ok()
 }
 
 /// Edge `i` of each section as its circle arc exactly, a rational B-spline over [0, 1] from
@@ -1300,7 +1456,10 @@ fn build(model: &mut Model, sections: &[Section], grid: &Grid, closed: bool, loo
                 model.set_edge_range(id.into(), first, last)?;
                 range = (first, last);
             } else {
-                model.set_edge_curve(id.into(), Curve::BSpline(grid.curves[i][k].clone()), crate::tolerance::LINEAR)?;
+                // (A B-spline section edge as it is, over [0, 1] as its row: the same curve
+                // whatever it is lofted to, its row only its knots refined.)
+                let row = exact_spline(&w.pieces[i]).filter(|_| grid.alike[i]).unwrap_or_else(|| grid.curves[i][k].clone());
+                model.set_edge_curve(id.into(), Curve::BSpline(row), crate::tolerance::LINEAR)?;
             }
         }
         section_edges.insert((i, k), (id, range));

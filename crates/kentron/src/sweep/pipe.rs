@@ -226,7 +226,7 @@ pub(super) fn motions(pieces: &[SpinePiece], samples: usize, anchor: (usize, f64
             }
             // The raw frame turned the least onto the new tangent; the correction then
             // takes it to the corrected frame at the end of the last piece.
-            let (ct, cr) = (correction.apply(t), correction.apply(r));
+            let (ct, cr) = correction.carry(t, r);
             let axis = t.cross(tangent);
             r = if axis.length() > 1e-12 {
                 let (sin, cos) = (axis.length(), t.dot(tangent));
@@ -237,14 +237,18 @@ pub(super) fn motions(pieces: &[SpinePiece], samples: usize, anchor: (usize, f64
             };
             t = tangent;
             let flat = r - t * r.dot(t);
-            r = flat * (1.0 / flat.length());
+            // (The new piece's own frame there: Frenet's, if that is the frame.)
+            r = normal_or(k, 0.0, t, flat * (1.0 / flat.length()));
             correction = Correction::between((t, r), (ct, cr));
         }
         x = p;
         // (A guide's or fixed frames as they say, the others turned by the correction.)
         let framed = |correction: &Correction, s: f64, x: Point, t: Vector, r: Vector| match fixed(k, s, x, t) {
             Some((ft, fr)) => frame(x, ft, fr),
-            None => frame(x, correction.apply(t), correction.apply(r)),
+            None => {
+                let (t, r) = correction.carry(t, r);
+                frame(x, t, r)
+            }
         };
         if anchor.0 == k && anchor.1 <= 0.0 {
             anchor_frame = Some(framed(&correction, 0.0, x, t, r));
@@ -280,24 +284,31 @@ pub(super) fn motions(pieces: &[SpinePiece], samples: usize, anchor: (usize, f64
     Ok((out, halves))
 }
 
-/// A rotation taking one orthonormal frame `(t, r, t × r)` onto another.
+/// A turn of the frames, in their own axes: taking one orthonormal frame `(t, r, t × r)`
+/// onto another, and any frame carried on from the first to as much turned in its own axes
+/// (as OCCT's location laws set into continuity, the frame along the next piece its own
+/// times the turn at the corner, `M(s) M(0)⁻¹ M₁`).
 struct Correction {
-    from: [Vector; 3],
-    to: [Vector; 3],
+    /// Row `i`: the corrected axis `i` in the frame's axes `(t, r, t × r)`.
+    local: [[f64; 3]; 3],
 }
 
 impl Correction {
     fn identity() -> Correction {
-        let basis = [Vector::new(1.0, 0.0, 0.0), Vector::new(0.0, 1.0, 0.0), Vector::new(0.0, 0.0, 1.0)];
-        Correction { from: basis, to: basis }
+        Correction { local: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]] }
     }
 
     fn between((t, r): (Vector, Vector), (u, s): (Vector, Vector)) -> Correction {
-        Correction { from: [t, r, t.cross(r)], to: [u, s, u.cross(s)] }
+        let from = [t, r, t.cross(r)];
+        let to = [u, s, u.cross(s)];
+        Correction { local: to.map(|a| from.map(|b| a.dot(b))) }
     }
 
-    fn apply(&self, v: Vector) -> Vector {
-        self.to[0] * v.dot(self.from[0]) + self.to[1] * v.dot(self.from[1]) + self.to[2] * v.dot(self.from[2])
+    /// The frame `(t, r)` turned: its corrected tangent and normal.
+    fn carry(&self, t: Vector, r: Vector) -> (Vector, Vector) {
+        let axes = [t, r, t.cross(r)];
+        let row = |i: usize| axes[0] * self.local[i][0] + axes[1] * self.local[i][1] + axes[2] * self.local[i][2];
+        (row(0), row(1))
     }
 }
 

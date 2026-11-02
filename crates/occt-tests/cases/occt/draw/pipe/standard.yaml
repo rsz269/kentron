@@ -170,15 +170,15 @@ ported_from:
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/pipe/standard/B1
 notes:
+  - "kentron deviation: OCCT's pipe of the face leaves out its two ends (21 faces, 43132.08 in OCCT 7.9 (OCP), the shape invalid, as the script's TODO says); kentron's has the same 21 side faces, each of the same area as OCCT's, closed by the two copies of the face (2564.8 each): valid, its area 48261.7."
   - "OCCT TODO OCC22741 (All): Faulty shapes in variables faulty_1 to faulty_2"
-expect: not_done
 build:
   - base: {load: {brep: "3_base.rle"}}
   - fbase: {face: {wire: base}}
   - profile: {load: {brep: "3_B1.rle"}}
   - result: {pipe: {spine: profile, profile: fbase}}
 checks:
-  - {area: result, eq: 43132.1, rel: 0.01}
+  - {area: result, eq: 48261.7, rel: 0.01}
   - {valid: result}
 ---
 case: B2

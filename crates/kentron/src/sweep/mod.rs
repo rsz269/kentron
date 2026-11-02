@@ -343,7 +343,9 @@ pub fn pipe_through(model: &mut Model, sections: &[(Shape, PipeOptions)], spine:
 /// first section's (as a profile face's) first and last faces, the caps of a solid.
 pub fn pipe_through_with(model: &mut Model, sections: &[(Shape, PipeOptions)], spine: Shape, solid: bool, guide: Option<Guide>) -> Result<Sweep> {
     let pieces = spine_pieces(model, spine)?;
-    let framing = framing(model, &pieces, &PipeOptions { guide, ..Default::default() })?;
+    // (In Frenet's frame if the sections say so.)
+    let frenet = sections.iter().any(|(_, o)| o.frenet);
+    let framing = framing(model, &pieces, &PipeOptions { guide, frenet, ..Default::default() })?;
     // (Each section corrected square to the guide's fixed direction, where it has one.)
     let sections: Vec<(Shape, PipeOptions)> = sections.iter().map(|&(s, o)| (s, PipeOptions { guide: guide.or(o.guide), ..o })).collect();
     pipe_shell::pipe_shell(model, &sections, &pieces, solid, &framing)

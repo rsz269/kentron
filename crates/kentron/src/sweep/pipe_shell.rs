@@ -163,6 +163,7 @@ pub(super) fn pipe_shell(model: &mut Model, sections: &[(Shape, PipeOptions)], p
         SectionPoles::Vertex(_) => true,
     });
     let pole_count = n + 1;
+    let both_points = matches!((poles.first(), poles.last()), (Some(SectionPoles::Vertex(_)), Some(SectionPoles::Vertex(_))));
     // The law of pole i of edge e: (global position, reference point) per section.
     let law = |e: usize, i: usize| -> Vec<(f64, Point)> {
         placed
@@ -200,10 +201,11 @@ pub(super) fn pipe_shell(model: &mut Model, sections: &[(Shape, PipeOptions)], p
             let top = builder.junction_edge(e, k + 1, v0, v1, &junction(k + 1), &|i| law(e, i), pole_count, n, &vertex_law)?;
             let right = builder.vertex_path(v1, k, motion, &sampled[k], &vertex_law(v1), &junction, &vertex_law)?;
             let left = builder.vertex_path(v0, k, motion, &sampled[k], &vertex_law(v0), &junction, &vertex_law)?;
-            // Where the section is a point, the face closes at it with no edge, unless both
-            // its sides are one edge (a seam): then by a degenerate edge of its own there.
+            // Where the section is a point, the face closes at it with no edge, unless its
+            // sides are one edge (a seam) or meet at both ends (the sweep a point at either
+            // end, as OCCT's): then by a degenerate edge of its own there.
             let point = |builder: &mut Builder, j: usize| -> Result<Option<EdgeId>> {
-                if v0 != v1 {
+                if v0 != v1 && !(both_points && planar.is_none()) {
                     return Ok(None);
                 }
                 let v = builder.vertex(v0, j, &junction(j), &vertex_law);
@@ -315,8 +317,9 @@ impl Builder<'_> {
         id
     }
 
-    /// The section's edge `e` at junction `j` (from vertex `v0` to `v1`); a degenerate
-    /// edge of its own where the section is a point there (each face its own).
+    /// The section's edge `e` at junction `j` (from vertex `v0` to `v1`); none where the
+    /// section is a point there (the faces closing there with no edge, or with degenerate
+    /// edges of their own).
     #[allow(clippy::too_many_arguments)]
     fn junction_edge(
         &mut self,

@@ -1785,20 +1785,14 @@ impl Draw {
             let r = kentron::sweep::pipe_cornered(&mut self.model, profile, spine, &options, corner)?;
             return self.set_shape_var(args[0], r);
         }
-        if self.sweep_mode == ["-FR"] {
-            // Frenet's frame only where it is the rotation-minimizing one: on a plane.
-            let wire = if spine.kind() == NodeKind::Wire { spine } else { make::wire(&mut self.model, &[spine])? };
-            if make::plane_of_wire(&self.model, wire).is_err() {
-                return self.not_implemented("buildsweep", args);
-            }
-        }
+        let frenet = self.sweep_mode == ["-FR"];
         let r = if let [(profile, contact, correction)] = self.sweep_profiles[..] {
             let profile = if solid && profile.kind() == NodeKind::Wire { make::planar_face(&mut self.model, profile)? } else { profile };
-            let options = kentron::sweep::PipeOptions { contact, correction, ..Default::default() };
+            let options = kentron::sweep::PipeOptions { contact, correction, frenet, ..Default::default() };
             kentron::sweep::pipe_with(&mut self.model, profile, spine, &options)?.shape
         } else {
             let sections: Vec<(Shape, kentron::sweep::PipeOptions)> =
-                self.sweep_profiles.iter().map(|&(s, contact, correction)| (s, kentron::sweep::PipeOptions { contact, correction, ..Default::default() })).collect();
+                self.sweep_profiles.iter().map(|&(s, contact, correction)| (s, kentron::sweep::PipeOptions { contact, correction, frenet, ..Default::default() })).collect();
             kentron::sweep::pipe_through(&mut self.model, &sections, spine, solid)?
         };
         self.set_shape_var(args[0], r)

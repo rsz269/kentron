@@ -104,7 +104,8 @@ addsweep v5 -T
 catch {buildsweep result}
 
 
-checkprops result -s 625461
+# kentron deviation (draw_deviations.json): The area of OCCT's interpolation through the sections, which overshoots far outside them: OCCT 7.9 (OCP) gives faces reaching out to about 2000 (6000 with -T) from a spine all the sections lie within 50 of, its area not the script's either (181746 for 185899, 591941 for 625461). kentron's sweep stays within the sections' extent, valid, with OCCT's shape counts; the area kentron's (25414.74, OCCT 625461).
+checkprops result -s 25414.74
 
 checknbshapes result -vertex 2 -edge 33 -wire 11 -face 11 -shell 1 -solid 0 -compsolid 0 -compound 0 -shape 58
 

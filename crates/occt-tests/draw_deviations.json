@@ -755,11 +755,6 @@
       "note": "At a tolerance of 100, far larger than the model's details, which boundaries get sewn depends on the pairing heuristics: kentron pairs the closest matching sections first, OCCT differs, leaving a different number of free bounds and different tolerances."
     }
   ],
-  "tests/thrusection/not_solids/W7": [
-    {
-      "note": "OCCT's reference area does not match its own surfaces: its loft's faces measure 278675 and 202648 by checkprops, but summing the area element over the first face's surface gives 251215. kentron's surfaces agree with OCCT's to within 2% of their size and measure 240k and 169k (409206 in all)."
-    }
-  ],
   "tests/offset/wire_closed_inside_0_005/A4": [
     {
       "from": "d.offset_counts(&[\"result\", \"26\", \"26\", \"1\"])?;",
@@ -2447,6 +2442,69 @@
       "from": "CheckIsFeatureRemoved gap2 {e f}",
       "to": "CheckIsFeatureRemoved gap2 {f}",
       "reason": "The edges where the removed faces met the other solid's notch (s_11_1, s_12_2) are still in kentron's result, unchanged, bounding that notch; OCCT's result has an edge at the very same place but a new one, reporting the original deleted. The faces are checked as they are."
+    }
+  ],
+  "tests/thrusection/specific/M6": [
+    {
+      "from": "checkprops result -s 185899",
+      "to": "checkprops result -s 20344.96",
+      "reason": "The area of OCCT's interpolation through the sections, which overshoots far outside them: OCCT 7.9 (OCP) gives faces reaching out to about 2000 (6000 with -T) from a spine all the sections lie within 50 of, its area not the script's either (181746 for 185899, 591941 for 625461). kentron's sweep stays within the sections' extent, valid, with OCCT's shape counts; the area kentron's (20344.96, OCCT 185899)."
+    }
+  ],
+  "tests/thrusection/specific/M8": [
+    {
+      "from": "checkprops result -s 185899",
+      "to": "checkprops result -s 20344.96",
+      "reason": "The area of OCCT's interpolation through the sections, which overshoots far outside them: OCCT 7.9 (OCP) gives faces reaching out to about 2000 (6000 with -T) from a spine all the sections lie within 50 of, its area not the script's either (181746 for 185899, 591941 for 625461). kentron's sweep stays within the sections' extent, valid, with OCCT's shape counts; the area kentron's (20344.96, OCCT 185899)."
+    }
+  ],
+  "tests/thrusection/specific/N3": [
+    {
+      "from": "checkprops result -s 185899",
+      "to": "checkprops result -s 20344.96",
+      "reason": "The area of OCCT's interpolation through the sections, which overshoots far outside them: OCCT 7.9 (OCP) gives faces reaching out to about 2000 (6000 with -T) from a spine all the sections lie within 50 of, its area not the script's either (181746 for 185899, 591941 for 625461). kentron's sweep stays within the sections' extent, valid, with OCCT's shape counts; the area kentron's (20344.96, OCCT 185899)."
+    }
+  ],
+  "tests/thrusection/specific/M7": [
+    {
+      "from": "checkprops result -s 625461",
+      "to": "checkprops result -s 25414.74",
+      "reason": "The area of OCCT's interpolation through the sections, which overshoots far outside them: OCCT 7.9 (OCP) gives faces reaching out to about 2000 (6000 with -T) from a spine all the sections lie within 50 of, its area not the script's either (181746 for 185899, 591941 for 625461). kentron's sweep stays within the sections' extent, valid, with OCCT's shape counts; the area kentron's (25414.74, OCCT 625461)."
+    }
+  ],
+  "tests/thrusection/specific/M9": [
+    {
+      "from": "checkprops result -s 625461",
+      "to": "checkprops result -s 25414.74",
+      "reason": "The area of OCCT's interpolation through the sections, which overshoots far outside them: OCCT 7.9 (OCP) gives faces reaching out to about 2000 (6000 with -T) from a spine all the sections lie within 50 of, its area not the script's either (181746 for 185899, 591941 for 625461). kentron's sweep stays within the sections' extent, valid, with OCCT's shape counts; the area kentron's (25414.74, OCCT 625461)."
+    }
+  ],
+  "tests/thrusection/specific/N4": [
+    {
+      "from": "checkprops result -s 625461",
+      "to": "checkprops result -s 25414.74",
+      "reason": "The area of OCCT's interpolation through the sections, which overshoots far outside them: OCCT 7.9 (OCP) gives faces reaching out to about 2000 (6000 with -T) from a spine all the sections lie within 50 of, its area not the script's either (181746 for 185899, 591941 for 625461). kentron's sweep stays within the sections' extent, valid, with OCCT's shape counts; the area kentron's (25414.74, OCCT 625461)."
+    }
+  ],
+  "tests/thrusection/specific/N1": [
+    {
+      "from": "checkprops result -s 186534",
+      "to": "checkprops result -s 21259.62",
+      "reason": "The area of OCCT's interpolation through the sections, which overshoots far outside them: OCCT 7.9 (OCP) gives faces reaching out to about 2000 (6000 with -T) from a spine all the sections lie within 50 of, its area not the script's either (181746 for 185899, 591941 for 625461). kentron's sweep stays within the sections' extent, valid, with OCCT's shape counts; the area kentron's (21259.62, OCCT 186534)."
+    }
+  ],
+  "tests/thrusection/specific/N2": [
+    {
+      "from": "checkprops result -s 622222",
+      "to": "checkprops result -s 25585.27",
+      "reason": "The area of OCCT's interpolation through the sections, which overshoots far outside them: OCCT 7.9 (OCP) gives faces reaching out to about 2000 (6000 with -T) from a spine all the sections lie within 50 of, its area not the script's either (181746 for 185899, 591941 for 625461). kentron's sweep stays within the sections' extent, valid, with OCCT's shape counts; the area kentron's (25585.27, OCCT 622222)."
+    }
+  ],
+  "tests/pipe/standard/B1": [
+    {
+      "from": "d.checkprops(&[\"result\", \"-s\", \"43132.1\"])?;",
+      "to": "d.checkprops(&[\"result\", \"-s\", \"48261.7\"])?;",
+      "reason": "OCCT's pipe of the face leaves out its two ends (21 faces, 43132.08 in OCCT 7.9 (OCP), the shape invalid, as the script's TODO says); kentron's has the same 21 side faces, each of the same area as OCCT's, closed by the two copies of the face (2564.8 each): valid, its area 48261.7."
     }
   ]
 }
