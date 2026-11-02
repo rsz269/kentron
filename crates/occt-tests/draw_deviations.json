@@ -2415,5 +2415,19 @@
       "to": "checknbshapes result -vertex 31 -edge 48 -wire 20 -face 18 -shell 1 -solid 1",
       "reason": "OCCT's result lists 31 vertices (`explode result v`, the same points as kentron's) where checknbshapes counts 30; kentron's has the same 31, and OCCT's edges, faces, area and volume."
     }
+  ],
+  "tests/boolean/removefeatures/C8": [
+    {
+      "from": "checkprops result -s 441340 -v 8.18282e+006 -deps 1.e-7",
+      "to": "checkprops result -s 441340 -v 8.18282e+006 -deps 1.e-5",
+      "reason": "The area and volume are checked to 1e-7 of values current OCCT does not give either (its removal integrated precisely: 441340.67 and 8182810.9); kentron's are within 1e-7 of OCCT's, and within 1e-5 of the script's."
+    }
+  ],
+  "tests/boolean/removefeatures/G2": [
+    {
+      "from": "checkprops result -s 501833 -v 8.60751e+006 -deps 1.e-7",
+      "to": "checkprops result -s 501833 -v 8.60751e+006 -deps 1.e-5",
+      "reason": "The area and volume are checked to 1e-7 of values current OCCT does not give either (its removal integrated precisely: 501834.24 and 8607502.6); kentron's are within 1e-7 of OCCT's, and within 1e-5 of the script's."
+    }
   ]
 }

@@ -4,7 +4,7 @@
 //! In each shell, neighbouring faces on the same plane or quadric (and facing the same way)
 //! become one face, the edges between them dropped; then edges meeting at a vertex of no
 //! other edge, on one line or circle, become one edge. Faces that would close round a
-//! periodic surface without a seam between them are left apart.
+//! periodic surface keep one line of the edges between them as the merged face's seam.
 
 use crate::hashing::{FastMap as HashMap, FastSet as HashSet};
 
@@ -516,7 +516,16 @@ fn merge_faces(model: &Model, specs: &mut Vec<Spec>, same_surface_only: bool, fr
     }
     let mut merged: Vec<(Vec<usize>, Spec)> = Vec::new();
     for group in groups.into_values().filter(|g| g.len() > 1) {
-        if let Some(mut spec) = merge_group(model, specs, &group, &internal) {
+        // (Faces that would close round a periodic surface: one line of the edges between
+        // them left as the merged face's seam, as OCCT's, at the surface's own seam where
+        // one runs there.)
+        let merged_group = merge_group(model, specs, &group, &internal).or_else(|| {
+            seam_lines(model, specs, &group, &internal).into_iter().find_map(|seam| {
+                let internal: HashSet<EdgeId> = internal.difference(&seam).copied().collect();
+                merge_group(model, specs, &group, &internal)
+            })
+        });
+        if let Some(mut spec) = merged_group {
             spec.sources = group.iter().flat_map(|&i| specs[i].sources.iter().copied()).collect();
             merged.push((group, spec));
         }
@@ -529,6 +538,47 @@ fn merge_faces(model: &Model, specs: &mut Vec<Spec>, same_surface_only: bool, fr
     kept.extend(merged.into_iter().map(|(_, s)| s));
     *specs = kept;
     true
+}
+
+/// The edges between the faces of `group` that could be a seam of the face they merge into:
+/// those along one isoparametric line round which its first face's surface is periodic, a set
+/// for each such line, the surface's own seam first, then the nearest to it.
+fn seam_lines(model: &Model, specs: &[Spec], group: &[usize], internal: &HashSet<EdgeId>) -> Vec<HashSet<EdgeId>> {
+    let surface = &specs[group[0]].surface;
+    let periods = [surface.u_period(), surface.v_period()];
+    if periods.iter().all(Option::is_none) {
+        return Vec::new();
+    }
+    let mut edges: Vec<EdgeId> = group.iter().flat_map(|&s| specs[s].loops.iter().flatten()).map(|u| u.edge).filter(|e| internal.contains(e)).collect();
+    edges.sort_unstable();
+    edges.dedup();
+    // (Each line: the direction across which it runs, its parameter there (within a period
+    // from 0), its edges.)
+    let mut lines: Vec<(usize, f64, HashSet<EdgeId>)> = Vec::new();
+    for edge in edges {
+        let Some((curve, first, last)) = model.edge_curve(Shape::from(edge)) else { continue };
+        let Some(uvs) = [0.0, 0.5, 1.0].iter().map(|&s| surface.parameters(curve.point(first + (last - first) * s))).collect::<Option<Vec<(f64, f64)>>>() else { continue };
+        for (d, period) in periods.iter().enumerate() {
+            let Some(period) = *period else { continue };
+            let at = |uv: &(f64, f64)| if d == 0 { uv.0 } else { uv.1 };
+            let across = |uv: &(f64, f64)| if d == 0 { uv.1 } else { uv.0 };
+            // (Within a period of 0, the nearer side: an edge on the seam reads either end.)
+            let wrapped = |x: f64| x - (x / period).round() * period;
+            let x = wrapped(at(&uvs[0]));
+            let tolerance = 1e-9 * period.max(1.0);
+            if uvs.iter().any(|uv| wrapped(at(uv) - x).abs() > tolerance) || (across(&uvs[2]) - across(&uvs[0])).abs() <= tolerance {
+                continue;
+            }
+            match lines.iter_mut().find(|(e, y, _)| *e == d && wrapped(x - *y).abs() <= tolerance) {
+                Some(line) => {
+                    line.2.insert(edge);
+                }
+                None => lines.push((d, x, HashSet::from_iter([edge]))),
+            }
+        }
+    }
+    lines.sort_by(|a, b| a.1.abs().total_cmp(&b.1.abs()));
+    lines.into_iter().map(|(_, _, edges)| edges).collect()
 }
 
 /// One face for a group, on its first face's surface; `None` where that does not work out
@@ -878,7 +928,10 @@ fn merge_edges(model: &mut Model, specs: &mut [Spec]) -> Result<bool> {
             changed |= merge_cycle(model, specs, &chain, &curves)?;
             continue;
         }
-        if cyclic || chain.len() < 2 || head == tail {
+        // (Arcs of a circle ending where they start, at a vertex of other edges too (a
+        // seam's): one closed edge round it.)
+        let closed_circle = head == tail && matches!(curves[&e].0, Curve::Circle(_));
+        if cyclic || chain.len() < 2 || (head == tail && !closed_circle) {
             continue;
         }
         changed |= merge_chain(model, specs, &chain, head, tail, &curves)?;
@@ -1041,7 +1094,7 @@ fn merge_chain(
         }
         Curve::Circle(_) => {
             let span: f64 = chain.iter().map(|e| (curves[e].2 - curves[e].1).abs()).sum();
-            if span >= std::f64::consts::TAU - 1e-9 {
+            if (head == tail) != (span >= std::f64::consts::TAU - 1e-9) || span > std::f64::consts::TAU + 1e-9 {
                 return Ok(false);
             }
             // Along the chain from head: the first edge's circle, turned to run that way.
@@ -1056,7 +1109,7 @@ fn merge_chain(
             // The end at the tail vertex itself, near where the spans add up to.
             let guess = start + span;
             let at_tail = crate::geometry::extrema::nearest_on_curve(pb, &circle, 0.0, tau).parameter;
-            let end = at_tail + ((guess - at_tail) / tau).round() * tau;
+            let end = if head == tail { start + tau } else { at_tail + ((guess - at_tail) / tau).round() * tau };
             if !(end > start) {
                 return Ok(false);
             }
@@ -1074,11 +1127,17 @@ fn merge_chain(
             if !l.iter().any(|u| members.contains(&u.edge)) {
                 continue;
             }
-            if n <= chain.len() {
+            if n < chain.len() || (n == chain.len() && head != tail) {
                 return Ok(false);
             }
-            // A run starts after a use not in the chain.
-            let begins: Vec<usize> = (0..n).filter(|&i| members.contains(&l[i].edge) && !members.contains(&l[(i + n - 1) % n].edge)).collect();
+            // A run starts after a use not in the chain; in a loop of the chain alone (round
+            // a circle), at the head, along the chain or back.
+            let begins: Vec<usize> = if n == chain.len() {
+                let along = |k: usize| ends(model, l[k].edge, l[k].orientation).0 == head;
+                (0..n).filter(|&i| (l[i].edge == chain[0] || l[i].edge == chain[chain.len() - 1]) && along(i)).take(1).collect()
+            } else {
+                (0..n).filter(|&i| members.contains(&l[i].edge) && !members.contains(&l[(i + n - 1) % n].edge)).collect()
+            };
             if begins.is_empty() || begins.len() > 2 || l.iter().filter(|u| members.contains(&u.edge)).count() != begins.len() * chain.len() {
                 return Ok(false);
             }
@@ -1089,7 +1148,10 @@ fn merge_chain(
                     return Ok(false);
                 }
                 let first_use = &l[begin];
-                let orientation = if ends(model, first_use.edge, first_use.orientation).0 == head { Orientation::Forward } else { Orientation::Reversed };
+                // (Round a closed circle, both ends at the head: along the chain where the run
+                // starts with its first edge.)
+                let forward = if head == tail { first_use.edge == chain[0] && (chain.len() > 1 || ends(model, first_use.edge, first_use.orientation).0 == head) } else { ends(model, first_use.edge, first_use.orientation).0 == head };
+                let orientation = if forward { Orientation::Forward } else { Orientation::Reversed };
                 let Some(pcurve) = analytic_pcurve(&curve, &spec.surface) else { return Ok(false) };
                 let mut u = Use { edge: chain[0], orientation, pcurve: Some(pcurve), first, last };
                 let (Some((start, _)), Some((new_start, _))) = (uv_ends(first_use), uv_ends(&u)) else { return Ok(false) };
@@ -1243,6 +1305,23 @@ mod tests {
     use crate::math::Frame;
     use crate::primitives::{Cuboid, Cylinder};
     use crate::{properties, validity};
+
+    /// A cylinder's side split in two halves (each from its seam to the opposite line), then
+    /// unified: one face round again, with one seam (as OCCT's), and one edge round each end.
+    #[test]
+    fn halves_of_a_cylinder_merged_round_a_seam() {
+        let mut model = Model::new();
+        let cylinder = Cylinder::new(2.0, 3.0).build(&mut model).unwrap();
+        let split = crate::heal::split_closed_faces(&mut model, cylinder).unwrap();
+        assert_eq!(model.unique_subshapes(split, NodeKind::Face).len(), 4);
+        let unified = unify_same_domain(&mut model, split).unwrap();
+        assert!(validity::check(&model, unified).is_valid());
+        assert_eq!(model.unique_subshapes(unified, NodeKind::Face).len(), 3);
+        assert_eq!(model.unique_subshapes(unified, NodeKind::Edge).len(), 3);
+        assert_eq!(model.unique_subshapes(unified, NodeKind::Vertex).len(), 2);
+        let volume = properties::volume(&model, unified).mass;
+        assert!((volume - std::f64::consts::PI * 12.0).abs() < 1e-9, "{volume}");
+    }
 
     /// A sphere of radius 1 and a 0.5 x 4 x 4 box through its middle, fused and unified:
     /// where the box's sides cut the sphere, one circle each, as OCCT's (the sphere's seam

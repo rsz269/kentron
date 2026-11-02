@@ -4,9 +4,9 @@
 //! The faces next to the removed ones are extended on their surfaces (a plane far across
 //! the features, a cylinder or cone all round and along, a sphere or torus whole), and
 //! with the removed faces they split space into cells. The gaps are the cells against the
-//! removed faces lying within the features' neighbourhood (no farther than the faces
-//! around them reach): one outside the solid is a hole or pocket, filled; one inside is a
-//! boss, cut away. The faces lying on one surface are merged after, so that each face
+//! removed faces (reaching as far as the faces carried on close them: a sloping face
+//! carried on up to the wall across, where a top is removed): one outside the solid is a
+//! hole or pocket, filled; one inside is a boss, cut away. The faces lying on one surface are merged after, so that each face
 //! around a feature is carried on over it as one face.
 
 use crate::error::{Error, Result};
@@ -49,7 +49,6 @@ pub fn remove_faces(model: &mut Model, solid: Shape, faces: &[Shape]) -> Result<
     for &f in removed.iter().chain(&around) {
         near.add_box(&crate::properties::bounding_box(model, f));
     }
-    let size = (near.max - near.min).length().max(1e-9);
     // The faces around carried on, and the features: the cells they bound.
     let mut sheets: Vec<Shape> = removed.clone();
     for &f in &around {
@@ -57,12 +56,10 @@ pub fn remove_faces(model: &mut Model, solid: Shape, faces: &[Shape]) -> Result<
     }
     let cells = crate::boolean::enclosed_solids(model, &sheets)?;
     let cells = model.unique_subshapes(cells, NodeKind::Solid);
-    let within = near.enlarged(1e-3 * size);
     let classifier = crate::boolean::PointClassifier::new(model, solid)?;
     let (mut fill, mut cut) = (Vec::new(), Vec::new());
     for &cell in &cells {
-        let b = crate::properties::bounding_box(model, cell);
-        if !within.contains_box(&b) || !touches(model, cell, &removed) {
+        if !touches(model, cell, &removed) {
             continue;
         }
         let Some(p) = crate::boolean::point_inside(model, cell)? else { continue };
