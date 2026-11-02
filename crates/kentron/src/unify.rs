@@ -11,7 +11,7 @@ use crate::hashing::{FastMap as HashMap, FastSet as HashSet};
 use crate::error::Result;
 use crate::geometry::curve::{Circle, Curve, Line};
 use crate::geometry::curve2::Curve2;
-use crate::geometry::project::analytic_pcurve;
+use crate::geometry::project::analytic_pcurve_on_range;
 use crate::geometry::surface::Surface;
 use crate::geometry::{ParametricCurve, ParametricSurface};
 use crate::math::{Direction, Point, Point2, Transform, Transform2, Transformable2, Vector, Vector2};
@@ -525,6 +525,9 @@ fn merge_faces(model: &Model, specs: &mut Vec<Spec>, same_surface_only: bool, fr
                 merge_group(model, specs, &group, &internal)
             })
         });
+        if std::env::var_os("UNIFY_DEBUG").is_some() && matches!(specs[group[0]].surface, Surface::Sphere(_)) {
+            eprintln!("group {:?} sphere surfaces {:?} merged={} seams={:?}", group, group.iter().map(|&i| format!("{:?}", specs[i].surface)).collect::<Vec<_>>(), merged_group.is_some(), seam_lines(model, specs, &group, &internal).iter().map(|l| { let i: HashSet<EdgeId> = internal.difference(l).copied().collect(); let e = *l.iter().next().unwrap(); let (c, a, b) = model.edge_curve(Shape::from(e)).unwrap(); (c.point(0.5*(a+b)), merge_group(model, specs, &group, &i).is_some()) }).collect::<Vec<_>>());
+        }
         if let Some(mut spec) = merged_group {
             spec.sources = group.iter().flat_map(|&i| specs[i].sources.iter().copied()).collect();
             merged.push((group, spec));
@@ -557,7 +560,8 @@ fn seam_lines(model: &Model, specs: &[Spec], group: &[usize], internal: &HashSet
     let mut lines: Vec<(usize, f64, HashSet<EdgeId>)> = Vec::new();
     for edge in edges {
         let Some((curve, first, last)) = model.edge_curve(Shape::from(edge)) else { continue };
-        let Some(uvs) = [0.0, 0.5, 1.0].iter().map(|&s| surface.parameters(curve.point(first + (last - first) * s))).collect::<Option<Vec<(f64, f64)>>>() else { continue };
+        // (Within the edge: at a pole, where a meridian may end, the angle round is any.)
+        let Some(uvs) = [0.25, 0.5, 0.75].iter().map(|&s| surface.parameters(curve.point(first + (last - first) * s))).collect::<Option<Vec<(f64, f64)>>>() else { continue };
         for (d, period) in periods.iter().enumerate() {
             let Some(period) = *period else { continue };
             let at = |uv: &(f64, f64)| if d == 0 { uv.0 } else { uv.1 };
@@ -651,7 +655,7 @@ fn merge_group(model: &Model, specs: &[Spec], group: &[usize], internal: &HashSe
                                     surface.point(uv.x, uv.y).distance(curve.point(t)) <= tolerance
                                 })
                             };
-                            match analytic_pcurve(&curve, &surface).filter(|p| u.pcurve.is_none() || fits(p)) {
+                            match analytic_pcurve_on_range(&curve, &surface, first, last).filter(|p| u.pcurve.is_none() || fits(p)) {
                                 Some(p) => (p, first, last),
                                 None if spec.surface == surface => (u.pcurve.clone()?, u.first, u.last),
                                 None => (u.pcurve.as_ref()?.transformed(&reparametrization(&spec.surface, &surface)?), u.first, u.last),
@@ -1152,7 +1156,7 @@ fn merge_chain(
                 // starts with its first edge.)
                 let forward = if head == tail { first_use.edge == chain[0] && (chain.len() > 1 || ends(model, first_use.edge, first_use.orientation).0 == head) } else { ends(model, first_use.edge, first_use.orientation).0 == head };
                 let orientation = if forward { Orientation::Forward } else { Orientation::Reversed };
-                let Some(pcurve) = analytic_pcurve(&curve, &spec.surface) else { return Ok(false) };
+                let Some(pcurve) = analytic_pcurve_on_range(&curve, &spec.surface, first, last) else { return Ok(false) };
                 let mut u = Use { edge: chain[0], orientation, pcurve: Some(pcurve), first, last };
                 let (Some((start, _)), Some((new_start, _))) = (uv_ends(first_use), uv_ends(&u)) else { return Ok(false) };
                 let shift = |period: Option<f64>, target: f64, at: f64| period.map_or(0.0, |p| ((target - at) / p).round() * p);

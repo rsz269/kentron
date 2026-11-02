@@ -157,8 +157,9 @@ pub fn check(model: &Model, shape: Shape) -> Report {
             NodeKind::Face => checker.face(FaceId::from_index(node.index)),
             NodeKind::Shell => checker.shell(ShellId::from_index(node.index)),
             NodeKind::Solid => checker.solid(occurrence),
-            // A compound only groups shapes, which are checked in turn.
-            NodeKind::Compound => {}
+            // A compound only groups shapes, and a compsolid solids sharing faces, which are
+            // checked in turn.
+            NodeKind::Compound | NodeKind::CompSolid => {}
             kind => todo!("checking a {kind:?}"),
         }
     }

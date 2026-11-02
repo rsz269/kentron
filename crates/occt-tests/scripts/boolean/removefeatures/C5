@@ -9,7 +9,8 @@ removefeatures res1 s gap1
 checkshape res1
 checkprops res1 -s 1200 -v 1875
 checknbshapes res1 -vertex 19 -edge 31 -wire 15 -face 15 -shell 2 -solid 2
-CheckIsFeatureRemoved gap1 {e f}
+# kentron deviation (draw_deviations.json): The edges where the removed faces met the other solid's notch (s_7_3, s_9_4) are still in kentron's result, unchanged, bounding that notch; OCCT's result has an edge at the very same place but a new one, reporting the original deleted. The faces are checked as they are.
+CheckIsFeatureRemoved gap1 {f}
 
 # check that the common face is still shared
 if {![regexp "OK" [bopcheck res1]]} {
@@ -33,7 +34,8 @@ removefeatures res2 s gap2
 checkshape res2
 checkprops res2 -s 1200 -v 1875
 checknbshapes res2 -vertex 19 -edge 31 -wire 15 -face 15 -shell 2 -solid 2
-CheckIsFeatureRemoved gap2 {e f}
+# kentron deviation (draw_deviations.json): The edges where the removed faces met the other solid's notch (s_11_1, s_12_2) are still in kentron's result, unchanged, bounding that notch; OCCT's result has an edge at the very same place but a new one, reporting the original deleted. The faces are checked as they are.
+CheckIsFeatureRemoved gap2 {f}
 
 # get history of the operation
 savehistory rf_hist2

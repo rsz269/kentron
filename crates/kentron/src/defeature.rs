@@ -22,61 +22,125 @@ pub struct Removed {
     pub history: History,
 }
 
-/// `solid` (a solid, or a compound of one) without the faces `faces`, the faces around them
-/// carried on over where they were.
+/// `shape` (a solid, or a compound or compsolid of solids) without the faces `faces`, the
+/// faces around them carried on over where they were; several solids sharing faces where
+/// they meet still.
 #[doc(alias = "BRepAlgoAPI_Defeaturing")]
 #[doc(alias = "removefeatures")]
-pub fn remove_faces(model: &mut Model, solid: Shape, faces: &[Shape]) -> Result<Removed> {
-    let solids = model.unique_subshapes(solid, NodeKind::Solid);
-    let [solid] = solids[..] else {
-        return Err(Error::InvalidInput("features are removed from one solid".into()));
-    };
-    let all: Vec<Shape> = model.unique_subshapes(solid, NodeKind::Face);
+pub fn remove_faces(model: &mut Model, shape: Shape, faces: &[Shape]) -> Result<Removed> {
+    let solids = model.unique_subshapes(shape, NodeKind::Solid);
+    if solids.is_empty() {
+        return Err(Error::InvalidInput("features are removed from solids".into()));
+    }
+    let faces_of: Vec<Vec<Shape>> = solids.iter().map(|&s| model.unique_subshapes(s, NodeKind::Face)).collect();
+    let all: Vec<Shape> = model.unique_subshapes(shape, NodeKind::Face);
     let removed: Vec<Shape> = all.iter().copied().filter(|f| faces.iter().any(|g| g.node == f.node)).collect();
     if removed.is_empty() {
         return Err(Error::InvalidInput("no faces of the solid to remove".into()));
     }
-    // The faces around the features: sharing an edge with one of them.
-    let removed_edges: std::collections::HashSet<NodeId> = removed.iter().flat_map(|&f| model.unique_subshapes(f, NodeKind::Edge)).map(|e| e.node).collect();
-    let around: Vec<Shape> = all
-        .iter()
-        .copied()
-        .filter(|f| !removed.iter().any(|g| g.node == f.node))
-        .filter(|&f| model.unique_subshapes(f, NodeKind::Edge).iter().any(|e| removed_edges.contains(&e.node)))
-        .collect();
-    // The neighbourhood: the box of the features and the faces around them.
-    let mut near = BoundingBox::EMPTY;
-    for &f in removed.iter().chain(&around) {
-        near.add_box(&crate::properties::bounding_box(model, f));
+    // Each feature (faces joined by edges) on its own: the faces around it, sharing an edge
+    // with it, carried on over it, and the cells they and it bound; the gaps of all filled
+    // or cut together after (as OCCT's, which removes features one by one; carried on over
+    // all the features at once, the faces around one cut through others). A gap inside a
+    // solid is cut from it; one outside them all filled into the solid whose removed faces
+    // it is against.
+    let classifiers: Vec<crate::boolean::PointClassifier> = solids.iter().map(|&s| crate::boolean::PointClassifier::new(model, s)).collect::<Result<_>>()?;
+    let mut fill: Vec<Vec<Shape>> = vec![Vec::new(); solids.len()];
+    let mut cut: Vec<Vec<Shape>> = vec![Vec::new(); solids.len()];
+    let mut around: Vec<Shape> = Vec::new();
+    for feature in features(model, &removed) {
+        let edges: std::collections::HashSet<NodeId> = feature.iter().flat_map(|&f| model.unique_subshapes(f, NodeKind::Edge)).map(|e| e.node).collect();
+        let next: Vec<Shape> = all
+            .iter()
+            .copied()
+            .filter(|f| !removed.iter().any(|g| g.node == f.node))
+            .filter(|&f| model.unique_subshapes(f, NodeKind::Edge).iter().any(|e| edges.contains(&e.node)))
+            .collect();
+        // The neighbourhood: the box of the feature and the faces around it.
+        let mut near = BoundingBox::EMPTY;
+        for &f in feature.iter().chain(&next) {
+            near.add_box(&crate::properties::bounding_box(model, f));
+        }
+        let mut sheets: Vec<Shape> = feature.clone();
+        for &f in &next {
+            sheets.push(extended(model, f, &near)?);
+        }
+        let cells = crate::boolean::enclosed_solids(model, &sheets)?;
+        let cells = model.unique_subshapes(cells, NodeKind::Solid);
+        let mut found = false;
+        for &cell in &cells {
+            if !touches(model, cell, &feature) {
+                continue;
+            }
+            let Some(p) = crate::boolean::point_inside(model, cell)? else { continue };
+            let locations: Vec<crate::boolean::PointLocation> = classifiers.iter().map(|c| c.locate(p)).collect();
+            if let Some(k) = locations.iter().position(|&l| l == crate::boolean::PointLocation::Inside) {
+                cut[k].push(cell);
+                found = true;
+            } else if locations.iter().all(|&l| l == crate::boolean::PointLocation::Outside) {
+                let mine = |k: usize| feature.iter().copied().filter(|f| faces_of[k].iter().any(|g| g.node == f.node)).collect::<Vec<_>>();
+                let k = (0..solids.len()).find(|&k| touches(model, cell, &mine(k))).unwrap_or(0);
+                fill[k].push(cell);
+                found = true;
+            }
+        }
+        if !found {
+            return Err(Error::Failed("removing features: the faces around them do not close over them".into()));
+        }
+        for f in next {
+            if !around.iter().any(|a| a.node == f.node) {
+                around.push(f);
+            }
+        }
     }
-    // The faces around carried on, and the features: the cells they bound.
-    let mut sheets: Vec<Shape> = removed.clone();
-    for &f in &around {
-        sheets.push(extended(model, f, &near)?);
-    }
-    let cells = crate::boolean::enclosed_solids(model, &sheets)?;
-    let cells = model.unique_subshapes(cells, NodeKind::Solid);
-    let classifier = crate::boolean::PointClassifier::new(model, solid)?;
-    let (mut fill, mut cut) = (Vec::new(), Vec::new());
-    for &cell in &cells {
-        if !touches(model, cell, &removed) {
+    let mut results = Vec::with_capacity(solids.len());
+    for (k, &solid) in solids.iter().enumerate() {
+        if fill[k].is_empty() && cut[k].is_empty() {
+            results.push(solid);
             continue;
         }
-        let Some(p) = crate::boolean::point_inside(model, cell)? else { continue };
-        match classifier.locate(p) {
-            crate::boolean::PointLocation::Outside => fill.push(cell),
-            crate::boolean::PointLocation::Inside => cut.push(cell),
-            crate::boolean::PointLocation::Boundary => {}
+        results.push(closed_over(model, solid, &fill[k], &cut[k], &around)?);
+    }
+    // Several solids: made to share their faces again where they meet (split where one
+    // meets part of another's), in a shape of the input's kind.
+    let (result, solid_images) = if let [one] = results[..] {
+        (one, vec![one])
+    } else {
+        let cells = crate::boolean::cells(model, &results)?;
+        let mut images = Vec::with_capacity(results.len());
+        for k in 0..results.len() {
+            let mine: Vec<Shape> = cells.iter().filter(|c| c.inside[k] && c.inside.iter().filter(|&&i| i).count() == 1).map(|c| c.shape).collect();
+            let [solid] = mine[..] else {
+                return Err(Error::Failed("removing features: the solids overlap after".into()));
+            };
+            images.push(model.unique_subshapes(solid, NodeKind::Solid).first().copied().unwrap_or(solid));
+        }
+        let kind = if shape.kind() == NodeKind::CompSolid { NodeKind::CompSolid } else { NodeKind::Compound };
+        let out = model.new_empty(kind);
+        for &solid in &images {
+            model.add(out, solid)?;
+        }
+        (out, images)
+    };
+    let mut history = history(model, shape, &removed, result);
+    if solids.len() > 1 {
+        for (&solid, &image) in solids.iter().zip(&solid_images) {
+            if image.node != solid.node {
+                history.record("removefeatures", solid.node, &[image.node]);
+            }
         }
     }
-    if fill.is_empty() && cut.is_empty() {
-        return Err(Error::Failed("removing features: the faces around them do not close over them".into()));
-    }
+    Ok(Removed { shape: result, history })
+}
+
+/// `solid` with the gaps `fill` filled and `cut` cut away, the faces on one surface merged as
+/// OCCT's removal merges them.
+fn closed_over(model: &mut Model, solid: Shape, fill: &[Shape], cut: &[Shape], around: &[Shape]) -> Result<Shape> {
     let mut result = solid;
-    for cell in fill {
+    for &cell in fill {
         result = crate::boolean::union(model, result, cell)?;
     }
-    for cell in cut {
+    for &cell in cut {
         result = crate::boolean::difference(model, result, cell)?;
     }
     let options = crate::unify::UnifyOptions { same_surface_only: true, ..Default::default() };
@@ -98,9 +162,7 @@ pub fn remove_faces(model: &mut Model, solid: Shape, faces: &[Shape]) -> Result<
     // (Then edges running on one curve merged, wherever they came from: an edge of a face
     // carried on meets the one it continues end to end.)
     let options = crate::unify::UnifyOptions { faces: false, edges: true, same_surface_only: false };
-    let result = crate::unify::unify_same_domain_with(model, result, options)?;
-    let history = history(model, solid, &removed, result);
-    Ok(Removed { shape: result, history })
+    crate::unify::unify_same_domain_with(model, result, options)
 }
 
 /// `face` carried on over the neighbourhood `near` on its surface (a plane across it, a
@@ -154,6 +216,33 @@ fn touches(model: &Model, cell: Shape, faces: &[Shape]) -> bool {
     })
 }
 
+/// `faces` in features: those joined by edges together.
+fn features(model: &Model, faces: &[Shape]) -> Vec<Vec<Shape>> {
+    let edges: Vec<std::collections::HashSet<NodeId>> = faces.iter().map(|&f| model.unique_subshapes(f, NodeKind::Edge).into_iter().map(|e| e.node).collect()).collect();
+    let mut feature_of: Vec<Option<usize>> = vec![None; faces.len()];
+    let mut out: Vec<Vec<Shape>> = Vec::new();
+    for start in 0..faces.len() {
+        if feature_of[start].is_some() {
+            continue;
+        }
+        let id = out.len();
+        feature_of[start] = Some(id);
+        let mut stack = vec![start];
+        let mut members = Vec::new();
+        while let Some(i) = stack.pop() {
+            members.push(faces[i]);
+            for j in 0..faces.len() {
+                if feature_of[j].is_none() && !edges[i].is_disjoint(&edges[j]) {
+                    feature_of[j] = Some(id);
+                    stack.push(j);
+                }
+            }
+        }
+        out.push(members);
+    }
+    out
+}
+
 /// Whether `p` lies on `face`.
 fn on_face(model: &Model, face: Shape, p: Point) -> bool {
     crate::boolean::PointClassifier::new(model, face).is_ok_and(|c| c.locate(p) == crate::boolean::PointLocation::Boundary)
@@ -179,6 +268,7 @@ fn history(model: &Model, solid: Shape, removed: &[Shape], result: Shape) -> His
         .map(|s| s.node)
         .collect();
     let result_faces = model.unique_subshapes(result, NodeKind::Face);
+    let original_faces = model.unique_subshapes(solid, NodeKind::Face);
     // (Edges below.)
     for kind in [NodeKind::Face, NodeKind::Vertex] {
         for s in model.unique_subshapes(solid, kind) {
@@ -187,11 +277,34 @@ fn history(model: &Model, solid: Shape, removed: &[Shape], result: Shape) -> His
             }
             let images: Vec<NodeId> = if kind == NodeKind::Face && !removed.iter().any(|r| r.node == s.node) {
                 let surface = model.surface(s);
-                result_faces
+                let alike: Vec<Shape> = result_faces.iter().copied().filter(|f| surface.is_some() && model.surface(*f) == surface).collect();
+                let mut images: Vec<Shape> = alike.iter().copied().filter(|&f| face_point(model, s).is_some_and(|p| on_face(model, f, p))).collect();
+                // (And the pieces of it carried on that another solid split off, where it
+                // meets that one in part: new faces on its surface holding none of the
+                // originals, next to its images.)
+                let fresh: Vec<Shape> = alike
                     .iter()
-                    .filter(|f| surface.is_some() && model.surface(**f) == surface && face_point(model, s).is_some_and(|p| on_face(model, **f, p)))
-                    .map(|f| f.node)
-                    .collect()
+                    .copied()
+                    .filter(|&f| !images.iter().any(|i| i.node == f.node) && !in_result_before(model, solid, f.node))
+                    .filter(|&f| !original_faces.iter().any(|&o| model.surface(o) == surface && face_point(model, o).is_some_and(|p| on_face(model, f, p))))
+                    .collect();
+                if !images.is_empty() {
+                    let mut grown = true;
+                    while grown {
+                        grown = false;
+                        for &f in &fresh {
+                            if images.iter().any(|i| i.node == f.node) {
+                                continue;
+                            }
+                            let edges: Vec<NodeId> = model.unique_subshapes(f, NodeKind::Edge).into_iter().map(|e| e.node).collect();
+                            if images.iter().any(|&i| model.unique_subshapes(i, NodeKind::Edge).iter().any(|e| edges.contains(&e.node))) {
+                                images.push(f);
+                                grown = true;
+                            }
+                        }
+                    }
+                }
+                images.into_iter().map(|f| f.node).collect()
             } else {
                 Vec::new()
             };

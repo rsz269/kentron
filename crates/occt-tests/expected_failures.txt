@@ -111,13 +111,6 @@ tests/boolean/cells_test/K1
 tests/boolean/gdml_public/A9
 tests/boolean/gdml_public/B2
 tests/boolean/history/A7
-tests/boolean/removefeatures/B7
-tests/boolean/removefeatures/C1
-tests/boolean/removefeatures/C3
-tests/boolean/removefeatures/C4
-tests/boolean/removefeatures/C5
-tests/boolean/removefeatures/D4
-tests/boolean/removefeatures/G1
 tests/boolean/volumemaker/A4
 tests/boolean/volumemaker/C5
 tests/boolean/volumemaker/C6

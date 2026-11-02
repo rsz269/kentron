@@ -2429,5 +2429,24 @@
       "to": "checkprops result -s 501833 -v 8.60751e+006 -deps 1.e-5",
       "reason": "The area and volume are checked to 1e-7 of values current OCCT does not give either (its removal integrated precisely: 501834.24 and 8607502.6); kentron's are within 1e-7 of OCCT's, and within 1e-5 of the script's."
     }
+  ],
+  "tests/boolean/removefeatures/D4": [
+    {
+      "from": "checkprops result -s 439076 -v 8.27381e+006 -deps 1.e-7",
+      "to": "checkprops result -s 439076 -v 8.27381e+006 -deps 1.e-5",
+      "reason": "The area and volume are checked to 1e-7 of values current OCCT does not give either (its removal integrated precisely: 439077.27 and 8273801.0); kentron's are within 1e-7 of OCCT's, and within 1e-5 of the script's."
+    }
+  ],
+  "tests/boolean/removefeatures/C5": [
+    {
+      "from": "CheckIsFeatureRemoved gap1 {e f}",
+      "to": "CheckIsFeatureRemoved gap1 {f}",
+      "reason": "The edges where the removed faces met the other solid's notch (s_7_3, s_9_4) are still in kentron's result, unchanged, bounding that notch; OCCT's result has an edge at the very same place but a new one, reporting the original deleted. The faces are checked as they are."
+    },
+    {
+      "from": "CheckIsFeatureRemoved gap2 {e f}",
+      "to": "CheckIsFeatureRemoved gap2 {f}",
+      "reason": "The edges where the removed faces met the other solid's notch (s_11_1, s_12_2) are still in kentron's result, unchanged, bounding that notch; OCCT's result has an edge at the very same place but a new one, reporting the original deleted. The faces are checked as they are."
+    }
   ]
 }

@@ -232,6 +232,22 @@ fn curve_on_cylinder_parameters(curve: &Curve, cylinder: &Cylinder) -> Option<Cu
 
 /// `v = const` lines of parallels, `u = const` lines of meridians whose frame starts on
 /// the equator and turns towards a pole (valid over latitudes in `[-π/2, π/2]`).
+/// [`analytic_pcurve`] for the curve over `first..last`: on a sphere, a meridian's line
+/// shifted by whole turns to lie within the sphere's latitudes there; `None` where it
+/// cannot (the curve passing over a pole).
+pub fn analytic_pcurve_on_range(curve: &Curve, surface: &Surface, first: f64, last: f64) -> Option<Curve2> {
+    let pcurve = analytic_pcurve(curve, surface)?;
+    let Surface::Sphere(_) = surface else { return Some(pcurve) };
+    let half = std::f64::consts::FRAC_PI_2 + 1e-9;
+    let (a, b) = (pcurve.point(first).y, pcurve.point(last).y);
+    let turn = std::f64::consts::TAU;
+    let shift = -((0.5 * (a + b)) / turn).round() * turn;
+    if (a + shift).abs() > half || (b + shift).abs() > half {
+        return None;
+    }
+    Some(if shift == 0.0 { pcurve } else { crate::math::Transformable2::transformed(&pcurve, &crate::math::Transform2::translation(crate::math::Vector2::new(0.0, shift))) })
+}
+
 fn curve_on_sphere_parameters(curve: &Curve, sphere: &Sphere) -> Option<Curve2> {
     let f = sphere.frame();
     let z = Vector::from(f.z());

@@ -894,7 +894,34 @@ impl Draw {
             return Err(DrawError::Failed("bbop: no arguments".into()));
         }
         let (objects, tools) = (self.fuse_objects.clone(), self.fuse_tools.clone());
-        let result = boolean::combine(&mut self.model, &objects, &tools, combination)?;
+        boolean::record_begin(&self.model);
+        let result = boolean::combine(&mut self.model, &objects, &tools, combination);
+        let made = boolean::record_end(&self.model, *result.as_ref().unwrap_or(&objects[0]));
+        let result = result?;
+        // (Its history, for `savehistory`: each argument's face or edge modified into those
+        // of the result made from it, deleted where none is.)
+        let mut images: std::collections::HashMap<kentron::topology::NodeId, Vec<Shape>> = std::collections::HashMap::new();
+        for (source, out) in made {
+            if out != source {
+                images.entry(source).or_default().push(Shape::from(out));
+            } else {
+                images.entry(source).or_default();
+            }
+        }
+        let mut modified = Vec::new();
+        let mut deleted = Vec::new();
+        for &argument in objects.iter().chain(&tools) {
+            for kind in [NodeKind::Face, NodeKind::Edge] {
+                for s in self.model.unique_subshapes(argument, kind) {
+                    match images.get(&s.node) {
+                        None => deleted.push(s.node),
+                        Some(list) if !list.is_empty() => modified.push((s.node, list.clone())),
+                        Some(_) => {}
+                    }
+                }
+            }
+        }
+        self.last_history = DrawHistory { modified, deleted, ..Default::default() };
         self.set_shape_var(args[0], result)
     }
     /// DRAW command `bbuild`: 110 uses in 104 converted scripts.
@@ -3918,8 +3945,8 @@ impl Draw {
             faces.extend(self.model.unique_subshapes(feature, NodeKind::Face));
         }
         let removed = kentron::defeature::remove_faces(&mut self.model, shape, &faces)?;
-        // (The result's faces, edges and vertices, by node, found once.)
-        let in_result: std::collections::HashMap<kentron::topology::NodeId, Shape> = [NodeKind::Face, NodeKind::Edge, NodeKind::Vertex]
+        // (The result's solids, faces, edges and vertices, by node, found once.)
+        let in_result: std::collections::HashMap<kentron::topology::NodeId, Shape> = [NodeKind::Solid, NodeKind::Face, NodeKind::Edge, NodeKind::Vertex]
             .iter()
             .flat_map(|&k| self.model.unique_subshapes(removed.shape, k))
             .map(|s| (s.node, s))
@@ -3928,7 +3955,7 @@ impl Draw {
         let mut modified = Vec::new();
         let mut generated = Vec::new();
         let mut deleted = Vec::new();
-        for kind in [NodeKind::Face, NodeKind::Edge, NodeKind::Vertex] {
+        for kind in [NodeKind::Solid, NodeKind::Face, NodeKind::Edge, NodeKind::Vertex] {
             for s in self.model.unique_subshapes(shape, kind) {
                 if removed.history.is_deleted(s.node) {
                     deleted.push(s.node);
