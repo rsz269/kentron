@@ -424,7 +424,13 @@ pub(super) fn trace(base: &Surface, other: &Surface, range: Range, (nu, nv): (us
                 continue;
             }
             let on = end.p - before.p;
-            let nearest = |ahead: bool| meetings.iter().filter(|m| ((m.p - end.p).dot(on) > 0.0) == ahead && m.p.distance(end.p) <= 0.1 * leaf).min_by(|a, b| a.p.distance(end.p).total_cmp(&b.p.distance(end.p)));
+            // (As far as a step where the surfaces turn tangent there, at the end and at the
+            // point, as two fillets of one radius meeting at a corner: steps stop there some way
+            // short.)
+            let touching = tracer.sine(&end) < TANGENT;
+            let straight_on = |m: &Both| (m.p - end.p).dot(on) >= 0.9 * (m.p - end.p).length() * on.length();
+            let reach = |m: &Both| if touching && tracer.sine(m) < TANGENT && straight_on(m) { leaf } else { 0.1 * leaf };
+            let nearest = |ahead: bool| meetings.iter().filter(|m| ((m.p - end.p).dot(on) > 0.0) == ahead && m.p.distance(end.p) <= reach(m)).min_by(|a, b| a.p.distance(end.p).total_cmp(&b.p.distance(end.p)));
             if let Some(&m) = nearest(true) {
                 if at_end { points.push(m) } else { points.insert(0, m) }
             } else if let Some(&m) = nearest(false).filter(|m| tracer.sine(m) < TANGENT && (m.p - before.p).dot(on) > 0.0) {
