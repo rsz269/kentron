@@ -2821,6 +2821,14 @@ impl Graph {
                 .zip(ends)
                 .map(|(section, met)| {
                     let mut found = self.section_points(fa, fb, section);
+                    // (Where it meets an edge so against a surface not free-form, other
+                    // points found on it there (where it crosses another section running
+                    // along that edge, found only as roughly as the surfaces touching allow)
+                    // are that meeting: left out, the section ending on the edge.)
+                    let bunched = |x: usize, m: usize| x != m && self.vertices.points[x].distance(self.vertices.points[m]) <= 1e3 * on_tol();
+                    if !(geom::freeform(&self.faces[fa].surface) && geom::freeform(&self.faces[fb].surface)) {
+                        found.retain(|f| !met.iter().any(|m| bunched(f.1, m.1)));
+                    }
                     // (Met exactly: on it, not only passed near.)
                     for m in met {
                         match found.iter_mut().find(|f| f.1 == m.1) {
@@ -2851,11 +2859,13 @@ impl Graph {
     /// section's, and the point on the edge.
     fn section_end_meetings(&self, fa: usize, fb: usize, section: &Section) -> Vec<(usize, f64, f64, Point)> {
         let Section::Sampled(points, false, traced) = section else { return Vec::new() };
-        // (Between free-form faces: two lying nearly on one another as offsets and ruled
-        // walls of a filling can.)
-        if traced.st.is_none() || points.len() < 2 || !geom::freeform(&self.faces[fa].surface) || !geom::freeform(&self.faces[fb].surface) {
+        // (Where either face is free-form: two lying nearly on one another as offsets and
+        // ruled walls of a filling can, or a lofted face whose edge lies on a cylinder the
+        // loft crosses, touching it where the section from across the face meets that edge.)
+        if traced.st.is_none() || points.len() < 2 || !(geom::freeform(&self.faces[fa].surface) || geom::freeform(&self.faces[fb].surface)) {
             return Vec::new();
         }
+        let both_freeform = geom::freeform(&self.faces[fa].surface) && geom::freeform(&self.faces[fb].surface);
         let (lo, hi) = section.range();
         let span = hi - lo;
         let reach = 10.0 * on_tol();
@@ -2883,6 +2893,14 @@ impl Graph {
                         continue;
                     }
                     let gap = |t: f64| geom::project(c, e.first, e.last, section.point(t)).1;
+                    // (Against a surface not free-form, not a section running along the
+                    // edge, the edge itself where it lies on that surface: it meets the edge
+                    // all over the stretch, as nearly as a section traced where the surfaces
+                    // touch follows it. Between free-form faces lying nearly on one another,
+                    // such a section is the edge they share, met all the same.)
+                    if !both_freeform && gap(a) <= tangent_reach && gap(0.5 * (a + b)) <= tangent_reach && gap(b) <= tangent_reach {
+                        continue;
+                    }
                     // (Its nearest approach over the stretch: sampled, then narrowed.)
                     let n = 32;
                     let best = (0..=n).map(|i| a + (b - a) * i as f64 / n as f64).min_by(|x, y| gap(*x).total_cmp(&gap(*y))).unwrap_or(end);

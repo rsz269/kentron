@@ -2262,6 +2262,25 @@ mod tests {
         assert!((volume - 182.3066).abs() < 1e-3, "{volume}");
     }
 
+    /// A square bar lofted round at its end (to a circle through the square's middles) and
+    /// cut down to a cylinder through that circle: the loft's sides meet the cylinder along
+    /// its top circle and in curves from the square's crossings up to it, where the surfaces
+    /// touch. The curves end on the circle, the corners outside the cylinder cut away (as
+    /// OCCT: 15 faces, 1387.617 by its loft).
+    #[test]
+    fn a_square_lofted_round_cut_to_a_cylinder() {
+        let mut model = Model::new();
+        let mut read = |text: &str| crate::io::brep::read(&mut model, &mut text.as_bytes()).unwrap();
+        let bar = read(include_str!("tests/square_lofted_round_a.brep"));
+        let cylinder = read(include_str!("tests/square_lofted_round_b.brep"));
+        let result = intersection(&mut model, bar, cylinder).unwrap();
+        let report = validity::check(&model, result);
+        assert!(report.is_valid(), "{report:?}");
+        assert_eq!(model.unique_subshapes(result, crate::topology::NodeKind::Face).len(), 15);
+        let volume = properties::volume(&model, result).mass;
+        assert!((volume - 1387.559).abs() < 1e-2, "{volume}");
+    }
+
     /// A cylinder with a window through its side, the window's pcurves kept a period off the
     /// rest of the face (as a model may keep them): its window is still a hole in the face,
     /// not a face of its own, when the solid meets another (the same volume as without the
