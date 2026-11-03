@@ -14,7 +14,7 @@
 
 use crate::boolean::{PointClassifier, PointLocation};
 use crate::error::Result;
-use crate::geometry::surface::{Cylinder, Surface};
+use crate::geometry::surface::{Cone, Cylinder, Surface, Torus};
 use crate::geometry::{ParametricCurve, ParametricSurface};
 use crate::heal::face_loops;
 use crate::math::{Direction, Frame, Point, Point2, Transform, Vector};
@@ -111,7 +111,7 @@ pub(super) fn offset(model: &mut Model, solid: Shape, distance: f64, made: Made)
     };
     let mut faces = Vec::new();
     for face in model.unique_subshapes(solid, NodeKind::Face) {
-        let Some(surface @ (Surface::Plane(_) | Surface::Cylinder(_))) = model.surface(face).cloned() else { return Ok(None) };
+        let Some(surface @ (Surface::Plane(_) | Surface::Cylinder(_) | Surface::Cone(_))) = model.surface(face).cloned() else { return Ok(None) };
         let Some(uv) = face_loops(model, face) else { return Ok(None) };
         let loops = uv.iter().map(|l| l.iter().flat_map(|u| (0..16).map(move |i| u.at(i as f64 / 16.0))).collect()).collect();
         let mut edges = Vec::new();
@@ -144,9 +144,13 @@ pub(super) fn offset(model: &mut Model, solid: Shape, distance: f64, made: Made)
             lo = Point2::new(lo.x.min(q.x), lo.y.min(q.y));
             hi = Point2::new(hi.x.max(q.x), hi.y.max(q.y));
         }
-        let grow = if beside_removed { (4.0 * d).max(0.25 * size) } else { 0.0 };
+        // (A plane beside a cone grown too: their offsets need not meet within the plane's
+        // own bounds, a cone's moving across its axis as it narrows.)
+        let beside_cone = matches!(face.surface, Surface::Plane(_))
+            && model.unique_subshapes(face.shape, NodeKind::Edge).iter().any(|e| faces.iter().any(|g| matches!(g.surface, Surface::Cone(_)) && model.unique_subshapes(g.shape, NodeKind::Edge).iter().any(|x| x.node == e.node)));
+        let grow = if beside_removed { (4.0 * d).max(0.25 * size) } else if beside_cone { 4.0 * d } else { 0.0 };
         let moved = match &face.surface {
-            Surface::Plane(plane) if !beside_removed => {
+            Surface::Plane(plane) if !beside_removed && !beside_cone => {
                 let n = Vector::from(plane.normal());
                 crate::modify::transform(model, face.shape, &Transform::translation(n * along), Default::default())?
             }
@@ -167,6 +171,39 @@ pub(super) fn offset(model: &mut Model, solid: Shape, distance: f64, made: Made)
                 let turn = (grow / r.abs()).min(std::f64::consts::PI);
                 let (u0, u1) = if hi.x - lo.x + 2.0 * turn >= std::f64::consts::TAU { (lo.x, lo.x + std::f64::consts::TAU) } else { (lo.x - turn, hi.x + turn) };
                 crate::make::face_on_domain(model, Surface::Cylinder(Cylinder::new(frame, r.abs())), u0, u1, lo.y - grow, hi.y + grow)?
+            }
+            Surface::Cone(c) => {
+                // (Moved along its normals: the cone of the same angle about the same axis,
+                // its radius grown by the distance's share across the axis, shifted along it
+                // by the rest; where that radius would be negative, the same cone from its
+                // apex, its parameter along it shifted to match.)
+                let (sin, cos) = c.semi_angle_sin_cos();
+                let f = c.frame();
+                let z = Vector::from(f.z());
+                let r = c.radius() + along * cos;
+                let origin = f.origin() - z * (along * sin);
+                let (cone, shift) = if r >= 0.0 {
+                    (Cone::new(Frame::new(origin, f.z(), f.x()), c.semi_angle(), r), 0.0)
+                } else {
+                    let apex = -r / sin;
+                    (Cone::new(Frame::new(origin + z * (apex * cos), f.z(), f.x()), c.semi_angle(), 0.0), -apex)
+                };
+                // (Grown past its bounds each way: trimmed by another face, its offset need not
+                // meet that face's within them.)
+                // (All the way round: only dividing the cells further.)
+                let grow = grow.max(4.0 * d);
+                let (u0, u1) = (lo.x, lo.x + std::f64::consts::TAU);
+                // (Not past its apex, on the side of it the face is: the moved cone's radius
+                // there nothing. To the apex itself, where the sheet closes on a point: stopped
+                // short of it, it leaves a hole there, and the cells inside it run on out.)
+                let (mut v0, mut v1) = (lo.y - grow + shift, hi.y + grow + shift);
+                let apex = -cone.radius() / cone.semi_angle_sin_cos().0;
+                if 0.5 * (lo.y + hi.y) + shift >= apex {
+                    v0 = v0.max(apex);
+                } else {
+                    v1 = v1.min(apex);
+                }
+                crate::make::face_on_domain(model, Surface::Cone(cone), u0, u1, v0, v1)?
             }
             _ => return Ok(None),
         };
@@ -196,10 +233,60 @@ pub(super) fn offset(model: &mut Model, solid: Shape, distance: f64, made: Made)
         if convex != (sign > 0.0) {
             continue;
         }
-        // (Tubes about straight edges only.)
         let (a, b) = (curve.point(c0), curve.point(c1));
         let length = a.distance(b);
-        if !matches!(curve, crate::geometry::curve::Curve::Line(_)) || length <= 1e-12 * size {
+        // (About a circular edge, a torus: the faces there surfaces of revolution about its
+        // axis, the tube's cross-section the same all round.)
+        if let crate::geometry::curve::Curve::Circle(circle) = &curve {
+            let f = circle.frame();
+            let z = Vector::from(f.z());
+            let radial = |p: Point| {
+                let w = p - f.origin();
+                let w = w - z * w.dot(z);
+                w * (1.0 / w.length().max(1e-300))
+            };
+            let e = radial(middle);
+            let angle_of = |n: Vector| n.dot(z).atan2(n.dot(e));
+            let (x, y) = (nf * sign, ng * sign);
+            let (vx, vy) = (angle_of(x), angle_of(y));
+            let mut sweep = vy - vx;
+            if sweep > std::f64::consts::PI {
+                sweep -= std::f64::consts::TAU;
+            } else if sweep < -std::f64::consts::PI {
+                sweep += std::f64::consts::TAU;
+            }
+            let (v0, v1) = if sweep >= 0.0 { (vx, vx + sweep) } else { (vx + sweep, vx) };
+            let torus = Surface::Torus(Torus::new(*f, circle.radius(), d));
+            sheets.push(crate::make::face_on_domain(model, torus, c0.min(c1), c0.max(c1), v0, v1)?);
+            if length > 1e-9 * size {
+                for p in [a, b] {
+                    match ends.iter_mut().find(|(q, _)| q.distance(p) <= 1e-9 * size) {
+                        Some((_, n)) => *n += 1,
+                        None => ends.push((p, 1)),
+                    }
+                }
+            }
+            continue;
+        }
+        // (About any other edge, the whole pipe round it: only dividing the cells further
+        // where the faces' offsets do not part.)
+        if !matches!(curve, crate::geometry::curve::Curve::Line(_)) && length > 1e-9 * size {
+            let (start, tangent) = curve.d1(c0);
+            let Some(t) = Direction::try_from_vector(tangent) else { return Ok(None) };
+            let ring = crate::make::edge_from_curve(model, crate::geometry::curve::Curve::Circle(crate::geometry::curve::Circle::new(Frame::from_z(start, t), d)))?;
+            let along = crate::make::edge_from_curve_range(model, curve.clone(), c0, c1)?;
+            let spine = crate::make::wire(model, &[along])?;
+            let Ok(pipe) = crate::sweep::pipe(model, ring, spine) else { return Ok(None) };
+            sheets.extend(model.unique_subshapes(pipe.shape, NodeKind::Face));
+            for p in [a, b] {
+                match ends.iter_mut().find(|(q, _)| q.distance(p) <= 1e-9 * size) {
+                    Some((_, n)) => *n += 1,
+                    None => ends.push((p, 1)),
+                }
+            }
+            continue;
+        }
+        if length <= 1e-12 * size {
             return Ok(None);
         }
         // (The tube's angle running from one face's offset to the other's.)

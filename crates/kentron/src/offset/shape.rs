@@ -1731,4 +1731,24 @@ mod tests {
         assert!((v - 4279.7876).abs() < 1e-2, "{v}");
         assert_eq!(model.unique_subshapes(wall, NodeKind::Face).len(), 32);
     }
+
+    /// A 60 x 40 x 20 block with a lip on its back wall, a cone narrowing from radius 6 at
+    /// the top to 3 at 3 below it, its axis 3 inside the wall, hollowed inwards by 3, open at
+    /// the top: the cone's offset passes its apex, and the sheet closes there. (Off OCCT's
+    /// volume, 16807.0103, by 3.05: the pipe about the cone's edge on the wall, of a radius
+    /// above that edge's at its vertex, folds on itself, and kentron's cavity keeps the
+    /// sharp corner there that OCCT's rounds.)
+    #[test]
+    fn a_lip_narrowing_down_a_wall_hollowed_past_its_apex() {
+        let mut model = Model::new();
+        let block = prism(&mut model, &[(-30.0, -20.0), (30.0, -20.0), (30.0, 20.0), (-30.0, 20.0)], 20.0);
+        let lip = Cone::new(3.0, 6.0, 3.0).with_frame(crate::math::Frame::from_z(Point::new(0.0, 17.0, 17.0), crate::math::Direction::Z)).build(&mut model).unwrap();
+        let body = crate::boolean::union(&mut model, block, lip).unwrap();
+        let body = crate::unify::unify_same_domain(&mut model, body).unwrap();
+        let top = face_at_height(&model, body, 20.0);
+        let hollow = thick_solid(&mut model, body, &[top], -3.0, Join::Arc).unwrap();
+        valid(&model, hollow);
+        let v = volume(&model, hollow).mass;
+        assert!((v - 16810.0553).abs() < 1e-2, "{v}");
+    }
 }
