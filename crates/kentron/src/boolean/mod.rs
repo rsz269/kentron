@@ -1988,6 +1988,30 @@ mod tests {
         assert!((v - 7.291729).abs() < 1e-3, "{v}");
     }
 
+    /// A concave fillet's tool, cut back to the torus its edge runs into, fused onto the
+    /// corner of a wall and a rib under that torus (a crop of a beer mat holder). The wall's
+    /// edge along the torus (read from a file, straying from it by 2e-6) and the tool's own
+    /// along it are one edge; the tool's cylinder, tangent to the rib's side, meets the torus
+    /// in a curve tangent to the rib's edge there, met at the corner's vertex. Taken a hair
+    /// apart each, they left an edge 2.5e-4 long and faces of no area. Volume and faces from
+    /// OCCT.
+    #[test]
+    fn a_torus_trimmed_fillet_tool_fused_onto_its_corner() {
+        let mut model = Model::new();
+        let read = |model: &mut Model, text: &str| crate::io::brep::read(model, &mut text.as_bytes()).unwrap();
+        let corner = read(&mut model, include_str!("tests/torus_trimmed_fillet_tool_a.brep"));
+        let tool = read(&mut model, include_str!("tests/torus_trimmed_fillet_tool_b.brep"));
+        let fused = union(&mut model, corner, tool).unwrap();
+        assert!(crate::validity::check(&model, fused).is_valid());
+        assert_eq!(model.explore(fused, crate::topology::NodeKind::Face).count(), 14);
+        for e in model.unique_subshapes(fused, crate::topology::NodeKind::Edge) {
+            let length = crate::properties::length(&model, e).mass;
+            assert!(length > 1e-3, "an edge {length} long at {:?}", model.point(model.edge_vertices(e).0));
+        }
+        let v = crate::properties::volume(&model, fused).mass;
+        assert!((v - 425.656548).abs() < 1e-3, "{v}");
+    }
+
     #[test]
     fn half_a_torus() {
         // A torus (R 10, r 3) cut by the half-space x > 0: half its volume 2π²Rr² and area

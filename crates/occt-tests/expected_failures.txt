@@ -88,7 +88,6 @@ tests/boolean/bopfuse_complex/J6
 tests/boolean/bopfuse_complex/K9
 tests/boolean/bopfuse_complex/L9
 tests/boolean/bopsection/D3
-tests/boolean/boptuc_complex/B5
 tests/boolean/boptuc_complex/C7
 tests/boolean/bsection/G5
 tests/boolean/bsection/L8

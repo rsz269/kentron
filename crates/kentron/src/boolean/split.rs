@@ -143,7 +143,10 @@ impl Graph {
                 let q = &pieces[j];
                 let Some(curve) = &self.edges[q.edge].curve else { return false };
                 let sections = self.edges[p.edge].operand.is_none() && self.edges[q.edge].operand.is_none();
-                let within = if sections { on_tol().max(2e-4 * chord) } else { on_tol() };
+                // (Or within either edge's own tolerance: an edge read from a file straying
+                // from its surfaces that much, and another lying on them.)
+                let strays = self.edges[p.edge].tolerance.max(self.edges[q.edge].tolerance).min(1e-3 * chord);
+                let within = if sections { on_tol().max(2e-4 * chord) } else { on_tol().max(strays) };
                 [0.5, 0.25, 0.75].iter().all(|&s| geom::project(curve, q.first.min(q.last), q.first.max(q.last), probe(p, s)).1 <= within)
             });
             match found {

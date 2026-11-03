@@ -21,8 +21,6 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/boolean/bfuse_2d/A2
-notes:
-  - "kentron deviation: kentron's result splits its edges and faces otherwise than OCCT's, its length as OCCT's: counts kentron's, vertex 16 (OCCT 14), edge 16 (OCCT 14)."
 build:
   - a: {load: {brep: "case_3_wire.brep"}}
   - b: {load: {brep: "offset_wire_034.brep"}}
@@ -30,7 +28,7 @@ build:
 checks:
   - {length: result, eq: 1085.29, rel: 0.01}
   - {exists: result}
-  - {count: result, eq: {vertices: 16, edges: 16}, placements: true}
+  - {count: result, eq: {vertices: 14, edges: 14}, placements: true}
   - {valid: result}
 ---
 case: A3
@@ -40,7 +38,7 @@ ported_from:
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/boolean/bfuse_2d/A3
 notes:
-  - "kentron deviation: kentron's result splits its edges and faces otherwise than OCCT's, its length as OCCT's: counts kentron's, vertex 29 (OCCT 20), edge 29 (OCCT 20)."
+  - "kentron deviation: kentron's result splits its edges and faces otherwise than OCCT's, its length as OCCT's: counts kentron's, vertex 26 (OCCT 20), edge 26 (OCCT 20)."
 build:
   - a: {load: {brep: "case_3_wire.brep"}}
   - b: {load: {brep: "case_3_wire2.brep"}}
@@ -48,7 +46,7 @@ build:
 checks:
   - {length: result, eq: 1085.29, rel: 0.01}
   - {exists: result}
-  - {count: result, eq: {vertices: 29, edges: 29}, placements: true}
+  - {count: result, eq: {vertices: 26, edges: 26}, placements: true}
   - {valid: result}
 ---
 case: A4

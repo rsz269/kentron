@@ -1962,32 +1962,18 @@
       "reason": "kentron's result splits its edges and faces otherwise than OCCT's, its length as OCCT's: counts kentron's, vertex 9 (OCCT 8)."
     }
   ],
-  "tests/boolean/bfuse_2d/A2": [
-    {
-      "from": "d.checknbshapes(&[\"result\", \"-vertex\", \"14\", \"-edge\", \"14\", \"-t\"])?;",
-      "to": "d.checknbshapes(&[\"result\", \"-vertex\", \"16\", \"-edge\", \"16\", \"-t\"])?;",
-      "reason": "kentron's result splits its edges and faces otherwise than OCCT's, its length as OCCT's: counts kentron's, vertex 16 (OCCT 14), edge 16 (OCCT 14)."
-    }
-  ],
   "tests/boolean/bfuse_2d/A3": [
     {
       "from": "d.checknbshapes(&[\"result\", \"-vertex\", \"20\", \"-edge\", \"20\", \"-t\"])?;",
-      "to": "d.checknbshapes(&[\"result\", \"-vertex\", \"29\", \"-edge\", \"29\", \"-t\"])?;",
-      "reason": "kentron's result splits its edges and faces otherwise than OCCT's, its length as OCCT's: counts kentron's, vertex 29 (OCCT 20), edge 29 (OCCT 20)."
-    }
-  ],
-  "tests/boolean/bopfuse_2d/A2": [
-    {
-      "from": "d.checknbshapes(&[\"result\", \"-vertex\", \"14\", \"-edge\", \"14\", \"-t\"])?;",
-      "to": "d.checknbshapes(&[\"result\", \"-vertex\", \"16\", \"-edge\", \"16\", \"-t\"])?;",
-      "reason": "kentron's result splits its edges and faces otherwise than OCCT's, its length as OCCT's: counts kentron's, vertex 16 (OCCT 14), edge 16 (OCCT 14)."
+      "to": "d.checknbshapes(&[\"result\", \"-vertex\", \"26\", \"-edge\", \"26\", \"-t\"])?;",
+      "reason": "kentron's result splits its edges and faces otherwise than OCCT's, its length as OCCT's: counts kentron's, vertex 26 (OCCT 20), edge 26 (OCCT 20)."
     }
   ],
   "tests/boolean/bopfuse_2d/A3": [
     {
       "from": "d.checknbshapes(&[\"result\", \"-vertex\", \"20\", \"-edge\", \"20\", \"-t\"])?;",
-      "to": "d.checknbshapes(&[\"result\", \"-vertex\", \"29\", \"-edge\", \"29\", \"-t\"])?;",
-      "reason": "kentron's result splits its edges and faces otherwise than OCCT's, its length as OCCT's: counts kentron's, vertex 29 (OCCT 20), edge 29 (OCCT 20)."
+      "to": "d.checknbshapes(&[\"result\", \"-vertex\", \"26\", \"-edge\", \"26\", \"-t\"])?;",
+      "reason": "kentron's result splits its edges and faces otherwise than OCCT's, its length as OCCT's: counts kentron's, vertex 26 (OCCT 20), edge 26 (OCCT 20)."
     }
   ],
   "tests/boolean/boptuc_2d/M8": [

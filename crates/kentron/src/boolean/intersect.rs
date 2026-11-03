@@ -2507,7 +2507,18 @@ impl Graph {
                                     *allowance = allowance.max(within);
                                 }
                                 None => {
-                                    let v = self.vertices.add(p);
+                                    // (Within as far as either strays of an end of the edge or
+                                    // a corner of the face, up to twice the classifying
+                                    // distance (a vertex only just off the face it was cut
+                                    // to): that vertex is where it meets the face, not a
+                                    // second one beside it.)
+                                    let reach = self.faces[fi].drift.max(self.edges[ei].tolerance).min(2.0 * on_tol());
+                                    let corners = self.faces[fi].boundary.iter().flat_map(|u| [self.edges[u.edge].start, self.edges[u.edge].end]);
+                                    let end = [self.edges[ei].start, self.edges[ei].end].into_iter().chain(corners).map(|v| (v, self.vertices.points[v].distance(p))).filter(|&(_, d)| d > on_tol() && d <= reach).min_by(|a, b| a.1.total_cmp(&b.1));
+                                    let v = match end {
+                                        Some((v, _)) => v,
+                                        None => self.vertices.add(p),
+                                    };
                                     self.add_pave(ei, t, v);
                                     self.faces[fi].vertices_on.push(v);
                                 }
@@ -2534,10 +2545,23 @@ impl Graph {
         let sine = d1.cross(d2).length() / (d1.length() * d2.length()).max(1e-300);
         let reach = (on_tol() / sine.max(1e-12)).min(1e2 * on_tol());
         let ends = [self.edges[e1].start, self.edges[e1].end, self.edges[e2].start, self.edges[e2].end];
+        // (Or farther, where they touch there: curves tangent where they meet (as where a
+        // surface tangent to another meets a third) run within the tolerance of each other
+        // for a while, the point found anywhere along that. An end within a little of the
+        // edges' lengths, with both curves through it and within the tolerance of each other
+        // all the way to it, is where they meet.)
+        let (a, b) = (&self.edges[e1], &self.edges[e2]);
+        let short = a.bbox.0.distance(a.bbox.1).min(b.bbox.0.distance(b.bbox.1));
+        let touching = |q: Point| {
+            let (tq, dq) = geom::project(&c1, a.first, a.last, q);
+            dq <= 2.0 * on_tol()
+                && geom::project(&c2, b.first, b.last, q).1 <= 2.0 * on_tol()
+                && (1..8).all(|k| geom::project(&c2, b.first, b.last, c1.point(t + (tq - t) * k as f64 / 8.0)).1 <= 2.0 * on_tol())
+        };
         let snapped = ends
             .into_iter()
             .map(|v| (v, self.vertices.points[v].distance(p)))
-            .filter(|&(_, d)| d <= reach)
+            .filter(|&(v, d)| d <= reach || (d <= (1e-3 * short).min(1e4 * on_tol()) && touching(self.vertices.points[v])))
             .min_by(|a, b| a.1.total_cmp(&b.1));
         match snapped {
             Some((v, _)) => {
