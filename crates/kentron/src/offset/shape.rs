@@ -157,6 +157,7 @@ fn stepped(model: &mut Model, shape: Shape, distance: f64, own: &[(NodeId, f64)]
                 prism.moved(&crate::math::Transform::translation(n * lo))
             }
         };
+
         for f in model.unique_subshapes(prism, NodeKind::Face) {
             if let Some((o, m)) = plane_of(model, f) {
                 if m.dot(n).abs() <= crate::tolerance::ANGULAR {
@@ -166,6 +167,30 @@ fn stepped(model: &mut Model, shape: Shape, distance: f64, own: &[(NodeId, f64)]
         }
         let _ = origin;
         result = crate::boolean::union(model, result, prism)?;
+    }
+    // Where two faces moved further meet along a straight edge (two walls of a box raised,
+    // at their corner), the corner between their prisms filled along it (as their offsets
+    // meet there): a block of the edge's length, across it each one's rest along its normal.
+    for (k, &(i, lo_i)) in raised.iter().enumerate() {
+        for &(j, lo_j) in &raised[k + 1..] {
+            if roots[i] == roots[j] {
+                continue;
+            }
+            let ((_, ni), (_, nj)) = (planes[i].expect("planar"), planes[j].expect("planar"));
+            let (ri, rj) = (distance_of(faces[i].node) - lo_i, distance_of(faces[j].node) - lo_j);
+            let shared: Vec<Shape> = model.unique_subshapes(faces[i], NodeKind::Edge).into_iter().filter(|e| edges_of[j].contains(&e.node)).collect();
+            for e in shared {
+                let Some((Curve::Line(_), _, _)) = model.edge_curve(e) else { continue };
+                let (a, b) = model.edge_vertices(e);
+                let (p0, p1) = (model.point(a) + ni * lo_i + nj * lo_j, model.point(b) + ni * lo_i + nj * lo_j);
+                let corners = [p0, p0 + ni * ri, p0 + ni * ri + nj * rj, p0 + nj * rj];
+                let sides: Vec<Shape> = (0..4).map(|q| crate::make::edge_between(model, corners[q], corners[(q + 1) % 4])).collect::<Result<_>>()?;
+                let wire = crate::make::wire(model, &sides)?;
+                let quad = crate::make::planar_face(model, wire)?;
+                let block = crate::sweep::extrude(model, quad, p1 - p0)?.shape;
+                result = crate::boolean::union(model, result, block)?;
+            }
+        }
     }
     // The faces on the prisms' sides' planes merged with those beside them there.
     let kept: crate::hashing::FastSet<NodeId> = model
@@ -1313,6 +1338,31 @@ mod tests {
             assert!((a - area).abs() < 1e-6 * area, "{a}");
             assert_eq!(model.unique_subshapes(moved, NodeKind::Face).len(), faces);
         }
+    }
+
+    /// A box in two layers (its sides split at mid-height), the upper halves of two
+    /// neighbouring sides moved 3 out: each a step out of its side, and the corner between
+    /// them filled along their shared edge only (as OCCT's offset shape_type_i_c_multi B8).
+    #[test]
+    fn neighbouring_faces_moved_further_fill_the_corner_between_them() {
+        let mut model = Model::new();
+        let lower = Cuboid::from_corners(Point::new(0.0, 0.0, 0.0), Point::new(10.0, 10.0, 5.0)).build(&mut model).unwrap();
+        let upper = Cuboid::from_corners(Point::new(0.0, 0.0, 5.0), Point::new(10.0, 10.0, 10.0)).build(&mut model).unwrap();
+        let block = crate::boolean::union(&mut model, lower, upper).unwrap();
+        let raised: Vec<(Shape, f64)> = model
+            .unique_subshapes(block, NodeKind::Face)
+            .into_iter()
+            .filter(|&f| {
+                let b = crate::properties::bounding_box(&model, f);
+                b.min.z > 4.9 && b.max.z > 9.9 && ((b.max.y - b.min.y) < 1e-3 && b.min.y.abs() < 1e-3 || (b.max.x - b.min.x) < 1e-3 && (b.min.x - 10.0).abs() < 1e-3)
+            })
+            .map(|f| (f, 3.0))
+            .collect();
+        assert_eq!(raised.len(), 2);
+        let moved = shape_with_faces(&mut model, block, 0.0, &raised, Join::Intersection).unwrap();
+        valid(&model, moved);
+        let v = volume(&model, moved).mass;
+        assert!((v - 1345.0).abs() < 1e-6 * 1345.0, "{v}");
     }
 
     #[test]

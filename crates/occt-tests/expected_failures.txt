@@ -1143,9 +1143,6 @@ tests/offset/shape_type_i_c_multi/A6
 tests/offset/shape_type_i_c_multi/A7
 tests/offset/shape_type_i_c_multi/A8
 tests/offset/shape_type_i_c_multi/B6
-tests/offset/shape_type_i_c_multi/B8
-tests/offset/shape_type_i_c_multi/B9
-tests/offset/shape_type_i_c_multi/C1
 tests/offset/shape_type_i_c_multi/C2
 tests/offset/shape_type_i_c_multi/C4
 tests/offset/shape_type_i_c_multi/C5
