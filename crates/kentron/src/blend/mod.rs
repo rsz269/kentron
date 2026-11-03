@@ -9,7 +9,7 @@ pub use corner2d::{chamfer_2d, fillet_2d, fillet_wire_2d, Corner2d};
 
 use crate::error::{Error, Result};
 use crate::geometry::curve::{Circle, Curve};
-use crate::geometry::surface::Surface;
+use crate::geometry::surface::{Plane, Surface};
 use std::f64::consts::TAU;
 
 use crate::geometry::ParametricSurface;
@@ -939,6 +939,9 @@ fn fillet_solid_edges_as(model: &mut Model, shape: Shape, edges: &[(Shape, f64)]
     let extended = extensions(model, shape, &corners);
     let overhangs = overhanging_ends(model, shape, &corners, &extended, &mitred);
     let runs = extended.clone();
+    // (The planes of the tools' ends, where the faces the tools leave there may lie on the
+    // solid's own: merged into them at the end.)
+    let mut caps: Vec<Plane> = Vec::new();
     for (i, ((((corner, radius), extend), mitre), overhang)) in corners.iter().zip(extended).zip(&mitred).zip(&overhangs).enumerate() {
         let (extend, beyond) = if corner.convex { (extend, Vec::new()) } else { concave_ends(model, shape, &corners, i)? };
         let tool = corner.tool(model, *radius, mitre_runs(corner, *radius, extend, mitre))?;
@@ -947,6 +950,9 @@ fn fillet_solid_edges_as(model: &mut Model, shape: Shape, edges: &[(Shape, f64)]
         record_tool(model, tool, &corner.edges);
         for (solid, keep_inside) in beyond {
             tool = if keep_inside { boolean::intersection(model, tool, solid)? } else { boolean::difference(model, tool, solid)? };
+        }
+        if let Path::Line { .. } = corner.path {
+            caps.extend(cap_planes(model, tool, corner.tangent));
         }
         result = if corner.convex { boolean::difference(model, result, tool)? } else { boolean::union(model, result, tool)? };
         result = keep(model, result)?;
@@ -991,7 +997,45 @@ fn fillet_solid_edges_as(model: &mut Model, shape: Shape, edges: &[(Shape, f64)]
         result = boolean::union(model, result, fill)?;
         result = keep(model, result)?;
     }
-    Ok(result)
+    merged_at_caps(model, result, &caps)
+}
+
+/// The planes of `tool`'s planar faces square to `along` (the straight edge it rounds): its
+/// ends cut square, not its sides along the edge's faces nor ends cut slanting by a face
+/// over them (as a chamfer's, which OCCT leaves a face of its own there).
+fn cap_planes(model: &Model, tool: Shape, along: Vector) -> Vec<Plane> {
+    let along = along.normalized();
+    model
+        .unique_subshapes(tool, NodeKind::Face)
+        .into_iter()
+        .filter_map(|f| plane_of_face(model, f))
+        .filter(|p| Vector::from(p.normal()).dot(along).abs() >= 1.0 - tolerance::ANGULAR)
+        .collect()
+}
+
+/// A planar face's plane, where it is.
+fn plane_of_face(model: &Model, face: Shape) -> Option<Plane> {
+    match untrimmed(model.surface(face)?) {
+        Surface::Plane(p) => Some(if face.placement == Transform::IDENTITY { p.clone() } else { p.transformed(&face.placement) }),
+        _ => None,
+    }
+}
+
+/// `result` with its faces on the planes `caps` (where fillet tools ended) merged with the
+/// faces beside them on the same plane, the others left as they are: a tool ending on a
+/// face square to its edge (as a pocket's rim rounded up to the pocket's end wall) leaves its
+/// end there as a face of its own, which OCCT's fillet, extending the wall, does not.
+fn merged_at_caps(model: &mut Model, result: Shape, caps: &[Plane]) -> Result<Shape> {
+    if caps.is_empty() {
+        return Ok(result);
+    }
+    let faces = model.unique_subshapes(result, NodeKind::Face);
+    let on_cap = |p: &Plane| caps.iter().any(|c| c.normal().dot(p.normal()).abs() >= 1.0 - tolerance::ANGULAR && c.distance(p.origin()).abs() <= tolerance::LINEAR);
+    let kept: crate::hashing::FastSet<NodeId> = faces.iter().filter(|&&f| !plane_of_face(model, f).is_some_and(|p| on_cap(&p))).map(|f| f.node).collect();
+    if kept.len() + 1 >= faces.len() {
+        return Ok(result);
+    }
+    crate::unify::unify_same_domain_keeping(model, result, crate::unify::UnifyOptions { faces: true, edges: false, same_surface_only: false }, &kept)
 }
 
 /// Where two convex fillets meet at a corner the material carries on past (a rim turning
@@ -4975,6 +5019,31 @@ mod tests {
         assert_eq!(model.explore(rounded, NodeKind::Solid).count(), 1);
         let v = properties::volume(&model, rounded).mass;
         assert!((v - 2861.94).abs() < 5.0, "{v}");
+    }
+
+    /// A pocket's rim rounded along one wall up to the pocket's end walls: where the fillet
+    /// ends, the end wall goes on up to it as one face (OCCT's 12 faces), not with the
+    /// fillet's end beside it as a face of its own.
+    #[test]
+    fn a_pocket_rim_fillet_ends_on_its_end_walls_extended() {
+        let mut model = Model::new();
+        let block = Cuboid::from_corners(Point::new(-30.0, -20.0, -10.0), Point::new(30.0, 20.0, 10.0)).build(&mut model).unwrap();
+        let pocket = Cuboid::from_corners(Point::new(-15.0, -10.0, 0.0), Point::new(15.0, 10.0, 11.0)).build(&mut model).unwrap();
+        let cut = boolean::difference(&mut model, block, pocket).unwrap();
+        let rim = model
+            .unique_subshapes(cut, NodeKind::Edge)
+            .into_iter()
+            .find(|&e| {
+                let (p, q) = model.edge_vertices(e);
+                let (p, q) = (model.point(p), model.point(q));
+                p.y == 10.0 && q.y == 10.0 && p.z == 10.0 && q.z == 10.0
+            })
+            .unwrap();
+        let rounded = fillet(&mut model, cut, &[rim], 1.0).unwrap();
+        assert!(validity::check(&model, rounded).is_valid());
+        assert_eq!(model.explore(rounded, NodeKind::Face).count(), 12);
+        let v = properties::volume(&model, rounded).mass;
+        assert!((v - 41993.56194).abs() < 1e-4, "{v}");
     }
 
     #[test]
