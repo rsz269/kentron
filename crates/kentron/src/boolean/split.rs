@@ -471,6 +471,41 @@ impl Graph {
         for i in degenerate {
             let piece = &pieces[arcs[i].piece];
             let (vertex, edge, first, last) = (piece.start, piece.edge, piece.first, piece.last);
+            // (Its ends where the arcs beside it reach the pole, in u: anywhere along it is the
+            // one point, and the curves beside it may reach it a little apart in u from where
+            // its own pcurve ends, as a section traced into a cone's apex, its u there found
+            // only roughly.)
+            {
+                let (a, b) = (arcs[i].uv[0], *arcs[i].uv.last().expect("polyline"));
+                let span = (b[0] - a[0]).abs();
+                let reach = 1e-3 * span.max(1e-9);
+                let others: Vec<f64> = arcs
+                    .iter()
+                    .enumerate()
+                    .filter(|&(j, arc)| j != i && self.edges[pieces[arc.piece].edge].curve.is_some())
+                    .flat_map(|(_, arc)| {
+                        let p = &pieces[arc.piece];
+                        [(p.start, arc.uv[0]), (p.end, *arc.uv.last().expect("polyline"))]
+                    })
+                    .filter(|&(end, uv)| end == vertex && (uv[1] - a[1]).abs() <= 1e-6)
+                    .map(|(_, uv)| uv[0])
+                    .collect();
+                let snapped = |u: f64| -> f64 {
+                    let nearest = others.iter().copied().min_by(|x, y| (x - u).abs().total_cmp(&(y - u).abs()));
+                    match nearest {
+                        Some(x) if (x - u).abs() <= reach => x,
+                        _ => u,
+                    }
+                };
+                let (sa, sb) = (snapped(a[0]), snapped(b[0]));
+                if sa != a[0] || sb != b[0] {
+                    let n = arcs[i].uv.len();
+                    arcs[i].uv[0][0] = sa;
+                    arcs[i].uv[n - 1][0] = sb;
+                    arcs[i].leave_start = [sb - sa, 0.0];
+                    arcs[i].leave_end = [sa - sb, 0.0];
+                }
+            }
             let (a, b) = (arcs[i].uv[0], *arcs[i].uv.last().expect("polyline"));
             let (lo, hi) = (a[0].min(b[0]), a[0].max(b[0]));
             let eps = 1e-9 * (hi - lo).max(1.0);

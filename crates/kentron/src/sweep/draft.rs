@@ -186,6 +186,10 @@ pub fn extrude_drafted(model: &mut Model, profile: Shape, v: Vector, angle: f64)
                         let y = z_vector.cross(x);
                         return super::skeleton::drafted_by_skeleton(model, profile, &corners, origin, x, y, v, d);
                     }
+                    // (Lines and arcs, leaning in: by the zones each takes away.)
+                    if d > 0.0 {
+                        return drafted_by_zones(model, profile, &pieces, inward, v, d);
+                    }
                     return Err(Error::InvalidInput("the draft closes a straight edge of the profile".into()));
                 }
                 let mut corners = vec![piece.start, piece.end];
@@ -236,6 +240,87 @@ pub fn extrude_drafted(model: &mut Model, profile: Shape, v: Vector, angle: f64)
         return Ok(turned);
     }
     Ok(solid)
+}
+
+/// The drafted extrusion of `profile` (its outline `pieces`, lines and arcs joined at sharp
+/// corners between lines and tangent elsewhere, leaning in by `d` at the top of `v`) where
+/// the draft closes some of its edges: the prism less what the draft takes away along each
+/// edge, all its points nearer the edge, across the outline, than the draft has moved it in
+/// there. Along a line, a wedge from the edge to its drafted plane, its ends on the planes
+/// bisecting its corners (square to it at a tangent joint); where the draft closes it, the
+/// triangle between it and where they meet, from there on down; along an arc, the ring between its circle and its cone, ending
+/// on the planes through its ends and its axis (and at the axis, where the draft closes it).
+/// Where the draft closes an edge its neighbours' zones meet and take the rest, as OCCT's
+/// drafted prism's faces do.
+fn drafted_by_zones(model: &mut Model, profile: Shape, pieces: &[Piece], inward: impl Fn(Vector) -> Vector, v: Vector, d: f64) -> Result<Shape> {
+    let n = pieces.len();
+    let height = v.length();
+    let z = v * (1.0 / height);
+    let prism = super::extrude(model, profile, v)?.shape;
+    let mut zones: Vec<Shape> = Vec::with_capacity(n);
+    for i in 0..n {
+        let piece = &pieces[i];
+        match piece.kind {
+            Kind::Line => {
+                let (before, after) = (&pieces[(i + n - 1) % n], &pieces[(i + 1) % n]);
+                let normal = inward(piece.tangent_start);
+                // (The direction each end moves in along its corner's bisector, per unit the
+                // edge moves in: square to the edge where its neighbour runs on tangent.)
+                let along_bisector = |other_tangent: Vector| -> Result<Vector> {
+                    let m = normal + inward(other_tangent);
+                    let along = m.dot(normal);
+                    if !(along > ANGULAR) {
+                        return Err(Error::InvalidInput("a drafted extrusion's corner turning back on itself".into()));
+                    }
+                    Ok(m * (1.0 / along))
+                };
+                let (ma, mb) = (along_bisector(before.tangent_end)?, along_bisector(after.tangent_start)?);
+                let (a, b) = (piece.start, piece.end);
+                let length = b - a;
+                // (Where the ends' bisectors meet, as far in as the draft closes the edge.)
+                let closing = (ma - mb).dot(length) / length.dot(length);
+                let mut points = vec![a, b, a + v, b + v];
+                // (Closed, all of the triangle between the edge and the bisectors' meeting
+                // on down.)
+                if closing > 0.0 && 1.0 / closing < d {
+                    let w = 1.0 / closing;
+                    let meeting = a + ma * w;
+                    points.extend([meeting + v * (w / d), meeting + v]);
+                } else {
+                    points.extend([a + ma * d + v, b + mb * d + v]);
+                }
+                if let Some(zone) = crate::blend::convex_solid(model, &points)? {
+                    zones.push(zone);
+                }
+            }
+            Kind::Arc { center, radius, top_radius, turn, .. } => {
+                // (In a half-plane through the axis at the arc's start: the ring's section,
+                // from the circle to the cone, as far as the axis.)
+                let out = (piece.start - center) * (1.0 / radius);
+                let at = |r: f64, h: f64| center + out * r + z * h;
+                let corners: Vec<Point> = if top_radius >= 0.0 {
+                    vec![at(radius, 0.0), at(radius, height), at(top_radius, height)]
+                } else {
+                    let apex = height * radius / (radius - top_radius);
+                    vec![at(radius, 0.0), at(radius, height), at(0.0, height), at(0.0, apex)]
+                };
+                let vertices: Vec<Shape> = corners.iter().map(|&p| make::vertex(model, p)).collect();
+                let sides = (0..vertices.len()).map(|k| make::edge(model, vertices[k], vertices[(k + 1) % vertices.len()])).collect::<Result<Vec<_>>>()?;
+                let wire = make::wire(model, &sides)?;
+                let section = make::planar_face(model, wire)?;
+                zones.push(super::revolve(model, section, Axis::new(center, Direction::try_from_vector(z).expect("a direction")), turn)?.shape);
+            }
+        }
+    }
+    let mut result = prism;
+    for zone in zones {
+        result = crate::boolean::difference(model, result, zone)?;
+    }
+    let result = crate::unify::unify_same_domain(model, result)?;
+    match &model.unique_subshapes(result, NodeKind::Solid)[..] {
+        [solid] => Ok(*solid),
+        found => Err(Error::Failed(format!("a drafted extrusion's zones leave {} solids, not one", found.len()))),
+    }
 }
 
 #[cfg(test)]
@@ -321,5 +406,38 @@ mod tests {
         let expected = (area(0.0) + 4.0 * area(0.5) + area(1.0)) / 6.0;
         let volume = properties::volume(&model, solid).mass;
         assert!((volume - expected).abs() < 1e-6 * expected, "{volume} vs {expected}");
+    }
+
+    /// A cross recess (a Phillips screw's: arms 1.13 wide reaching 3.4, the corners between
+    /// them rounded by 2.27) drafted 30 degrees down 3.53: the draft closes the arms' sides and
+    /// tips at 0.98, the corners' cones running on to meet on the axis at 3.014 (OCCT's
+    /// drafted prism's volume, 16.4787, and depth).
+    #[test]
+    fn a_cross_drafted_past_its_arms() {
+        let mut model = Model::new();
+        let m = 6.8;
+        let (w, reach, r) = (m / 12.0, m / 2.0, m / 3.0);
+        let mut edges = Vec::new();
+        for k in 0..4 {
+            let turn = Transform::rotation(Axis::new(Point::ORIGIN, Direction::Z), k as f64 * FRAC_PI_2);
+            let p = |x: f64, y: f64| Point::new(x, y, 0.0).transformed(&turn);
+            let c = w + r;
+            edges.push(make::edge_between(&mut model, p(reach, 0.0), p(reach, w)).unwrap());
+            edges.push(make::edge_between(&mut model, p(reach, w), p(c, w)).unwrap());
+            // (The corner, about (c, c), from (c, w) round to (w, c): clockwise.)
+            let frame = Frame::new(p(c, c), Direction::new(0.0, 0.0, -1.0), Direction::new(0.0, -1.0, 0.0).transformed(&turn));
+            edges.push(make::edge_from_curve_range(&mut model, Curve::Circle(Circle::new(frame, r)), 0.0, FRAC_PI_2).unwrap());
+            edges.push(make::edge_between(&mut model, p(w, c), p(w, reach)).unwrap());
+            edges.push(make::edge_between(&mut model, p(w, reach), p(0.0, reach)).unwrap());
+        }
+        let wire = make::wire(&mut model, &edges).unwrap();
+        let cross = make::planar_face(&mut model, wire).unwrap();
+        let solid = extrude_drafted(&mut model, cross, Vector::new(0.0, 0.0, -3.53), 30f64.to_radians()).unwrap();
+        let report = validity::check(&model, solid);
+        assert!(report.is_valid(), "{report:?}");
+        let volume = properties::volume(&model, solid).mass;
+        assert!((volume - 16.4787).abs() < 1e-3, "{volume}");
+        let lowest = model.unique_subshapes(solid, NodeKind::Vertex).iter().map(|&v| model.point(v).z).fold(f64::INFINITY, f64::min);
+        assert!((lowest + 3.0142).abs() < 1e-3, "{lowest}");
     }
 }

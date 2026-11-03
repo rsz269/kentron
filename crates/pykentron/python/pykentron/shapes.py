@@ -1347,8 +1347,8 @@ class Wire(Shape, Mixin1D):
         return result.Wires()
 
     def fillet2D(self, radius: float, vertices: Iterable[Vertex]) -> "Wire":
-        """The wire with its corners at `vertices` rounded (between straight edges)."""
-        return _round_corners(self, radius, list(vertices), lambda a, b, p: _fillet_corner(a, b, p, radius))
+        """The wire with its corners at `vertices` rounded (between lines and circular arcs)."""
+        return _round_corners(self, radius, list(vertices), lambda a, b, p: _fillet_corner(a, b, p, radius), lambda a, b: _curved_fillet_corner(a, b, radius))
 
     def chamfer2D(self, d: float, vertices: Iterable[Vertex]) -> "Wire":
         """The wire with its corners at `vertices` cut back by `d` along both edges."""
@@ -1614,6 +1614,88 @@ def _fillet_corner(a: Edge, b: Edge, corner, radius: float):
     return pa, Edge.makeThreePointArc(pa, mid, pb), pb
 
 
+def _curved_fillet_corner(a: Edge, b: Edge, radius: float):
+    """The arc of `radius` between `a` and `b` (meeting at a corner, either or both arcs of
+    circles, the others straight) and the points it meets them at: its centre where the
+    edges offset in by the radius (lines moved along their normals, circles grown or shrunk)
+    cross nearest the corner, as OCCT's 2D fillet finds it. None where they meet tangent."""
+    p = a.endPoint()
+    ta, tb = a.tangentAt(1.0), b.tangentAt(0.0)
+    n = ta.cross(tb)
+    if n.Length <= 1e-9:
+        return None
+    n = n.normalized()
+    # (Each edge as its offset towards the corner's inside: to the left of the way it runs,
+    # about `n`, the way the corner turns.)
+    def offset(e, t):
+        side = n.cross(t).normalized()
+        g = e.geomType()
+        if g == "LINE":
+            return ("line", p + side * radius, t)
+        if g == "CIRCLE":
+            c, r = e.arcCenter(), e.radius()
+            return ("circle", c, r - radius if (c - p).dot(side) > 0 else r + radius)
+        raise NotImplementedError("2D fillets between edges other than lines and circular arcs")
+    x, y = ta.normalized(), n.cross(ta).normalized()
+    flat = lambda q: ((q - p).dot(x), (q - p).dot(y))
+    up = lambda u, v: p + x * u + y * v
+    def meets(f, g):
+        if f[0] == "circle" and g[0] == "line":
+            f, g = g, f
+        if f[0] == "line" and g[0] == "line":
+            (ax, ay), (dx, dy) = flat(f[1]), (f[2].dot(x), f[2].dot(y))
+            (bx, by), (ex, ey) = flat(g[1]), (g[2].dot(x), g[2].dot(y))
+            det = dx * ey - dy * ex
+            if abs(det) <= 1e-12:
+                return []
+            s = ((bx - ax) * ey - (by - ay) * ex) / det
+            return [(ax + dx * s, ay + dy * s)]
+        if f[0] == "line":
+            (ax, ay), (dx, dy) = flat(f[1]), (f[2].dot(x), f[2].dot(y))
+            (cx, cy), r = flat(g[1]), g[2]
+            # |a + d s - c|² = r², d unit
+            fx, fy = ax - cx, ay - cy
+            bq = fx * dx + fy * dy
+            disc = bq * bq - (fx * fx + fy * fy - r * r)
+            if disc < 0 or r <= 0:
+                return []
+            return [(ax + dx * s, ay + dy * s) for s in (-bq - math.sqrt(disc), -bq + math.sqrt(disc))]
+        (ax, ay), ra = flat(f[1]), f[2]
+        (bx, by), rb = flat(g[1]), g[2]
+        dx, dy = bx - ax, by - ay
+        dd = math.hypot(dx, dy)
+        if ra <= 0 or rb <= 0 or dd <= 1e-12 or dd > ra + rb or dd < abs(ra - rb):
+            return []
+        along = (ra * ra - rb * rb + dd * dd) / (2 * dd)
+        h = math.sqrt(max(ra * ra - along * along, 0.0))
+        mx, my = ax + dx * along / dd, ay + dy * along / dd
+        return [(mx + h * dy / dd, my - h * dx / dd), (mx - h * dy / dd, my + h * dx / dd)]
+    fa, fb = offset(a, ta), offset(b, tb)
+    found = meets(fa, fb)
+    if not found:
+        raise ValueError("the fillet is too large for its edges")
+    o = up(*min(found, key=lambda q: q[0] * q[0] + q[1] * q[1]))
+    def touching(e, f):
+        if f[0] == "line":
+            return p + f[2] * (o - p).dot(f[2])
+        c = f[1]
+        return c + (o - c).normalized() * e.radius()
+    pa, pb = touching(a, fa), touching(b, fb)
+    # (Both on their edges, the corner's side of their other ends.)
+    for e, q in ((a, pa), (b, pb)):
+        if (e.positionAt(e.paramAt(q), mode="parameter") - q).Length > 1e-6 * (1.0 + radius):
+            raise ValueError("the fillet is too large for its edges")
+    mid = o + ((pa - o) + (pb - o)).normalized() * radius
+    return pa, Edge.makeThreePointArc(pa, mid, pb), pb
+
+
+def _trimmed(edge: Edge, start: Vector, end: Vector) -> Edge:
+    """`edge` (not straight) from `start` to `end`, points on it, the way it runs."""
+    a, b = edge.paramAt(start), edge.paramAt(end)
+    t = edge.trim(min(a, b), max(a, b))
+    return t.reverse() if (t.startPoint() - start).Length > (t.endPoint() - start).Length else t
+
+
 def _chamfer_corner(a: Edge, b: Edge, corner, d: float):
     p, u, v = corner
     pa, pb = p + u * d, p + v * d
@@ -1644,8 +1726,9 @@ def _coplanar(outer: "Wire", inner) -> bool:
     return all(abs(sum((p[k] - c[k]) * n[k] for k in range(3))) <= tol for w in inner for p in samples(w))
 
 
-def _round_corners(wire: Wire, size: float, vertices, corner_edge) -> Wire:
-    """`wire`'s corners at `vertices` (all if none) replaced by `corner_edge`'s edges."""
+def _round_corners(wire: Wire, size: float, vertices, corner_edge, curved_corner=None) -> Wire:
+    """`wire`'s corners at `vertices` (all if none) replaced by `corner_edge`'s edges
+    (`curved_corner`'s where an edge there is curved, if given)."""
     edges = list(wire)
     closed = wire.IsClosed()
     wanted = [Vector(v.Center()) for v in vertices] if vertices else None
@@ -1663,10 +1746,13 @@ def _round_corners(wire: Wire, size: float, vertices, corner_edge) -> Wire:
             continue
         corner = _line_corner(Edge.makeLine(starts[i], ends[i]) if edges[i].geomType() == "LINE" else edges[i], Edge.makeLine(starts[j], ends[j]) if edges[j].geomType() == "LINE" else edges[j])
         if corner is None:
-            if wanted is not None:
-                raise NotImplementedError("2D fillets and chamfers between curved edges")
-            continue
-        made = corner_edge(edges[i], edges[j], corner)
+            if wanted is None:
+                continue
+            if curved_corner is None:
+                raise NotImplementedError("2D chamfers between curved edges")
+            made = curved_corner(edges[i], edges[j])
+        else:
+            made = corner_edge(edges[i], edges[j], corner)
         if made is None:
             continue
         pa, e, pb = made
@@ -1690,7 +1776,12 @@ def _round_corners(wire: Wire, size: float, vertices, corner_edge) -> Wire:
     out = []
     for i in range(n):
         if (starts[i] - ends[i]).Length > 1e-9:
-            out.append(line(i) if edges[i].geomType() == "LINE" else edges[i])
+            if edges[i].geomType() == "LINE":
+                out.append(line(i))
+            elif (starts[i] - edges[i].startPoint()).Length > 1e-12 or (ends[i] - edges[i].endPoint()).Length > 1e-12:
+                out.append(_trimmed(edges[i], starts[i], ends[i]))
+            else:
+                out.append(edges[i])
         if i in inserts:
             out.append(inserts[i])
     return Wire.assembleEdges(out)

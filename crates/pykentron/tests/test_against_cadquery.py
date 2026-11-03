@@ -136,6 +136,27 @@ def rounded_corners_between_arcs_and_lines(cq):
     return face.fillet2D(2.0, face.Vertices())
 
 
+def wire_corner_rounded_between_an_arc_and_a_line(cq):
+    # (A raised countersunk oval screw head's profile, as cq_warehouse draws it: the corner
+    # where its oval top meets its countersunk side rounded on the wire, the arc trimmed.)
+    from math import atan2, cos, radians, sin, sqrt
+    V = cq.Vector
+    a, k, rf, dk = 90, 3.3, 15.0, 10.5
+    top = k + rf - sqrt(4 * rf**2 - dk**2) / 2
+    centre = top - rf
+    half = atan2(k - centre, dk / 2) / 2 + radians(45)
+    mid = V(rf * cos(half), 0, centre + rf * sin(half))
+    side = k / cos(radians(a / 2))
+    bottom = V(dk / 2 + side * cos(radians(-90 - a / 2)), 0, k + side * sin(radians(-90 - a / 2)))
+    corner = V(dk / 2, 0, k)
+    edges = [cq.Edge.makeLine(V(0, 0, 0), V(0, 0, top)), cq.Edge.makeThreePointArc(V(0, 0, top), mid, corner),
+             cq.Edge.makeLine(corner, bottom), cq.Edge.makeLine(bottom, V(0, 0, 0))]
+    wire = cq.Wire.assembleEdges(edges)
+    at = [v for v in wire.Vertices() if (cq.Vector(v.toTuple()) - corner).Length < 1e-9]
+    wire = wire.fillet2D(k * 0.075, at)
+    return cq.Solid.extrudeLinear(cq.Face.makeFromWires(wire), V(0, 1, 0))
+
+
 def loft_through_three_unevenly_spaced_circles(cq):
     # (CadQuery's loft, as a workplane's, passes through its sections evenly, however far
     # apart they are.)
@@ -356,6 +377,7 @@ def corners_of_a_placed_cutter_rounded(cq):
 
 
 CASES = [
+    wire_corner_rounded_between_an_arc_and_a_line,
     box, cylinder_along_y, cone, workplane_box, fused_boxes, cut_bores, intersected,
     polyline_prism_xz, polyline_prism_custom_plane, hexagon, face_with_hole, loft,
     rotated_mirrored, revolved, located, euler_location, offset_outline, smoothed_helix_spline,

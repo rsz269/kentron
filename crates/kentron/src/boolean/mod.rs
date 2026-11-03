@@ -2554,4 +2554,22 @@ mod tests {
             "{edges:?}"
         );
     }
+
+    /// A disc with screw holes round its rim, their axes on its side, each blind hole's drill
+    /// tip a cone whose apex lies on the side: cut by the next hole's tool, away from them.
+    /// The cones' halves end at the apex on a degenerate edge whose pcurve stops a little
+    /// apart in u from where the section beside it reaches the apex: their ends are one
+    /// point there, and the halves were lost, the shell left open (OCCT's volume).
+    #[test]
+    fn a_disc_with_drill_tips_on_its_side_cut_again() {
+        let mut model = Model::new();
+        let mut read = |text: &str| crate::io::brep::read(&mut model, &mut text.as_bytes()).unwrap();
+        let disc = read(include_str!("tests/disk_with_rim_holes_a.brep"));
+        let tool = read(include_str!("tests/disk_with_rim_holes_b.brep"));
+        let result = difference(&mut model, disc, tool).unwrap();
+        let report = validity::check(&model, result);
+        assert!(report.is_valid(), "{report:?}");
+        let volume = properties::volume(&model, result).mass;
+        assert!((volume - 355415.434).abs() < 1e-2, "{volume}");
+    }
 }
