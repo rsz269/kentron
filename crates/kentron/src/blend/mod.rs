@@ -527,8 +527,20 @@ fn fillet_solid_edges_inner(model: &mut Model, shape: Shape, edges: &[(Shape, f6
     // and two convex, the odd one rounded first: the other two then go on into each other
     // smoothly round its fillet's end, as OCCT rounds them (by a torus round a straight
     // fillet's end).
-    if let Some((first, then)) = mixed_corner_stages(model, shape, edges) {
+    if let Some((first, then, probed)) = mixed_corner_stages(model, shape, edges) {
         let before = fault_kinds(model, shape);
+        // (Where an edge's turn was told only by probing the material beside it (a free-form
+        // edge's), rounded at once first, as such corners were before: staged only where that
+        // splits the solid, fails or leaves it unsound.)
+        if probed {
+            let solids = |model: &Model, s: Shape| model.explore(s, NodeKind::Solid).count();
+            let count = solids(model, shape);
+            if let Ok(rounded) = fillet_solid_edges_unstaged(model, shape, edges).and_then(|r| sound(model, &before, r)) {
+                if solids(model, rounded) <= count {
+                    return Ok(rounded);
+                }
+            }
+        }
         let staged = fillet_solid_edges_unstaged(model, shape, &first).and_then(|rounded| {
             // (The first fillets' tools end on faces they leave split where they meet them,
             // as on a hole's wall: one face again, for the others to go on along the edges
@@ -563,10 +575,12 @@ fn fillet_solid_edges_inner(model: &mut Model, shape: Shape, edges: &[(Shape, f6
 /// `None` where there is no such vertex, or an edge rounded first at one would be rounded
 /// after at another.
 #[allow(clippy::type_complexity)]
-fn mixed_corner_stages(model: &Model, shape: Shape, edges: &[(Shape, f64)]) -> Option<(Vec<(Shape, f64)>, Vec<(Curve, f64, f64, f64)>)> {
+fn mixed_corner_stages(model: &Model, shape: Shape, edges: &[(Shape, f64)]) -> Option<(Vec<(Shape, f64)>, Vec<(Curve, f64, f64, f64)>, bool)> {
     let edges = tangent_chains(model, shape, edges, 0.0);
     // (Which way each turns, from its curve: a trimmed one's basis too, as a chamfer's.)
-    let convex: Vec<Option<bool>> = edges.iter().map(|&(e, _)| Corner::of(model, shape, e, false).ok().flatten().or_else(|| Corner::of(model, shape, e, true).ok().flatten()).map(|c| c.convex)).collect();
+    // (Else, as a B-spline edge between a plane and a torus, from the material beside it.)
+    let of_corner: Vec<Option<bool>> = edges.iter().map(|&(e, _)| Corner::of(model, shape, e, false).ok().flatten().or_else(|| Corner::of(model, shape, e, true).ok().flatten()).map(|c| c.convex)).collect();
+    let convex: Vec<Option<bool>> = edges.iter().zip(&of_corner).map(|(&(e, _), c)| c.or_else(|| turns_convex(model, shape, e))).collect();
     let mut at: Vec<(NodeId, Vec<usize>)> = Vec::new();
     for (i, &(edge, _)) in edges.iter().enumerate() {
         let (a, b) = model.edge_vertices(edge);
@@ -644,7 +658,38 @@ fn mixed_corner_stages(model: &Model, shape: Shape, edges: &[(Shape, f64)]) -> O
             then.push((curve, a, b, radius));
         }
     }
-    Some((first, then))
+    // (Whether a turn at a corner staged was found only by probing.)
+    let probed = odd.iter().chain(&paired).any(|&i| of_corner[i].is_none());
+    Some((first, then, probed))
+}
+
+/// Whether `edge` of `shape` is convex (the material between its two faces), from where a
+/// point just beside its middle lies: off it along the one face's outward normal and back
+/// along the other's, outside at a convex edge, inside at a concave one (and the other way
+/// round the same). `None` where that cannot be told.
+fn turns_convex(model: &Model, shape: Shape, edge: Shape) -> Option<bool> {
+    use crate::geometry::ParametricCurve;
+    let faces: Vec<Shape> = model.explore(shape, NodeKind::Face).filter(|f| model.explore(*f, NodeKind::Edge).any(|e| e.node == edge.node)).collect();
+    let [f, g] = faces[..] else { return None };
+    if f.node == g.node {
+        return None;
+    }
+    let (curve, first, last) = model.edge_curve(Shape { orientation: Orientation::Forward, ..edge })?;
+    let p = curve.point(0.5 * (first + last));
+    let outward = |face: Shape| normal_at(model, shape, face.node, p).map(|n| if face.orientation == Orientation::Reversed { n * -1.0 } else { n });
+    let (n, m) = (outward(f)?, outward(g)?);
+    if n.cross(m).length() <= tolerance::ANGULAR.sqrt() {
+        return None;
+    }
+    let h = (1e-3 * curve.point(first).distance(curve.point(last))).clamp(10.0 * tolerance::LINEAR, 1e-2);
+    let classifier = boolean::PointClassifier::new(model, shape).ok()?;
+    let outside = |q: Point| match classifier.locate(q) {
+        boolean::PointLocation::Outside => Some(true),
+        boolean::PointLocation::Inside => Some(false),
+        _ => None,
+    };
+    let (a, b) = (outside(p + (n - m) * h)?, outside(p + (m - n) * h)?);
+    (a == b).then_some(a)
 }
 
 /// [`fillet_solid_edges`] all at once.
@@ -4890,6 +4935,11 @@ mod tests {
         assert!(report.problems.is_empty(), "{report:?}");
         let v = properties::volume(&model, rounded).mass;
         assert!((v - 10357.056661).abs() < 1e-3, "{v}");
+        // (The tool's piece of the torus one face with it again, framed otherwise as it is:
+        // one torus face, the two either side of its seam one too.)
+        let unified = crate::unify::unify_same_domain(&mut model, rounded).unwrap();
+        let tori = model.unique_subshapes(unified, NodeKind::Face).into_iter().filter(|&f| matches!(model.surface(f), Some(Surface::Torus(_)))).count();
+        assert_eq!(tori, 1);
         // (No face across the fillet where the edge ended, but the top's.)
         for face in model.unique_subshapes(rounded, NodeKind::Face) {
             if let Some(Surface::Plane(plane)) = model.surface(face) {
@@ -4897,6 +4947,34 @@ mod tests {
                 assert!(Vector::from(plane.normal()).z.abs() < 1e-9 || (z - 40.0).abs() < 1e-9, "a plane across at {z}");
             }
         }
+    }
+
+    /// A rib's top rounded where it meets a wall, the corner of a beer mat holder: the
+    /// concave edge between rib and wall, and the convex ones along the rib's top (a circle)
+    /// and the wall's (a B-spline, between the wall and the torus over both). The concave
+    /// fillet is made first and the convex ones run on round its end, as OCCT's: made at once,
+    /// they left a piece of the rib's corner apart. Volume from OCCT (2861.94; staged so,
+    /// the corner's patch differs by about 3).
+    #[test]
+    fn three_fillets_at_a_rib_top_meet_round_the_concave_ones_end() {
+        let mut model = Model::new();
+        let block = crate::io::brep::read(&mut model, &mut include_str!("tests/three_fillets_at_a_rib_top.brep").as_bytes()).unwrap();
+        let corner = Point::new(-11.0, -54.0, 26.472339912237153);
+        let edges: Vec<Shape> = model
+            .unique_subshapes(block, NodeKind::Edge)
+            .into_iter()
+            .filter(|&e| {
+                let (p, q) = model.edge_vertices(e);
+                model.point(p).distance(corner) < 1e-6 || model.point(q).distance(corner) < 1e-6
+            })
+            .collect();
+        assert_eq!(edges.len(), 3);
+        let rounded = fillet(&mut model, block, &edges, 1.5).unwrap();
+        let report = validity::check(&model, rounded);
+        assert!(report.problems.is_empty(), "{report:?}");
+        assert_eq!(model.explore(rounded, NodeKind::Solid).count(), 1);
+        let v = properties::volume(&model, rounded).mass;
+        assert!((v - 2861.94).abs() < 5.0, "{v}");
     }
 
     #[test]

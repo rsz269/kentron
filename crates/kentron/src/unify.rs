@@ -414,9 +414,10 @@ fn loop_area(uses: &[Use]) -> f64 {
     (0..n).map(|i| points[i].x * points[(i + 1) % n].y - points[(i + 1) % n].x * points[i].y).sum::<f64>() / 2.0
 }
 
-/// True for planes and quadrics: surfaces whose edges have closed-form pcurves.
+/// True for planes, quadrics and tori: surfaces whose edges have closed-form pcurves, or
+/// pcurves carried from one framing of them to another.
 fn elementary(s: &Surface) -> bool {
-    matches!(s, Surface::Plane(_) | Surface::Cylinder(_) | Surface::Cone(_) | Surface::Sphere(_))
+    matches!(s, Surface::Plane(_) | Surface::Cylinder(_) | Surface::Cone(_) | Surface::Sphere(_) | Surface::Torus(_))
 }
 
 /// True if two elementary surfaces are the same point set.
@@ -447,6 +448,14 @@ fn same_domain(a: &Surface, b: &Surface) -> bool {
         }
         (Surface::Sphere(p), Surface::Sphere(q)) => {
             p.frame().origin().distance(q.frame().origin()) <= tol && (p.radius() - q.radius()).abs() <= tol
+        }
+        // (The axis the same way: turned over, the tube's angles would run the other way.)
+        (Surface::Torus(p), Surface::Torus(q)) => {
+            Vector::from(p.frame().z()).dot(Vector::from(q.frame().z())) > 0.0
+                && parallel(p.frame().z(), q.frame().z())
+                && p.frame().origin().distance(q.frame().origin()) <= tol
+                && (p.major_radius() - q.major_radius()).abs() <= tol
+                && (p.minor_radius() - q.minor_radius()).abs() <= tol
         }
         _ => false,
     }
@@ -720,6 +729,16 @@ fn reparametrization(from: &Surface, to: &Surface) -> Option<Transform2> {
             }
             let turn = Vector::from(fa.x()).dot(y).atan2(Vector::from(fa.x()).dot(x));
             Some(Transform2::orthogonal([[1.0, 0.0], [0.0, 1.0]], Vector2::new(turn, (fa.origin() - fb.origin()).dot(z) / cos)))
+        }
+        // (One torus, its axis the same way: round from the one's start, the tube the same.)
+        (Surface::Torus(a), Surface::Torus(b)) => {
+            let (fa, fb) = (a.frame(), b.frame());
+            let (x, y, z) = (Vector::from(fb.x()), Vector::from(fb.y()), Vector::from(fb.z()));
+            if Vector::from(fa.z()).dot(z) <= 0.0 {
+                return None;
+            }
+            let turn = Vector::from(fa.x()).dot(y).atan2(Vector::from(fa.x()).dot(x));
+            Some(Transform2::orthogonal([[1.0, 0.0], [0.0, 1.0]], Vector2::new(turn, 0.0)))
         }
         _ => None,
     }

@@ -217,6 +217,11 @@ fn distinct_faces(model: &Model, faces: Vec<Shape>) -> Vec<Shape> {
             let (Some(s), Some(rs), Ok(id)) = (model.surface(f), model.surface(r), crate::topology::FaceId::try_from(f.node)) else { return false };
             let (u0, u1, v0, v1) = model.face_bounds(id);
             let p = s.point(0.5 * (u0 + u1), 0.5 * (v0 + v1));
+            // (A torus as the boolean operations take it, a surface of revolution.)
+            let rs = match rs {
+                crate::geometry::surface::Surface::Torus(t) => &super::graph::torus_as_revolution(t),
+                rs => rs,
+            };
             super::geom::signed_distance(rs, p).abs() <= super::geom::on_tol()
         };
         let alike = by_edges.entry(key).or_default();

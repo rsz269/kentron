@@ -25,7 +25,6 @@ tests/blend/complex/F3
 tests/blend/complex/G8
 tests/blend/encoderegularity/A1
 tests/blend/encoderegularity/A2
-tests/blend/encoderegularity/A4
 tests/blend/encoderegularity/A5
 tests/blend/encoderegularity/A6
 tests/blend/encoderegularity/A7
