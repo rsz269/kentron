@@ -1151,9 +1151,71 @@ fn made_alike(sections: &[Section], edges: usize) -> MadeAlike {
         }).fold(0.0, f64::max);
         (poles, strays)
     };
+    // How far the Bezier of degree `n` (at least 3) through `points` at even parameters
+    // strays from them when it keeps their ends and the tangents there (`d0`, `d1`, per unit
+    // of the span's own parameter), its other poles fitted by least squares: OCCT's
+    // approximation of a conic (GeomConvert_ApproxCurve, C1) keeps ends and tangents, and so
+    // takes a degree more than a free fit at times (an arc of 9 there but 10 here).
+    let fit_ends = |points: &[Point], d0: Vector, d1: Vector, n: usize| -> f64 {
+        let m = points.len();
+        let (p0, p1) = (points[0], points[m - 1]);
+        let fixed = [(0, p0), (1, p0 + d0 * (1.0 / n as f64)), (n - 1, p1 - d1 * (1.0 / n as f64)), (n, p1)];
+        let free: Vec<usize> = (2..n - 1).collect();
+        let rows: Vec<Vec<f64>> = (0..m).map(|j| bernstein(n, j as f64 / (m - 1) as f64)).collect();
+        let f = free.len();
+        let mut poles = vec![Point::ORIGIN; n + 1];
+        for &(k, p) in &fixed {
+            poles[k] = p;
+        }
+        if f > 0 {
+            let mut a = vec![vec![0.0; f]; f];
+            let mut rhs = vec![Vector::new(0.0, 0.0, 0.0); f];
+            for (row, p) in rows.iter().zip(points) {
+                let rest = fixed.iter().fold(*p - Point::ORIGIN, |acc, &(k, q)| acc - (q - Point::ORIGIN) * row[k]);
+                for (r, &kr) in free.iter().enumerate() {
+                    for (c, &kc) in free.iter().enumerate() {
+                        a[r][c] += row[kr] * row[kc];
+                    }
+                    rhs[r] = rhs[r] + rest * row[kr];
+                }
+            }
+            for col in 0..f {
+                let pivot = a[col][col];
+                for r in col + 1..f {
+                    let g = a[r][col] / pivot;
+                    for c in col..f {
+                        a[r][c] -= g * a[col][c];
+                    }
+                    rhs[r] = rhs[r] - rhs[col] * g;
+                }
+            }
+            let mut x = vec![Vector::new(0.0, 0.0, 0.0); f];
+            for r in (0..f).rev() {
+                let mut v = rhs[r];
+                for c in r + 1..f {
+                    v = v - x[c] * a[r][c];
+                }
+                x[r] = v * (1.0 / a[r][r]);
+            }
+            for (r, &k) in free.iter().enumerate() {
+                poles[k] = Point::ORIGIN + x[r];
+            }
+        }
+        rows.iter().zip(points).map(|(row, p)| {
+            let q = row.iter().zip(&poles).fold(Vector::new(0.0, 0.0, 0.0), |acc, (w, pole)| acc + (*pole - Point::ORIGIN) * *w);
+            (Point::ORIGIN + q).distance(*p)
+        }).fold(0.0, f64::max)
+    };
     let span_points = |piece: &Piece, spans: usize, k: usize| -> Vec<Point> {
         let (a, b) = (k as f64 / spans as f64, (k + 1) as f64 / spans as f64);
         (0..SAMPLES).map(|j| piece.at(a + (b - a) * j as f64 / (SAMPLES - 1) as f64)).collect()
+    };
+    // The tangents at a span's ends, per unit of the span's own parameter.
+    let span_tangents = |piece: &Piece, spans: usize, k: usize| -> (Vector, Vector) {
+        let (a, b) = (k as f64 / spans as f64, (k + 1) as f64 / spans as f64);
+        let scale = (piece.last - piece.first) * (b - a);
+        let at = |s: f64| piece.curve.d1(piece.first + (piece.last - piece.first) * s).1 * scale;
+        (at(a), at(b))
     };
     // Each section's edge: its degree and spans.
     let shape = |piece: &Piece| -> (usize, usize) {
@@ -1164,8 +1226,10 @@ fn made_alike(sections: &[Section], edges: usize) -> MadeAlike {
         loop {
             // (Each span's points once, for every degree tried.)
             let points: Vec<Vec<Point>> = (0..spans).map(|k| span_points(piece, spans, k)).collect();
+            let tangents: Vec<(Vector, Vector)> = (0..spans).map(|k| span_tangents(piece, spans, k)).collect();
             for n in 1..=MOST {
-                if points.iter().all(|p| fit(p, n).1 <= TOLERANCE) {
+                let near = |(p, &(d0, d1)): (&Vec<Point>, &(Vector, Vector))| if n < 3 { fit(p, n).1 <= TOLERANCE } else { fit_ends(p, d0, d1, n) <= TOLERANCE };
+                if points.iter().zip(&tangents).all(near) {
                     return (n, spans);
                 }
             }
@@ -1758,9 +1822,11 @@ mod tests {
 
     /// A stand's profile (a block with a U cut out of its top by a circle arc) lofted through
     /// four sections whose arc dips far deeper in some: spaced by the distances between the
-    /// sections' poles as OCCT makes them (each edge alike, an arc's no more than a line's),
-    /// within 0.2% of OCCT's volume (163456.6); by the mean distance between points sampled
-    /// along them (an arc's many), 8% more.
+    /// sections' poles as OCCT makes them (each edge alike, an arc's no more than a line's;
+    /// the arcs of degrees 8, 10, 7 and 7 as OCCT's approximation keeping their ends and
+    /// tangents makes them, not 8, 9, 6 and 6 as a free fit would), OCCT's volume
+    /// (163456.614; with the free fit's degrees 163679.0); by the mean distance between
+    /// points sampled along them (an arc's many), 8% more.
     #[test]
     fn sections_spaced_by_their_poles_distances_as_occt() {
         let mut model = Model::new();
@@ -1783,7 +1849,7 @@ mod tests {
             properties::volume(model, solid).mass
         };
         let occt = volume(&mut model, Spacing::ByDistance);
-        assert!((occt - 163456.6).abs() <= 2e-3 * 163456.6, "{occt}");
+        assert!((occt - 163456.614).abs() < 1e-2, "{occt}");
         assert!(volume(&mut model, Spacing::ByMeanDistance) > 1.07 * 163456.6);
     }
 

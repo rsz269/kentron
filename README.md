@@ -83,8 +83,8 @@ conversation's context, read back from the cache).
 - **746 CadQuery scripts from 113 public projects** (5 more open render windows or wait and
   are not run): of the 732 whose results don't depend on the order a kernel lists faces in
   (or on how it tells equal shapes apart), pykentron builds 689 as CadQuery does, and 24 more
-  differ only where CadQuery's result is wrong (2026-11-03). Timed on 2026-10-31, on the 672 it then built alike, it took 195 s in
-  all against CadQuery's 941 s, and was faster on 646.
+  differ only where CadQuery's result is wrong (2026-11-03). Timed on 2026-10-31, on the 672
+  it then built alike, it took 195 s in all against CadQuery's 941 s, and was faster on 646.
   The scripts, what they found and where they stand:
   [`crates/pykentron/tests/found`](crates/pykentron/tests/found/README.md).
 
