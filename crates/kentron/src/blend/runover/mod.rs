@@ -56,6 +56,13 @@ struct Bounded {
 
 impl Bounded {
     fn of(model: &Model, face: Shape) -> Option<Bounded> {
+        Self::of_with(model, face, true)
+    }
+
+    /// [`Bounded::of`], with the faces beyond its edges and its box (for measuring distances
+    /// to it among others) found or not: only telling points on it from points off it, they
+    /// are not needed, and finding them is the slow part.
+    fn of_with(model: &Model, face: Shape, whole: bool) -> Option<Bounded> {
         let surface = model.surface(face)?;
         let surface = if face.placement == Transform::IDENTITY { surface.clone() } else { surface.transformed(&face.placement) };
         let mut loops = Vec::new();
@@ -74,17 +81,22 @@ impl Bounded {
             edge_shapes.push(e);
         }
         let ids: Vec<crate::topology::EdgeId> = edge_shapes.iter().filter_map(|e| crate::topology::EdgeId::try_from(e.node).ok()).collect();
-        let beyond: Vec<Vec<Surface>> = model
+        let beyond: Vec<Vec<Surface>> = if !whole {
+            vec![Vec::new(); ids.len()]
+        } else {
+            model
             .faces_around(&ids)
             .into_iter()
             .map(|faces| faces.into_iter().filter(|&f| crate::topology::NodeId::from(f) != face.node).filter_map(|f| model.surface(Shape::from(f)).cloned()).collect())
-            .collect();
+            .collect()
+        };
         let (mut lo, mut hi) = (Point2::new(f64::INFINITY, f64::INFINITY), Point2::new(f64::NEG_INFINITY, f64::NEG_INFINITY));
         for q in loops.iter().flatten() {
             (lo.x, lo.y, hi.x, hi.y) = (lo.x.min(q.x), lo.y.min(q.y), hi.x.max(q.x), hi.y.max(q.y));
         }
         let uv_tolerance = 1e-7 * lo.distance(hi);
-        Some(Bounded { face, bbox: crate::properties::bounding_box(model, face), edge_shapes, u_period: surface.u_period(), v_period: surface.v_period(), surface, loops, edges, beyond, uv_tolerance, near: std::cell::Cell::new(None) })
+        let bbox = if whole { crate::properties::bounding_box(model, face) } else { crate::math::BoundingBox::default() };
+        Some(Bounded { face, bbox, edge_shapes, u_period: surface.u_period(), v_period: surface.v_period(), surface, loops, edges, beyond, uv_tolerance, near: std::cell::Cell::new(None) })
     }
 
     /// Whether `(u, v)` lies on the face (inside its loops, even-odd, or on them).
@@ -249,13 +261,81 @@ struct Rolled {
     tangents: [Vector; 2],
 }
 
-/// The ball of radius `radius(s)` along `edge` of `shape` (`s` the fraction of the edge's
-/// length from its start), in `count` sections and one more where the contacts change what
-/// they lie on (the ball rolling onto another face, or over an edge; found by bisection,
-/// where the fillet's faces end). Around a closed edge the last section is the first.
-fn roll(model: &Model, shape: Shape, edge: Shape, radius: &dyn Fn(f64) -> f64, count: usize, switches: Switches) -> Result<Rolled> {
-    // The two faces, each with the direction of the edge in its boundary (+1 along the
-    // edge's own).
+/// The curve a fillet runs along: one edge's, or a chain of edges going on into one another
+/// smoothly. Piece `i` runs from `a` to `b` of its curve (the chain's way along it, which
+/// may be against the curve's), at spine parameters `i` to `i + 1`.
+struct Spine {
+    pieces: Vec<(Curve, f64, f64)>,
+    /// Each piece's length up to each of [`Spine::SAMPLES`] steps along it, from the
+    /// spine's start.
+    lengths: Vec<Vec<f64>>,
+    closed: bool,
+}
+
+impl Spine {
+    const SAMPLES: usize = 64;
+
+    fn new(pieces: Vec<(Curve, f64, f64)>, closed: bool) -> Spine {
+        let mut total = 0.0;
+        let lengths = pieces
+            .iter()
+            .map(|(c, a, b)| {
+                let points: Vec<Point> = (0..=Self::SAMPLES).map(|i| c.point(a + (b - a) * i as f64 / Self::SAMPLES as f64)).collect();
+                let start = total;
+                let along: Vec<f64> = std::iter::once(start).chain(points.windows(2).scan(start, |l, w| { *l += w[0].distance(w[1]); Some(*l) })).collect();
+                total = *along.last().expect("samples");
+                along
+            })
+            .collect();
+        Spine { pieces, lengths, closed }
+    }
+
+    /// The parameter range: 0 to the number of pieces.
+    fn end(&self) -> f64 {
+        self.pieces.len() as f64
+    }
+
+    /// The piece at spine parameter `s`, and the fraction along it.
+    fn piece(&self, s: f64) -> (usize, f64) {
+        let i = (s.floor().max(0.0) as usize).min(self.pieces.len() - 1);
+        (i, (s - i as f64).clamp(0.0, 1.0))
+    }
+
+    /// The point at `s` and the unit direction along the spine there.
+    fn d1(&self, s: f64) -> (Point, Vector) {
+        let (i, f) = self.piece(s);
+        let (c, a, b) = &self.pieces[i];
+        let (p, d) = c.d1(a + (b - a) * f);
+        (p, d.normalized() * (b - a).signum())
+    }
+
+    /// The spine parameter at `u` of the way along it, each piece taking its share of the
+    /// way by its length (evenly in its own parameter within it): sections spaced so are
+    /// about as far apart on long pieces as on short ones.
+    fn at_share(&self, u: f64) -> f64 {
+        let total = *self.lengths.last().and_then(|l| l.last()).expect("samples");
+        let at = u.clamp(0.0, 1.0) * total;
+        let last = self.pieces.len() - 1;
+        let i = self.lengths.iter().position(|l| at <= *l.last().expect("samples")).unwrap_or(last);
+        let (from, to) = (self.lengths[i][0], *self.lengths[i].last().expect("samples"));
+        i as f64 + if to > from { ((at - from) / (to - from)).clamp(0.0, 1.0) } else { 1.0 }
+    }
+
+    /// The fraction of the spine's length up to `s`.
+    fn fraction(&self, s: f64) -> f64 {
+        let (i, f) = self.piece(s);
+        let along = &self.lengths[i];
+        let x = f * Self::SAMPLES as f64;
+        let k = (x.floor() as usize).min(Self::SAMPLES - 1);
+        let l = along[k] + (along[k + 1] - along[k]) * (x - k as f64);
+        let total = *self.lengths.last().and_then(|l| l.last()).expect("samples");
+        l / total.max(1e-300)
+    }
+}
+
+/// The faces of `shape` bounded by `edge`, each with the direction of the edge in its
+/// boundary (+1 along the edge's own).
+fn faces_of(model: &Model, shape: Shape, edge: Shape) -> Vec<(Shape, f64)> {
     let mut faces: Vec<(Shape, f64)> = Vec::new();
     for face in model.explore(shape, NodeKind::Face) {
         for wire in model.children(face) {
@@ -267,26 +347,36 @@ fn roll(model: &Model, shape: Shape, edge: Shape, radius: &dyn Fn(f64) -> f64, c
             }
         }
     }
+    faces
+}
+
+/// The ball of radius `radius(s)` along `edge` of `shape` (`s` the fraction of the edge's
+/// length from its start), in `count` sections and one more where the contacts change what
+/// they lie on (the ball rolling onto another face, or over an edge; found by bisection,
+/// where the fillet's faces end). Around a closed edge the last section is the first.
+fn roll(model: &Model, shape: Shape, edge: Shape, radius: &dyn Fn(f64) -> f64, count: usize, switches: Switches) -> Result<Rolled> {
+    let faces = faces_of(model, shape, edge);
     let [(f0, along0), (f1, along1)] = faces[..] else {
         return Err(Error::InvalidInput(format!("a fillet edge must bound two faces, it bounds {}", faces.len())));
     };
     let (curve, t0, t1) = model.edge_curve(Shape { orientation: Orientation::Forward, ..edge }).ok_or_else(|| Error::InvalidInput("a degenerate edge has no fillet".into()))?;
     let (va, vb) = model.edge_vertices(Shape { orientation: Orientation::Forward, ..edge });
-    let closed = va.node == vb.node;
     let side_set = sides(model, shape, edge, [f0, f1]);
-    // The radius at a parameter of the edge (by the fraction of its length up to there),
+    let spine = Spine::new(vec![(curve, t0, t1)], va.node == vb.node);
+    roll_on(model, &spine, side_set, [(f0, along0), (f1, along1)], radius, count, switches)
+}
+
+/// [`roll`] along `spine`, between the sides `side_set`; `faces` the faces at the spine's
+/// start, each with the spine's direction in its boundary (+1 along it); `count` sections
+/// for each piece of the spine.
+fn roll_on(model: &Model, spine: &Spine, side_set: [Side; 2], faces: [(Shape, f64); 2], radius: &dyn Fn(f64) -> f64, count: usize, switches: Switches) -> Result<Rolled> {
+    let [(f0, along0), (f1, along1)] = faces;
+    let (t0, t1) = (0.0, spine.end());
+    let closed = spine.closed;
+    let count = count * spine.pieces.len();
+    // The radius at a parameter of the spine (by the fraction of its length up to there),
     // and the largest, for scales.
-    let lengths: Vec<f64> = {
-        const N: usize = 64;
-        let points: Vec<Point> = (0..=N).map(|i| curve.point(t0 + (t1 - t0) * i as f64 / N as f64)).collect();
-        std::iter::once(0.0).chain(points.windows(2).scan(0.0, |l, w| { *l += w[0].distance(w[1]); Some(*l) })).collect()
-    };
-    let radius_at = |t: f64| {
-        let x = ((t - t0) / (t1 - t0)).clamp(0.0, 1.0) * (lengths.len() - 1) as f64;
-        let k = (x.floor() as usize).min(lengths.len() - 2);
-        let l = lengths[k] + (lengths[k + 1] - lengths[k]) * (x - k as f64);
-        radius(l / lengths[lengths.len() - 1].max(1e-300))
-    };
+    let radius_at = |t: f64| radius(spine.fraction(t));
     let largest = largest(radius);
     if !(largest > 0.0) {
         return Err(Error::InvalidInput(format!("fillet radius must be positive, got {largest}")));
@@ -304,10 +394,8 @@ fn roll(model: &Model, shape: Shape, edge: Shape, radius: &dyn Fn(f64) -> f64, c
         let n = n.normalized();
         Some(if face.orientation == Orientation::Reversed { -n } else { n })
     };
-    let spine = |t: f64| -> (Point, Vector) {
-        let (p, d) = curve.d1(t);
-        (p, d.normalized())
-    };
+    let path = spine;
+    let spine = |t: f64| -> (Point, Vector) { path.d1(t) };
     // The first place: between the faces' tangent planes at the start of the edge (or just
     // along it, where a face's surface is singular there).
     let ((p0, d0), (n0, n1)) = [0.0, 1e-4, 1e-2]
@@ -389,7 +477,7 @@ fn roll(model: &Model, shape: Shape, edge: Shape, radius: &dyn Fn(f64) -> f64, c
     let mut breaks: Vec<usize> = Vec::new();
     let mut last_t = t0;
     for i in 0..=count {
-        let t = t0 + (t1 - t0) * i as f64 / count as f64;
+        let t = if path.pieces.len() == 1 { t0 + (t1 - t0) * i as f64 / count as f64 } else { path.at_share(i as f64 / count as f64) };
         let (section, support) = solve(t, offset)?;
         if let (Some(&previous), Some(&before)) = (supports.last(), sections.last()) {
             if previous != support && switches != Switches::Ignored {
@@ -510,7 +598,15 @@ pub(super) fn fillet_along(model: &mut Model, shape: Shape, edge: Shape, law: &d
     }
     // (Finer along curved edges, where the faces through the sections are smooth.)
     let straight = matches!(model.edge_curve(edge), Some((Curve::Line(_), _, _)));
-    let Rolled { mut sections, supports, breaks, side_set, convex, closed, tangents } = roll(model, shape, edge, law, if straight { 48 } else { 192 }, Switches::Bisected)?;
+    let rolled = roll(model, shape, edge, law, if straight { 48 } else { 192 }, Switches::Bisected)?;
+    by_booleans(model, shape, rolled, radius)
+}
+
+/// The fillet of `shape` the ball `rolled` makes (its largest radius `radius`), built by
+/// boolean operations: the wedge cut away, the lens within the solid kept, and the two
+/// sewn (see the [module](self) documentation).
+fn by_booleans(model: &mut Model, shape: Shape, rolled: Rolled, radius: f64) -> Result<Shape> {
+    let Rolled { mut sections, supports, breaks, side_set, convex, closed, tangents } = rolled;
     if !convex && !closed {
         return Err(Error::InvalidInput("run-over fillets of open concave edges are not supported yet".into()));
     }
@@ -561,7 +657,10 @@ pub(super) fn fillet_along(model: &mut Model, shape: Shape, edge: Shape, law: &d
     let mut lens_wires = Vec::new();
     for s in &sections[..if closed { sections.len() - 1 } else { sections.len() }] {
         let toward = (s.at - s.center).normalized();
-        let beyond = s.at + toward * (0.5 * s.radius);
+        // (Further out where a contact is the edge's point itself, as where the ball reaches
+        // the end of a face narrowing to nothing: the point out from it is not this one.)
+        let at_edge = s.contacts.iter().any(|c| c.distance(s.at) <= 1e-3 * s.radius);
+        let beyond = s.at + toward * (if at_edge { 0.75 } else { 0.5 } * s.radius);
         if convex {
             let out = |c: Point| c + toward * (0.5 * s.radius);
             wedge_wires.push(polygon(model, &[s.contacts[0], out(s.contacts[0]), beyond, out(s.contacts[1]), s.contacts[1]])?);
@@ -603,6 +702,13 @@ pub(super) fn fillet_along(model: &mut Model, shape: Shape, edge: Shape, law: &d
         let (u0, u1, v0, v1) = model.face_uv_bounds(f);
         let mut points: Vec<Point> = model.unique_subshapes(f, NodeKind::Vertex).iter().map(|&v| model.point(v)).collect();
         points.push(surface.point(0.5 * (u0 + u1), 0.5 * (v0 + v1)));
+        // (And its edges' middles: the middle of a lens's end, its parameters' box's, may lie
+        // on the chord, its arc's does not.)
+        for e in model.unique_subshapes(f, NodeKind::Edge) {
+            if let Some((c, a, b)) = model.edge_curve(Shape { orientation: Orientation::Forward, ..e }) {
+                points.push(c.point(0.5 * (a + b)));
+            }
+        }
         let tol = 1e-6 * (1.0 + radius);
         walls.iter().any(|w| points.iter().all(|&p| nearest_on_surface(p, w, None).2 <= tol))
     };
@@ -612,6 +718,14 @@ pub(super) fn fillet_along(model: &mut Model, shape: Shape, edge: Shape, law: &d
     // (The cut built once: only some of its faces are kept, and what is sewn from them is
     // checked below.)
     let cut = boolean::difference_once(model, shape, wedge).map_err(|e| Error::Failed(format!("cutting the wedge: {e}")))?;
+    // (Its shells left open, as where the wedge's faces meet the solid's along curves
+    // only nearly the same: with the looser tolerances too.)
+    let cut = if closed_shells(model, cut) { cut } else { boolean::difference(model, shape, wedge).map_err(|e| Error::Failed(format!("cutting the wedge: {e}")))? };
+    // (Or nothing cut at all, the wedge's edges along the contacts not found to split the
+    // faces they lie on (as where a contact ends on an edge between tangent faces): with the
+    // looser tolerances.)
+    let untouched = (super::volume_of(model, cut) - super::volume_of(model, shape)).abs() <= 1e-9 * super::volume_of(model, shape).abs().max(1.0);
+    let cut = if untouched { crate::tolerance::with_loosened(true, || boolean::difference_once(model, shape, wedge)).map_err(|e| Error::Failed(format!("cutting the wedge: {e}")))? } else { cut };
     let faces = if convex {
         let lens_solid = solid(model, &lens_wires, "lens")?;
         let (wedge_walls, lens_walls) = (chords(model, wedge, &sections), chords(model, lens_solid, &sections));
@@ -651,6 +765,10 @@ pub(super) fn fillet_along(model: &mut Model, shape: Shape, edge: Shape, law: &d
     }
     let solid = solid_of(model, shell)?;
     let result = unify::unify_same_domain(model, solid)?;
+    // (Edges sewn from lofted pieces and the solid's faces stray from their faces' pcurves
+    // by a little more than the classifying distance: made as tolerant as that, up to a
+    // hundred thousandth of the radius.)
+    tolerant_of_pcurves(model, result, 1e-5 * (1.0 + radius))?;
     // (Checked: valid, and what it takes away (at a concave edge, adds) no more than the
     // wedge, nor less than nothing.)
     let (before, after, wedge_volume) = (super::volume_of(model, shape), super::volume_of(model, result), super::volume_of(model, wedge));
@@ -660,6 +778,214 @@ pub(super) fn fillet_along(model: &mut Model, shape: Shape, edge: Shape, law: &d
         return Err(Error::Failed("a run-over fillet that does not come out right".into()));
     }
     Ok(result)
+}
+
+/// `shape` with the chain `edges` (going on into one another smoothly at shared vertices)
+/// rounded by one ball of `radius` rolling along them all, on the faces at the edges and on
+/// beyond them, built by boolean operations (see the [module](self) documentation).
+pub(super) fn fillet_chain(model: &mut Model, shape: Shape, edges: &[Shape], radius: f64) -> Result<Shape> {
+    let curved = edges.iter().any(|&e| !matches!(model.edge_curve(e), Some((Curve::Line(_), _, _))));
+    let (rolled, _) = roll_chain(model, shape, edges, &|_| radius, if curved { 96 } else { 48 }, Switches::Bisected)?;
+    by_booleans(model, shape, rolled, radius)
+}
+
+/// Whether the ball of `radius` along the chain `edges` of `shape` touches anything but the
+/// faces at the edges somewhere (away from an open chain's ends).
+pub(super) fn chain_needed(model: &Model, shape: Shape, edges: &[Shape], radius: f64) -> bool {
+    let rolled = roll_chain(model, shape, edges, &|_| radius, 8, Switches::Ignored);
+    let Ok((rolled, own)) = rolled else { return false };
+    // (Each section's contacts on the faces at the edge it lies along; at a vertex between
+    // two, on either's.)
+    let n = rolled.supports.len();
+    let range = if rolled.closed { 0..n } else { 1..n - 1 };
+    range.into_iter().any(|i| {
+        let (s, t) = (rolled.supports[i], rolled.sections[i].t);
+        let last = own.len() - 1;
+        let pieces = [(t.floor().max(0.0) as usize).min(last), ((t.ceil().max(1.0) as usize) - 1).min(last)];
+        (0..2).any(|k| s[k].1.is_some() || !pieces.iter().any(|&p| own[p][k] == s[k].0))
+    })
+}
+
+/// Whether `edges` make one chain (see [`chain_order`]).
+pub(super) fn is_chain(model: &Model, edges: &[Shape]) -> bool {
+    chain_order(model, edges).is_some()
+}
+
+/// `edges` in order along the chain they make (each next one from the vertex the last ends
+/// at), each with whether the chain runs against it; and whether the chain closes. `None`
+/// where they are not one chain (three meeting at a vertex, or apart).
+fn chain_order(model: &Model, edges: &[Shape]) -> Option<(Vec<(Shape, bool)>, bool)> {
+    use crate::topology::NodeId;
+    let ends: Vec<(NodeId, NodeId)> = edges
+        .iter()
+        .map(|&e| {
+            let (a, b) = model.edge_vertices(Shape { orientation: Orientation::Forward, ..e });
+            (a.node, b.node)
+        })
+        .collect();
+    let n = edges.len();
+    let mut uses: crate::hashing::FastMap<NodeId, usize> = Default::default();
+    for &(a, b) in &ends {
+        *uses.entry(a).or_default() += 1;
+        *uses.entry(b).or_default() += 1;
+    }
+    if n == 0 || uses.values().any(|&u| u > 2) {
+        return None;
+    }
+    let start = (0..n).find_map(|i| if uses[&ends[i].0] == 1 { Some((i, false)) } else if uses[&ends[i].1] == 1 { Some((i, true)) } else { None });
+    let closed = start.is_none();
+    let (mut i, mut against) = start.unwrap_or((0, false));
+    let mut used = vec![false; n];
+    let mut order = Vec::with_capacity(n);
+    loop {
+        used[i] = true;
+        order.push((edges[i], against));
+        let tip = if against { ends[i].0 } else { ends[i].1 };
+        match (0..n).find(|&j| !used[j] && (ends[j].0 == tip || ends[j].1 == tip)) {
+            Some(j) => {
+                against = ends[j].0 != tip;
+                i = j;
+            }
+            None => break,
+        }
+    }
+    (order.len() == n).then_some((order, closed))
+}
+
+/// A face's outward normal at its surface's point nearest `p`.
+fn outward_normal(model: &Model, face: Shape, p: Point) -> Option<Vector> {
+    let surface = model.surface(face)?.transformed(&face.placement);
+    let (u, v, _) = nearest_on_surface(p, &surface, None);
+    let (_, du, dv) = surface.d1(u, v);
+    let n = du.cross(dv);
+    if n.length() <= 1e-300 {
+        return None;
+    }
+    let n = n.normalized();
+    Some(if face.orientation == Orientation::Reversed { -n } else { n })
+}
+
+/// [`roll`] along the chain `edges`: its sides each the faces at the edges on that side (one
+/// edge's face going on into the next edge's on the same side, the same face or tangent to
+/// it), with their neighbours. Also, for each edge, its faces' places among its sides'.
+fn roll_chain(model: &Model, shape: Shape, edges: &[Shape], radius: &dyn Fn(f64) -> f64, count: usize, switches: Switches) -> Result<(Rolled, Vec<[usize; 2]>)> {
+    let (order, closed) = chain_order(model, edges).ok_or_else(|| Error::InvalidInput("fillet edges that are not one chain".into()))?;
+    let mut pieces = Vec::with_capacity(order.len());
+    let mut sided: Vec<[(Shape, f64); 2]> = Vec::with_capacity(order.len());
+    for &(edge, against) in &order {
+        let faces = faces_of(model, shape, edge);
+        let [(g0, a0), (g1, a1)] = faces[..] else {
+            return Err(Error::InvalidInput(format!("a fillet edge must bound two faces, it bounds {}", faces.len())));
+        };
+        let (curve, t0, t1) = model.edge_curve(Shape { orientation: Orientation::Forward, ..edge }).ok_or_else(|| Error::InvalidInput("a degenerate edge has no fillet".into()))?;
+        let (a, b, sign) = if against { (t1, t0, -1.0) } else { (t0, t1, 1.0) };
+        let mut pair = [(g0, a0 * sign), (g1, a1 * sign)];
+        if let Some(previous) = sided.last() {
+            let same = |x: Shape, y: Shape| x.node == y.node;
+            let keep = if same(pair[0].0, previous[0].0) || same(pair[1].0, previous[1].0) {
+                true
+            } else if same(pair[0].0, previous[1].0) || same(pair[1].0, previous[0].0) {
+                false
+            } else {
+                let p = curve.point(a);
+                let normal = |f: Shape| outward_normal(model, f, p).unwrap_or(Vector::new(0.0, 0.0, 0.0));
+                let n0 = normal(pair[0].0);
+                n0.dot(normal(previous[0].0)) >= n0.dot(normal(previous[1].0))
+            };
+            if !keep {
+                pair.swap(0, 1);
+            }
+        }
+        pieces.push((curve, a, b));
+        sided.push(pair);
+    }
+    let chain: Vec<crate::topology::NodeId> = order.iter().map(|(e, _)| e.node).collect();
+    let ends: Vec<crate::topology::NodeId> = if closed {
+        Vec::new()
+    } else {
+        let vertex = |(e, against): (Shape, bool), last: bool| {
+            let (a, b) = model.edge_vertices(Shape { orientation: Orientation::Forward, ..e });
+            if against == last { a.node } else { b.node }
+        };
+        vec![vertex(order[0], false), vertex(order[order.len() - 1], true)]
+    };
+    let all = model.unique_subshapes(shape, NodeKind::Face);
+    let primary = |k: usize| {
+        let mut faces: Vec<Shape> = Vec::new();
+        for pair in &sided {
+            if !faces.iter().any(|f| f.node == pair[k].0.node) {
+                faces.push(pair[k].0);
+            }
+        }
+        faces
+    };
+    let side = |k: usize| -> (Side, Vec<usize>) {
+        let (mine, other) = (primary(k), primary(1 - k));
+        let mut members = mine.clone();
+        for face in &mine {
+            for e in model.unique_subshapes(*face, NodeKind::Edge) {
+                if chain.contains(&e.node) {
+                    continue;
+                }
+                let (p, q) = model.edge_vertices(e);
+                if ends.contains(&p.node) || ends.contains(&q.node) {
+                    continue;
+                }
+                for &f in &all {
+                    let fresh = !members.iter().any(|m| m.node == f.node) && !other.iter().any(|o| o.node == f.node);
+                    if fresh && model.unique_subshapes(f, NodeKind::Edge).iter().any(|x| x.node == e.node) {
+                        members.push(f);
+                    }
+                }
+            }
+        }
+        // (Each edge's face on this side, by its place among the side's faces measured.)
+        let kept: Vec<Shape> = members.iter().copied().filter(|&f| Bounded::of(model, f).is_some()).collect();
+        let own: Vec<usize> = sided.iter().map(|pair| kept.iter().position(|f| f.node == pair[k].0.node).unwrap_or(usize::MAX)).collect();
+        let bounded: Vec<Bounded> = kept.iter().filter_map(|&f| Bounded::of(model, f)).collect();
+        (Side(bounded), own)
+    };
+    let ((s0, own0), (s1, own1)) = (side(0), side(1));
+    let spine = Spine::new(pieces, closed);
+    let rolled = roll_on(model, &spine, [s0, s1], sided[0], radius, count, switches)?;
+    Ok((rolled, own0.into_iter().zip(own1).map(|(a, b)| [a, b]).collect()))
+}
+
+/// The edges of `shape` made as tolerant as their faces' pcurves stray from them, where that
+/// is more than their tolerance and no more than `limit`; the vertices then as tolerant as
+/// their edges.
+fn tolerant_of_pcurves(model: &mut Model, shape: Shape, limit: f64) -> Result<()> {
+    let mut wider: Vec<(crate::topology::EdgeId, f64)> = Vec::new();
+    for face in model.unique_subshapes(shape, NodeKind::Face) {
+        let Some(surface) = model.surface(face).cloned() else { continue };
+        let coedges: Vec<Shape> = model.children(face).flat_map(|w| model.children(w).collect::<Vec<_>>()).collect();
+        for coedge in coedges {
+            let Ok(c) = CoEdgeId::try_from(coedge.node) else { continue };
+            let edge = model[c].edge;
+            let Some((pcurve, p0, p1)) = model.effective_pcurve(c) else { continue };
+            // (At the same parameters on both, as the edge's own curve has them; a degenerate
+            // edge's point, its vertex.)
+            let curve = model.get(edge).and_then(|e| model.get(e.curve)).map(|slot| slot.curve.clone());
+            let (start, _) = model.edge_vertices(Shape::from(edge));
+            let pole = model.point(start);
+            let stray = (0..=16)
+                .map(|k| {
+                    let t = p0 + (p1 - p0) * k as f64 / 16.0;
+                    let uv = pcurve.point(t);
+                    surface.point(uv.x, uv.y).distance(curve.as_ref().map_or(pole, |c| c.point(t)))
+                })
+                .fold(0.0, f64::max);
+            if stray > model.tolerance(Shape::from(edge)) && stray <= limit {
+                wider.push((edge, 1.5 * stray));
+            }
+        }
+    }
+    for (edge, tolerance) in wider {
+        if tolerance > model.tolerance(Shape::from(edge)) {
+            model.set_edge_tolerance(edge, tolerance)?;
+        }
+    }
+    crate::modify::update_tolerances(model, shape)
 }
 
 /// [`fillet_along`] built directly (see [`trim`]).
@@ -817,16 +1143,26 @@ fn lens(model: &mut Model, s: &Section) -> Result<Shape> {
     make::wire(model, &[arc, chord])
 }
 
+/// Faces as [`rolls_off`] measures them, each made once (for several edges of one face).
+#[derive(Default)]
+pub(super) struct KnownFaces(std::cell::RefCell<crate::hashing::FastMap<crate::topology::NodeId, Option<std::rc::Rc<Bounded>>>>);
+
+impl KnownFaces {
+    fn get(&self, model: &Model, face: Shape) -> Option<std::rc::Rc<Bounded>> {
+        self.0.borrow_mut().entry(face.node).or_insert_with(|| Bounded::of_with(model, face, false).map(std::rc::Rc::new)).clone()
+    }
+}
+
 /// Whether the ball of the fillet along a straight edge between `faces`, touching them at
 /// `contacts` in the section at the edge's start (the edge running along `tangent` for
 /// `length`, from `ends[0]` to `ends[1]`), touches them off their bounds somewhere along it:
 /// where it must roll onto the faces beyond. (Not where a contact leaves its face across an
 /// edge from one of the edge's ends, as a face narrowing to its end: the fillet's end meets
 /// the faces there as at any end.)
-pub(super) fn rolls_off(model: &Model, faces: [Shape; 2], tangent: Vector, length: f64, contacts: [Point; 2], ends: [Point; 2]) -> bool {
+pub(super) fn rolls_off(model: &Model, faces: [Shape; 2], tangent: Vector, length: f64, contacts: [Point; 2], ends: [Point; 2], known: &KnownFaces) -> bool {
     const SAMPLES: usize = 32;
     faces.iter().zip(contacts).any(|(&face, contact)| {
-        let Some(bounded) = Bounded::of(model, face) else { return false };
+        let Some(bounded) = known.get(model, face) else { return false };
         // (Whether the face's boundary edge nearest `p` runs from one of the edge's ends.)
         let from_an_end = |p: Point| {
             let gap = |&(ref c, first, last): &(Curve, f64, f64)| (0..=64).map(|i| c.point(first + (last - first) * i as f64 / 64.0).distance(p)).fold(f64::INFINITY, f64::min);

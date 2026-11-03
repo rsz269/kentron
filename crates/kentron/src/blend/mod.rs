@@ -822,6 +822,29 @@ fn fillet_solid_edges_as(model: &mut Model, shape: Shape, edges: &[(Shape, f64)]
     let roots: Vec<usize> = { let mut r: Vec<usize> = (0..n).map(|i| root(&mut group, i)).collect(); r.sort_unstable(); r.dedup(); r };
     for r in roots {
         let members: Vec<usize> = (0..n).filter(|&i| root(&mut group, i) == r).collect();
+        // A chain of several edges of one radius whose ball would touch faces beyond the
+        // edges' own somewhere rolls on onto them, all along the chain (where that can be
+        // built and leaves the solid as sound as it was).
+        if let [first, ..] = members[..] {
+            let radius = classified[first].1;
+            if members.len() > 1 && members.iter().all(|&i| classified[i].1 == radius) {
+                let chain: Vec<Shape> = members.iter().map(|&i| Shape { placement: Transform::IDENTITY, ..classified[i].0 }).collect();
+                // (Tried only where a straight edge among them, its fillet a cylinder, would
+                // touch its faces off their bounds: a cheap test, rolling the ball along a
+                // whole chain to find out is not.)
+                let off = runover::is_chain(model, &chain) && {
+                    let (faces, known) = (model.unique_subshapes(local, NodeKind::Face), runover::KnownFaces::default());
+                    members.iter().any(|&i| classified[i].2.as_ref().is_some_and(|c| rolls_off_among(model, &faces, c, radius, &known)))
+                };
+                if off && runover::chain_needed(model, local, &chain, radius * unscale) {
+                    let before = fault_kinds(model, local);
+                    if let Ok(rounded) = runover::fillet_chain(model, local, &chain, radius * unscale).and_then(|r| sound(model, &before, r)) {
+                        local = rounded;
+                        continue;
+                    }
+                }
+            }
+        }
         if members.iter().all(|&i| classified[i].2.is_some()) {
             // An edge alone whose ball would touch its faces off their bounds rolls on onto
             // the faces beyond (where that can be built).
@@ -1268,15 +1291,19 @@ fn not_in_turn(e: &Error) -> bool {
 /// Whether `corner`'s fillet of `radius` (along a straight edge, convex) would touch its
 /// faces off their bounds: where the ball must roll on onto the faces beyond.
 fn rolls_off(model: &Model, shape: Shape, corner: &Corner, radius: f64) -> bool {
+    rolls_off_among(model, &model.unique_subshapes(shape, NodeKind::Face), corner, radius, &runover::KnownFaces::default())
+}
+
+/// [`rolls_off`], the shape's faces given (and those measured already).
+fn rolls_off_among(model: &Model, faces: &[Shape], corner: &Corner, radius: f64, known: &runover::KnownFaces) -> bool {
     let Path::Line { length } = corner.path else { return false };
     if !corner.convex {
         return false;
     }
     let Ok((_, t1, t2)) = corner.ball(radius) else { return false };
-    let faces = model.unique_subshapes(shape, NodeKind::Face);
     let find = |node: NodeId| faces.iter().copied().find(|f| f.node == node);
     let (Some(a), Some(b)) = (find(corner.faces[0].0), find(corner.faces[1].0)) else { return false };
-    runover::rolls_off(model, [a, b], corner.tangent, length, [t1, t2], [corner.origin, corner.end])
+    runover::rolls_off(model, [a, b], corner.tangent, length, [t1, t2], [corner.origin, corner.end], known)
 }
 
 /// `op` on `shape` where it has solids; on the solids closed shells bound, given back as
@@ -5044,6 +5071,86 @@ mod tests {
         assert_eq!(model.explore(rounded, NodeKind::Face).count(), 12);
         let v = properties::volume(&model, rounded).mass;
         assert!((v - 41993.56194).abs() < 1e-4, "{v}");
+    }
+
+    /// An L bracket's inner corner rounded R 51.9 (its legs' inner depth 52), leaving a strip
+    /// 0.1 wide of the horizontal leg's top: its front top edge rounded R 1.5 rolls across
+    /// the strip onto the R 51.9 fillet beyond, the strip gone (OCCT's values and faces),
+    /// not left with a flat beside a cylinder.
+    #[test]
+    fn a_fillet_rolls_across_a_strip_narrower_than_it_onto_the_fillet_beyond() {
+        let mut model = Model::new();
+        let horizontal = Cuboid::from_corners(Point::new(-7.5, -60.0, 0.0), Point::new(7.5, 0.0, 8.0)).build(&mut model).unwrap();
+        let vertical = Cuboid::from_corners(Point::new(-7.5, -8.0, 0.0), Point::new(7.5, 0.0, 60.0)).build(&mut model).unwrap();
+        let bracket = boolean::union(&mut model, horizontal, vertical).unwrap();
+        let along = |model: &Model, s: Shape, y: f64, z: f64| {
+            model
+                .unique_subshapes(s, NodeKind::Edge)
+                .into_iter()
+                .find(|&e| {
+                    let (p, q) = model.edge_vertices(e);
+                    let (p, q) = (model.point(p), model.point(q));
+                    (p.y - y).abs() < 1e-9 && (q.y - y).abs() < 1e-9 && (p.z - z).abs() < 1e-9 && (q.z - z).abs() < 1e-9
+                })
+                .unwrap()
+        };
+        let inner = along(&model, bracket, -8.0, 8.0);
+        let filleted = fillet(&mut model, bracket, &[inner], 51.9).unwrap();
+        let front = along(&model, filleted, -60.0, 8.0);
+        let rounded = fillet(&mut model, filleted, &[front], 1.5).unwrap();
+        assert!(validity::check(&model, rounded).is_valid());
+        assert_eq!(model.explore(rounded, NodeKind::Face).count(), 9);
+        let v = properties::volume(&model, rounded).mass;
+        assert!((v - 22103.84289).abs() < 1e-4, "{v}");
+        let a = properties::area(&model, rounded).mass;
+        assert!((a - 6203.65983).abs() < 1e-4, "{a}");
+    }
+
+    /// [`a_fillet_rolls_across_a_strip_narrower_than_it_onto_the_fillet_beyond`] with the
+    /// horizontal leg's front corners rounded R 5 first: the front edge goes on into the
+    /// corners' arcs, and on up the sides along the R 51.9 fillet, one chain whose ball
+    /// rolls across the strip where it is there. OCCT's faces; its volume and area within
+    /// 1e-5 (the fillet lofted through the ball's sections, OCCT's fitted).
+    #[test]
+    fn a_chain_rolls_across_a_strip_narrower_than_it_onto_the_fillet_beyond() {
+        let mut model = Model::new();
+        let horizontal = Cuboid::from_corners(Point::new(-7.5, -60.0, 0.0), Point::new(7.5, 0.0, 8.0)).build(&mut model).unwrap();
+        let vertical = Cuboid::from_corners(Point::new(-7.5, -8.0, 0.0), Point::new(7.5, 0.0, 60.0)).build(&mut model).unwrap();
+        let bracket = boolean::union(&mut model, horizontal, vertical).unwrap();
+        let ends = |model: &Model, e: Shape| {
+            let (p, q) = model.edge_vertices(e);
+            (model.point(p), model.point(q))
+        };
+        let along = |model: &Model, s: Shape, y: f64, z: f64| {
+            model
+                .unique_subshapes(s, NodeKind::Edge)
+                .into_iter()
+                .find(|&e| {
+                    let (p, q) = ends(model, e);
+                    (p.y - y).abs() < 1e-9 && (q.y - y).abs() < 1e-9 && (p.z - z).abs() < 1e-9 && (q.z - z).abs() < 1e-9
+                })
+                .unwrap()
+        };
+        let inner = along(&model, bracket, -8.0, 8.0);
+        let filleted = fillet(&mut model, bracket, &[inner], 51.9).unwrap();
+        let corners: Vec<Shape> = model
+            .unique_subshapes(filleted, NodeKind::Edge)
+            .into_iter()
+            .filter(|&e| {
+                let (p, q) = ends(&model, e);
+                [p, q].iter().all(|r| (r.x.abs() - 7.5).abs() < 1e-9 && (r.y + 60.0).abs() < 1e-9) && (p.z - q.z).abs() > 7.0
+            })
+            .collect();
+        assert_eq!(corners.len(), 2);
+        let cornered = fillet(&mut model, filleted, &corners, 5.0).unwrap();
+        let front = along(&model, cornered, -60.0, 8.0);
+        let rounded = fillet(&mut model, cornered, &[front], 1.5).unwrap();
+        assert!(validity::check(&model, rounded).is_valid());
+        assert_eq!(model.explore(rounded, NodeKind::Face).count(), 17);
+        let v = properties::volume(&model, rounded).mass;
+        assert!((v - 21941.14570).abs() < 1e-5 * v, "{v}");
+        let a = properties::area(&model, rounded).mass;
+        assert!((a - 6045.64487).abs() < 1e-5 * a, "{a}");
     }
 
     #[test]
