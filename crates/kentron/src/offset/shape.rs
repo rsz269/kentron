@@ -43,6 +43,21 @@ pub fn shape_with_faces(model: &mut Model, shape: Shape, distance: f64, faces: &
     if join == Join::Arc && own.is_empty() {
         return or_within(model, rounded, shape, distance, Made::Offset);
     }
+    // Outwards by intersection, a solid of planar faces with concave edges: also as the
+    // space its pieces cover (super::cells), taken where moving its faces one by one fails
+    // or encloses another volume (a notch closed or a face vanished, its neighbours' offsets
+    // passing through one another unnoticed).
+    if join == Join::Intersection && own.is_empty() && distance > 0.0 {
+        if let Ok(Some(covered)) = super::cells::offset(model, shape, distance) {
+            let agree = rounded.as_ref().is_ok_and(|&r| {
+                let (a, b) = (crate::properties::volume(model, r).mass, crate::properties::volume(model, covered).mass);
+                (a - b).abs() <= 1e-6 * a.abs().max(b.abs()).max(1.0)
+            });
+            if !agree {
+                return Ok(covered);
+            }
+        }
+    }
     rounded
 }
 
@@ -114,7 +129,15 @@ fn stepped(model: &mut Model, shape: Shape, distance: f64, own: &[(NodeId, f64)]
         }
     }
     let unmoved = distance == 0.0 && base_own.iter().all(|(_, d)| *d == 0.0);
-    let mut result = if unmoved { shape } else { moved_and_rounded(model, shape, distance, &base_own, join)? };
+    // (Every face moved alike: as a plain offset, which also closes notches it fills.)
+    let alike = base_own.iter().all(|(_, d)| *d == distance);
+    let mut result = if unmoved {
+        shape
+    } else if alike {
+        shape_with_faces(model, shape, distance, &[], join)?
+    } else {
+        moved_and_rounded(model, shape, distance, &base_own, join)?
+    };
     // Each face moved further: a prism of the rest along its normal, from where the base has
     // it (the face of the base on its plane moved by the least distance holding a point inside
     // it, moved so; else the face itself moved so).
@@ -1363,6 +1386,24 @@ mod tests {
         valid(&model, moved);
         let v = volume(&model, moved).mass;
         assert!((v - 1345.0).abs() < 1e-6 * 1345.0, "{v}");
+    }
+
+    /// A prism of a profile with a notch, offset 3 outwards by intersection: the notch closes
+    /// (its slanting face vanishes, its walls' offsets passing through each other). OCCT's
+    /// volume (offset shape_type_i_c Y2): the profile's offset, 16 by 13 less a corner 6 by 2,
+    /// times the prism's length grown to 16.
+    #[test]
+    fn an_offset_closing_a_notch() {
+        let mut model = Model::new();
+        let pts = [(0.0, 0.0), (10.0, 0.0), (10.0, 7.0), (6.0, 7.0), (6.0, 3.0), (5.0, 5.0), (0.0, 5.0)].map(|(x, z)| Point::new(x, 0.0, z));
+        let edges: Vec<Shape> = (0..pts.len()).map(|i| crate::make::edge_between(&mut model, pts[i], pts[(i + 1) % pts.len()]).unwrap()).collect();
+        let wire = crate::make::wire(&mut model, &edges).unwrap();
+        let face = crate::make::planar_face(&mut model, wire).unwrap();
+        let prism = crate::sweep::extrude(&mut model, face, Vector::new(0.0, 10.0, 0.0)).unwrap().shape;
+        let moved = shape(&mut model, prism, 3.0, Join::Intersection).unwrap();
+        valid(&model, moved);
+        let v = volume(&model, moved).mass;
+        assert!((v - 3136.0).abs() < 1e-6 * 3136.0, "{v}");
     }
 
     #[test]

@@ -938,23 +938,20 @@ fn v6() -> DrawResult<()> {
 
 /// `tests/offset/shape_type_i_c/V9`
 #[test]
-#[should_panic]
-fn v9() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.r#box(&["b1", "10", "6", "10"])?;
-        d.polyline(&["p", "2", "0", "5", "2", "2", "5", "2", "2.5", "3", "2", "3", "5", "2", "3", "10", "2", "0", "10", "2", "0", "5"])?;
-        d.mkplane(&["f", "p"])?;
-        d.prism(&["b2", "f", "6", "0", "0"])?;
-        d.bcut(&["s", "b1", "b2"])?;
-        d.offsetparameter(&["1e-7", "c", "i", "r"])?;
-        d.offsetload(&["s", "2.5"])?;
-        d.offsetperform(&["result"])?;
-        d.checkprops(&["result", "-s", "1140", "-v", "2460"])?;
-        d.unifysamedom(&["result_unif", "result"])?;
-        d.checknbshapes(&["result_unif", "-face", "10", "-shell", "1"])?;
-        Ok(())
-    })
+fn v9() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.r#box(&["b1", "10", "6", "10"])?;
+    d.polyline(&["p", "2", "0", "5", "2", "2", "5", "2", "2.5", "3", "2", "3", "5", "2", "3", "10", "2", "0", "10", "2", "0", "5"])?;
+    d.mkplane(&["f", "p"])?;
+    d.prism(&["b2", "f", "6", "0", "0"])?;
+    d.bcut(&["s", "b1", "b2"])?;
+    d.offsetparameter(&["1e-7", "c", "i", "r"])?;
+    d.offsetload(&["s", "2.5"])?;
+    d.offsetperform(&["result"])?;
+    d.checkprops(&["result", "-s", "1140", "-v", "2460"])?;
+    d.unifysamedom(&["result_unif", "result"])?;
+    d.checknbshapes(&["result_unif", "-face", "10", "-shell", "1"])?;
+    Ok(())
 }
 
 /// `tests/offset/shape_type_i_c/XA2`

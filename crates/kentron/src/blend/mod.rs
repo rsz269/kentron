@@ -2439,7 +2439,7 @@ fn hull_facets(points: &[Point]) -> Option<Vec<(Vector, Vec<Point>)>> {
 }
 
 /// The solid convex hull of `points`; `None` where they are flat.
-fn convex_solid(model: &mut Model, points: &[Point]) -> Result<Option<Shape>> {
+pub(crate) fn convex_solid(model: &mut Model, points: &[Point]) -> Result<Option<Shape>> {
     let Some(facets) = hull_facets(points) else { return Ok(None) };
     let mut faces = Vec::with_capacity(facets.len());
     for (_, polygon) in &facets {

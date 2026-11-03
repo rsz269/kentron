@@ -1125,13 +1125,10 @@ tests/offset/shape_type_a/A2
 tests/offset/shape_type_i/A5
 tests/offset/shape_type_i/A9
 tests/offset/shape_type_i/B4
-tests/offset/shape_type_i_c/O8
 tests/offset/shape_type_i_c/P3
 tests/offset/shape_type_i_c/V4
 tests/offset/shape_type_i_c/V5
-tests/offset/shape_type_i_c/V9
 tests/offset/shape_type_i_c/XT2
-tests/offset/shape_type_i_c/Y2
 tests/offset/shape_type_i_c/Y5
 tests/offset/shape_type_i_c/Y6
 tests/offset/shape_type_i_c/Y7
