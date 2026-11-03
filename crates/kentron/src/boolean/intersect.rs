@@ -1935,7 +1935,7 @@ fn sliced(base: &Face, other: &Face, crossings: &[Point]) -> Vec<Section> {
     // iso-line of the base (a meridian of a torus cut by a plane through its axis) does
     // not run along a grid line.
     let shift = 0.381_966_011_250_105;
-    let periodic = base.u_period.is_some() && base.u_range.1 - base.u_range.0 >= TAU - 1e-9;
+    let mut periodic = base.u_period.is_some() && base.u_range.1 - base.u_range.0 >= TAU - 1e-9;
     let (u0, u1) = if periodic {
         let u0 = base.u_range.0 + shift * TAU / nu as f64;
         (u0, u0 + TAU)
@@ -1946,7 +1946,7 @@ fn sliced(base: &Face, other: &Face, crossings: &[Point]) -> Vec<Section> {
         let (lo, hi) = (base.u_range.0 - 0.05 * span - shift * 1.1 * span / nu as f64, base.u_range.1 + 0.05 * span);
         if base.u_period.is_some() { (lo, hi) } else { (lo.max(bu0), hi.min(bu1)) }
     };
-    let v_periodic = base.v_period.filter(|&period| base.v_range.1 - base.v_range.0 >= period - 1e-9);
+    let mut v_periodic = base.v_period.filter(|&period| base.v_range.1 - base.v_range.0 >= period - 1e-9);
     let (v0, v1) = match v_periodic {
         Some(period) => {
             let v0 = base.v_range.0 + shift * period / nv as f64;
@@ -1979,19 +1979,55 @@ fn sliced(base: &Face, other: &Face, crossings: &[Point]) -> Vec<Section> {
         let margin = spacing + 0.05 * size;
         let near = |p: Point| p.x >= lo.x - margin && p.x <= hi.x + margin && p.y >= lo.y - margin && p.y <= hi.y + margin && p.z >= lo.z - margin && p.z <= hi.z + margin;
         let (mut imin, mut imax, mut jmin, mut jmax) = (usize::MAX, 0, usize::MAX, 0);
+        let (mut by_u, mut by_v) = ([false; N], [false; N]);
         for i in 0..=N {
             for j in 0..=N {
                 if near(samples[i][j]) {
                     (imin, imax, jmin, jmax) = (imin.min(i), imax.max(i), jmin.min(j), jmax.max(j));
+                    (by_u[i % N], by_v[j % N]) = (true, true);
                 }
             }
         }
+        // (Round a closed direction, the samples near the other face within an arc of under
+        // half of it, as on a torus far larger than the face: that arc, from the sample after
+        // the widest gap between them on round to the one before it, a step wider each way.
+        // `None` where they run round more of it.)
+        let arc = |near: &[bool; N]| -> Option<(f64, f64)> {
+            let (mut gap, mut after) = (0, 0);
+            for start in (0..N).filter(|&k| near[k]) {
+                let run = (1..=N).take_while(|&d| !near[(start + d) % N]).count();
+                if run > gap {
+                    (gap, after) = (run, start + run + 1);
+                }
+            }
+            (gap > N / 2).then(|| ((after % N) as f64 - 1.0, (after % N + N - gap) as f64))
+        };
         if imin == usize::MAX {
             (u0, u1, v0, v1)
         } else {
-            let at = |a: f64, b: f64, k: usize| a + (b - a) * k as f64 / N as f64;
-            let (iu, ju) = if periodic { (0, N) } else { (imin.saturating_sub(1), (imax + 1).min(N)) };
-            let (iv, jv) = if v_periodic.is_some() { (0, N) } else { (jmin.saturating_sub(1), (jmax + 1).min(N)) };
+            let at = |a: f64, b: f64, k: f64| a + (b - a) * k / N as f64;
+            let (iu, ju) = if periodic {
+                match arc(&by_u) {
+                    Some(window) => {
+                        periodic = false;
+                        window
+                    }
+                    None => (0.0, N as f64),
+                }
+            } else {
+                (imin.saturating_sub(1) as f64, (imax + 1).min(N) as f64)
+            };
+            let (iv, jv) = if v_periodic.is_some() {
+                match arc(&by_v) {
+                    Some(window) => {
+                        v_periodic = None;
+                        window
+                    }
+                    None => (0.0, N as f64),
+                }
+            } else {
+                (jmin.saturating_sub(1) as f64, (jmax + 1).min(N) as f64)
+            };
             (at(u0, u1, iu), at(u0, u1, ju), at(v0, v1, iv), at(v0, v1, jv))
         }
     };

@@ -1970,6 +1970,24 @@ mod tests {
         }
     }
 
+    /// A quarter of a small cylinder (a fillet's tool) cut by a torus far larger than it
+    /// (R 216, r 60), crossing it from one straight edge to the other: on the torus's grid,
+    /// fine for the whole torus, the section was a cell or two wide and lost, and the quarter
+    /// kept whole. Volume from OCCT.
+    #[test]
+    fn a_quarter_cylinder_cut_by_a_torus_far_larger_than_it() {
+        use crate::math::{Direction, Frame};
+        let mut model = Model::new();
+        let block = cuboid(&mut model, (-11.0, 52.5, 24.0), (1.5, 1.5, 8.0));
+        let cylinder = crate::primitives::Cylinder::new(1.5, 10.0).with_frame(Frame::new(Point::new(-9.5, 52.5, 23.0), Direction::Z, Direction::X)).build(&mut model).unwrap();
+        let quarter = intersection(&mut model, block, cylinder).unwrap();
+        let torus = crate::primitives::Torus::new(216.0, 60.0).with_frame(Frame::new(Point::new(0.0, 0.0, 216.0), Direction::Y, Direction::X)).build(&mut model).unwrap();
+        let cut = intersection(&mut model, quarter, torus).unwrap();
+        assert!(crate::validity::check(&model, cut).is_valid());
+        let v = crate::properties::volume(&model, cut).mass;
+        assert!((v - 7.291729).abs() < 1e-3, "{v}");
+    }
+
     #[test]
     fn half_a_torus() {
         // A torus (R 10, r 3) cut by the half-space x > 0: half its volume 2π²Rr² and area

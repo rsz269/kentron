@@ -1578,7 +1578,9 @@ fn concave_ends(model: &mut Model, shape: Shape, corners: &[(Corner, f64)], i: u
                 faces.push(face);
             }
         }
-        let [face] = faces[..] else { continue };
+        // (Pieces of one surface, as a torus's on either side of its seam, are one face here.)
+        let carrier = |f: Shape| model.surface(f).map(|s| (untrimmed(s).transformed(&f.placement), f.orientation));
+        let Some(&face) = faces.first().filter(|&&f| faces.iter().all(|&g| carrier(g) == carrier(f))) else { continue };
         let Some(surface) = model.surface(face).map(|s| untrimmed(s).transformed(&face.placement)) else { continue };
         let Some((u, v)) = surface.parameters(p) else { continue };
         let (_, du, dv) = surface.d1(u, v);
@@ -1600,6 +1602,49 @@ fn concave_ends(model: &mut Model, shape: Shape, corners: &[(Corner, f64)], i: u
             continue;
         }
         if !(facing > tolerance::ANGULAR.sqrt()) {
+            continue;
+        }
+        // (A torus or a sphere, as a rim's rounded top the edge runs up into: the tool run on
+        // until its cross-section is past the surface all across, measured from the tube's
+        // or the sphere's centre, and kept on the material's side of it. No further: run on
+        // through a tube, the tool would come out of it again.)
+        type Centre = Box<dyn Fn(Point) -> Option<Point>>;
+        type Build = Box<dyn Fn(&mut Model) -> Result<Shape>>;
+        let round: Option<(Centre, f64, Build)> = match &surface {
+            Surface::Torus(t) if t.minor_radius() < t.major_radius() => {
+                let (o, z, big, small, frame) = (t.frame().origin(), Vector::from(t.frame().z()), t.major_radius(), t.minor_radius(), *t.frame());
+                let centre = move |q: Point| {
+                    let flat = (q - o) - z * (q - o).dot(z);
+                    (flat.length() > tolerance::LINEAR).then(|| o + flat.normalized() * big)
+                };
+                Some((Box::new(centre), small, Box::new(move |model: &mut Model| crate::primitives::Torus::new(big, small).with_frame(frame).build(model))))
+            }
+            Surface::Sphere(s) => {
+                let (o, r, frame) = (s.frame().origin(), s.radius(), *s.frame());
+                Some((Box::new(move |_: Point| Some(o)), r, Box::new(move |model: &mut Model| crate::primitives::Sphere::new(r).with_frame(frame).build(model))))
+            }
+            _ => None,
+        };
+        if let Some((centre, r, build)) = round {
+            let Some(c) = centre(p) else { continue };
+            // (Facing its centre, the material outside it: past the surface is inside.)
+            let inward = n.dot(c - p) > 0.0;
+            let past = |q: Point| centre(q).is_some_and(|c| (q.distance(c) < r) == inward);
+            // (The cross-section's corner on the edge, its ends on the faces and between.)
+            let between = corner.into[0].dot(corner.into[1]).clamp(-1.0, 1.0).acos();
+            let along = if between > 1e-3 { radius / (0.5 * between).tan() } else { *radius };
+            let step = radius / 16.0;
+            let cleared = |(x, y): (f64, f64)| {
+                (1..=128).map(|j| j as f64 * step).find(|&s| {
+                    let (q, into) = corner.past(k == 1, s);
+                    past(q + into[0] * x + into[1] * y)
+                })
+            };
+            let cross = [(0.0, 0.0), (along, 0.0), (0.0, along), (0.5 * along, 0.5 * along)];
+            let Some(far) = cross.into_iter().map(cleared).collect::<Option<Vec<f64>>>().map(|s| s.into_iter().fold(0.0, f64::max)) else { continue };
+            let solid = build(model)?;
+            run[k] = far + 0.25 * radius;
+            beyond.push((solid, !inward));
             continue;
         }
         let solid = match &surface {
@@ -4816,6 +4861,42 @@ mod tests {
             .unwrap();
         let bevelled = chamfer(&mut model, l, &[edge], 0.25).unwrap();
         check_volume(&model, bevelled, 3.0 + 0.25 * 0.25 / 2.0);
+    }
+
+    /// The inner edge of an L-shaped block standing on a torus (R 216, r 60, its axis
+    /// across the block) runs down into it: the fillet runs on into the torus and ends on it,
+    /// as OCCT's, not square across at the edge's end. (The torus's seam passes through that
+    /// end, two faces of one surface meeting there.) Volume from OCCT.
+    #[test]
+    fn a_concave_fillet_ends_on_the_torus_its_edge_runs_into() {
+        use crate::math::{Direction, Frame};
+        let mut model = Model::new();
+        let a = Cuboid::from_corners(Point::new(-20.0, -20.0, 0.0), Point::new(0.0, 20.0, 40.0)).build(&mut model).unwrap();
+        let b = Cuboid::from_corners(Point::new(0.0, -20.0, 0.0), Point::new(20.0, 0.0, 40.0)).build(&mut model).unwrap();
+        let l = boolean::union(&mut model, a, b).unwrap();
+        let torus = crate::primitives::Torus::new(216.0, 60.0).with_frame(Frame::new(Point::new(0.0, 0.0, 306.0), Direction::Y, Direction::X)).build(&mut model).unwrap();
+        let block = boolean::intersection(&mut model, l, torus).unwrap();
+        let edge = model
+            .unique_subshapes(block, NodeKind::Edge)
+            .into_iter()
+            .find(|&e| {
+                let (p, q) = model.edge_vertices(e);
+                let (p, q) = (model.point(p), model.point(q));
+                [p, q].iter().all(|p| p.x.abs() < 1e-9 && p.y.abs() < 1e-9)
+            })
+            .unwrap();
+        let rounded = fillet(&mut model, block, &[edge], 1.5).unwrap();
+        let report = validity::check(&model, rounded);
+        assert!(report.problems.is_empty(), "{report:?}");
+        let v = properties::volume(&model, rounded).mass;
+        assert!((v - 10357.056661).abs() < 1e-3, "{v}");
+        // (No face across the fillet where the edge ended, but the top's.)
+        for face in model.unique_subshapes(rounded, NodeKind::Face) {
+            if let Some(Surface::Plane(plane)) = model.surface(face) {
+                let z = properties::area(&model, face).center_of_mass.z;
+                assert!(Vector::from(plane.normal()).z.abs() < 1e-9 || (z - 40.0).abs() < 1e-9, "a plane across at {z}");
+            }
+        }
     }
 
     #[test]
