@@ -270,7 +270,6 @@ tests/bugs/modalg_2/bug22864_3
 tests/bugs/modalg_2/bug22968
 tests/bugs/modalg_2/bug23170
 tests/bugs/modalg_2/bug23174
-tests/bugs/modalg_2/bug23214
 tests/bugs/modalg_2/bug23367_10
 tests/bugs/modalg_2/bug264_0
 tests/bugs/modalg_2/bug264_6

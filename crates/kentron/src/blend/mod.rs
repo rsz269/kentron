@@ -834,7 +834,7 @@ fn fillet_solid_edges_as(model: &mut Model, shape: Shape, edges: &[(Shape, f64)]
                 // whole chain to find out is not.)
                 let off = runover::is_chain(model, &chain) && {
                     let (faces, known) = (model.unique_subshapes(local, NodeKind::Face), runover::KnownFaces::default());
-                    members.iter().any(|&i| classified[i].2.as_ref().is_some_and(|c| rolls_off_among(model, &faces, c, radius, &known)))
+                    members.iter().any(|&i| classified[i].2.as_ref().is_some_and(|c| rolls_off_among(model, &faces, c, radius, &known, true)))
                 };
                 if off && runover::chain_needed(model, local, &chain, radius * unscale) {
                     let before = fault_kinds(model, local);
@@ -1291,11 +1291,11 @@ fn not_in_turn(e: &Error) -> bool {
 /// Whether `corner`'s fillet of `radius` (along a straight edge, convex) would touch its
 /// faces off their bounds: where the ball must roll on onto the faces beyond.
 fn rolls_off(model: &Model, shape: Shape, corner: &Corner, radius: f64) -> bool {
-    rolls_off_among(model, &model.unique_subshapes(shape, NodeKind::Face), corner, radius, &runover::KnownFaces::default())
+    rolls_off_among(model, &model.unique_subshapes(shape, NodeKind::Face), corner, radius, &runover::KnownFaces::default(), false)
 }
 
 /// [`rolls_off`], the shape's faces given (and those measured already).
-fn rolls_off_among(model: &Model, faces: &[Shape], corner: &Corner, radius: f64, known: &runover::KnownFaces) -> bool {
+fn rolls_off_among(model: &Model, faces: &[Shape], corner: &Corner, radius: f64, known: &runover::KnownFaces, narrowing: bool) -> bool {
     let Path::Line { length } = corner.path else { return false };
     if !corner.convex {
         return false;
@@ -1303,7 +1303,7 @@ fn rolls_off_among(model: &Model, faces: &[Shape], corner: &Corner, radius: f64,
     let Ok((_, t1, t2)) = corner.ball(radius) else { return false };
     let find = |node: NodeId| faces.iter().copied().find(|f| f.node == node);
     let (Some(a), Some(b)) = (find(corner.faces[0].0), find(corner.faces[1].0)) else { return false };
-    runover::rolls_off(model, [a, b], corner.tangent, length, [t1, t2], [corner.origin, corner.end], known)
+    runover::rolls_off(model, [a, b], corner.tangent, length, [t1, t2], [corner.origin, corner.end], known, narrowing)
 }
 
 /// `op` on `shape` where it has solids; on the solids closed shells bound, given back as
@@ -5151,6 +5151,48 @@ mod tests {
         assert!((v - 21941.14570).abs() < 1e-5 * v, "{v}");
         let a = properties::area(&model, rounded).mass;
         assert!((a - 6045.64487).abs() < 1e-5 * a, "{a}");
+    }
+
+    /// A pocket's rim rounded R 1 along one wall, then R 0.99 along the next: that edge goes
+    /// on past the first fillet's end along the short edge left there, whose wall narrows to
+    /// nothing under the first fillet, the ball rolling over its rim. The chain rolls on as
+    /// one, ending where its contacts meet, and not carried past its start into the pocket's
+    /// other wall. OCCT's volume; its area within 1e-4 (OCCT clips a cylinder by the first
+    /// fillet there, a little more area; kentron's before this left flats, 1.5e-4 over).
+    #[test]
+    fn a_rim_chain_rolls_over_where_its_wall_narrows_to_nothing() {
+        let mut model = Model::new();
+        let block = Cuboid::from_corners(Point::new(-30.0, -20.0, -10.0), Point::new(30.0, 20.0, 10.0)).build(&mut model).unwrap();
+        let pocket = Cuboid::from_corners(Point::new(-15.0, -10.0, 0.0), Point::new(15.0, 10.0, 11.0)).build(&mut model).unwrap();
+        let cut = boolean::difference(&mut model, block, pocket).unwrap();
+        let ends = |model: &Model, e: Shape| {
+            let (p, q) = model.edge_vertices(e);
+            (model.point(p), model.point(q))
+        };
+        let rim: Vec<Shape> = model
+            .unique_subshapes(cut, NodeKind::Edge)
+            .into_iter()
+            .filter(|&e| {
+                let (p, q) = ends(&model, e);
+                p.y == 10.0 && q.y == 10.0 && p.z == 10.0 && q.z == 10.0
+            })
+            .collect();
+        let first = fillet(&mut model, cut, &rim, 1.0).unwrap();
+        let side: Vec<Shape> = model
+            .unique_subshapes(first, NodeKind::Edge)
+            .into_iter()
+            .filter(|&e| {
+                let (p, q) = ends(&model, e);
+                [p, q].iter().all(|r| (r.x + 15.0).abs() < 1e-9 && (r.z - 10.0).abs() < 1e-9)
+            })
+            .collect();
+        assert_eq!(side.len(), 2);
+        let rounded = fillet(&mut model, first, &side, 0.99).unwrap();
+        assert!(validity::check(&model, rounded).is_valid());
+        let v = properties::volume(&model, rounded).mass;
+        assert!((v - 41989.26089).abs() < 1e-6 * v, "{v}");
+        let a = properties::area(&model, rounded).mass;
+        assert!((a - 9779.19079).abs() < 1e-4 * a, "{a}");
     }
 
     #[test]

@@ -901,10 +901,19 @@ impl Graph {
                     };
                     if recognized.is_some() {
                         let edge_shape = Shape { placement: coedge.placement, ..Shape::from(edge_id) };
-                        let (curve, a, b) = model.edge_curve(edge_shape).expect("an edge of a planar face has a curve");
-                        pcurve = crate::geometry::project::analytic_pcurve(&curve, &surface)
-                            .or_else(|| crate::geometry::project::pcurve_on_range(&curve, &surface, a, b, 1e-9).map(Curve2::BSpline))
-                            .ok_or_else(|| Error::InvalidInput("no pcurve on a planar B-spline face".into()))?;
+                        pcurve = match model.edge_curve(edge_shape) {
+                            Some((curve, a, b)) => crate::geometry::project::analytic_pcurve(&curve, &surface)
+                                .or_else(|| crate::geometry::project::pcurve_on_range(&curve, &surface, a, b, 1e-9).map(Curve2::BSpline))
+                                .ok_or_else(|| Error::InvalidInput("no pcurve on a planar B-spline face".into()))?,
+                            // (A degenerate edge, as where a loft closes to a point: its vertex's
+                            // point on the plane.)
+                            None => {
+                                let p = model.point(model.edge_vertices(edge_shape).0).transformed(&face.placement);
+                                let uv = geom::uv_of(&surface, p);
+                                let at = crate::math::Point2::new(uv[0], uv[1]);
+                                Curve2::BSpline(crate::geometry::curve2::BSplineCurve2::new(vec![at, at], vec![first, last.max(first + 1e-9)], vec![2, 2], 1))
+                            }
+                        };
                     }
                     let placement = coedge.placement;
                     let entry = known.entry(edge_id.into()).or_default();

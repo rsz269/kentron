@@ -274,6 +274,8 @@ struct Spine {
 
 impl Spine {
     const SAMPLES: usize = 64;
+    /// The fewest sections along one piece.
+    const LEAST: usize = 4;
 
     fn new(pieces: Vec<(Curve, f64, f64)>, closed: bool) -> Spine {
         let mut total = 0.0;
@@ -309,16 +311,20 @@ impl Spine {
         (p, d.normalized() * (b - a).signum())
     }
 
-    /// The spine parameter at `u` of the way along it, each piece taking its share of the
-    /// way by its length (evenly in its own parameter within it): sections spaced so are
-    /// about as far apart on long pieces as on short ones.
-    fn at_share(&self, u: f64) -> f64 {
+    /// About `count` parameters along the spine, from its start to its end: each piece's
+    /// share by its length, at least [`Spine::LEAST`] (evenly in its own parameter within
+    /// it). Sections spaced so are about as far apart on long pieces as on short ones, and
+    /// a short piece is not passed over.
+    fn parameters(&self, count: usize) -> Vec<f64> {
         let total = *self.lengths.last().and_then(|l| l.last()).expect("samples");
-        let at = u.clamp(0.0, 1.0) * total;
-        let last = self.pieces.len() - 1;
-        let i = self.lengths.iter().position(|l| at <= *l.last().expect("samples")).unwrap_or(last);
-        let (from, to) = (self.lengths[i][0], *self.lengths[i].last().expect("samples"));
-        i as f64 + if to > from { ((at - from) / (to - from)).clamp(0.0, 1.0) } else { 1.0 }
+        let mut ts = Vec::with_capacity(count + 1);
+        for (i, along) in self.lengths.iter().enumerate() {
+            let length = along.last().expect("samples") - along[0];
+            let n = ((count as f64 * length / total.max(1e-300)).round() as usize).max(Self::LEAST);
+            ts.extend((0..n).map(|k| i as f64 + k as f64 / n as f64));
+        }
+        ts.push(self.end());
+        ts
     }
 
     /// The fraction of the spine's length up to `s`.
@@ -476,8 +482,8 @@ fn roll_on(model: &Model, spine: &Spine, side_set: [Side; 2], faces: [(Shape, f6
     let mut supports: Vec<[Support; 2]> = Vec::new();
     let mut breaks: Vec<usize> = Vec::new();
     let mut last_t = t0;
-    for i in 0..=count {
-        let t = if path.pieces.len() == 1 { t0 + (t1 - t0) * i as f64 / count as f64 } else { path.at_share(i as f64 / count as f64) };
+    let ts: Vec<f64> = if path.pieces.len() == 1 { (0..=count).map(|i| t0 + (t1 - t0) * i as f64 / count as f64).collect() } else { path.parameters(count) };
+    for t in ts {
         let (section, support) = solve(t, offset)?;
         if let (Some(&previous), Some(&before)) = (supports.last(), sections.last()) {
             if previous != support && switches != Switches::Ignored {
@@ -539,9 +545,21 @@ fn roll_on(model: &Model, spine: &Spine, side_set: [Side; 2], faces: [(Shape, f6
                         solve(hi, start)?.0
                     }
                 };
-                breaks.push(sections.len());
-                sections.push(s);
-                supports.push(support);
+                // (A switch found a hair from the section before or this one (as where the
+                // contacts switch just where two of a chain's edges meet): that section is the
+                // break, not one beside it, which would make the faces slivers.)
+                let near = 1e-6 * (t1 - t0).abs();
+                if (s.t - last_t).abs() <= near {
+                    let k = sections.len() - 1;
+                    breaks.push(k);
+                    supports[k] = support;
+                } else if (t - s.t).abs() <= near {
+                    breaks.push(sections.len());
+                } else {
+                    breaks.push(sections.len());
+                    sections.push(s);
+                    supports.push(support);
+                }
             }
         }
         offset = section.center - section.at;
@@ -640,9 +658,44 @@ fn by_booleans(model: &mut Model, shape: Shape, rolled: Rolled, radius: f64) -> 
             let flat = |p: Point| p - t * (p - s.at).dot(t);
             Section { at: s.at + by, center: flat(s.center) + by, contacts: [flat(s.contacts[0]) + by, flat(s.contacts[1]) + by], ..s }
         };
-        sections.insert(0, carry(first, tangents[0] * -first.radius));
-        sections.push(carry(last, tangents[1] * last.radius));
-        (sections, breaks.into_iter().map(|b| b + 1).collect())
+        // (Where the fillet narrows to nothing toward an end, only its last section there:
+        // the lens closes to its point once.)
+        let mut breaks = breaks;
+        while sections.len() > 2 && narrows(&sections[sections.len() - 1]) && narrows(&sections[sections.len() - 2]) {
+            let gone = sections.len() - 2;
+            sections.remove(gone);
+            breaks.retain(|&b| b != gone);
+            for b in breaks.iter_mut().filter(|b| **b > gone) {
+                *b -= 1;
+            }
+        }
+        while sections.len() > 2 && narrows(&sections[0]) && narrows(&sections[1]) {
+            sections.remove(1);
+            breaks.retain(|&b| b != 1);
+            for b in breaks.iter_mut().filter(|b| **b > 1) {
+                *b -= 1;
+            }
+        }
+        let (first, last) = (sections[0], sections[sections.len() - 1]);
+        // (Not where the fillet narrows to nothing at the end, its contacts meeting there (a
+        // face narrowing to the edge's end): the lens ends at their point, and nothing lies
+        // past it to cut.)
+        // (Nor where the solid goes on past the end (the edge ending on a face across it, as
+        // a pocket's rim at the pocket's inner corner): the wedge carried on would cut into it.
+        // Told by the middle of the lens's chord a quarter of the radius on.)
+        let goes_on = |model: &Model, s: &Section, by: Vector| {
+            let p = s.contacts[0] + (s.contacts[1] - s.contacts[0]) * 0.5 + by.normalized() * (0.25 * s.radius);
+            matches!(boolean::classify_point(model, shape, p), Ok(boolean::PointLocation::Inside))
+        };
+        let (narrow_first, narrow_last) = (narrows(&first) || goes_on(model, &first, -tangents[0]), narrows(&last) || goes_on(model, &last, tangents[1]));
+        if !narrow_first {
+            sections.insert(0, carry(first, tangents[0] * -first.radius));
+        }
+        if !narrow_last {
+            sections.push(carry(last, tangents[1] * last.radius));
+        }
+        let shift = usize::from(!narrow_first);
+        (sections, breaks.into_iter().map(|b| b + shift).collect())
     };
     // Only the sections the faces need: where the fillet runs straight (the ball on planes),
     // its ends; and where the contacts switch.
@@ -664,7 +717,7 @@ fn by_booleans(model: &mut Model, shape: Shape, rolled: Rolled, radius: f64) -> 
         if convex {
             let out = |c: Point| c + toward * (0.5 * s.radius);
             wedge_wires.push(polygon(model, &[s.contacts[0], out(s.contacts[0]), beyond, out(s.contacts[1]), s.contacts[1]])?);
-            lens_wires.push(lens(model, s)?);
+            lens_wires.push(if narrows(s) { make::vertex(model, s.contacts[1]) } else { lens(model, s)? });
         } else {
             // (At a concave edge, the wedge along a line from within the ball out through
             // each contact, crossing the face there: the solid is cut exactly along the
@@ -1071,6 +1124,11 @@ fn chords(model: &Model, solid: Shape, sections: &[Section]) -> Vec<Surface> {
         .collect()
 }
 
+/// Whether the fillet narrows to nothing at section `s`: its contacts (nearly) one point.
+fn narrows(s: &Section) -> bool {
+    s.contacts[0].distance(s.contacts[1]) <= 1e-3 * s.radius
+}
+
 /// A closed wire of straight edges through `points`.
 /// The sections that stay (with the breaks among them renumbered): the ends and breaks,
 /// and between them those off the straight line from one kept section to the next by more
@@ -1158,8 +1216,9 @@ impl KnownFaces {
 /// `length`, from `ends[0]` to `ends[1]`), touches them off their bounds somewhere along it:
 /// where it must roll onto the faces beyond. (Not where a contact leaves its face across an
 /// edge from one of the edge's ends, as a face narrowing to its end: the fillet's end meets
-/// the faces there as at any end.)
-pub(super) fn rolls_off(model: &Model, faces: [Shape; 2], tangent: Vector, length: f64, contacts: [Point; 2], ends: [Point; 2], known: &KnownFaces) -> bool {
+/// the faces there as at any end. Unless `narrowing`: for an edge of a chain, whose ends are
+/// not the fillet's.)
+pub(super) fn rolls_off(model: &Model, faces: [Shape; 2], tangent: Vector, length: f64, contacts: [Point; 2], ends: [Point; 2], known: &KnownFaces, narrowing: bool) -> bool {
     const SAMPLES: usize = 32;
     faces.iter().zip(contacts).any(|(&face, contact)| {
         let Some(bounded) = known.get(model, face) else { return false };
@@ -1175,7 +1234,7 @@ pub(super) fn rolls_off(model: &Model, faces: [Shape; 2], tangent: Vector, lengt
             let s = length * (0.02 + 0.96 * i as f64 / SAMPLES as f64);
             let p = contact + tangent.normalized() * s;
             let (u, v, d) = nearest_on_surface(p, &bounded.surface, None);
-            d <= 1e-6 * (1.0 + length) && !bounded.contains((u, v)) && !from_an_end(p)
+            d <= 1e-6 * (1.0 + length) && !bounded.contains((u, v)) && (narrowing || !from_an_end(p))
         })
     })
 }
