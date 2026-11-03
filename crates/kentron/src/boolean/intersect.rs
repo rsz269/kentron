@@ -2882,7 +2882,11 @@ impl Graph {
             let mut ends: Vec<Vec<(f64, usize, bool)>> = Vec::with_capacity(curves.len());
             for section in &curves {
                 let mut met: Vec<(f64, usize, bool)> = Vec::new();
-                for (edge, s, t, q) in self.section_end_meetings(fa, fb, section) {
+                let (meetings, at_vertices) = self.section_end_meetings(fa, fb, section);
+                for (t, v) in at_vertices {
+                    met.push((t, v, false));
+                }
+                for (edge, s, t, q) in meetings {
                     // (One vertex where it meets coincident edges, or meets an edge where it
                     // has one already, or the sections cross: a vertex there lying on the
                     // edge. Found along the edge only roughly, where the surfaces touch.)
@@ -2951,14 +2955,16 @@ impl Graph {
     /// lying on the other face's surface too, where the surfaces touch nearly tangent
     /// (within ten times the classifying distance): the edge, its parameter there, the
     /// section's, and the point on the edge.
-    fn section_end_meetings(&self, fa: usize, fb: usize, section: &Section) -> Vec<(usize, f64, f64, Point)> {
-        let Section::Sampled(points, false, traced) = section else { return Vec::new() };
+    fn section_end_meetings(&self, fa: usize, fb: usize, section: &Section) -> (Vec<(usize, f64, f64, Point)>, Vec<(f64, usize)>) {
+        let Section::Sampled(points, false, traced) = section else { return Default::default() };
         // (Where either face is free-form: two lying nearly on one another as offsets and
         // ruled walls of a filling can, or a lofted face whose edge lies on a cylinder the
         // loft crosses, touching it where the section from across the face meets that edge.)
         if traced.st.is_none() || points.len() < 2 || !(geom::freeform(&self.faces[fa].surface) || geom::freeform(&self.faces[fb].surface)) {
-            return Vec::new();
+            return Default::default();
         }
+        // (And the edges' own vertices it ends on, with its parameter there.)
+        let mut ends: Vec<(f64, usize)> = Vec::new();
         let both_freeform = geom::freeform(&self.faces[fa].surface) && geom::freeform(&self.faces[fb].surface);
         let (lo, hi) = section.range();
         let span = hi - lo;
@@ -2968,7 +2974,20 @@ impl Graph {
         // tolerance times their radius): some way short of the edge, met all the same.)
         let tangent_reach = 1e3 * on_tol();
         let mut out: Vec<(usize, f64, f64, Point)> = Vec::new();
-        for (end, a, b) in [(lo, lo, lo + 0.1 * span), (hi, hi - 0.1 * span, hi)] {
+        // (The stretch at each end a tenth of the section long, in space: its points may bunch
+        // where it ends, the surfaces turning tangent there, as where two branches of the
+        // section cross, a tenth of the parameters then reaching hardly any way.)
+        let length: f64 = points.windows(2).map(|w| w[0].distance(w[1])).sum();
+        let stretch = |end: f64, toward: f64| {
+            let p = section.point(end);
+            let mut k = 0.1;
+            while k < 0.5 && section.point(end + (toward - end) * k).distance(p) < 0.1 * length {
+                k += 0.05;
+            }
+            end + (toward - end) * k
+        };
+        let (at_lo, at_hi) = (stretch(lo, hi), stretch(hi, lo));
+        for (end, a, b) in [(lo, lo, at_lo), (hi, at_hi, hi)] {
             let at_end = section.point(end);
             let far = section.point(if end == lo { b } else { a }).distance(at_end);
             for (f, g) in [(fa, fb), (fb, fa)] {
@@ -3018,7 +3037,12 @@ impl Graph {
                     if sine >= TANGENT_SINE || (gap(t) > reach && sine > 1e-3) {
                         continue;
                     }
-                    if q.distance(self.vertices.points[e.start]) <= reach || q.distance(self.vertices.points[e.end]) <= reach {
+                    // (There the section ends on that vertex: met exactly, as where two faces
+                    // lying nearly on one another meet at a corner they share and part from it.)
+                    if let Some(v) = [e.start, e.end].into_iter().find(|&v| q.distance(self.vertices.points[v]) <= reach) {
+                        if !ends.iter().any(|&(_, w)| w == v) {
+                            ends.push((t, v));
+                        }
                         continue;
                     }
                     // (Once on each edge: on edges of both faces where they coincide, as the
@@ -3029,7 +3053,7 @@ impl Graph {
                 }
             }
         }
-        out
+        (out, ends)
     }
 
     /// The known vertices `section` passes, with its parameter there and whether it passes

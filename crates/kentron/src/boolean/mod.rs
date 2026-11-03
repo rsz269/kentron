@@ -2506,4 +2506,52 @@ mod tests {
         assert!((v - volume).abs() < 1e-6 * volume, "{v} != {volume}");
         assert_eq!(model.unique_subshapes(result, NodeKind::Face).len(), 6);
     }
+
+    /// The section of `a` and `b` read from the fixtures: its edges' lengths and ends.
+    fn fixture_section(a: &str, b: &str) -> Vec<(f64, Point, Point)> {
+        let mut model = Model::new();
+        let mut read = |text: &str| crate::io::brep::read(&mut model, &mut text.as_bytes()).unwrap();
+        let (a, b) = (read(a), read(b));
+        let s = section(&mut model, a, b).unwrap();
+        model
+            .unique_subshapes(s, NodeKind::Edge)
+            .into_iter()
+            .map(|e| {
+                let (v0, v1) = model.edge_vertices(e);
+                (properties::length(&model, e).mass, model.point(v0), model.point(v1))
+            })
+            .collect()
+    }
+
+    /// The end walls of two thickened plates mirrored onto one another (cells of a Schwarz
+    /// lattice), each from the arc their middles share outwards, twisting across the mirror
+    /// plane: their section is the arc and two branches running off it where the walls cross
+    /// the plane, the surfaces tangent there. The trace of the second branch stops just past
+    /// the arc, its points bunching as it ends, and was met with the arc only within the
+    /// last tenth of its parameters, too short a way: the arc is split at both branches, as
+    /// OCCT's.
+    #[test]
+    fn mirrored_walls_crossing_split_their_shared_arc_at_both_branches() {
+        let edges = fixture_section(include_str!("tests/mirrored_walls_crossing_a.brep"), include_str!("tests/mirrored_walls_crossing_b.brep"));
+        for junction in [Point::new(3.98, 0.2580, 1.9732), Point::new(3.98, 1.9669, 0.3022)] {
+            let meeting = edges.iter().filter(|(_, p, q)| p.distance(junction) < 1e-3 || q.distance(junction) < 1e-3).count();
+            assert_eq!(meeting, 3, "{junction:?}: {edges:?}");
+        }
+        let total: f64 = edges.iter().map(|e| e.0).sum();
+        assert!((total - 4.6262).abs() < 1e-3, "{total}");
+    }
+
+    /// The side walls of the same plates, both lying nearly flat and continuing one another
+    /// across the mirror plane, from a corner they share: their section runs from that corner
+    /// along the plane (0.7502 long, as OCCT's). Met by the corner's vertex only within the
+    /// tolerance it was dropped, as a vertex of the edges already.
+    #[test]
+    fn mirrored_walls_continuing_meet_along_the_mirror_plane() {
+        let edges = fixture_section(include_str!("tests/mirrored_walls_continuing_a.brep"), include_str!("tests/mirrored_walls_continuing_b.brep"));
+        let corner = Point::new(3.98, 1.99, 0.0);
+        assert!(
+            edges.iter().any(|(l, p, q)| (l - 0.7502).abs() < 1e-3 && (p.distance(corner) < 1e-6 || q.distance(corner) < 1e-6)),
+            "{edges:?}"
+        );
+    }
 }
