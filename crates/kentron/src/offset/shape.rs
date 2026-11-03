@@ -36,11 +36,146 @@ pub fn shape(model: &mut Model, shape: Shape, distance: f64, join: Join) -> Resu
 #[doc(alias = "offsetonface")]
 pub fn shape_with_faces(model: &mut Model, shape: Shape, distance: f64, faces: &[(Shape, f64)], join: Join) -> Result<Shape> {
     let own: Vec<(NodeId, f64)> = faces.iter().map(|(f, d)| (f.node, *d)).collect();
+    if let Some(stepped) = stepped(model, shape, distance, &own, join)? {
+        return Ok(stepped);
+    }
     let rounded = moved_and_rounded(model, shape, distance, &own, join);
     if join == Join::Arc && own.is_empty() {
         return or_within(model, rounded, shape, distance, Made::Offset);
     }
     rounded
+}
+
+/// [`shape_with_faces`] where faces side by side on one plane (facing the same way) move by
+/// different distances: their offsets are parallel planes, meeting nowhere, joined by steps
+/// (as OCCT's are). Each such group moved by the least of its distances first; then each face
+/// moved further raised by a prism of the rest along its normal, its sides square to the
+/// plane (where the faces round the group are square to it, as OCCT's are then too), and the
+/// faces left on one plane by the prisms' sides merged. `None` where there are no such faces.
+fn stepped(model: &mut Model, shape: Shape, distance: f64, own: &[(NodeId, f64)], join: Join) -> Result<Option<Shape>> {
+    if own.is_empty() {
+        return Ok(None);
+    }
+    let distance_of = |node: NodeId| own.iter().find(|(n, _)| *n == node).map_or(distance, |(_, d)| *d);
+    // Planar faces, with their planes (by outward normal).
+    let faces = model.unique_subshapes(shape, NodeKind::Face);
+    let plane_of = |model: &Model, f: Shape| -> Option<(Point, Vector)> {
+        let Surface::Plane(p) = model.surface(f)?.transformed(&f.placement) else { return None };
+        let n = Vector::from(p.normal());
+        Some((p.origin(), if f.orientation == Orientation::Reversed { -n } else { n }))
+    };
+    let planes: Vec<Option<(Point, Vector)>> = faces.iter().map(|&f| plane_of(model, f)).collect();
+    let same_plane = |a: (Point, Vector), b: (Point, Vector)| a.1.dot(b.1) >= 1.0 - crate::tolerance::ANGULAR && (b.0 - a.0).dot(a.1).abs() <= crate::tolerance::LINEAR;
+    // Groups of planar faces side by side (sharing an edge) on one plane.
+    let mut group: Vec<usize> = (0..faces.len()).collect();
+    fn root(group: &mut [usize], mut i: usize) -> usize {
+        while group[i] != i {
+            group[i] = group[group[i]];
+            i = group[i];
+        }
+        i
+    }
+    let edges_of: Vec<Vec<NodeId>> = faces.iter().map(|&f| model.unique_subshapes(f, NodeKind::Edge).into_iter().map(|e| e.node).collect()).collect();
+    for i in 0..faces.len() {
+        for j in i + 1..faces.len() {
+            let (Some(a), Some(b)) = (planes[i], planes[j]) else { continue };
+            if same_plane(a, b) && edges_of[i].iter().any(|e| edges_of[j].contains(e)) {
+                let (ra, rb) = (root(&mut group, i), root(&mut group, j));
+                group[ra.max(rb)] = ra.min(rb);
+            }
+        }
+    }
+    // Each face's group's least distance, where the group's faces move by different ones.
+    let roots: Vec<usize> = (0..faces.len()).map(|i| root(&mut group, i)).collect();
+    let mut least: HashMap<usize, (f64, f64)> = HashMap::new();
+    for (i, &r) in roots.iter().enumerate() {
+        let d = distance_of(faces[i].node);
+        let e = least.entry(r).or_insert((d, d));
+        *e = (e.0.min(d), e.1.max(d));
+    }
+    let raised: Vec<(usize, f64)> = (0..faces.len())
+        .filter(|&i| planes[i].is_some())
+        .filter_map(|i| {
+            let (lo, hi) = least[&roots[i]];
+            let d = distance_of(faces[i].node);
+            (hi > lo && d > lo).then_some((i, lo))
+        })
+        .collect();
+    if raised.is_empty() {
+        return Ok(None);
+    }
+    // The base: each such group moved by its least distance.
+    let mut base_own: Vec<(NodeId, f64)> = own.to_vec();
+    for (i, &r) in roots.iter().enumerate() {
+        let (lo, hi) = least[&r];
+        if hi > lo {
+            base_own.retain(|(n, _)| *n != faces[i].node);
+            base_own.push((faces[i].node, lo));
+        }
+    }
+    let unmoved = distance == 0.0 && base_own.iter().all(|(_, d)| *d == 0.0);
+    let mut result = if unmoved { shape } else { moved_and_rounded(model, shape, distance, &base_own, join)? };
+    // Each face moved further: a prism of the rest along its normal, from where the base has
+    // it (the face of the base on its plane moved by the least distance holding a point inside
+    // it, moved so; else the face itself moved so).
+    let options = crate::meshing::MeshOptions { deflection: 1e-3, angle: 0.5, relative: true };
+    let triangles = |model: &mut Model, f: Shape| -> Vec<[Point; 3]> {
+        match crate::meshing::triangulate(model, f, options) {
+            Ok((nodes, tris)) => tris.iter().map(|t| [nodes[t[0] as usize], nodes[t[1] as usize], nodes[t[2] as usize]]).collect(),
+            Err(_) => Vec::new(),
+        }
+    };
+    let inside = |tri: &[Point; 3], p: Point, n: Vector| {
+        let side = |a: Point, b: Point| (b - a).cross(p - a).dot(n);
+        let (s0, s1, s2) = (side(tri[0], tri[1]), side(tri[1], tri[2]), side(tri[2], tri[0]));
+        (s0 >= 0.0 && s1 >= 0.0 && s2 >= 0.0) || (s0 <= 0.0 && s1 <= 0.0 && s2 <= 0.0)
+    };
+    let base_faces = model.unique_subshapes(result, NodeKind::Face);
+    let mut walls: Vec<(Point, Vector)> = Vec::new();
+    for &(i, lo) in &raised {
+        let (origin, n) = planes[i].expect("planar");
+        let rest = distance_of(faces[i].node) - lo;
+        let own_triangles = triangles(model, faces[i]);
+        let inner = own_triangles
+            .iter()
+            .max_by(|a, b| (a[1] - a[0]).cross(a[2] - a[0]).length().total_cmp(&(b[1] - b[0]).cross(b[2] - b[0]).length()))
+            .map(|t| Point::new((t[0].x + t[1].x + t[2].x) / 3.0, (t[0].y + t[1].y + t[2].y) / 3.0, (t[0].z + t[1].z + t[2].z) / 3.0) + n * lo);
+        let mut image = None;
+        if let Some(p) = inner {
+            for &g in &base_faces {
+                if plane_of(model, g).is_some_and(|q| same_plane((origin + n * lo, n), q)) && triangles(model, g).iter().any(|t| inside(t, p, n)) {
+                    image = Some(g);
+                    break;
+                }
+            }
+        }
+        let prism = match image {
+            Some(g) => crate::sweep::extrude(model, Shape { orientation: Orientation::Forward, ..g }, n * rest)?.shape,
+            None => {
+                let face = Shape { orientation: Orientation::Forward, ..faces[i] };
+                let prism = crate::sweep::extrude(model, face, n * rest)?.shape;
+                prism.moved(&crate::math::Transform::translation(n * lo))
+            }
+        };
+        for f in model.unique_subshapes(prism, NodeKind::Face) {
+            if let Some((o, m)) = plane_of(model, f) {
+                if m.dot(n).abs() <= crate::tolerance::ANGULAR {
+                    walls.push((o, m));
+                }
+            }
+        }
+        let _ = origin;
+        result = crate::boolean::union(model, result, prism)?;
+    }
+    // The faces on the prisms' sides' planes merged with those beside them there.
+    let kept: crate::hashing::FastSet<NodeId> = model
+        .unique_subshapes(result, NodeKind::Face)
+        .into_iter()
+        .filter(|&f| !plane_of(model, f).is_some_and(|p| walls.iter().any(|&w| same_plane(w, p))))
+        .map(|f| f.node)
+        .collect();
+    let merged = crate::unify::unify_same_domain_keeping(model, result, crate::unify::UnifyOptions { faces: true, edges: false, same_surface_only: false }, &kept)?;
+    Ok(Some(merged))
 }
 
 /// [`shape_with_faces`] by its faces moved one by one, and the edges where they part
@@ -1146,6 +1281,38 @@ mod tests {
     fn valid(model: &Model, s: Shape) {
         let problems: Vec<String> = crate::validity::check(model, s).errors().map(|p| p.description.clone()).collect();
         assert!(problems.is_empty(), "{problems:?}");
+    }
+
+    /// An L-shaped prism whose top is two faces side by side on one plane (OCCT's offset
+    /// shape_type_i_c_multi A1): moved by different distances, they are joined by a step;
+    /// with the rest moved too, the higher face's prism stands on its moved face, as wide.
+    /// OCCT's values and face counts.
+    #[test]
+    fn faces_side_by_side_moved_apart_are_joined_by_a_step() {
+        for (all, right, left, area, vol, faces) in [(0.0, 1.0, 2.0, 470.0, 650.0, 8), (1.0, 2.0, 3.0, 708.0, 1224.0, 8), (2.0, 0.0, 1.0, 826.0, 1470.0, 8)] {
+            let mut model = Model::new();
+            let pts = [(0.0, 0.0, 0.0), (10.0, 0.0, 0.0), (10.0, 0.0, 5.0), (5.0, 0.0, 5.0), (0.0, 0.0, 5.0)].map(|(x, y, z)| Point::new(x, y, z));
+            let edges: Vec<Shape> = (0..5).map(|i| crate::make::edge_between(&mut model, pts[i], pts[(i + 1) % 5]).unwrap()).collect();
+            let wire = crate::make::wire(&mut model, &edges).unwrap();
+            let face = crate::make::planar_face(&mut model, wire).unwrap();
+            let prism = crate::sweep::extrude(&mut model, face, Vector::new(0.0, 10.0, 0.0)).unwrap().shape;
+            let tops: Vec<(Shape, f64)> = model
+                .unique_subshapes(prism, NodeKind::Face)
+                .into_iter()
+                .filter_map(|f| {
+                    let b = crate::properties::bounding_box(&model, f);
+                    ((b.min.z - 5.0).abs() < 1e-3 && (b.max.z - 5.0).abs() < 1e-3).then_some((f, if b.min.x > 4.0 { right } else { left }))
+                })
+                .collect();
+            assert_eq!(tops.len(), 2);
+            let moved = shape_with_faces(&mut model, prism, all, &tops, Join::Intersection).unwrap();
+            valid(&model, moved);
+            let v = volume(&model, moved).mass;
+            assert!((v - vol).abs() < 1e-6 * vol, "{v}");
+            let a = crate::properties::area(&model, moved).mass;
+            assert!((a - area).abs() < 1e-6 * area, "{a}");
+            assert_eq!(model.unique_subshapes(moved, NodeKind::Face).len(), faces);
+        }
     }
 
     #[test]

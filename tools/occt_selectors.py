@@ -48,15 +48,15 @@ proc kentron_report {k n t} {
   switch -nocase -- $t {
     e {
       # Sampled along the curve: lprops is imprecise on some B-spline edges.
-      if {[catch {uplevel #0 [list mkcurve kentron_c $n]}]} { return }
-      uplevel #0 {bounds kentron_c kentron_u1 kentron_u2}
-      set u1 [uplevel #0 {dval kentron_u1}]; set u2 [uplevel #0 {dval kentron_u2}]
+      if {[catch {uplevel 1 [list mkcurve kentron_c $n]}]} { return }
+      uplevel 1 {bounds kentron_c kentron_u1 kentron_u2}
+      set u1 [uplevel 1 {dval kentron_u1}]; set u2 [uplevel 1 {dval kentron_u2}]
       set m 4000; set len 0.; set sx 0.; set sy 0.; set sz 0.
-      uplevel #0 [list cvalue kentron_c $u1 kentron_x kentron_y kentron_z]
-      set px [uplevel #0 {dval kentron_x}]; set py [uplevel #0 {dval kentron_y}]; set pz [uplevel #0 {dval kentron_z}]
+      uplevel 1 [list cvalue kentron_c $u1 kentron_x kentron_y kentron_z]
+      set px [uplevel 1 {dval kentron_x}]; set py [uplevel 1 {dval kentron_y}]; set pz [uplevel 1 {dval kentron_z}]
       for {set i 1} {$i <= $m} {incr i} {
-        uplevel #0 [list cvalue kentron_c [expr {$u1 + ($u2 - $u1) * $i / double($m)}] kentron_x kentron_y kentron_z]
-        set qx [uplevel #0 {dval kentron_x}]; set qy [uplevel #0 {dval kentron_y}]; set qz [uplevel #0 {dval kentron_z}]
+        uplevel 1 [list cvalue kentron_c [expr {$u1 + ($u2 - $u1) * $i / double($m)}] kentron_x kentron_y kentron_z]
+        set qx [uplevel 1 {dval kentron_x}]; set qy [uplevel 1 {dval kentron_y}]; set qz [uplevel 1 {dval kentron_z}]
         set d [expr {sqrt(($qx-$px)**2 + ($qy-$py)**2 + ($qz-$pz)**2)}]
         set len [expr {$len + $d}]
         set sx [expr {$sx + $d * ($px + $qx) / 2.}]; set sy [expr {$sy + $d * ($py + $qy) / 2.}]; set sz [expr {$sz + $d * ($pz + $qz) / 2.}]
@@ -65,12 +65,12 @@ proc kentron_report {k n t} {
       if {$len > 0} { puts [format "KENTRON_SEL %d %s E %.12g %.12g %.12g %.12g" $k $n [expr {$sx/$len}] [expr {$sy/$len}] [expr {$sz/$len}] $len] }
       return
     }
-    f { set p [uplevel #0 [list sprops $n]] }
-    sh { set p [uplevel #0 [list sprops $n]] }
-    so { set p [uplevel #0 [list vprops $n]] }
-    w { set p [uplevel #0 [list lprops $n]] }
+    f { set p [uplevel 1 [list sprops $n]] }
+    sh { set p [uplevel 1 [list sprops $n]] }
+    so { set p [uplevel 1 [list vprops $n]] }
+    w { set p [uplevel 1 [list lprops $n]] }
     v {
-      set b [regexp -all -inline {[-+]?[0-9]*\.?[0-9]+(?:[eE][-+]?[0-9]+)?} [uplevel #0 [list bounding $n]]]
+      set b [regexp -all -inline {[-+]?[0-9]*\.?[0-9]+(?:[eE][-+]?[0-9]+)?} [uplevel 1 [list bounding $n]]]
       puts "KENTRON_SEL $k $n V 0 [expr {([lindex $b 0] + [lindex $b 3]) / 2.}] [expr {([lindex $b 1] + [lindex $b 4]) / 2.}] [expr {([lindex $b 2] + [lindex $b 5]) / 2.}]"
       return
     }
@@ -82,11 +82,12 @@ proc kentron_report {k n t} {
 foreach kentron_cmd {explode nexplode} {
   rename $kentron_cmd kentron_orig_$kentron_cmd
   proc $kentron_cmd {args} [string map [list CMD $kentron_cmd] {
-    # At global level: DRAW creates its variables in the calling scope.
-    set r [uplevel #0 [list kentron_orig_CMD {*}$args]]
+    # In the caller's scope: DRAW creates its variables in the calling scope (a proc's
+    # own, inside one), and the names are measured there too.
+    set r [uplevel 1 [list kentron_orig_CMD {*}$args]]
     set t [lindex $args 1]
     if {[regexp -nocase {^([efvw]|so|sh)$} $t]} {
-      foreach n $r { kentron_report $::kentron_k $n $t }
+      foreach n $r { uplevel 1 [list kentron_report $::kentron_k $n $t] }
     }
     incr ::kentron_k
     return $r
@@ -182,7 +183,9 @@ def tcl_main(groups: list, draw: Path, tcl_lib: Path | None, jobs: int) -> None:
             harness = (f"set dirname {{{SCRIPTS}}}; set groupname {name}; set gridname {grid.name}; set casename {case}; "
                        "set imagedir /tmp; set test_image x; set logdir /tmp\nproc checkview {args} {}\n")
             body = "".join(f"if {{[catch {{source {{{f}}}}} m]}} {{puts \"TCLERROR $m\"}}\n" for f in files if f.exists())
-            runs.append((f"tests/{name}/{grid.name}/{case}", "pload ALL\n" + harness + WRAPPER + body + "exit\n"))
+            # (DEFAULT, not ALL: DATAEXCHANGE crashes DRAW in batch mode on some builds; the
+            # scripts load what else they need themselves.)
+            runs.append((f"tests/{name}/{grid.name}/{case}", "pload DEFAULT\n" + harness + WRAPPER + body + "exit\n"))
     # (Each run in its own DRAW process, several at once.)
     with ThreadPoolExecutor(max_workers=jobs) as pool:
         outputs = pool.map(lambda r: run_draw(draw, tcl_lib, r[1]), runs)

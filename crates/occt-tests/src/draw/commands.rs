@@ -4235,7 +4235,9 @@ impl Draw {
         } else {
             kentron::offset::thick_solid(&mut self.model, shape, &faces, distance, join)?
         };
-        let r = if self.offset_merge { kentron::unify::unify_same_domain(&mut self.model, r)? } else { r };
+        // (OCCT's RemoveIntEdges: the edges the offset made within a face, between pieces of
+        // one face; faces apart that come to lie on one plane stay apart.)
+        let r = if self.offset_merge { kentron::unify::unify_same_domain_with(&mut self.model, r, kentron::unify::UnifyOptions { same_surface_only: true, ..Default::default() })? } else { r };
         self.flag_offset_solids_closed(r);
         self.set_shape_var(result, r)
     }
