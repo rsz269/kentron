@@ -316,9 +316,6 @@ tests/bugs/modalg_2/bug5805_45
 tests/bugs/modalg_2/bug5805_46
 tests/bugs/modalg_2/bug5805_47
 tests/bugs/modalg_2/bug5805_48
-tests/bugs/modalg_3/bug5805_50
-tests/bugs/modalg_3/bug5805_51
-tests/bugs/modalg_3/bug5805_52
 tests/bugs/modalg_3/bug5805_9
 tests/bugs/modalg_4/bug23076
 tests/bugs/modalg_4/bug363_1
@@ -1101,7 +1098,6 @@ tests/offset/bugs/bug26233
 tests/offset/bugs/bug5806
 tests/offset/compshape/A1
 tests/offset/compshape/A4
-tests/offset/faces_type_a/B1
 tests/offset/faces_type_i/B4
 tests/offset/faces_type_i/B5
 tests/offset/faces_type_i/C2
@@ -1115,13 +1111,9 @@ tests/offset/faces_type_i/F5
 tests/offset/faces_type_i/I5
 tests/offset/faces_type_i/J5
 tests/offset/faces_type_i/K6
-tests/offset/faces_type_i/L3
-tests/offset/faces_type_i/L4
-tests/offset/faces_type_i/L5
 tests/offset/faces_type_i/M6
 tests/offset/faces_type_i/M8
 tests/offset/shape/A1
-tests/offset/shape_type_a/A2
 tests/offset/shape_type_i/A5
 tests/offset/shape_type_i/A9
 tests/offset/shape_type_i/B4

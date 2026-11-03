@@ -101,6 +101,14 @@ pub(super) fn offset(model: &mut Model, solid: Shape, distance: f64, made: Made)
     if distance > 0.0 && !removed.is_empty() {
         return Ok(None);
     }
+    // (Faces placed in the solid (as read from some files): measured on a copy with the
+    // placements applied; not where faces are removed, which are named by node.)
+    let placed = model.unique_subshapes(solid, NodeKind::Face).iter().any(|f| f.placement != Transform::IDENTITY);
+    let solid = match (placed, removed.is_empty()) {
+        (false, _) => solid,
+        (true, true) => crate::modify::copy_unplaced(model, solid, &[])?.0,
+        (true, false) => return Ok(None),
+    };
     let mut faces = Vec::new();
     for face in model.unique_subshapes(solid, NodeKind::Face) {
         let Some(surface @ (Surface::Plane(_) | Surface::Cylinder(_))) = model.surface(face).cloned() else { return Ok(None) };

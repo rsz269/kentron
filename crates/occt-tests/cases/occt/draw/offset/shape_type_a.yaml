@@ -19,7 +19,6 @@ ported_from:
   file: tests/offset/shape_type_a/A2
 notes:
   - "kentron deviation: At this distance some faces of the source shrink away entirely, which changes the topology; kentron's offsets keep every face, so the result is wrong."
-expect: not_done
 build:
   - s: {load: {brep: "CHE_bb60.rle"}}
   - result: {offset_shape: {shape: s, distance: 0.37, join: "arc"}}

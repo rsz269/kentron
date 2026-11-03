@@ -247,9 +247,22 @@ fn moved_and_rounded(model: &mut Model, shape: Shape, distance: f64, own: &[(Nod
 pub fn thick_solid(model: &mut Model, shape: Shape, removed: &[Shape], thickness: f64, join: Join) -> Result<Shape> {
     // A compound of one solid: that solid.
     let solids = model.unique_subshapes(shape, NodeKind::Solid);
-    let shape = match (shape.kind(), &solids[..]) {
-        (NodeKind::Solid, _) => shape,
-        (_, [solid]) => *solid,
+    let shells = model.unique_subshapes(shape, NodeKind::Shell);
+    let shape = match (shape.kind(), &solids[..], &shells[..]) {
+        (NodeKind::Solid, _, _) => shape,
+        (_, [solid], _) => *solid,
+        // (One closed shell, no solid: the solid it bounds, as OCCT takes it.)
+        (_, [], [shell]) if crate::boolean::closed_shells(model, *shell) => {
+            let solid = model.new_empty(NodeKind::Solid);
+            model.add(solid, *shell)?;
+            if crate::properties::volume(model, solid).mass >= 0.0 {
+                solid
+            } else {
+                let turned = model.new_empty(NodeKind::Solid);
+                model.add(turned, shell.reversed())?;
+                turned
+            }
+        }
         _ => return Err(Error::InvalidInput("a thick solid of a shape that is not one solid".into())),
     };
     // The walls reuse the solid's faces: placed faces are first moved where they are.

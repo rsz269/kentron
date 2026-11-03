@@ -94,7 +94,6 @@ ported_from:
   file: tests/offset/faces_type_a/B1
 notes:
   - "kentron deviation: The source is not a single solid, which kentron's thick solids require."
-expect: not_done
 build:
   - s: {load: {brep: "CHE_vevopar.rle"}}
   - s_11: {select: {of: s, face: [-8.08304e-16, -0.531376, 0.265688], area: 0.51873}}

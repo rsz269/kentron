@@ -1619,10 +1619,9 @@ ported_from:
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/offset/faces_type_i/L3
 notes:
-  - "kentron deviation: The reference (340.505) is not what OCCT computes today (330.767); kentron's result (330.761) agrees with today's OCCT."
+  - "kentron deviation: The reference (340.505) is not what OCCT computes today: DRAW (OCCT 8.1) gives 330.767 for this offset; kentron's result (330.761) agrees with it."
   - "OCCT TODO OCC24156 (MacOS): An exception was caught"
   - "OCCT TODO OCC24156 (MacOS): TEST INCOMPLETE"
-expect: not_done
 build:
   - w1: {bspline: {degree: 3, knots: [[-1.0, 4], [1.0, 4]], poles: [[0, 0, 0], [2, 10, 0], [4, 6, 0], [10, 0, 0]]}}
   - w1: {edge: {curve: w1}}
@@ -1634,7 +1633,7 @@ build:
   - s_3: {select: {of: s, face: [1.5, -2.5, 5.0], area: 58.3095}}
   - result: {thick_solid: {shape: s, faces: [s_2, s_3], thickness: 1, join: "intersection"}}
 checks:
-  - {volume: result, eq: 340.505, rel: 0.01}
+  - {volume: result, eq: 330.767, rel: 0.01}
 ---
 case: L4
 ported_from:
@@ -1643,10 +1642,9 @@ ported_from:
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/offset/faces_type_i/L4
 notes:
-  - "kentron deviation: The reference (246.795) is not what OCCT computes today (252.145); kentron's result (252.168) agrees with today's OCCT."
+  - "kentron deviation: The reference (246.795) is not what OCCT computes today: DRAW (OCCT 8.1) gives 252.145 for this offset; kentron's result (252.168) agrees with it."
   - "OCCT TODO OCC24156 (MacOS): An exception was caught"
   - "OCCT TODO OCC24156 (MacOS): TEST INCOMPLETE"
-expect: not_done
 build:
   - w1: {bspline: {degree: 3, knots: [[-1.0, 4], [1.0, 4]], poles: [[0, 0, 0], [2, 10, 0], [4, 6, 0], [10, 0, 0]]}}
   - w1: {edge: {curve: w1}}
@@ -1658,7 +1656,7 @@ build:
   - s_3: {select: {of: s, face: [1.5, -2.5, 5.0], area: 58.3095}}
   - result: {thick_solid: {shape: s, faces: [s_2, s_3], thickness: -1, join: "intersection"}}
 checks:
-  - {volume: result, eq: 246.795, rel: 0.01}
+  - {volume: result, eq: 252.145, rel: 0.01}
 ---
 case: L5
 ported_from:
@@ -1667,10 +1665,9 @@ ported_from:
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/offset/faces_type_i/L5
 notes:
-  - "kentron deviation: The reference (352.331) is not what OCCT computes today (347.376); kentron's result (347.466) agrees with today's OCCT."
+  - "kentron deviation: The reference (352.331) is not what OCCT computes today: DRAW (OCCT 8.1) gives 347.376 for this offset; kentron's result (347.466) agrees with it."
   - "OCCT TODO OCC24156 (MacOS): An exception was caught"
   - "OCCT TODO OCC24156 (MacOS): TEST INCOMPLETE"
-expect: not_done
 build:
   - w1: {bspline: {degree: 3, knots: [[-1.0, 4], [1.0, 4]], poles: [[0, 0, 0], [2, 10, 0], [4, 6, 0], [10, 0, 0]]}}
   - w1: {edge: {curve: w1}}
@@ -1682,7 +1679,7 @@ build:
   - s_5: {select: {of: s, face: [4.2286, 0.732966, 10.0], area: 62.2}}
   - result: {thick_solid: {shape: s, faces: [s_4, s_5], thickness: 1, join: "intersection"}}
 checks:
-  - {volume: result, eq: 352.331, rel: 0.01}
+  - {volume: result, eq: 347.376, rel: 0.01}
 ---
 case: L6
 ported_from:

@@ -4241,6 +4241,24 @@ impl Draw {
         self.flag_offset_solids_closed(r);
         self.set_shape_var(result, r)
     }
+    /// DRAW command `thickshell`: 53 uses in 53 converted scripts.
+    ///
+    /// Example: `thickshell result s 5`
+    pub fn thickshell(&mut self, args: &[&str]) -> DrawResult {
+        // `thickshell result shape offset [jointype [tol]]`: the solid between the shape and
+        // its offset (jointype `a`, arcs, by default; `i` intersection).
+        need(args, 3, "thickshell result shape offset [jointype [tol]]")?;
+        let shape = self.shape_var(args[1])?;
+        let distance: f64 = args[2].parse().map_err(|_| DrawError::Failed(format!("thickshell: bad offset {}", args[2])))?;
+        let join = match args.get(3).copied() {
+            None | Some("a") => kentron::offset::Join::Arc,
+            Some("i") => kentron::offset::Join::Intersection,
+            Some(other) => return Err(DrawError::Failed(format!("thickshell: bad join type {other}"))),
+        };
+        let r = kentron::offset::thick_shell(&mut self.model, shape, distance, join)?;
+        self.set_shape_var(args[0], r)
+    }
+
     /// DRAW command `offsetshape`: 9 uses in 9 converted scripts.
     ///
     /// Example: `offsetshape result a 10`
@@ -5362,12 +5380,6 @@ impl Draw {
     /// Example: `tessellate r result_1 50 50`
     pub fn tessellate(&mut self, args: &[&str]) -> DrawResult {
         self.not_implemented("tessellate", args)
-    }
-    /// DRAW command `thickshell`: 53 uses in 53 converted scripts.
-    ///
-    /// Example: `thickshell result s 5`
-    pub fn thickshell(&mut self, args: &[&str]) -> DrawResult {
-        self.not_implemented("thickshell", args)
     }
     /// DRAW command `thrusections`: 293 uses in 291 converted scripts.
     ///

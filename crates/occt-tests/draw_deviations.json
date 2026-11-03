@@ -1643,17 +1643,23 @@
   ],
   "tests/offset/faces_type_i/L3": [
     {
-      "note": "The reference (340.505) is not what OCCT computes today (330.767); kentron's result (330.761) agrees with today's OCCT."
+      "from": "d.checkprops(&[\"result\", \"-v\", \"340.505\"])?;",
+      "to": "d.checkprops(&[\"result\", \"-v\", \"330.767\"])?;",
+      "reason": "The reference (340.505) is not what OCCT computes today: DRAW (OCCT 8.1) gives 330.767 for this offset; kentron's result (330.761) agrees with it."
     }
   ],
   "tests/offset/faces_type_i/L4": [
     {
-      "note": "The reference (246.795) is not what OCCT computes today (252.145); kentron's result (252.168) agrees with today's OCCT."
+      "from": "d.checkprops(&[\"result\", \"-v\", \"246.795\"])?;",
+      "to": "d.checkprops(&[\"result\", \"-v\", \"252.145\"])?;",
+      "reason": "The reference (246.795) is not what OCCT computes today: DRAW (OCCT 8.1) gives 252.145 for this offset; kentron's result (252.168) agrees with it."
     }
   ],
   "tests/offset/faces_type_i/L5": [
     {
-      "note": "The reference (352.331) is not what OCCT computes today (347.376); kentron's result (347.466) agrees with today's OCCT."
+      "from": "d.checkprops(&[\"result\", \"-v\", \"352.331\"])?;",
+      "to": "d.checkprops(&[\"result\", \"-v\", \"347.376\"])?;",
+      "reason": "The reference (352.331) is not what OCCT computes today: DRAW (OCCT 8.1) gives 347.376 for this offset; kentron's result (347.466) agrees with it."
     }
   ],
   "tests/offset/faces_type_i/M6": [

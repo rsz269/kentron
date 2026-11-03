@@ -4,14 +4,17 @@
 //! * [`shape`]: a solid or shell whose faces are moved along their normals.
 //! * [`thick_solid`]: a solid hollowed out, its walls of a given thickness, with some faces
 //!   removed to open it.
+//! * [`thick_shell`]: the solid between a face or shell and its offset.
 
 mod cells;
 mod regularize;
 pub(crate) mod shape;
+mod thick;
 mod wire;
 mod within;
 
 pub use shape::{shape, shape_with_faces, thick_solid};
+pub use thick::thick_shell;
 pub use wire::{open_planar_wire, planar_wire};
 
 /// How offsets are joined where they part (at corners of a wire turning away from the offset

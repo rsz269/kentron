@@ -282,7 +282,9 @@ pub(super) fn signed_distance_and_normal(surface: &Surface, p: Point) -> (f64, O
 pub(super) fn freeform(surface: &Surface) -> bool {
     match surface {
         Surface::BSpline(_) | Surface::Bezier(_) => true,
-        Surface::Offset(o) => freeform(o.basis()) || matches!(o.basis(), Surface::Plane(_) | Surface::Cylinder(_) | Surface::Cone(_) | Surface::Sphere(_)),
+        // (Any offset surface (one not the elementary surface it equals): numerically, as
+        // free-form; a surface of revolution's or extrusion's too.)
+        Surface::Offset(_) => true,
         Surface::Trimmed(t) => freeform(t.basis()),
         _ => false,
     }
