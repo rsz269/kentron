@@ -1068,7 +1068,11 @@ fn merged_at_caps(model: &mut Model, result: Shape, caps: &[Plane]) -> Result<Sh
 /// leaves.) (The solid's volume carried from one corner to the next.)
 /// `corners` (each with its size: a fillet's radius, a chamfer's larger distance) met in
 /// pairs at `meetings`, `mitred` and run past their ends as `runs`; `tool` makes corner
-/// `k`'s tool run past its ends as given; `keep` checks each step's result.
+/// `k`'s tool run past its ends as given; `keep` checks each step's result. (What each
+/// corner takes depends on the tools alone, so all of it is cut at once, in as few cuts as
+/// keep the solids of each cut apart (solids meeting are first split by one another, which
+/// for many is slow), unless that takes away more than all of it holds: then each corner's
+/// is cut in turn, kept only where it takes away no more than it holds.)
 fn inward_corners(
     model: &mut Model,
     shape: Shape,
@@ -1079,8 +1083,7 @@ fn inward_corners(
     keep: &dyn Fn(&Model, Shape) -> Result<Shape>,
     tool: &dyn Fn(&mut Model, usize, [f64; 2]) -> Result<Shape>,
 ) -> Result<Shape> {
-    let mut result = shape;
-    let mut volume_now: Option<f64> = None;
+    let mut pieces: Vec<(Vec<Shape>, f64)> = Vec::new();
     for (p, at) in meetings {
         let [i, j] = at[..] else { continue };
         let end_of = |c: &Corner| usize::from(c.origin.distance(*p) > tolerance::LINEAR);
@@ -1122,9 +1125,13 @@ fn inward_corners(
             let run = if chord > tolerance::LINEAR { reach.min(0.6 * chord) } else { reach };
             if k == 0 { [run, 0.0] } else { [0.0, run] }
         };
+        // (Everything taken lies within `near` of the corner: the tools cut down to it first,
+        // so that the operations between them are on what is near the corner alone.)
+        let near = crate::primitives::Cuboid::from_corners(*p - Vector::new(reach, reach, reach), *p + Vector::new(reach, reach, reach)).build(model)?;
         let mut on = Vec::with_capacity(2);
         for (k, l, end) in [(i, j, ki), (j, i, kj)] {
             let tool = tool(model, k, run_at(end, l))?;
+            let tool = boolean::intersection(model, tool, near)?;
             let wall = corners[k].0.faces.iter().find(|f| !corners[l].0.faces.iter().any(|g| g.0 == f.0)).cloned();
             let Some(beyond) = (match wall {
                 Some(w) => beyond_wall(model, &w, *p, reach)?,
@@ -1137,37 +1144,95 @@ fn inward_corners(
         if on.len() != 2 {
             continue;
         }
-        let mut taken: Option<Shape> = None;
-        for (k, l) in [(0, 1), (1, 0)] {
-            let other = match on[l].1 {
-                Some(beyond) => boolean::union(model, on[l].0, beyond)?,
-                None => on[l].0,
-            };
-            let part = boolean::intersection(model, on[k].0, other)?;
-            taken = Some(match taken {
-                Some(t) => boolean::union(model, t, part)?,
-                None => part,
-            });
+        // (What either takes where the other would too, or beyond the other's wall: the
+        // tools' common part and each tool's part beyond the other's wall. As one solid,
+        // unless that comes out unsound (the union of parts sharing much of their faces is
+        // the hardest operation to get right): then the three apart, which are only cut away.)
+        let [(t0, b0), (t1, b1)] = [(on[0].0, on[0].1.expect("a wall")), (on[1].0, on[1].1.expect("a wall"))];
+        let whole = (|model: &mut Model| -> Result<Shape> {
+            let other = boolean::union(model, t1, b1)?;
+            let p0 = boolean::intersection(model, t0, other)?;
+            let other = boolean::union(model, t0, b0)?;
+            let p1 = boolean::intersection(model, t1, other)?;
+            boolean::union(model, p0, p1)
+        })(model);
+        let mut parts = Vec::with_capacity(3);
+        let mut failed = false;
+        match whole {
+            Ok(taken) if crate::validity::check(model, taken).is_valid() => {
+                if model.explore(taken, NodeKind::Face).next().is_some() {
+                    parts.push(taken);
+                }
+            }
+            _ => {
+                for (a, b) in [(t0, t1), (t0, b1), (t1, b0)] {
+                    match boolean::intersection(model, a, b) {
+                        Ok(part) if model.explore(part, NodeKind::Face).next().is_some() => parts.push(part),
+                        Ok(_) => {}
+                        Err(_) => failed = true,
+                    }
+                }
+            }
         }
-        let near = crate::primitives::Cuboid::from_corners(*p - Vector::new(reach, reach, reach), *p + Vector::new(reach, reach, reach)).build(model)?;
-        let taken = boolean::intersection(model, taken.expect("two parts"), near)?;
-        // (Only a sliver at the corner, no more than it holds taken away.)
-        let size = crate::properties::volume(model, taken).mass;
-        if model.explore(taken, NodeKind::Face).next().is_none() || !(size > 0.0 && size < reach * reach * reach) {
+        if failed {
             continue;
         }
-        record_tool(model, taken, &[corners[i].0.edges.clone(), corners[j].0.edges.clone()].concat());
-        let before = match volume_now {
-            Some(v) => v,
-            None => crate::properties::volume(model, result).mass,
-        };
-        let cut = boolean::difference(model, result, taken)?;
+        // (Only a sliver at the corner, no more than it holds taken away; each part a sound
+        // solid, which cut away does not take what lies around it.)
+        let size: f64 = parts.iter().map(|&part| crate::properties::volume(model, part).mass).sum();
+        if parts.is_empty() || !(size > 0.0 && size < reach * reach * reach) || !parts.iter().all(|&part| crate::validity::check(model, part).is_valid()) {
+            continue;
+        }
+        let edges = [corners[i].0.edges.clone(), corners[j].0.edges.clone()].concat();
+        for &part in &parts {
+            record_tool(model, part, &edges);
+        }
+        pieces.push((parts, size));
+    }
+    if pieces.is_empty() {
+        return Ok(shape);
+    }
+    let takes_no_more = |before: f64, after: f64, size: f64| before - after <= size * (1.0 + 1e-6) + 1e-9;
+    let volume_before = crate::properties::volume(model, shape).mass;
+    if pieces.len() > 1 {
+        // (Each part into the first cut whose parts' boxes are all apart from its own.)
+        let mut cuts: Vec<(Vec<Shape>, Vec<crate::math::BoundingBox>)> = Vec::new();
+        for &part in pieces.iter().flat_map(|(parts, _)| parts) {
+            let bounds = crate::properties::bounding_box(model, part).enlarged(1e-4);
+            match cuts.iter_mut().find(|(_, boxes)| boxes.iter().all(|b| !b.overlaps(&bounds))) {
+                Some((parts, boxes)) => {
+                    parts.push(part);
+                    boxes.push(bounds);
+                }
+                None => cuts.push((vec![part], vec![bounds])),
+            }
+        }
+        let size: f64 = pieces.iter().map(|&(_, size)| size).sum();
+        let mut cut = Ok(shape);
+        for (parts, _) in &cuts {
+            let all = model.new_empty(NodeKind::Compound);
+            for &part in parts {
+                model.add(all, part)?;
+            }
+            cut = cut.and_then(|so_far| boolean::difference(model, so_far, all));
+        }
+        if let Ok(cut) = cut.and_then(|cut| keep(model, cut)) {
+            if takes_no_more(volume_before, crate::properties::volume(model, cut).mass, size) {
+                return Ok(cut);
+            }
+        }
+    }
+    let (mut result, mut before) = (shape, volume_before);
+    for (parts, size) in pieces {
+        let mut cut = result;
+        for part in parts {
+            cut = boolean::difference(model, cut, part)?;
+        }
         let cut = keep(model, cut)?;
         let after = crate::properties::volume(model, cut).mass;
-        volume_now = Some(before);
-        if before - after <= size * (1.0 + 1e-6) + 1e-9 {
+        if takes_no_more(before, after, size) {
             result = cut;
-            volume_now = Some(after);
+            before = after;
         }
     }
     Ok(result)

@@ -2145,6 +2145,43 @@ fn sliced(base: &Face, other: &Face, crossings: &[Point]) -> Vec<Section> {
     // unless the other surface is free-form: each of its distances starts the next.)
     let stateless = !geom::freeform(q);
     let bisect = |g: &dyn Fn(f64) -> f64, mut a: f64, mut b: f64| {
+        // (On an analytic other surface, whose distances are smooth: by false position,
+        // the Illinois way, which closes in on the root as bisection does but in far fewer
+        // steps; down to neighbouring numbers, or a zero.)
+        if stateless {
+            let (mut ga, mut gb) = (g(a), g(b));
+            if (ga >= 0.0) == (gb >= 0.0) {
+                return 0.5 * (a + b);
+            }
+            let mut kept = 0i8;
+            for _ in 0..100 {
+                let mut m = (a * gb - b * ga) / (gb - ga);
+                if !(m > a.min(b) && m < a.max(b)) {
+                    m = 0.5 * (a + b);
+                }
+                if m == a || m == b {
+                    break;
+                }
+                let gm = g(m);
+                if gm == 0.0 {
+                    return m;
+                }
+                if (gm >= 0.0) == (ga >= 0.0) {
+                    (a, ga) = (m, gm);
+                    if kept == 1 {
+                        gb *= 0.5;
+                    }
+                    kept = 1;
+                } else {
+                    (b, gb) = (m, gm);
+                    if kept == -1 {
+                        ga *= 0.5;
+                    }
+                    kept = -1;
+                }
+            }
+            return 0.5 * (a + b);
+        }
         let ga = g(a) >= 0.0;
         for _ in 0..60 {
             let m = 0.5 * (a + b);

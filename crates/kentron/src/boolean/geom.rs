@@ -89,6 +89,16 @@ pub(super) fn signed_distance(surface: &Surface, p: Point) -> f64 {
             (d - z * d.dot(z)).length() - c.radius()
         }
         Surface::Sphere(s) => p.distance(s.frame().origin()) - s.radius(),
+        Surface::Torus(t) => {
+            // From the tube's centre circle, less the tube's radius (outward from the tube,
+            // as its normal points).
+            let f = t.frame();
+            let d = p - f.origin();
+            let z = Vector::from(f.z());
+            let h = d.dot(z);
+            let radial = (d - z * h).length();
+            (radial - t.major_radius()).hypot(h) - t.minor_radius()
+        }
         Surface::Cone(c) => {
             // In the half-plane through the axis and p: the distance to the generator, or to
             // the one opposite past the apex if nearer (the surface facing the other way
