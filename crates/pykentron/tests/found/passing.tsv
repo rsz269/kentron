@@ -561,3 +561,16 @@ cqindustry	example/dome/cut_key_pentagon.py	medicationforall/cqindustry@c583078	
 cadquery_tests	fit_test_blocks/ball_and_socket.py	Roger-random/cadquery_tests@56a7be5	MIT	0.032	0.074	0.050	0.145	6
 coordproof-openbim-mep	cadquery/duct_hanger.py	Taz33m/coordproof-openbim-mep@918ebda	Apache-2.0	0.017	0.015	0.290	0.308	2
 gym	robots/open_duck_mini_v2/parts/left_cache.py	yotown/gym@e50fa99	Apache-2.0	0.026	0.108	0.222	1.096	5
+python_basics	Learning/cadquery/samples/001.py	Kai3645/python_basics@6097980	not copied (none)	0.021	0.017	0.044	0.041	6
+aaditya889-cadquery	scripts/part_scripts/drone/extra_parts.py	aaditya889/cadquery@8993786	not copied (none)	0.083	0.123	0.173	0.568	2
+lab	sandbox/cadquery_practice/namecard_case.py	ar90n/lab@bf38783	not copied (none)	0.043	0.043	0.119	0.198	11
+3D-print	3D_printer_stuff/filament_label.py	konikvranik/3D-print@8bbf5ac	not copied (none)	0.209	0.226	1.936	8.520	15
+3D-print	3D_printer_stuff/tube_holder.py	konikvranik/3D-print@8bbf5ac	not copied (none)	0.360	0.360	1.543	2.016	2
+3D-print	smarthome/amplifier_case.py	konikvranik/3D-print@8bbf5ac	not copied (none)	0.216	0.166	0.821	1.215	6
+roamyboard	case/roamy-v3.py	nevyn/roamyboard@719a9b2	not copied (none)	0.127	0.127	1.178	3.312	41
+small-projects	CadQuery/light-cover2/light-cover2.py	scottclo/small-projects@660748c	not copied (none)	0.003	0.003	0.011	0.011	3
+cadquery-cad-vscode	examples/bicycle/assembly.py	shdaifat/cadquery-cad-vscode@65391ae	MIT	0.755	0.856	1.881	13.231	1
+tocisz-cad	spindle.py	tocisz/cad@29be8c0	not copied (none)	0.089	0.185	0.288	0.934	12
+voneiden-cad	projects/a320/jayel/jayel_assembly.py	voneiden/cad@7778191	not copied (none)	0.020	0.020	0.166	0.519	2
+voneiden-cad	projects/a320/pushpull/pushpull.py	voneiden/cad@7778191	not copied (none)	0.010	0.010	0.086	0.185	2
+voneiden-cad	projects/cnctable/cnctable.py	voneiden/cad@7778191	not copied (none)	0.009	0.009	0.059	0.059	2

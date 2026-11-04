@@ -1,7 +1,7 @@
 # CadQuery scripts from public projects
 
-pykentron is tested against CadQuery 2.8 on a corpus of 751 CadQuery scripts from 113
-public projects on GitHub, collected from 2026-10-18 to 2026-10-29. Each script runs on both,
+pykentron is tested against CadQuery 2.8 on a corpus of 764 CadQuery scripts from 122
+public projects on GitHub, collected from 2026-10-18 to 2026-11-04. Each script runs on both,
 and their results are compared. The scripts are a mix: when they were found, some failed on
 pykentron, built differently or ran much slower, and the rest built as on CadQuery. Many of
 the first kind have been fixed since, and some differences turned out not to be pykentron's
@@ -10,7 +10,7 @@ the first kind have been fixed since, and some differences turned out not to be 
 ## What is here
 
 - `<project>/`: the scripts of projects under permissive licences, copied with the project's
-  licence beside them and the project's own modules they import (518 scripts from 69
+  licence beside them and the project's own modules they import (519 scripts from 70
   projects). Larger libraries some scripts import are not copied: cq_warehouse, cqterrain,
   cadqueryhelper, cqindustry, cqfantasy, cq_gears, cqMore, cq-electronics and LatticeQuery.
   Install them without their dependencies (`pip install --no-deps`), so that they cannot
@@ -19,13 +19,13 @@ the first kind have been fixed since, and some differences turned out not to be 
   (128) or ran substantially slower (41) when they were found: project, script, source repository and
   commit, licence, kind, suspected area, both kernels' wall times, and the first differences
   or the error. It records them as found and is not updated as they are fixed.
-- [`passing.tsv`](passing.tsv): the 562 scripts that built as on CadQuery when last checked
-  for it (2026-10-20, and 2026-10-23 and 2026-10-29 for the last rounds), with both kernels' wall and CPU times
+- [`passing.tsv`](passing.tsv): the 575 scripts that built as on CadQuery when last checked
+  for it (2026-10-20, and 2026-10-23, 2026-10-29 and 2026-11-04 for the last rounds), with both kernels' wall and CPU times
   (CadQuery's from the hunt, in a fresh process each; it runs several threads, so its CPU
   time is often over its wall time). 69 scripts are in both lists: found failing or
   differing, then fixed by the time this list was made.
 - [`derived/`](derived): scripts derived from corpus scripts whose results depend on a
-  kernel's face order (below), with that step made explicit. They are not among the 751.
+  kernel's face order (below), with that step made explicit. They are not among the 764.
 - [`harness/`](harness): the tools that run and compare the scripts.
 
 Scripts under other licences, or none, are not copied: [`cases.tsv`](cases.tsv) and
@@ -96,6 +96,11 @@ Some differences are not pykentron's:
   pykentron failed on or built differently, 21 where it was slower or less than 3× faster,
   and 203 at random among those it built alike, two thirds of them taking CadQuery 0.05 s or
   more.
+- **2026-11-04:** scripts using CadQuery's constraint solvers (assemblies' `constrain` and
+  `solve`, sketches' `constrain` and `solve`), found by GitHub's code search, once pykentron
+  solved them itself rather than through CadQuery's casadi and nlopt: the 13 from 9 projects
+  that built as on CadQuery with something to compare (one of them, a spindle, after a fix
+  to 2D fillets). Viewer imports were dropped from them to run them headless.
 
 Left out throughout: scripts using unseeded randomness (no two runs agree), scripts calling
 OCCT's Python bindings (OCP) beyond the shapes CadQuery hands them (they test OCCT's API, not
