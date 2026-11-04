@@ -836,7 +836,14 @@ impl Tracer<'_> {
                 return None;
             }
         }
-        None
+        // (Not as close as that within the steps, where the surfaces are found only less
+        // precisely, as an offset's near its basis's collapsed edge: as close as they are
+        // found there. Else every step there fails, and the branch creeps on in ever
+        // shorter ones.)
+        let (p, _, _) = self.base.d1(u, v);
+        let (q, _, _) = self.other_d1(s, t);
+        let scale = 1e-10 * (1.0 + (p - Point::ORIGIN).length());
+        ((p - q).length() <= scale && ((p - from.p).dot(dir) - h).abs() <= scale).then_some(Both { u, v, s, t, p })
     }
 
     /// The branch from `start` one way (`sense` +1 or -1 along the shared direction): its
