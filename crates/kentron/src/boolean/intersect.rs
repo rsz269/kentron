@@ -213,7 +213,43 @@ fn surface_contact(curve: &Curve, first: f64, last: f64, surface: &Surface, tole
 /// [`surface_contact`] from the distances `g` gives.
 #[allow(clippy::too_many_arguments)]
 fn contact_from(curve: &Curve, first: f64, last: f64, surface: &Surface, tolerance: f64, n: usize, ts: &[f64], g: &dyn Fn(f64) -> f64) -> Contact {
-    let values: Vec<f64> = ts.iter().map(|&t| g(t)).collect();
+    // (Not found at samples that cannot be on the surface: the distance shrinks by no more
+    // than the way along the curve, its chords' lengths doubled for the arcs. Those stand
+    // in with the sign of the last found and less than its size by that way: farther than
+    // the tolerances, with no root beside them nor a point touching the surface. The
+    // neighbours of each sample found are found too, for the touching points sought there.)
+    let points: Vec<Point> = ts.iter().map(|&t| curve.point(t)).collect();
+    let mut values: Vec<f64> = Vec::with_capacity(ts.len());
+    let mut found: Vec<bool> = Vec::with_capacity(ts.len());
+    let mut i = 0;
+    while i < ts.len() {
+        let d = g(ts[i]);
+        values.push(d);
+        found.push(true);
+        let mut way = 0.0;
+        let mut j = i + 1;
+        while j + 1 < ts.len() {
+            way += 2.0 * points[j - 1].distance(points[j]);
+            if way >= 0.5 * d.abs() || d.abs() - way <= 2.0 * TOL.max(tolerance) {
+                break;
+            }
+            values.push(d.signum() * (d.abs() - way));
+            found.push(false);
+            j += 1;
+        }
+        i = j;
+    }
+    let first_found = found.clone();
+    for i in 0..ts.len() {
+        if first_found[i] {
+            for k in [i.wrapping_sub(1), i + 1] {
+                if k < ts.len() && !found[k] {
+                    values[k] = g(ts[k]);
+                    found[k] = true;
+                }
+            }
+        }
+    }
     // Lying on the surface within the tolerance of meeting points (shapes made by earlier
     // operations put edges on surfaces only that closely).
     let within = |bound: f64| values.iter().all(|v| v.abs() <= bound) && ts.windows(2).all(|w| g(0.5 * (w[0] + w[1])).abs() <= bound);
@@ -275,7 +311,7 @@ fn contact_from(curve: &Curve, first: f64, last: f64, surface: &Surface, toleran
         // A touching point: |g| has a small local minimum without a sign change. It is
         // where g's derivative along the curve vanishes, found precisely by bisection
         // (minimizing |g| itself is imprecise there, g being quadratic).
-        if i > 0 && i < n {
+        if i > 0 && i < n && found[i] {
             let (a, b, c) = (values[i - 1], values[i], values[i + 1]);
             // (A strict extremum: where g is flat, as along a circle about a cylinder's axis,
             // there is none to find.)
@@ -2036,7 +2072,24 @@ fn sliced(base: &Face, other: &Face, crossings: &[Point]) -> Vec<Section> {
     let marched = || {
         let spacing = base.samples.get().map_or(0.0, |s| s.1);
         let range = super::march::Range { u: (u0, u1), v: (v0, v1), u_period: if periodic { base.u_period } else { None }, v_period: v_periodic, u_wrap: base.u_period, v_wrap: base.v_period };
-        super::march::trace(s, q, range, (nu, nv), spacing * 64.0 / nu.max(nv) as f64, crossings, 10.0 * (base.drift.max(other.drift) + on_tol()), (other.u_range, other.v_range))
+        // (On a surface of extrusion, as many columns along its curve as make the lattice's
+        // cells no longer that way than four times across, but as many as a B-spline curve's
+        // spans would have: a short curve swept far, as a letter's outline cast onto a face,
+        // has few. The steps as on the whole lattice.)
+        let columns = match s {
+            Surface::Extrusion(e) => {
+                let samples: Vec<Point> = (0..=32).map(|k| e.basis().point(u0 + (u1 - u0) * k as f64 / 32.0)).collect();
+                let along = samples.windows(2).map(|w| w[0].distance(w[1])).sum::<f64>();
+                let across = (v1 - v0).abs();
+                let spans = match e.basis() {
+                    Curve::BSpline(b) => (4 * (b.knots().len().max(2) - 1) * b.degree().max(1)).clamp(16, 240),
+                    _ => 16,
+                };
+                if across > 0.0 { ((4.0 * nv as f64 * along / across).ceil() as usize).max(spans).min(nu) } else { nu }
+            }
+            _ => nu,
+        };
+        super::march::trace(s, q, range, (columns, nv), spacing * 64.0 / nu.max(nv) as f64, crossings, 10.0 * (base.drift.max(other.drift) + on_tol()), (other.u_range, other.v_range))
     };
     // (Where either surface is free-form, or a surface of extrusion: on its grid of signed
     // distances, as fine as a quadric's, sections are slow to find.)
