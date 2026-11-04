@@ -76,14 +76,29 @@ impl Graph {
     /// For a half-space (an open operand): true if `p` is behind its boundary, on the side
     /// opposite the outward normal of the nearest face's surface.
     pub(super) fn behind(&self, faces: &[usize], p: Point) -> bool {
-        let nearest = faces
-            .iter()
-            .map(|&g| {
-                let face = &self.faces[g];
-                let foot = geom::surface_point(&face.surface, geom::uv_of(&face.surface, p));
-                (foot.distance(p), g, foot)
+        // (In order of how near their surfaces may come, by the boxes of free-form ones'
+        // poles, which hold them: those whose box is farther than the nearest found are
+        // passed over. Of feet as near, the first face's.)
+        let bound = |g: usize| {
+            crate::properties::control_box(&self.faces[g].surface).map_or(0.0, |b| {
+                let gap = |x: f64, lo: f64, hi: f64| (lo - x).max(x - hi).max(0.0);
+                Vector::new(gap(p.x, b.min.x, b.max.x), gap(p.y, b.min.y, b.max.y), gap(p.z, b.min.z, b.max.z)).length()
             })
-            .min_by(|a, b| a.0.total_cmp(&b.0));
+        };
+        let mut order: Vec<(f64, usize)> = faces.iter().map(|&g| (bound(g), g)).collect();
+        order.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+        let mut nearest: Option<(f64, usize, Point)> = None;
+        for (gap, g) in order {
+            if nearest.is_some_and(|(d, _, _)| gap > d) {
+                break;
+            }
+            let face = &self.faces[g];
+            let foot = geom::surface_point(&face.surface, geom::uv_of(&face.surface, p));
+            let d = foot.distance(p);
+            if nearest.is_none_or(|(best, h, _)| d < best || (d == best && g < h)) {
+                nearest = Some((d, g, foot));
+            }
+        }
         match nearest {
             Some((_, g, foot)) => (p - foot).dot(self.faces[g].outward_normal(foot)) < 0.0,
             None => false,
