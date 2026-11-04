@@ -779,6 +779,22 @@ fn by_booleans(model: &mut Model, shape: Shape, rolled: Rolled, radius: f64) -> 
     // looser tolerances.)
     let untouched = (super::volume_of(model, cut) - super::volume_of(model, shape)).abs() <= 1e-9 * super::volume_of(model, shape).abs().max(1.0);
     let cut = if untouched { crate::tolerance::with_loosened(true, || boolean::difference_once(model, shape, wedge)).map_err(|e| Error::Failed(format!("cutting the wedge: {e}")))? } else { cut };
+    // (At a convex edge, its shells still open along a face kept, not only along the
+    // wedge's chords that are left out: the lens, sewn on along the contacts, does not
+    // close that, and the pieces sewn would not close (on the public CadQuery scripts, never
+    // once), found only slowly.)
+    if convex && !closed_shells(model, cut) {
+        let kept = keep(model, cut, &chords(model, wedge, &sections));
+        let mut uses: crate::hashing::FastMap<crate::topology::NodeId, usize> = Default::default();
+        for f in model.unique_subshapes(cut, NodeKind::Face) {
+            for e in model.explore(f, NodeKind::Edge) {
+                *uses.entry(e.node).or_default() += 1;
+            }
+        }
+        if kept.iter().any(|&f| model.explore(f, NodeKind::Edge).any(|e| uses.get(&e.node) == Some(&1))) {
+            return Err(Error::Failed("a run-over fillet whose wedge's cut leaves the shell open".into()));
+        }
+    }
     let faces = if convex {
         let lens_solid = solid(model, &lens_wires, "lens")?;
         let (wedge_walls, lens_walls) = (chords(model, wedge, &sections), chords(model, lens_solid, &sections));
