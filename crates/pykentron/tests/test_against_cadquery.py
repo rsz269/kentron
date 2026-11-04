@@ -376,8 +376,30 @@ def corners_of_a_placed_cutter_rounded(cq):
     return cq.Solid.extrudeLinear(face.fillet2D(0.2, corners), cq.Vector(0, 0, 1))
 
 
+def sketch_faces_merged_after_a_rounding(cq):
+    # (A spindle's profile as a sketch builds it: three faces fused side by side, one rounded
+    # at a corner away from the edges it shares with the others. The rounding keeps those
+    # edges, so cleaning the compound merges the three into one face.)
+    V = cq.Vector
+
+    def poly(*pts):
+        return cq.Face.makeFromWires(cq.Wire.makePolygon([V(x, y, 0) for x, y in pts], close=True))
+
+    lower = poly((0, 0), (1.71, 0), (2, 7), (0, 7))
+    upper = poly((0, 9.1), (2.25, 9.1), (1.74, 51), (0, 51))
+    base = poly((0, 7), (6.8, 7), (6.8, 8.5), (2.25, 9.1), (0, 9.1))
+    corner = V(6.8, 8.5, 0)
+    rounded = []
+    for f in cq.Compound.makeCompound([lower, upper]).fuse(base).Faces():
+        at = [v for v in f.Vertices() if (V(v.toTuple()) - corner).Length < 1e-9]
+        rounded.append(f.fillet2D(0.5, at) if at else f)
+    faces = cq.Compound.makeCompound(rounded).clean().Faces()
+    assert len(faces) == 1, f"{len(faces)} faces after cleaning, not one"
+    return cq.Solid.extrudeLinear(faces[0], V(0, 0, 1))
+
+
 CASES = [
-    wire_corner_rounded_between_an_arc_and_a_line,
+    wire_corner_rounded_between_an_arc_and_a_line, sketch_faces_merged_after_a_rounding,
     box, cylinder_along_y, cone, workplane_box, fused_boxes, cut_bores, intersected,
     polyline_prism_xz, polyline_prism_custom_plane, hexagon, face_with_hole, loft,
     rotated_mirrored, revolved, located, euler_location, offset_outline, smoothed_helix_spline,

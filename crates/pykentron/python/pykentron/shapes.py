@@ -1776,12 +1776,15 @@ def _round_corners(wire: Wire, size: float, vertices, corner_edge, curved_corner
     out = []
     for i in range(n):
         if (starts[i] - ends[i]).Length > 1e-9:
-            if edges[i].geomType() == "LINE":
-                out.append(line(i))
-            elif (starts[i] - edges[i].startPoint()).Length > 1e-12 or (ends[i] - edges[i].endPoint()).Length > 1e-12:
-                out.append(_trimmed(edges[i], starts[i], ends[i]))
-            else:
+            # (An edge no corner touches is kept itself, as OCCT's 2D fillets keep it: a
+            # neighbouring face sharing it still does, which a sketch's clean merges along.)
+            untouched = (starts[i] - edges[i].startPoint()).Length <= 1e-12 and (ends[i] - edges[i].endPoint()).Length <= 1e-12
+            if untouched:
                 out.append(edges[i])
+            elif edges[i].geomType() == "LINE":
+                out.append(line(i))
+            else:
+                out.append(_trimmed(edges[i], starts[i], ends[i]))
         if i in inserts:
             out.append(inserts[i])
     return Wire.assembleEdges(out)
