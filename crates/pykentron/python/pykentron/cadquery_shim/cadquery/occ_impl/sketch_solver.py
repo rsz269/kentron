@@ -422,3 +422,10 @@ class SketchConstraintSolver(object):
         ixs = self.ixs
 
         return [x[i1:i2] for i1, i2 in zip(ixs, ixs[1:])], status
+
+
+# (pykentron: the problem solved by kentron, unless PYKENTRON_SOLVER=cadquery; with it,
+# arcs' points as tuples, without numpy.)
+from pykentron.constraint_solvers import sketch_solver as _sketch_solver
+
+SketchConstraintSolver, arc_first, arc_last, arc_point = _sketch_solver(SketchConstraintSolver, arc_first, arc_last, arc_point)

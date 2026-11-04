@@ -30,16 +30,17 @@ dependencies = ["numpy"]
 dynamic = ["version"]
 
 [project.optional-dependencies]
-# What CadQuery's own layers need (pykentron.shim), with CadQuery 2.8's constraints.
+# What CadQuery's own layers need (pykentron.shim), with CadQuery 2.8's constraints. (Its
+# constraint solvers are kentron's: casadi and nlopt only for CadQuery's own, below.)
 cadquery = [
     "pyparsing>=3.0.0",
     "multimethod>=1.11,<2.0",
     "runtype",
     "typing_extensions",
-    "nlopt>=2.9.0,<3.0",
-    "casadi",
     "ezdxf>=1.3.0",
 ]
+# CadQuery's own constraint solvers, used instead of kentron's with PYKENTRON_SOLVER=cadquery.
+cadquery-solvers = ["nlopt>=2.9.0,<3.0", "casadi"]
 dxf = ["ezdxf>=1.3.0"]
 
 [project.scripts]

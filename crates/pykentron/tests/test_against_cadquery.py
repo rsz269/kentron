@@ -496,6 +496,122 @@ def test_gltf_assembly_as_cadquery(tmp_path, suffix):
     assert math.isclose(ours[2], theirs[2], rel_tol=1e-3), (ours[2], theirs[2])
 
 
+
+# Constraint solving: the same CadQuery code (`cq` the module) run on CadQuery (IPOPT through
+# casadi, nlopt's SLSQP) and on pykentron's shim (kentron's solvers) in a process of its own,
+# their solved placements and sketch variables compared. Where constraints leave a part free
+# to turn, IPOPT's choice is compared too: kentron solves as IPOPT steps.
+SOLVES = {
+    "tips_free_to_turn_about_their_axes": """
+iron = cq.Workplane().box(20, 20, 4)
+tip = cq.Workplane().rect(3, 1.2).extrude(9).faces(">Z").workplane().rect(1, 0.6).extrude(2)
+assy = cq.Assembly().add(iron, name="iron")
+for i in range(4):
+    name = f"tip{i}"
+    assy.add(tip, name=name)
+    assy.constrain("iron", cq.Face.makePlane(1, 1, dir=(0, 0, 1)), name, cq.Face.makePlane(1, 1, dir=(0, 0, 1)), "Axis")
+    assy.constrain("iron", cq.Vertex.makeVertex(math.sin(math.pi * i / 2) * 7, math.cos(math.pi * i / 2) * 7, 2), name, tip.faces(">Z").val(), "Point")
+assy.solve()
+""",
+    "lid_mated_on_a_box_by_planes": """
+base = cq.Workplane().box(40, 30, 10).faces(">Z").shell(-2)
+lid = cq.Workplane().box(40, 30, 3).translate((5, -3, 30)).rotate((0, 0, 0), (1, 0, 0), 25)
+assy = cq.Assembly().add(base, name="base").add(lid, name="lid")
+assy.constrain("lid", lid.faces("<Z").val(), "base", base.faces(">Z").val(), "Plane")
+assy.solve()
+""",
+    "parts_pinned_turned_and_slid": """
+plate = cq.Workplane().box(30, 30, 2)
+peg = cq.Workplane().circle(2).extrude(8)
+bar = cq.Workplane().box(20, 3, 3)
+assy = cq.Assembly().add(plate, name="plate").add(peg, name="peg").add(bar, name="bar")
+assy.constrain("plate", "Fixed")
+assy.constrain("peg", peg.faces("<Z").val(), "plate", plate.faces(">Z").val(), "PointInPlane")
+assy.constrain("peg", peg.edges("<Z").val(), "plate", plate.edges("|Z and >X and >Y").val(), "PointOnLine")
+assy.constrain("bar", "FixedRotation", (0, 0, 30))
+assy.constrain("bar@faces@<X", "FixedPoint", (1, 2, 3))
+assy.constrain("peg@faces@>Z", "FixedAxis", (0, 0.2, 1))
+assy.solve()
+""",
+    "sketch_of_arcs_and_lines": """
+s = (
+    cq.Sketch()
+    .arc((0.0, 0.0), (-0.5, 0.5), (0.0, 1.0), "arc1")
+    .arc((0.0, 1.0), (0.5, 1.5), (1.0, 1.0), "arc2")
+    .segment((1.0, 0.0), "segment1")
+    .close("segment2")
+)
+s.constrain("segment2", "Fixed", None)
+s.constrain("segment1", "segment2", "Coincident", None)
+s.constrain("arc2", "segment1", "Coincident", None)
+s.constrain("segment2", "arc1", "Coincident", None)
+s.constrain("arc1", "arc2", "Coincident", None)
+s.constrain("segment1", "segment2", "Angle", 90)
+s.constrain("segment2", "arc1", "Angle", 90)
+s.constrain("arc1", "arc2", "Angle", -90)
+s.constrain("arc2", "segment1", "Angle", 90)
+s.constrain("segment1", "Length", 0.5)
+s.constrain("arc1", "Length", 1.0)
+s.solve()
+""",
+}
+
+_SOLVED = """
+def solved(g):
+    if "assy" in g:
+        out = {}
+        for n, o in g["assy"].objects.items():
+            t = o.loc.wrapped.Transformation()
+            q, v = t.GetRotation(), t.TranslationPart()
+            out[n] = [v.X(), v.Y(), v.Z(), q.W(), q.X(), q.Y(), q.Z()]
+        return {"placements": out, "status": g["assy"]._solve_result["success"]}
+    return {"sketch": [[float(v) for v in e] for e in g["s"]._solve_status["x"]], "status": g["s"]._solve_status["status"]}
+"""
+
+
+def _solve_with_cadquery(code):
+    g = {"cq": cadquery, "math": math}
+    exec(code, g)
+    h = {}
+    exec(_SOLVED, h)
+    return h["solved"](g)
+
+
+def _solve_with_pykentron(code):
+    import json
+    import subprocess
+
+    here = Path(__file__).resolve().parent.parent / "python"
+    program = (
+        "import sys, json, math\n"
+        f"sys.path[:0] = [{str(here / 'pykentron' / 'cadquery_shim')!r}, {str(here)!r}]\n"
+        "import cadquery as cq\n"
+        + code + _SOLVED + "print(json.dumps(solved(globals())))\n"
+    )
+    out = subprocess.run([sys.executable, "-c", program], capture_output=True, text=True, check=True)
+    return json.loads(out.stdout.strip().splitlines()[-1])
+
+
+@parametrize("name", sorted(SOLVES), ids=sorted(SOLVES))
+def test_constraints_solved_as_cadquery(name):
+    code = SOLVES[name]
+    ours, theirs = _solve_with_pykentron(code), _solve_with_cadquery(code)
+    assert ours["status"] == theirs["status"], (ours["status"], theirs["status"])
+    if "placements" in theirs:
+        assert sorted(ours["placements"]) == sorted(theirs["placements"]) or len(ours["placements"]) == len(theirs["placements"])
+        # (Parts named by uuid when unnamed: compared in order of their names' kinds.)
+        for (n1, a), (n2, b) in zip(sorted(ours["placements"].items()), sorted(theirs["placements"].items())):
+            assert all(math.isclose(x, y, abs_tol=1e-6) for x, y in zip(a[:3], b[:3])), (name, n1, a, b)
+            # (q and −q are one rotation.)
+            assert 1 - abs(sum(x * y for x, y in zip(a[3:], b[3:]))) < 1e-9, (name, n1, a, b)
+    else:
+        for a, b in zip(ours["sketch"], theirs["sketch"]):
+            if len(a) == 5:
+                # (An arc's start angle: nlopt builds start it a whole turn apart at times.)
+                turns = round((a[3] - b[3]) / (2 * math.pi))
+                a = a[:3] + [a[3] - 2 * math.pi * turns] + a[4:]
+            assert all(math.isclose(x, y, abs_tol=1e-6) for x, y in zip(a, b)), (name, a, b)
+
 if __name__ == "__main__":
     import traceback
 
@@ -517,5 +633,12 @@ if __name__ == "__main__":
             except Exception as e:
                 failed += 1
                 print(f"FAILED  gltf_assembly{suffix}: {type(e).__name__}: {e}")
-    print(f"{len(CASES) + 2 - failed} passed, {failed} failed")
+    for name in sorted(SOLVES):
+        try:
+            test_constraints_solved_as_cadquery(name)
+            print(f"ok      solved {name}")
+        except Exception as e:
+            failed += 1
+            print(f"FAILED  solved {name}: {type(e).__name__}: {e}")
+    print(f"{len(CASES) + 2 + len(SOLVES) - failed} passed, {failed} failed")
     sys.exit(1 if failed else 0)

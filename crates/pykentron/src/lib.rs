@@ -23,6 +23,7 @@ use kentron::topology::{Model, NodeId, NodeKind, Orientation, Shape, WireId};
 use kentron::{blend, boolean, loft, make, modify, offset, primitives, properties, sweep, validity};
 
 mod cadquery;
+mod constraints;
 mod profile;
 
 type Xyz = (f64, f64, f64);
@@ -1417,6 +1418,8 @@ fn _kentron(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     m.add_function(wrap_pyfunction!(profile::profile, m)?)?;
     m.add_function(wrap_pyfunction!(profile::set_profile, m)?)?;
+    m.add_function(wrap_pyfunction!(constraints::solve_assembly, m)?)?;
+    m.add_function(wrap_pyfunction!(constraints::solve_sketch, m)?)?;
     m.add_class::<Handle>()?;
     m.add_class::<Mesh>()?;
     m.add_function(wrap_pyfunction!(is_closed, m)?)?;

@@ -44,9 +44,11 @@ VENDORED = [
 
 # Changes to the copies, `(module, CadQuery's text, replacement)`: what the import would
 # otherwise load or build up front, deferred to first use (numpy for hulls and the sketch
-# solver, nlopt, pyparsing and the selector grammars, which string selectors no longer need:
-# they are read by pykentron.selector_syntax). Half the shim's import. Each text must occur
-# once, or vendoring stops.
+# solver, nlopt, casadi, pyparsing and the selector grammars, which string selectors no longer
+# need: they are read by pykentron.selector_syntax), half the shim's import; and the two
+# constraint solvers' classes handed to pykentron.constraint_solvers, which solves their
+# problems with kentron (no casadi, nlopt or numpy) unless PYKENTRON_SOLVER=cadquery. Each
+# text must occur once, or vendoring stops.
 PATCHES = [
     (
         "hull.py",
@@ -100,6 +102,42 @@ PATCHES = [
         "        import importlib\n\n"
         "        return getattr(importlib.import_module(self._name), attr)\n\n\n"
         "nlopt = _OnFirstUse(\"nlopt\")\n",
+    ),
+    (
+        "occ_impl/solver.py",
+        "from typing import (\n",
+        "from __future__ import annotations  # (pykentron: annotations not evaluated, so casadi's\n"
+        "# names in them do not import it.)\n\n"
+        "from typing import (\n",
+    ),
+    (
+        "occ_impl/solver.py",
+        "import casadi as ca\n",
+        "class _OnFirstUse:\n"
+        "    \"\"\"(pykentron) A module imported when one of its names is first read.\"\"\"\n\n"
+        "    def __init__(self, name):\n"
+        "        self._name = name\n\n"
+        "    def __getattr__(self, attr):\n"
+        "        import importlib\n\n"
+        "        return getattr(importlib.import_module(self._name), attr)\n\n\n"
+        "ca = _OnFirstUse(\"casadi\")\n",
+    ),
+    (
+        "occ_impl/solver.py",
+        "        return locs, result\n",
+        "        return locs, result\n\n\n"
+        "# (pykentron: the problem solved by kentron, unless PYKENTRON_SOLVER=cadquery.)\n"
+        "from pykentron.constraint_solvers import assembly_solver as _assembly_solver\n\n"
+        "ConstraintSolver = _assembly_solver(ConstraintSolver)\n",
+    ),
+    (
+        "occ_impl/sketch_solver.py",
+        "        return [x[i1:i2] for i1, i2 in zip(ixs, ixs[1:])], status\n",
+        "        return [x[i1:i2] for i1, i2 in zip(ixs, ixs[1:])], status\n\n\n"
+        "# (pykentron: the problem solved by kentron, unless PYKENTRON_SOLVER=cadquery; with it,\n"
+        "# arcs' points as tuples, without numpy.)\n"
+        "from pykentron.constraint_solvers import sketch_solver as _sketch_solver\n\n"
+        "SketchConstraintSolver, arc_first, arc_last, arc_point = _sketch_solver(SketchConstraintSolver, arc_first, arc_last, arc_point)\n",
     ),
     (
         "selectors.py",
@@ -197,7 +235,7 @@ def main() -> int:
         (target / "VENDORED.txt").write_text(
             f"Copied unchanged from CadQuery {RELEASE} ({REPOSITORY}), Apache License 2.0 "
             "(LICENSE.CadQuery), by crates/pykentron/scripts/vendor_cadquery.py:\n" + "".join(f"  {prefix}{r}\n" for r in files)
-            + (f"Patched there (imports deferred to first use): {', '.join(patched)}.\n" if patched else "")
+            + (f"Patched there (imports deferred to first use; the constraint solvers kentron's): {', '.join(patched)}.\n" if patched else "")
         )
     print(f"copied {len(VENDORED) + len(VENDORED_EXPORTERS)} modules from CadQuery {RELEASE}")
     return 0

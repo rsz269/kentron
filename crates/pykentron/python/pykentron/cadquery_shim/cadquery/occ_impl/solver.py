@@ -1,3 +1,6 @@
+from __future__ import annotations  # (pykentron: annotations not evaluated, so casadi's
+# names in them do not import it.)
+
 from typing import (
     List,
     Tuple,
@@ -14,7 +17,19 @@ from typing import (
 
 from math import radians, pi
 
-import casadi as ca
+class _OnFirstUse:
+    """(pykentron) A module imported when one of its names is first read."""
+
+    def __init__(self, name):
+        self._name = name
+
+    def __getattr__(self, attr):
+        import importlib
+
+        return getattr(importlib.import_module(self._name), attr)
+
+
+ca = _OnFirstUse("casadi")
 
 from OCP.gp import (
     gp_Vec,
@@ -729,3 +744,9 @@ class ConstraintSolver(object):
         ]
 
         return locs, result
+
+
+# (pykentron: the problem solved by kentron, unless PYKENTRON_SOLVER=cadquery.)
+from pykentron.constraint_solvers import assembly_solver as _assembly_solver
+
+ConstraintSolver = _assembly_solver(ConstraintSolver)
