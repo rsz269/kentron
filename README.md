@@ -28,6 +28,9 @@ it is kentron's own code: OCCT is the reference to match, not a dependency.
 - **[`crates/pykentron`](crates/pykentron)**: Python bindings with a CadQuery-compatible API,
   [on PyPI](https://pypi.org/project/pykentron/). CadQuery scripts run on kentron by
   importing `pykentron` in place of `cadquery`, or unchanged with `pykentron-run`.
+  Assembly and sketch constraints are solved by kentron's own solvers, which reach the same
+  solutions as CadQuery's (casadi's IPOPT, nlopt's SLSQP) 20–50× faster and need neither
+  library.
 - **[`crates/occt-tests`](crates/occt-tests)**: OCCT's own tests, converted to run against kentron.
 
 ## Aims and scope
@@ -56,7 +59,7 @@ it honest. Every change is checked against the test sources below before it is c
 and no change may make a passing test fail.
 
 <!-- effort -->
-So far (2026-09-25 to 2026-11-04): about 304 hours of the agent's active work, 21.2 million
+So far (2026-09-25 to 2026-11-04): about 305 hours of the agent's active work, 21.3 million
 tokens written by it, and 11.9 billion tokens processed in all (nearly all of them its
 conversation's context, read back from the cache).
 <!-- /effort -->
@@ -92,6 +95,10 @@ About 12,800 tests run (with OCCT's dataset). About 1,500 of them are known gaps
 expected failures ([`crates/occt-tests/expected_failures.txt`](crates/occt-tests/expected_failures.txt) for OCCT's scripts): they pass
 while they fail, so `cargo test` is green, and fail once they pass, so a fix is noticed
 as surely as a regression.
+
+kentron also has 411 unit tests of its own, written during its development, and pykentron
+55 cases of its own that it builds as CadQuery does
+([`crates/pykentron/tests/test_against_cadquery.py`](crates/pykentron/tests/test_against_cadquery.py)).
 
 ## Performance
 
