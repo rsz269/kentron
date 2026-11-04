@@ -688,8 +688,21 @@ fn numeric_ray_hits(surface: &Surface, origin: Point, direction: Vector, bbox: &
     }
     let f = |t: f64| signed_distance(surface, origin + direction * t);
     let n = 400;
-    let ts: Vec<f64> = (0..=n).map(|i| t0 + (t1 - t0) * i as f64 / n as f64).collect();
-    let fs: Vec<f64> = ts.iter().map(|&t| f(t)).collect();
+    // (Sampled along the ray, past the samples that cannot be on the surface: the distance
+    // shrinks by no more than the way along the ray, half of it kept for a foot found short
+    // of the nearest.)
+    let reach = (t1 - t0) / n as f64 * direction.length();
+    let (mut ts, mut fs) = (Vec::new(), Vec::new());
+    let mut k = 0;
+    while k <= n {
+        let t = t0 + (t1 - t0) * k as f64 / n as f64;
+        let d = f(t);
+        ts.push(t);
+        fs.push(d);
+        let clear = if reach > 0.0 { (0.5 * d.abs() / reach).floor() } else { 0.0 };
+        k = if k == n { n + 1 } else { (k + (clear.min(n as f64) as usize).max(1)).min(n) };
+    }
+    let n = ts.len() - 1;
     let mut hits = Vec::new();
     for i in 0..n {
         if fs[i] * fs[i + 1] < 0.0 {
