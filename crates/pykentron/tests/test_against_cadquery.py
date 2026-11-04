@@ -499,8 +499,10 @@ def test_gltf_assembly_as_cadquery(tmp_path, suffix):
 
 # Constraint solving: the same CadQuery code (`cq` the module) run on CadQuery (IPOPT through
 # casadi, nlopt's SLSQP) and on pykentron's shim (kentron's solvers) in a process of its own,
-# their solved placements and sketch variables compared. Where constraints leave a part free
-# to turn, IPOPT's choice is compared too: kentron solves as IPOPT steps.
+# their solved placements and sketch variables compared. Where constraints leave a part (or a
+# sketch) free to move, CadQuery's choice is compared too: kentron solves as IPOPT and nlopt
+# step. (Sketches within 1e-6: CadQuery's finite-difference gradients move its own answer
+# that much when its start moves by 1e-12.)
 SOLVES = {
     "tips_free_to_turn_about_their_axes": """
 iron = cq.Workplane().box(20, 20, 4)
@@ -532,6 +534,21 @@ assy.constrain("bar", "FixedRotation", (0, 0, 30))
 assy.constrain("bar@faces@<X", "FixedPoint", (1, 2, 3))
 assy.constrain("peg@faces@>Z", "FixedAxis", (0, 0.2, 1))
 assy.solve()
+""",
+    "sketch_left_free_to_turn": """
+s = (
+    cq.Sketch()
+    .arc((0.0, 0.0), (-0.5, 0.5), (0.0, 1.0), "arc1")
+    .segment((1.0, 0.0), "segment1")
+    .close("segment2")
+)
+s.constrain("segment2", "Fixed", None)
+s.constrain("arc1", "ArcAngle", 60)
+s.constrain("arc1", "Radius", 1.0)
+s.constrain("segment2", "arc1", "Coincident", None)
+s.constrain("arc1", "segment1", "Coincident", None)
+s.constrain("segment1", "segment2", "Coincident", None)
+s.solve()
 """,
     "sketch_of_arcs_and_lines": """
 s = (

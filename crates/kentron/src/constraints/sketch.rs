@@ -1,12 +1,14 @@
 //! Sketch constraints: the lines and arcs of a planar sketch moved to best satisfy
 //! constraints on them (CadQuery's `Sketch.solve`).
 //!
-//! The problem is CadQuery's, solved by least squares instead of its SLSQP solver (nlopt):
+//! The problem is CadQuery's, solved by its own method, nlopt's SLSQP, ported step for step
+//! ([`solve`]; or by least squares, [`solve_by_least_squares`]):
 //! a line's variables are its start and end, (x₁, y₁, x₂, y₂); an arc's its centre, radius,
 //! start angle and sweep, (x, y, r, a, da), its point at angle t being
 //! (x + r sin t, y + r cos t) (angles from +y towards +x, as CadQuery has them), the radius
 //! kept at or above 0. Each constraint's residual is CadQuery's cost, their squares summed
-//! and made least from where the sketch's edges are.
+//! and made least from where the sketch's edges are (with CadQuery's finite-difference
+//! gradient for SLSQP, whose steps depend on it).
 
 use super::dual::Dual;
 use super::least_squares::{self, Evaluation, Settings, Stop};
@@ -77,14 +79,34 @@ pub struct Solution {
     pub evaluations: usize,
     /// Whether the minimization converged (not stopped for taking too many steps).
     pub converged: bool,
+    /// nlopt's result code for how it ended (4: XTOL_REACHED, as CadQuery's solves end;
+    /// negative: a failure nlopt raises as an error).
+    pub status: i32,
 }
 
 /// Two entities' variables (five each, at most).
 const N: usize = 10;
 type D = Dual<N>;
 
-/// `entities` moved to best satisfy `constraints`.
+/// `entities` moved to best satisfy `constraints`, as CadQuery's solver moves them: nlopt's
+/// SLSQP ([`super::slsqp`], step for step) on CadQuery's objective and finite-difference
+/// gradient ([`super::sketch_costs`]), with CadQuery's settings (no tolerance on the
+/// objective's change, 1e-9 relative and 1e-12 absolute on the variables'), the radii kept at
+/// or above 0.
 pub fn solve(entities: &[Entity], constraints: &[Constraint]) -> Result<Solution> {
+    let (first, start, lower) = layout(entities);
+    check(entities, constraints)?;
+    let upper = vec![f64::INFINITY; start.len()];
+    let objective = super::sketch_costs::Objective { entities, constraints, first: &first, start: &start };
+    let stop = super::slsqp::Stopping { ftol_rel: 0.0, ftol_abs: 0.0, xtol_rel: 1e-9, xtol_abs: vec![1e-12; start.len()], max_evaluations: 0 };
+    let out = super::slsqp::minimize(&start, &lower, &upper, |x, g| objective.evaluate(x, g), &stop);
+    let status = out.result as i32;
+    let solved = entities.iter().zip(&first).map(|(e, &k)| e.from_variables(&out.x[k..])).collect();
+    Ok(Solution { entities: solved, cost: out.minimum, steps: out.evaluations, evaluations: out.evaluations, converged: status > 0, status })
+}
+
+/// Each entity's first variable, all the variables, and their lower bounds (an arc's radius 0).
+fn layout(entities: &[Entity]) -> (Vec<usize>, Vec<f64>, Vec<f64>) {
     let mut first = Vec::with_capacity(entities.len());
     let mut start = Vec::new();
     for e in entities {
@@ -92,13 +114,17 @@ pub fn solve(entities: &[Entity], constraints: &[Constraint]) -> Result<Solution
         start.extend(e.variables());
     }
     let mut lower = vec![f64::NEG_INFINITY; start.len()];
-    let upper = vec![f64::INFINITY; start.len()];
     for (e, &k) in entities.iter().zip(&first) {
         if e.is_arc() {
             lower[k + 2] = 0.0;
         }
     }
-    // (Points at no fraction are arcs' centres: a line has none.)
+    (first, start, lower)
+}
+
+/// Constraints CadQuery's costs cannot take: a point on a line without a fraction along it,
+/// radii and sweeps of lines, a line's orientation of an arc.
+fn check(entities: &[Entity], constraints: &[Constraint]) -> Result<()> {
     for c in constraints {
         let lines_without_fraction = match *c {
             Constraint::FixedPoint(e, None) => !entities[e].is_arc(),
@@ -117,6 +143,15 @@ pub fn solve(entities: &[Entity], constraints: &[Constraint]) -> Result<Solution
             return Err(Error::InvalidInput("a constraint on the wrong kind of edge".into()));
         }
     }
+    Ok(())
+}
+
+/// [`solve`] by least squares instead (Levenberg–Marquardt with exact derivatives): the same
+/// where the constraints determine the sketch, often elsewhere where they leave it free.
+pub fn solve_by_least_squares(entities: &[Entity], constraints: &[Constraint]) -> Result<Solution> {
+    let (first, start, lower) = layout(entities);
+    let upper = vec![f64::INFINITY; start.len()];
+    check(entities, constraints)?;
     let evaluate = |x: &[f64]| {
         let mut residuals = Vec::new();
         let mut rows = Vec::new();
@@ -195,7 +230,8 @@ pub fn solve(entities: &[Entity], constraints: &[Constraint]) -> Result<Solution
     let settings = Settings { max_steps: 10_000, step_relative: 1e-13, step_absolute: 1e-15, cost: 0.0, gradient: 1e-24 };
     let out = least_squares::minimize(&start, &lower, &upper, evaluate, settings);
     let solved = entities.iter().zip(&first).map(|(e, &k)| e.from_variables(&out.variables[k..])).collect();
-    Ok(Solution { entities: solved, cost: out.cost, steps: out.steps, evaluations: out.evaluations, converged: out.stop != Stop::Steps })
+    let converged = out.stop != Stop::Steps;
+    Ok(Solution { entities: solved, cost: out.cost, steps: out.steps, evaluations: out.evaluations, converged, status: if converged { 4 } else { 5 } })
 }
 
 /// An entity's point at fraction `at` of its parameter range (`None`: an arc's centre).
@@ -269,18 +305,21 @@ mod tests {
             Constraint::Length(1, 2.0),
             Constraint::Length(2, 2.0),
         ];
-        let s = solve(&entities, &constraints).unwrap();
-        assert!(s.converged && s.cost < 1e-20, "{s:?}");
-        let Entity::Line { end, .. } = s.entities[1] else { panic!() };
-        assert!((end[0] - 1.0).abs() < 1e-9 && (end[1] - 3f64.sqrt()).abs() < 1e-9, "{:?}", s.entities);
+        // (SLSQP, as CadQuery's, ends within about 1e-9; least squares closer.)
+        for (s, within) in [(solve(&entities, &constraints).unwrap(), 1e-8), (solve_by_least_squares(&entities, &constraints).unwrap(), 1e-12)] {
+            assert!(s.converged && s.status == 4 && s.cost < within * within, "{s:?}");
+            let Entity::Line { end, .. } = s.entities[1] else { panic!() };
+            assert!((end[0] - 1.0).abs() < within && (end[1] - 3f64.sqrt()).abs() < within, "{:?}", s.entities);
+        }
     }
 
     /// An arc's radius set and its centre held: the radius changes, the centre stays.
     #[test]
     fn an_arc_given_its_radius() {
         let entities = [Entity::Arc { centre: [1.0, 2.0], radius: 3.0, start: 0.0, sweep: PI / 2.0 }];
-        let s = solve(&entities, &[Constraint::FixedPoint(0, None), Constraint::Radius(0, 5.0)]).unwrap();
-        let Entity::Arc { centre, radius, .. } = s.entities[0] else { panic!() };
-        assert!((radius - 5.0).abs() < 1e-12 && (centre[0] - 1.0).abs() < 1e-12 && (centre[1] - 2.0).abs() < 1e-12, "{s:?}");
+        for s in [solve(&entities, &[Constraint::FixedPoint(0, None), Constraint::Radius(0, 5.0)]).unwrap(), solve_by_least_squares(&entities, &[Constraint::FixedPoint(0, None), Constraint::Radius(0, 5.0)]).unwrap()] {
+            let Entity::Arc { centre, radius, .. } = s.entities[0] else { panic!() };
+            assert!((radius - 5.0).abs() < 1e-8 && (centre[0] - 1.0).abs() < 1e-8 && (centre[1] - 2.0).abs() < 1e-8, "{s:?}");
+        }
     }
 }

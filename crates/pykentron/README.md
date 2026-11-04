@@ -65,11 +65,10 @@ The in-place build installs the extension by renaming, so interpreters that have
 keep running; put `crates/pykentron/python` on `sys.path` to use it. The CadQuery layers need
 `pyparsing`, `multimethod`, `runtype`, `typing_extensions` and `numpy`, as CadQuery does: the
 `cadquery` extra. CadQuery's assembly and sketch constraints are solved by kentron, without
-casadi or nlopt: assemblies by the Newton steps CadQuery's IPOPT takes, so that parts the
-constraints leave free to move end where CadQuery's do; sketches by least squares, as CadQuery's
-where the constraints determine them (where they leave them free, a sketch may settle elsewhere
-than CadQuery's does). `PYKENTRON_SOLVER=cadquery` uses CadQuery's own solvers instead (the
-`cadquery-solvers` extra).
+casadi or nlopt, step for step as CadQuery's solvers take them (IPOPT's Newton steps for
+assemblies, nlopt's SLSQP on CadQuery's own costs for sketches), so that parts and sketches the
+constraints leave free to move end where CadQuery's do. `PYKENTRON_SOLVER=cadquery` uses
+CadQuery's own solvers instead (the `cadquery-solvers` extra).
 
 ## Memory and speed
 

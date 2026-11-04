@@ -81,9 +81,10 @@ pub fn solve_assembly(starts: Vec<(Triple, Triple)>, locked: Vec<bool>, constrai
 /// A sketch's edges moved to satisfy constraints. `entities`: ("LINE", [x₁, y₁, x₂, y₂]) or
 /// ("CIRCLE", [x, y, r, a, da]); `constraints`: (kind, entity, second entity or None,
 /// parameters) as CadQuery's sketch takes them (angles in radians; a missing fraction None).
+/// Solved as CadQuery's nlopt solves them; with the report, nlopt's result code.
 #[pyfunction]
 #[allow(clippy::type_complexity)]
-pub fn solve_sketch(entities: Vec<(String, Vec<f64>)>, constraints: Vec<(String, usize, Option<usize>, Vec<Option<f64>>)>) -> PyResult<(Vec<Vec<f64>>, Report)> {
+pub fn solve_sketch(entities: Vec<(String, Vec<f64>)>, constraints: Vec<(String, usize, Option<usize>, Vec<Option<f64>>)>) -> PyResult<(Vec<Vec<f64>>, Report, i32)> {
     let mut parsed_entities = Vec::with_capacity(entities.len());
     for (geom, x) in &entities {
         parsed_entities.push(match (geom.as_str(), x.len()) {
@@ -122,5 +123,5 @@ pub fn solve_sketch(entities: Vec<(String, Vec<f64>)>, constraints: Vec<(String,
             sketch::Entity::Arc { centre, radius, start, sweep } => vec![centre[0], centre[1], radius, start, sweep],
         })
         .collect();
-    Ok((out, (s.cost, s.steps, s.evaluations, s.converged)))
+    Ok((out, (s.cost, s.steps, s.evaluations, s.converged), s.status))
 }

@@ -4,8 +4,9 @@ CadQuery states its constraint problems in `cadquery.occ_impl.solver` (assemblie
 IPOPT through casadi) and `cadquery.occ_impl.sketch_solver` (sketches, solved by nlopt's
 SLSQP). The shim's copies of those modules end by handing their solver classes to
 `assembly_solver` and `sketch_solver` here, which put in their place classes taking the same
-arguments and giving the same kind of result, the problems solved by kentron (least squares,
-with exact derivatives) without casadi, nlopt or numpy.
+arguments and giving the same kind of result, the problems solved by kentron as CadQuery's
+solvers solve them (IPOPT's Newton steps for assemblies, nlopt's SLSQP for sketches), without
+casadi, nlopt or numpy.
 
 `PYKENTRON_SOLVER=cadquery` keeps CadQuery's own solvers (casadi and nlopt then needed), to
 compare the two on the same geometry.
@@ -119,6 +120,10 @@ def assembly_solver(original):
     return ConstraintSolver
 
 
+class RoundoffLimited(Exception):
+    """nlopt's RoundoffLimited: the sketch solver stopped where rounding kept it from going on."""
+
+
 def _sketch_params(kind, val):
     if kind in ("Fixed", "Coincident"):
         return []
@@ -158,7 +163,7 @@ def sketch_solver(original, arc_first, arc_last, arc_point):
 
     class SketchConstraintSolver:
         """CadQuery's sketch constraint problem (`cadquery.occ_impl.sketch_solver`), solved by
-        kentron: the lines' and arcs' variables making the constraints' costs least."""
+        kentron's port of nlopt's SLSQP on CadQuery's objective and finite-difference gradient."""
 
         def __init__(self, entities, constraints, geoms):
             self.entities = list(entities)
@@ -175,13 +180,20 @@ def sketch_solver(original, arc_first, arc_last, arc_point):
 
             entities = [(g, [float(v) for v in e]) for g, e in zip(self.geoms, self.entities)]
             constraints = [(kind, e1, e2, _sketch_params(kind, val)) for (e1, e2), kind, val in self.constraints]
-            x, (cost, steps, evaluations, converged) = _kentron.solve_sketch(entities, constraints)
+            x, (cost, steps, evaluations, converged), code = _kentron.solve_sketch(entities, constraints)
+            # (Where nlopt's optimize raises, CadQuery's solve does: so does this.)
+            if code == -4:
+                raise RoundoffLimited("nlopt roundoff-limited")
+            if code == -2:
+                raise ValueError("nlopt invalid argument")
+            if code < 0:
+                raise RuntimeError("nlopt failure")
             status = {
                 "entities": self.entities,
                 "cost": cost,
                 "iters": evaluations,
-                # (nlopt's codes: 4 XTOL_REACHED, where CadQuery's solves end; 5 MAXEVAL_REACHED.)
-                "status": 4 if converged else 5,
+                # (nlopt's result code: 4 XTOL_REACHED, where CadQuery's solves end.)
+                "status": code,
                 "solver": "kentron",
             }
             return [tuple(v) for v in x], status
