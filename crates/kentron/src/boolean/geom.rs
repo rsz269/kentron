@@ -72,8 +72,9 @@ pub(super) fn signed_distance_with_gradient(surface: &Surface, p: Point) -> Opti
         Surface::Revolution(_) | Surface::Extrusion(_) => {
             // Along the normal at the foot point, which is the gradient there.
             let uv = uv_of(surface, p);
-            let n = normal_at(surface, uv);
-            ((p - surface_point(surface, uv)).dot(n), n)
+            let (foot, su, sv) = surface.d1(uv[0], uv[1]);
+            let n = unit_normal(su, sv);
+            ((p - foot).dot(n), n)
         }
         _ => return None,
     })
@@ -119,7 +120,8 @@ pub(super) fn signed_distance(surface: &Surface, p: Point) -> f64 {
             // surface. (Not at a surface of revolution's pole, where the distance changes sign
             // through the axis.)
             let uv = uv_of(surface, p);
-            let (r, n) = (p - surface_point(surface, uv), normal_at(surface, uv));
+            let (foot, su, sv) = surface.d1(uv[0], uv[1]);
+            let (r, n) = (p - foot, unit_normal(su, sv));
             if n.length() > 0.5 || matches!(surface, Surface::Revolution(_)) { r.dot(n) } else { r.length() }
         }
         other if freeform(other) => {

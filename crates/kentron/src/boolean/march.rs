@@ -617,6 +617,21 @@ fn seeds(base: &Surface, other: &Surface, range: Range, nu: usize, nv: usize) ->
         if !changes && near > 1.5 * radius + geom::LOOSE_ON_TOL {
             continue;
         }
+        // (Nor where the distance is smooth across the block: surfaces nearly parallel, close
+        // without meeting, are nearer than the block is wide. Across a block over which the
+        // distance is near enough quadratic, its departure from the corners' bilinear
+        // interpolation is greatest at the middle or the middles of the sides: all nine of
+        // one sign, farther from 0 than twice that, it has none.)
+        if !changes && ib - ia >= 2 && jb - ja >= 2 {
+            let mids = [(ic, ja), (ib, jc), (ic, jb), (ia, jc)].map(|(i, j)| node(i, j).0);
+            let d = values.iter().map(|(d, _)| *d).collect::<Vec<f64>>();
+            let interpolated = [0.5 * (d[0] + d[1]), 0.5 * (d[1] + d[2]), 0.5 * (d[2] + d[3]), 0.5 * (d[3] + d[0])];
+            let departure = mids.iter().zip(interpolated).map(|(m, i)| (m - i).abs()).fold((dc - 0.25 * (d[0] + d[1] + d[2] + d[3])).abs(), f64::max);
+            let nearest = mids.iter().map(|m| m.abs()).fold(near, f64::min);
+            if mids.iter().all(|&m| (m >= 0.0) == sign) && nearest > 2.0 * departure + geom::LOOSE_ON_TOL {
+                continue;
+            }
+        }
         if ib - ia > 1 || jb - ja > 1 {
             // Halved along the longer side (in cells).
             if ib - ia >= jb - ja {

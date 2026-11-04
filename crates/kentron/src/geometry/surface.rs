@@ -717,17 +717,22 @@ impl ExtrusionSurface {
                 let (e1, e2) = scan.across;
                 let (px, py) = ((p - Point::ORIGIN).dot(e1), (p - Point::ORIGIN).dot(e2));
                 let (i, _) = scan.xy.iter().enumerate().map(|(i, &(x, y))| (i, (x - px) * (x - px) + (y - py) * (y - py))).min_by(|x, y| x.1.total_cmp(&y.1)).expect("samples");
-                // (Its gap as the steps measure it.)
-                (i, gap(a + step * i as f64))
+                // (Its gap as the steps measure it: at their first point.)
+                (i, None)
             }
-            None => (0..=n).map(|i| (i, gap(a + step * i as f64))).min_by(|x, y| x.1.total_cmp(&y.1)).expect("samples"),
+            None => (0..=n).map(|i| (i, gap(a + step * i as f64))).min_by(|x, y| x.1.total_cmp(&y.1)).map(|(i, g)| (i, Some(g))).expect("samples"),
         };
         let start = a + step * i as f64;
         let mut u = start;
         let (lo, hi) = (u - step, u + step);
+        // (The gap at the last point the steps measured, and where.)
+        let mut measured = (f64::NAN, f64::INFINITY);
+        let mut scanned = scanned;
         for _ in 0..30 {
             let (c, d1, d2) = self.basis.d2(u);
             let (w, w1, w2) = (flat(c - p), flat(d1), flat(d2));
+            measured = (u, w.length_squared());
+            scanned.get_or_insert(measured.1);
             let (g1, g2) = (w.dot(w1), w1.dot(w1) + w.dot(w2));
             if g2 <= 0.0 {
                 break;
@@ -739,7 +744,9 @@ impl ExtrusionSurface {
             }
             u = next;
         }
-        if gap(u) > scanned {
+        let scanned = scanned.unwrap_or_else(|| gap(start));
+        let at_u = if (measured.0 - u).abs() <= 1e-15 * (1.0 + u.abs()) { measured.1 } else { gap(u) };
+        if at_u > scanned {
             u = start;
         }
         if let Some(period) = self.basis.period() {
@@ -875,12 +882,16 @@ impl RevolutionSurface {
         let mut v = a + step * i as f64;
         let (lo, hi) = (v - step, v + step);
         let mut converged = false;
+        // (The gap at the last point Newton measured, and where: that of its end, once it
+        // stops moving.)
+        let mut measured = (f64::NAN, f64::INFINITY);
         for _ in 0..30 {
             let (c, d1, d2) = self.basis.d2(v);
             let d = c - o;
             let h = d.dot(z);
             let radial = d - z * h;
             let r = radial.length().max(1e-300);
+            measured = (v, (radial.length() - rp).powi(2) + (h - hp).powi(2));
             let (h1, h2) = (d1.dot(z), d2.dot(z));
             let (rad1, rad2) = (d1 - z * h1, d2 - z * h2);
             let r1 = radial.dot(rad1) / r;
@@ -902,8 +913,9 @@ impl RevolutionSurface {
         // Newton may stall (at the axis, where the meridian's radius has a kink): keep the
         // best of it, the scan and a golden-section search around the scan's best.
         let scan_best = a + step * i as f64;
-        if gap(v) > scanned {
-            v = scan_best;
+        let mut at_v = if (measured.0 - v).abs() <= 1e-15 * (1.0 + v.abs()) { measured.1 } else { gap(v) };
+        if at_v > scanned {
+            (v, at_v) = (scan_best, scanned);
         }
         let (mut x, mut y) = ((scan_best - step).max(a.min(b)), (scan_best + step).min(a.max(b)));
         let ratio = 0.618_033_988_749_895;
@@ -915,8 +927,10 @@ impl RevolutionSurface {
                 x = p1;
             }
         }
+        // (Converged, the bracket is the scan's best, unless cut by an end of the range.)
         let golden = 0.5 * (x + y);
-        if gap(golden) < gap(v) {
+        let at_golden = if converged && golden == scan_best { scanned } else { gap(golden) };
+        if at_golden < at_v {
             v = golden;
         }
         let c = self.basis.point(v) - o;
