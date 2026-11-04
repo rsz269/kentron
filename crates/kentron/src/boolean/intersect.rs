@@ -2105,6 +2105,24 @@ fn sliced(base: &Face, other: &Face, crossings: &[Point]) -> Vec<Section> {
             return out;
         }
     }
+    // (On a torus (a surface of revolution of a circle) met by a plane, a cylinder or a cone,
+    // as many nodes as make the cells a two-hundredth of the smaller face across, if fewer:
+    // the sections there are smooth, and a far finer grid, as the whole surface's is on a
+    // small face, takes long to search.)
+    let (nu, nv) = match (s, q) {
+        (Surface::Revolution(r), Surface::Plane(_) | Surface::Cylinder(_) | Surface::Cone(_)) if matches!(r.basis(), Curve::Circle(_)) => {
+            let size = base.extent.0.distance(base.extent.1).min(other.extent.0.distance(other.extent.1));
+            let cell = size / 200.0;
+            let length = |at: &dyn Fn(f64) -> Point| (0..16).map(|k| at(k as f64 / 16.0).distance(at((k + 1) as f64 / 16.0))).sum::<f64>();
+            let (um, vm) = (0.5 * (u0 + u1), 0.5 * (v0 + v1));
+            let along_u = length(&|x| s.point(u0 + (u1 - u0) * x, vm));
+            let along_v = length(&|x| s.point(um, v0 + (v1 - v0) * x));
+            let count = |l: f64, n: usize| if cell > 0.0 { ((l / cell).ceil() as usize).clamp(16, n) } else { n };
+            (count(along_u, nu), count(along_v, nv))
+        }
+        _ => (nu, nv),
+    };
+    let coarse = (nu, nv) != grid_size(s);
     // Along the grid, each foot point on a free-form other surface starts the next search.
     let last_foot = std::cell::Cell::new(None);
     let f = |u: f64, v: f64| {
@@ -2347,8 +2365,9 @@ fn sliced(base: &Face, other: &Face, crossings: &[Point]) -> Vec<Section> {
             // the other face. The factor is tuned on the tests: finer, a section running along
             // an edge two faces share moves across it, where telling which face it lies in
             // is ill-conditioned.)
-            // (On a free-form base, whose grid follows its poles and may be coarse.)
-            if geom::freeform(s) {
+            // (On a free-form base, whose grid follows its poles and may be coarse, or a torus's
+            // made coarser.)
+            if geom::freeform(s) || coarse {
                 traced.uv = traced.densified(closed, 3e-4 * other.extent.0.distance(other.extent.1));
             }
             let points: Vec<Point> = traced.uv.iter().map(|&(u, v)| s.point(u, v)).collect();
