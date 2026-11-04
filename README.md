@@ -167,6 +167,9 @@ kentron and pykentron are dual-licensed under the [MIT](LICENSE-MIT) and
 code they come from:
 - [`crates/occt-tests`](crates/occt-tests), translated from OCCT's and BRL-CAD's tests: LGPL-2.1 (OCCT's with the
   Open CASCADE exception). Nothing else depends on it.
+- kentron's SLSQP optimizer ([`crates/kentron/src/constraints/slsqp.rs`](crates/kentron/src/constraints/slsqp.rs),
+  which solves CadQuery's sketch constraints), translated line by line from NLopt's:
+  BSD-3-Clause, and MIT for NLopt's stopping tests ([`LICENSE-SLSQP`](LICENSE-SLSQP)).
 - The CadQuery code copied into pykentron
   ([`crates/pykentron/python/pykentron/cadquery_shim/cadquery`](crates/pykentron/python/pykentron/cadquery_shim/cadquery) and
   [`crates/pykentron/python/pykentron/occ_impl/exporters`](crates/pykentron/python/pykentron/occ_impl/exporters), each with its

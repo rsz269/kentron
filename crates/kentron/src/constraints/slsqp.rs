@@ -1,3 +1,16 @@
+// A translation of NLopt's SLSQP (src/algs/slsqp/slsqp.c) and stopping tests
+// (src/util/stop.c), NLopt 2.11.0. Their notices, which apply to this file:
+//
+// Copyright (c) 1988 Dieter Kraft
+// Copyright (c) 1994 Association for Computing Machinery
+// Copyright (c) 2001, 2002 Enthought, Inc. All rights reserved.
+// Copyright (c) 2003-2009 SciPy Developers. All rights reserved.
+// Copyright (c) 2010 Massachusetts Institute of Technology. All rights reserved.
+// Distributed under the BSD-3-Clause licence (conditions and disclaimer in LICENSE-SLSQP).
+//
+// Copyright (c) 2007-2014 Massachusetts Institute of Technology (the stopping tests).
+// Distributed under the MIT licence (in LICENSE-SLSQP).
+
 //! Sequential least squares programming (SLSQP): the minimum of an objective with a gradient,
 //! within lower and upper bounds on each variable, taken step by step exactly as nlopt 2.11.0's
 //! `NLOPT_LD_SLSQP` takes it, so that where the minimum is not unique (a sketch whose
