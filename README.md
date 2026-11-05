@@ -29,8 +29,9 @@ it is kentron's own code: OCCT is the reference to match, not a dependency.
   [on PyPI](https://pypi.org/project/pykentron/). CadQuery scripts run on kentron by
   importing `pykentron` in place of `cadquery`, or unchanged with `pykentron-run`.
   Assembly and sketch constraints are solved by kentron's own solvers, which reach the same
-  solutions as CadQuery's (casadi's IPOPT, nlopt's SLSQP) 20–50× faster and need neither
-  library.
+  solutions as CadQuery's (casadi's IPOPT, nlopt's SLSQP), mostly 20–60× faster (2026-11-05:
+  17–81× on 8 of 9 corpus assemblies and 2× on the ninth, 18–38× on CadQuery's sketch
+  tests), and need neither library.
 - **[`crates/occt-tests`](crates/occt-tests)**: OCCT's own tests, converted to run against kentron.
 
 ## Aims and scope
@@ -59,7 +60,7 @@ it honest. Every change is checked against the test sources below before it is c
 and no change may make a passing test fail.
 
 <!-- effort -->
-So far (2026-09-25 to 2026-11-04): about 312 hours of the agent's active work, 21.6 million
+So far (2026-09-25 to 2026-11-05): about 313 hours of the agent's active work, 21.7 million
 tokens written by it, and 12.0 billion tokens processed in all (nearly all of them its
 conversation's context, read back from the cache).
 <!-- /effort -->
@@ -86,8 +87,8 @@ conversation's context, read back from the cache).
 - **759 CadQuery scripts from 122 public projects** (5 more open render windows or wait and
   are not run): of the 745 whose results don't depend on the order a kernel lists faces in
   (or on how it tells equal shapes apart), pykentron builds 703 as CadQuery does, and 24 more
-  differ only where CadQuery's result is wrong (2026-11-04). Timed on 2026-10-31, on the 672
-  it then built alike, it took 195 s in all against CadQuery's 941 s, and was faster on 646.
+  differ only where CadQuery's result is wrong (2026-11-04). Timed on 2026-11-05, on the 701
+  it then built alike, it took 231 s in all against CadQuery's 1,099 s, and was faster on 663.
   The scripts, what they found and where they stand:
   [`crates/pykentron/tests/found`](crates/pykentron/tests/found/README.md).
 
@@ -107,13 +108,13 @@ CadQuery 2.8 (OCCT), median of 5 runs:
 
 | | wall time | CPU time | peak memory |
 |---|---|---|---|
-| pykentron, `fast` profile (default) | 3.5 s | 3.9 s | 383 MB |
-| pykentron, `low-memory` profile | 4.0 s | 4.3 s | 282 MB |
-| CadQuery 2.8 / OCCT | 37.8 s | 120.4 s | 1,083 MB |
+| pykentron, `fast` profile (default) | 3.4 s | 3.7 s | 370 MB |
+| pykentron, `low-memory` profile | 3.9 s | 4.3 s | 279 MB |
+| CadQuery 2.8 / OCCT | 38.1 s | 120.5 s | 1,087 MB |
 
-With the default `fast` profile, that is 11× faster than CadQuery, with 31× less CPU time and 2.8×
-less memory. A second complex model from the same project builds in 3.6 s (4.0 s of CPU time,
-454 MB) on pykentron's `fast` profile, against 37.9 s (121.0 s, 1,103 MB) on CadQuery.
+With the default `fast` profile, that is 11× faster than CadQuery, with 33× less CPU time and 2.9×
+less memory. A second complex model from the same project builds in 3.5 s (3.8 s of CPU time,
+447 MB) on pykentron's `fast` profile, against 38.2 s (123.1 s, 1,117 MB) on CadQuery.
 
 pykentron frees shapes that Python no longer refers to, with the data cached for them. Which
 allocator it uses is chosen with `PYKENTRON_PROFILE`:
@@ -145,10 +146,10 @@ An existing CadQuery script runs unchanged with `pykentron-run script.py`, or af
   older x86-64 CPU, build with an empty `RUSTFLAGS=`.
 - `cargo test` runs everything. Most of OCCT's converted tests read its test dataset, an
   external download: see [`crates/occt-tests/README.md`](crates/occt-tests/README.md). Without it those tests fail.
-- [`tools/run_tests.py`](tools/run_tests.py) runs the same tests with every test binary at once (about 33 s on 16
-  threads, against about 49 s for `cargo test --release`, which runs them one after
+- [`tools/run_tests.py`](tools/run_tests.py) runs the same tests with every test binary at once (about 53 s on 16
+  threads, against about 75 s for `cargo test --release`, which runs them one after
   another; the slowest tests expected to fail take most of it). `--quick` leaves out the
-  tests expected to fail (about 14 s); a fix that makes one pass
+  tests expected to fail (about 19 s); a fix that makes one pass
   then goes unnoticed.
 - pykentron from source: `python3 crates/pykentron/build.py` (see
   [`crates/pykentron/README.md`](crates/pykentron/README.md)).
