@@ -2389,6 +2389,36 @@ fn sliced(base: &Face, other: &Face, crossings: &[Point]) -> Vec<Section> {
 /// other there: the difference of their curvatures is indefinite, so that their section is
 /// two branches crossing in `p` (not a curve along which they touch, as a fillet and its
 /// face, nor `p` alone).
+/// The closest points of two curves from `(u, s)`, by Gauss-Newton on both parameters
+/// within their ranges: where they cross, their crossing (quadratically, at any angle); kept
+/// only where it brings them nearer.
+pub(super) fn closest_points(a: &Curve, (a0, a1): (f64, f64), b: &Curve, (b0, b1): (f64, f64), (mut u, mut s): (f64, f64)) -> (f64, f64) {
+    let clamp = |x: f64, lo: f64, hi: f64| x.clamp(lo.min(hi), lo.max(hi));
+    let mut gap = a.point(u).distance(b.point(s));
+    for _ in 0..30 {
+        let ((x, ta), (y, tb)) = (a.d1(u), b.d1(s));
+        let r = x - y;
+        let (p, q, w) = (ta.dot(ta), ta.dot(tb), tb.dot(tb));
+        let det = p * w - q * q;
+        if !(det.abs() > 1e-300) {
+            break;
+        }
+        // (r + ta du - tb ds) square to both tangents.
+        let (f, g) = (-r.dot(ta), r.dot(tb));
+        let (du, ds) = ((f * w + q * g) / det, (q * f + p * g) / det);
+        let (nu, ns) = (clamp(u + du, a0, a1), clamp(s + ds, b0, b1));
+        let next = a.point(nu).distance(b.point(ns));
+        if !(next < gap) {
+            break;
+        }
+        (u, s, gap) = (nu, ns, next);
+        if gap <= 1e-15 {
+            break;
+        }
+    }
+    (u, s)
+}
+
 fn touching_across(a: &Surface, b: &Surface, p: Point) -> bool {
     use crate::geometry::ParametricSurface;
     let n = geom::normal_at_point(a, p);
@@ -2569,6 +2599,16 @@ impl Graph {
                                 // edge meets the face there, on its boundary (one vertex with
                                 // its meeting the face across that edge).)
                                 if location == Location::Inside {
+                                    // (Or within a free-form face's own tolerance of its
+                                    // boundary, crossing a boundary edge there: one vertex for
+                                    // both, as on the boundary below. As where mirrored plates'
+                                    // offset edges cross in the plane between them, each
+                                    // meeting the other's wall only a little apart.)
+                                    if geom::freeform(&face.surface) && face.drift > on_tol() && face.near_boundary(p, face.drift, &self.edges, &self.vertices) {
+                                        if let Some(crossing @ (_, _, Some(_))) = self.meeting_at_boundary(curve, edge.first, edge.last, t, face, face.drift.min(1e3 * on_tol())) {
+                                            return Some(crossing);
+                                        }
+                                    }
                                     let snapped = self.meeting_at_boundary(curve, edge.first, edge.last, t, face, 0.0).filter(|m| m.2.is_none() && m.1.distance(p) <= 1e3 * on_tol());
                                     return Some(snapped.unwrap_or((t, p, None)));
                                 }
@@ -2806,6 +2846,15 @@ impl Graph {
         for _ in 0..16 {
             u = geom::project(curve, first, last, other_curve.point(s)).0;
             s = geom::project(other_curve, other.first, other.last, curve.point(u)).0;
+        }
+        // (Then, on a free-form face whose edges stray from it by more than the classifying
+        // distance, where they run at a slight angle, Gauss-Newton on both at once: alternate
+        // projections close in on a crossing by only the square of the cosine of the curves'
+        // angle each round, hardly at all at a slight one (mirrored plates' offset edges in
+        // the plane between them, at 0.03), stopping well short of it.)
+        let (da, db) = (curve.d1(u).1, other_curve.d1(s).1);
+        if geom::freeform(&face.surface) && face.drift > on_tol() && da.cross(db).length() < 0.1 * da.length() * db.length() {
+            (u, s) = closest_points(curve, (first, last), other_curve, (other.first, other.last), (u, s));
         }
         let (x, y) = (curve.point(u), other_curve.point(s));
         let gap = x.distance(y);

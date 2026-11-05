@@ -2607,6 +2607,18 @@ mod tests {
         }
     }
 
+    /// Two lines crossing at 0.03 radians, from points on them 0.5 short of the crossing:
+    /// their closest points are the crossing itself (alternate projections from there close
+    /// in by only cos² of the angle each round, leaving them well apart).
+    #[test]
+    fn edges_crossing_at_a_slight_angle_met_where_they_cross() {
+        use crate::geometry::curve::{Curve, Line};
+        let line = |angle: f64| Curve::Line(Line { origin: Point::new(1.0, 2.0, 3.0), direction: Direction::new(angle.cos(), angle.sin(), 0.0) });
+        let (a, b) = (line(0.0), line(0.03));
+        let (u, s) = intersect::closest_points(&a, (-10.0, 10.0), &b, (-10.0, 10.0), (-0.5, -0.5));
+        assert!(u.abs() < 1e-9 && s.abs() < 1e-9, "{u} {s}");
+    }
+
     /// A disc with screw holes round its rim, their axes on its side, each blind hole's drill
     /// tip a cone whose apex lies on the side: cut by the next hole's tool, away from them.
     /// The cones' halves end at the apex on a degenerate edge whose pcurve stops a little
