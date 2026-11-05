@@ -60,7 +60,7 @@ it honest. Every change is checked against the test sources below before it is c
 and no change may make a passing test fail.
 
 <!-- effort -->
-So far (2026-09-25 to 2026-11-05): about 316 hours of the agent's active work, 21.8 million
+So far (2026-09-25 to 2026-11-05): about 317 hours of the agent's active work, 21.8 million
 tokens written by it, and 12.1 billion tokens processed in all (nearly all of them its
 conversation's context, read back from the cache).
 <!-- /effort -->
@@ -146,10 +146,10 @@ An existing CadQuery script runs unchanged with `pykentron-run script.py`, or af
   older x86-64 CPU, build with an empty `RUSTFLAGS=`.
 - `cargo test` runs everything. Most of OCCT's converted tests read its test dataset, an
   external download: see [`crates/occt-tests/README.md`](crates/occt-tests/README.md). Without it those tests fail.
-- [`tools/run_tests.py`](tools/run_tests.py) runs the same tests with every test binary at once (about 53 s on 16
-  threads, against about 75 s for `cargo test --release`, which runs them one after
+- [`tools/run_tests.py`](tools/run_tests.py) runs the same tests with every test binary at once (about 40 s on 16
+  threads, against about 53 s for `cargo test --release`, which runs them one after
   another; the slowest tests expected to fail take most of it). `--quick` leaves out the
-  tests expected to fail (about 19 s); a fix that makes one pass
+  tests expected to fail (about 18 s); a fix that makes one pass
   then goes unnoticed.
 - pykentron from source: `python3 crates/pykentron/build.py` (see
   [`crates/pykentron/README.md`](crates/pykentron/README.md)).
