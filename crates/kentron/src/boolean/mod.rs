@@ -2576,6 +2576,37 @@ mod tests {
         }
     }
 
+    /// An end wall of a thickened plate (a cell of a Schwarz lattice) and its mirror image
+    /// across y = 1.99, hinged on the arc they share there and twisting through the plane:
+    /// their section is the arc and two branches, where the walls cross the plane, from the
+    /// arc out to the offset edge. Towards the arc the walls cross ever more slightly (both
+    /// lie in the plane along it), and the second branch's last stretch was taken for the
+    /// walls only touching and dropped; and where it ends on the offset edge the point there
+    /// lies off the traced curve by more than the tolerance (the walls crossing at a sine of
+    /// 0.03): the branch was lost, and the plate's union with its image left open.
+    #[test]
+    fn mirrored_hinged_walls_crossing_the_plane_at_two_branches() {
+        use crate::math::{Direction, Transform};
+        let mut model = Model::new();
+        let a = crate::io::brep::read(&mut model, &mut include_str!("tests/mirrored_walls_hinged_a.brep").as_bytes()).unwrap();
+        let mirror = Transform::mirror_plane(Point::new(0.0, 1.99, 0.0), Direction::Y);
+        let b = crate::modify::transform(&mut model, a, &mirror, Default::default()).unwrap();
+        let s = section(&mut model, a, b).unwrap();
+        let branches: Vec<(Point, Point)> = model
+            .unique_subshapes(s, NodeKind::Edge)
+            .into_iter()
+            .filter(|&e| (properties::length(&model, e).mass - 0.45).abs() < 1e-3)
+            .map(|e| {
+                let (v0, v1) = model.edge_vertices(e);
+                (model.point(v0), model.point(v1))
+            })
+            .collect();
+        assert_eq!(branches.len(), 2, "{branches:?}");
+        for end in [Point::new(0.5405, 1.99, 0.0702), Point::new(0.1042, 1.99, 0.5349)] {
+            assert!(branches.iter().any(|(p, q)| p.distance(end) < 1e-3 || q.distance(end) < 1e-3), "{end:?}: {branches:?}");
+        }
+    }
+
     /// A disc with screw holes round its rim, their axes on its side, each blind hole's drill
     /// tip a cone whose apex lies on the side: cut by the next hole's tool, away from them.
     /// The cones' halves end at the apex on a degenerate edge whose pcurve stops a little

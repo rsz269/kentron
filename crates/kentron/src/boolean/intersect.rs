@@ -1296,7 +1296,15 @@ impl Section {
                 // refining onto both is singular: a point on both surfaces within the samples'
                 // spacing (two samples', where the tracing's cells are coarse) of the polyline
                 // may be on it there.
-                let found = if dist <= tolerance {
+                // (Where they cross at a slight angle, a point on both within the tolerance
+                // may lie off the curve by as much over the angle's sine: as where mirrored
+                // plates' walls cross along the plane between them, an edge of one meeting the
+                // other's wall there. Only where they still cross clearly, at a sine of 0.02 or
+                // more (so up to fifty times as far): nearer tangent, the curve is found too
+                // roughly to tell a point on it from one beside it.)
+                let sine = geom::normal_at_point(&traced.base, p).cross(geom::normal_at_point(&traced.other, p)).length();
+                let reach = if sine >= 0.02 { tolerance / sine } else { tolerance };
+                let found = if dist <= reach {
                     Some((t, false))
                 } else {
                     (d <= 2.0 * length + tolerance && touching_across(&traced.base, &traced.other, p)).then_some((i as f64 + s, true))

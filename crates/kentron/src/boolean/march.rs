@@ -294,7 +294,22 @@ pub(super) fn trace(base: &Surface, other: &Surface, range: Range, (nu, nv): (us
             }
         }
         if !tangent.is_empty() {
-            let crossing: Vec<bool> = tangent.iter().map(|&i| tracer.crosses(&chain.0, i, 0.1 * leaf)).collect();
+            let mut crossing: Vec<bool> = tangent.iter().map(|&i| tracer.crosses(&chain.0, i, 0.1 * leaf)).collect();
+            // (A crossing branch running on, at its end, to where the surfaces turn tangent
+            // (as mirrored plates' walls towards the edge they share, crossing ever more
+            // slightly): its last points, beyond where the test tells, still cross if each
+            // does so slightly. Only a run at either end of the chain next to crossing points,
+            // all of them so.)
+            let n = chain.0.len();
+            if tangent.len() == n && crossing.iter().any(|&c| c) {
+                let first = crossing.iter().position(|&c| c).expect("a crossing point");
+                let last = crossing.iter().rposition(|&c| c).expect("a crossing point");
+                for run in [0..first, last + 1..n] {
+                    if !run.is_empty() && run.clone().all(|k| tracer.crosses_slightly(&chain.0, k, 0.1 * leaf)) {
+                        crossing[run].iter_mut().for_each(|c| *c = true);
+                    }
+                }
+            }
             if crossing.iter().all(|&c| !c) {
                 touching.push(chain);
                 continue;
@@ -769,6 +784,36 @@ impl Tracer<'_> {
         let (plus, minus) = (at(1.0), at(-1.0));
         let tol = geom::on_tol();
         (plus > tol && minus < -tol) || (plus < -tol && minus > tol)
+    }
+
+    /// [`Self::crosses`] where the surfaces cross at so slight an angle that both lie within
+    /// the tolerance `w` aside: the distances change sign there, and ten times as far aside
+    /// again, growing as far again (touching, they keep their sign and grow by the square).
+    fn crosses_slightly(&self, points: &[Both], i: usize, w: f64) -> bool {
+        let n = points.len();
+        let along = points[(i + 1).min(n - 1)].p - points[i.saturating_sub(1)].p;
+        let b = &points[i];
+        let (_, su, sv) = self.base.d1(b.u, b.v);
+        let side = su.cross(sv).cross(along);
+        if !(side.length() > 0.0) {
+            return false;
+        }
+        let side = side.normalized() * w;
+        let (aa, ab, bb) = (su.dot(su), su.dot(sv), sv.dot(sv));
+        let det = aa * bb - ab * ab;
+        if !(det.abs() > 0.0) {
+            return false;
+        }
+        let (ra, rb) = (side.dot(su), side.dot(sv));
+        let (du, dv) = ((ra * bb - rb * ab) / det, (rb * aa - ra * ab) / det);
+        let at = |k: f64| self.distance_to_other(self.base.point(b.u + k * du, b.v + k * dv), (b.s, b.t));
+        let (plus, minus) = (at(1.0), at(-1.0));
+        if !(plus * minus < 0.0) {
+            return false;
+        }
+        let (far_plus, far_minus) = (at(10.0), at(-10.0));
+        let linear = |near: f64, far: f64| near * far > 0.0 && (5.0..20.0).contains(&(far / near));
+        linear(plus, far_plus) && linear(minus, far_minus)
     }
 
     /// The signed distance from `x` to the other surface (carried on past its bounds), along
