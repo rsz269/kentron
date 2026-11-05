@@ -527,6 +527,9 @@ fn fillet_solid_edges_inner(model: &mut Model, shape: Shape, edges: &[(Shape, f6
     // and two convex, the odd one rounded first: the other two then go on into each other
     // smoothly round its fillet's end, as OCCT rounds them (by a torus round a straight
     // fillet's end).
+    // (Rounded at once, where that was tried first: what is returned if staging fails too,
+    // not made again.)
+    let mut at_once: Option<Result<Shape>> = None;
     if let Some((first, then, probed)) = mixed_corner_stages(model, shape, edges) {
         let before = fault_kinds(model, shape);
         // (Where an edge's turn was told only by probing the material beside it (a free-form
@@ -535,11 +538,13 @@ fn fillet_solid_edges_inner(model: &mut Model, shape: Shape, edges: &[(Shape, f6
         if probed {
             let solids = |model: &Model, s: Shape| model.explore(s, NodeKind::Solid).count();
             let count = solids(model, shape);
-            if let Ok(rounded) = fillet_solid_edges_unstaged(model, shape, edges).and_then(|r| sound(model, &before, r)) {
-                if solids(model, rounded) <= count {
-                    return Ok(rounded);
+            let rounded = fillet_solid_edges_unstaged(model, shape, edges);
+            if let Ok(sound) = rounded.clone().and_then(|r| sound(model, &before, r)) {
+                if solids(model, sound) <= count {
+                    return Ok(sound);
                 }
             }
+            at_once = Some(rounded);
         }
         let staged = fillet_solid_edges_unstaged(model, shape, &first).and_then(|rounded| {
             // (The first fillets' tools end on faces they leave split where they meet them,
@@ -566,7 +571,7 @@ fn fillet_solid_edges_inner(model: &mut Model, shape: Shape, edges: &[(Shape, f6
             return Ok(rounded);
         }
     }
-    fillet_solid_edges_unstaged(model, shape, edges)
+    at_once.unwrap_or_else(|| fillet_solid_edges_unstaged(model, shape, edges))
 }
 
 /// The edges (with the edges going on from them tangentially) to round first and those to
