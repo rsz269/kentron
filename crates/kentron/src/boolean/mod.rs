@@ -2555,6 +2555,27 @@ mod tests {
         );
     }
 
+    /// An offset face of a thickened plate (a cell of a Schwarz lattice) and its mirror image
+    /// across x = 1.99, meeting end to end there near tangent: each one's edge meets the
+    /// other's face a little apart (4e-5), and branches of their section from either side stop
+    /// short of those points. Carried on a whole step to them (as two fillets meeting at a
+    /// corner), each to a different one, they made a small loop of two edges between the two
+    /// points, and the union of the two plates was left open.
+    #[test]
+    fn mirrored_offset_faces_leave_no_loops_where_their_edges_meet() {
+        use crate::math::{Direction, Transform};
+        let mut model = Model::new();
+        let a = crate::io::brep::read(&mut model, &mut include_str!("tests/mirrored_offset_faces_a.brep").as_bytes()).unwrap();
+        let mirror = Transform::mirror_plane(Point::new(1.99, 0.0, 0.0), Direction::X);
+        let b = crate::modify::transform(&mut model, a, &mirror, Default::default()).unwrap();
+        let s = section(&mut model, a, b).unwrap();
+        for e in model.unique_subshapes(s, NodeKind::Edge) {
+            let (v0, v1) = model.edge_vertices(e);
+            let length = properties::length(&model, e).mass;
+            assert!(model.point(v0).distance(model.point(v1)) > 1e-4 || length < 1e-4, "a loop of {length} at {:?}", model.point(v0));
+        }
+    }
+
     /// A disc with screw holes round its rim, their axes on its side, each blind hole's drill
     /// tip a cone whose apex lies on the side: cut by the next hole's tool, away from them.
     /// The cones' halves end at the apex on a degenerate edge whose pcurve stops a little
