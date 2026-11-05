@@ -814,6 +814,7 @@ impl Tracer<'_> {
     /// there), from a guess.
     fn stepped(&self, from: &Both, dir: Vector, h: f64, guess: Both) -> Option<Both> {
         let (mut u, mut v, mut s, mut t) = (guess.u, guess.v, guess.s, guess.t);
+        let mut last = f64::INFINITY;
         for _ in 0..20 {
             let (p, pu, pv) = self.base.d1(u, v);
             let (q, qs, qt) = self.other_d1(s, t);
@@ -823,6 +824,13 @@ impl Tracer<'_> {
             if f.length() <= scale && g.abs() <= scale {
                 return Some(Both { u, v, s, t, p });
             }
+            // (Within the looser bound below and no longer closing in, as where the surfaces
+            // are found only that precisely: taken now, not after all the steps.)
+            let residual = f.length().max(g.abs());
+            if residual <= 100.0 * scale && residual > 0.5 * last {
+                return Some(Both { u, v, s, t, p });
+            }
+            last = residual;
             // Rows: the three of base - other, and the plane's; columns u, v, s, t.
             let m = [
                 [pu.x, pv.x, -qs.x, -qt.x],
