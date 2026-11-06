@@ -816,6 +816,7 @@ fn trace(arcs: &[ArcOnFace], ends: &[(usize, usize)], alive: &[bool], nodes: &[(
     for list in &mut around {
         list.sort_by(|a, b| a.0.total_cmp(&b.0));
         untangle_tangent(list, arcs);
+        lens_order(list, arcs, ends);
     }
     let end_of = |(a, forward): (usize, bool)| if forward { ends[a].1 } else { ends[a].0 };
     let mut visited: HashSet<(usize, bool)> = HashSet::default();
@@ -847,6 +848,47 @@ fn trace(arcs: &[ArcOnFace], ends: &[(usize, usize)], alive: &[bool], nodes: &[(
         }
     }
     cycles
+}
+
+/// Orders again two half-arcs leaving a node next to each other (within a tenth of a
+/// radian) for the same far node, a lens between them: by the sign of the area the lens
+/// closes (out along one, back along the other), the one with it on its left first. Taken
+/// so at both their ends, the two are in mirrored orders there, as two arcs closing a lens
+/// are, even where they cross in (u, v) (a section running a hair along a boundary arc,
+/// its points straying across it): by their departures' angles alone, both ends may have
+/// them in the same order, and the region round them is not traced.
+fn lens_order(list: &mut [(f64, usize, bool)], arcs: &[ArcOnFace], ends: &[(usize, usize)]) {
+    use std::f64::consts::TAU;
+    let n = list.len();
+    if n < 2 {
+        return;
+    }
+    let far = |&(_, i, forward): &(f64, usize, bool)| if forward { ends[i].1 } else { ends[i].0 };
+    let polyline = |&(_, i, forward): &(f64, usize, bool)| -> Vec<Uv> {
+        let mut uv = arcs[i].uv.clone();
+        if !forward {
+            uv.reverse();
+        }
+        uv
+    };
+    for k in 0..n {
+        let j = (k + 1) % n;
+        if j == k {
+            continue;
+        }
+        let (a, b) = (list[k], list[j]);
+        let gap = (b.0 - a.0).rem_euclid(TAU);
+        if gap > 0.1 || a.1 == b.1 || far(&a) != far(&b) {
+            continue;
+        }
+        let mut poly = polyline(&a);
+        poly.extend(polyline(&b).iter().rev().skip(1).copied());
+        if geom::signed_area(&poly) < 0.0 {
+            // (Their departures' angles swapped with them, the list kept sorted.)
+            list[k] = (a.0, b.1, b.2);
+            list[j] = (b.0, a.1, a.2);
+        }
+    }
 }
 
 /// Orders again the half-arcs leaving a node (sorted by their departures' angles) whose
@@ -960,6 +1002,30 @@ mod tests {
         assert_eq!(regions[0].loops.len(), 2);
     }
 
+
+    /// The unit square, its bottom side split at 0.3 and 0.6 (vertices 4 and 5), and a
+    /// section between those two running a hair along the side, crossing it: leaving 4 above
+    /// it and reaching 5 from below (as a section traced where a surface touches a face
+    /// along its boundary strays across the boundary's pcurve). At both ends the section
+    /// leaves just counter-clockwise of the side, the two in one order there, not mirrored
+    /// as two arcs closing a lens are: the square's own region was not traced.
+    #[test]
+    fn a_section_crossing_a_boundary_arc_it_runs_along() {
+        let paths = vec![
+            (0, 4, vec![[0.0, 0.0], [0.3, 0.0]]),
+            (4, 5, vec![[0.3, 0.0], [0.6, 0.0]]),
+            (5, 1, vec![[0.6, 0.0], [1.0, 0.0]]),
+            (1, 2, vec![[1.0, 0.0], [1.0, 1.0]]),
+            (2, 3, vec![[1.0, 1.0], [0.0, 1.0]]),
+            (3, 0, vec![[0.0, 1.0], [0.0, 0.0]]),
+            (4, 5, vec![[0.3, 0.0], [0.4, 0.0005], [0.5, -0.0005], [0.6, 0.0]]),
+        ];
+        let (arcs, pieces) = arcs(&paths);
+        let outer = vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0], [0.0, 0.0]];
+        let regions = split_face(&arcs, &pieces, &[outer], 1.0, false);
+        let areas: Vec<f64> = regions.iter().map(|r| r.polygons.iter().map(|p| geom::signed_area(p)).sum()).collect();
+        assert!(areas.iter().any(|&a| (a - 1.0).abs() < 1e-3), "{areas:?}");
+    }
 
     /// The boundary of the unit square, its left and right sides split at mid-height
     /// (vertices 4 and 5), as paths for [`arcs`].
