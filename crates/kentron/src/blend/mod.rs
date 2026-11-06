@@ -980,7 +980,21 @@ fn fillet_solid_edges_as(model: &mut Model, shape: Shape, edges: &[(Shape, f64)]
     for (i, ((((corner, radius), extend), mitre), overhang)) in corners.iter().zip(extended).zip(&mitred).zip(&overhangs).enumerate() {
         let (extend, beyond) = if corner.convex { (extend, Vec::new()) } else { concave_ends(model, shape, &corners, i)? };
         let tool = corner.tool(model, *radius, mitre_runs(corner, *radius, extend, mitre))?;
-        let tool = mitred_tool(model, tool, mitre)?;
+        // (Where the other fillet at a mitred end has another radius, the two surfaces do not
+        // meet on the mitre plane: the tool cut back square at the other edge instead, and
+        // with what lies in both tools run on past the corner, which the fillets take away
+        // between them there.)
+        let (mitre, shared) = unequal_mitres(&corners, &mitred, i);
+        let mut taken = Vec::with_capacity(shared.len());
+        for (j, ends) in shared {
+            let (other, r) = &corners[j];
+            let theirs = other.tool(model, *r, mitre_runs(other, *r, runs[j], &ends))?;
+            taken.push(boolean::intersection(model, tool, theirs)?);
+        }
+        let mut tool = mitred_tool(model, tool, &mitre)?;
+        for piece in taken {
+            tool = boolean::union(model, tool, piece)?;
+        }
         let mut tool = mitred_tool(model, tool, overhang)?;
         record_tool(model, tool, &corner.edges);
         for (solid, keep_inside) in beyond {
@@ -1605,6 +1619,45 @@ fn mitres(corners: &[(Corner, f64)]) -> Vec<[Option<(Point, Vector)>; 2]> {
             })
         })
         .collect()
+}
+
+/// Corner `i`'s mitres, with those at ends where the other corner's radius differs (by more
+/// than the linear tolerance) replaced by the plane through the end square to the other
+/// edge, along the face both bound (its normal facing this corner's own edge); and those
+/// other corners, each with the end of theirs to run its tool on past.
+fn unequal_mitres(corners: &[(Corner, f64)], mitred: &[[Option<(Point, Vector)>; 2]], i: usize) -> ([Option<(Point, Vector)>; 2], Vec<(usize, [Option<(Point, Vector)>; 2])>) {
+    let (corner, radius) = &corners[i];
+    let mut mitre = mitred[i];
+    let mut shared = Vec::new();
+    for k in 0..2 {
+        let Some((p, _)) = mitre[k] else { continue };
+        let found = corners.iter().enumerate().find_map(|(j, (other, _))| {
+            if j == i || mitred[j].iter().all(Option::is_none) {
+                return None;
+            }
+            [other.origin, other.end].iter().position(|q| q.distance(p) <= tolerance::LINEAR).filter(|&e| mitred[j][e].is_some()).map(|e| (j, e))
+        });
+        let Some((j, e)) = found else { continue };
+        let (other, r) = &corners[j];
+        if (r - radius).abs() <= tolerance::LINEAR {
+            continue;
+        }
+        // The other edge's direction from the end, and the normal of the face both bound.
+        let q = if e == 1 { other.end } else { other.origin };
+        let dj = other.direction_at(q) * if e == 1 { -1.0 } else { 1.0 };
+        let di = corner.direction_at(p) * if k == 1 { -1.0 } else { 1.0 };
+        let n = di.cross(dj);
+        let square = dj.cross(n);
+        if !(square.length() > 1e-9) {
+            continue;
+        }
+        let square = square.normalized();
+        mitre[k] = Some((p, if square.dot(di) > 0.0 { square } else { -square }));
+        let mut ends = [None, None];
+        ends[e] = mitred[j][e];
+        shared.push((j, ends));
+    }
+    (mitre, shared)
 }
 
 /// The tool's runs past its edge's ends, far enough past a mitred end for the mitre to cut
@@ -5270,6 +5323,49 @@ mod tests {
         assert!((v - 41989.26089).abs() < 1e-6 * v, "{v}");
         let a = properties::area(&model, rounded).mass;
         assert!((a - 9779.19079).abs() < 1e-4 * a, "{a}");
+    }
+
+    /// As above, the next wall's rim alone given (its edge only, not the short one past the
+    /// first fillet's end): the first fillet is made again with it, the two meeting at the
+    /// pocket's corner. With radii unequal (1 and 0.99) their surfaces cross off the corner's
+    /// bisector plane; cut back to that plane, the tools left a sliver of it between them
+    /// (area 0.006). They meet where their surfaces cross, as OCCT's do: its volume and area.
+    #[test]
+    fn rim_fillets_of_unequal_radii_meet_where_their_surfaces_cross() {
+        let mut model = Model::new();
+        let block = Cuboid::from_corners(Point::new(-30.0, -20.0, -10.0), Point::new(30.0, 20.0, 10.0)).build(&mut model).unwrap();
+        let pocket = Cuboid::from_corners(Point::new(-15.0, -10.0, 0.0), Point::new(15.0, 10.0, 11.0)).build(&mut model).unwrap();
+        let cut = boolean::difference(&mut model, block, pocket).unwrap();
+        let ends = |model: &Model, e: Shape| {
+            let (p, q) = model.edge_vertices(e);
+            (model.point(p), model.point(q))
+        };
+        let rim: Vec<Shape> = model
+            .unique_subshapes(cut, NodeKind::Edge)
+            .into_iter()
+            .filter(|&e| {
+                let (p, q) = ends(&model, e);
+                p.y == 10.0 && q.y == 10.0 && p.z == 10.0 && q.z == 10.0
+            })
+            .collect();
+        let first = fillet(&mut model, cut, &rim, 1.0).unwrap();
+        let side: Vec<Shape> = model
+            .unique_subshapes(first, NodeKind::Edge)
+            .into_iter()
+            .filter(|&e| {
+                let (p, q) = ends(&model, e);
+                [p, q].iter().all(|r| (r.x + 15.0).abs() < 1e-9 && (r.z - 10.0).abs() < 1e-9) && p.distance(q) > 5.0
+            })
+            .collect();
+        assert_eq!(side.len(), 1);
+        let rounded = fillet(&mut model, first, &side, 0.99).unwrap();
+        assert!(validity::check(&model, rounded).is_valid());
+        let v = properties::volume(&model, rounded).mass;
+        assert!((v - 41989.26089).abs() < 1e-6 * v, "{v}");
+        let a = properties::area(&model, rounded).mass;
+        assert!((a - 9779.19079).abs() < 1e-8 * a, "{a}");
+        let least = model.unique_subshapes(rounded, NodeKind::Face).iter().map(|&f| properties::area(&model, f).mass).fold(f64::INFINITY, f64::min);
+        assert!(least > 0.01, "a face of {least}");
     }
 
     #[test]
