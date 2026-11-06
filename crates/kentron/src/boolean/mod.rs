@@ -2643,6 +2643,35 @@ mod tests {
         assert!((properties::volume(&model, u).mass - expected).abs() <= 1e-6 * expected, "{} vs {expected}", properties::volume(&model, u).mass);
     }
 
+    /// A block's corner hollowed round (a quarter circle, R 2, about the z axis) and a slab
+    /// set on it whose underside ends on the same quarter circle, made a rational B-spline:
+    /// both curves the one circle, the edges are split only where they end, not wherever
+    /// the search for crossings met them all along. The union is the two together.
+    #[test]
+    fn a_slab_on_a_hollowed_corner_along_its_arc_made_a_b_spline() {
+        use crate::geometry::curve::{BSplineCurve, Curve};
+        let mut model = Model::new();
+        let block = Cuboid::from_corners(Point::new(0.0, 0.0, 0.0), Point::new(2.0, 2.0, 1.0)).build(&mut model).unwrap();
+        let round = Cylinder::new(2.0, 3.0).with_frame(Frame::from_z(Point::new(0.0, 0.0, -1.0), Direction::Z)).build(&mut model).unwrap();
+        let a = difference(&mut model, block, round).unwrap();
+        let w = 0.5f64.sqrt();
+        let arc = BSplineCurve::new(vec![Point::new(2.0, 0.0, 1.0), Point::new(2.0, 2.0, 1.0), Point::new(0.0, 2.0, 1.0)], vec![0.0, 1.0], vec![3, 3], 2).with_weights(vec![1.0, w, 1.0]);
+        let corners = [(0.0, 2.0), (0.0, 3.0), (3.0, 3.0), (3.0, 0.0), (2.0, 0.0)].map(|(x, y)| Point::new(x, y, 1.0));
+        let mut sides = vec![crate::make::edge_from_curve(&mut model, Curve::BSpline(arc)).unwrap()];
+        for i in 0..4 {
+            sides.push(crate::make::edge_between(&mut model, corners[i], corners[i + 1]).unwrap());
+        }
+        let wire = crate::make::wire(&mut model, &sides).unwrap();
+        let face = crate::make::planar_face(&mut model, wire).unwrap();
+        let b = crate::sweep::extrude(&mut model, face, Vector::new(0.0, 0.0, 1.0)).unwrap().shape;
+        let expected = properties::volume(&model, a).mass + properties::volume(&model, b).mass;
+        let u = union(&mut model, a, b).unwrap();
+        assert!(validity::check(&model, u).is_valid());
+        assert!((properties::volume(&model, u).mass - expected).abs() <= 1e-6 * expected, "{} vs {expected}", properties::volume(&model, u).mass);
+        let most = model.unique_subshapes(u, NodeKind::Face).iter().map(|&f| model.unique_subshapes(f, NodeKind::Edge).len()).max().unwrap();
+        assert!(most <= 8, "a face of {most} edges");
+    }
+
     /// A blade lofted through ellipses and a cap on its end: a half ellipse turned half a turn
     /// about the axis it ends on, its flat face the blade's end, both bounded by the one
     /// ellipse. A vertex found on one operand's ellipse did not split the other's (not taken

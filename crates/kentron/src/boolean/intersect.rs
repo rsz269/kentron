@@ -2849,7 +2849,8 @@ impl Graph {
             }
             let curves: Option<Vec<&Curve>> = edges.iter().map(|&e| self.edges[e].curve.as_ref()).collect();
             let Some(curves) = curves else { continue };
-            if curves.iter().all(|c| same_ellipse(curves[0], c)) {
+            let first = &self.edges[edges[0]];
+            if curves.iter().all(|c| same_ellipse(curves[0], c)) || edges.iter().all(|&e| on_one_circle(first, &self.edges[e])) {
                 drop.insert(*v);
             }
         }
@@ -3702,6 +3703,28 @@ fn same_ellipse(a: &Curve, b: &Curve) -> bool {
         && (x.minor_radius() - y.minor_radius()).abs() <= tol
         && axis(x.frame()).cross(axis(y.frame())).length() <= 1e-9
         && Vector::from(x.frame().x()).cross(Vector::from(y.frame().x())).length() * x.major_radius() <= tol
+}
+
+/// True if edges `a` and `b` lie on one circle: as circles, or one of them a B-spline
+/// (a rational one, the circle exactly) on the other's circle.
+fn on_one_circle(a: &Edge, b: &Edge) -> bool {
+    let (Some(x), Some(y)) = (&a.curve, &b.curve) else { return false };
+    let on = |c: &Circle, e: &Edge, curve: &Curve| {
+        let tol = on_tol();
+        let n = Vector::from(c.frame().x()).cross(Vector::from(c.frame().y()));
+        (0..=8).all(|k| {
+            let p = curve.point(e.first + (e.last - e.first) * k as f64 / 8.0);
+            let d = p - c.center();
+            let h = d.dot(n);
+            h.abs() <= tol && ((d - n * h).length() - c.radius()).abs() <= tol
+        })
+    };
+    match (x, y) {
+        (Curve::Circle(_), Curve::Circle(_)) => same_carrier(x, y),
+        (Curve::Circle(c), Curve::BSpline(_)) => on(c, b, y),
+        (Curve::BSpline(_), Curve::Circle(c)) => on(c, a, x),
+        _ => false,
+    }
 }
 
 /// True if two curves are the same circle or B-spline, or lie on the same line.

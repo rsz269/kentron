@@ -1343,7 +1343,20 @@ fn concave_corner_fill(model: &mut Model, corners: &[(Corner, f64)], at: &[usize
     let Some(solid) = convex_solid(model, &points)? else { return Ok(None) };
     let frame = Frame::new(center, Direction::Z, Direction::X);
     let ball = crate::primitives::Sphere::new(radius).with_frame(frame).build(model)?;
-    Ok(Some(boolean::difference(model, solid, ball)?))
+    let mut fill = boolean::difference(model, solid, ball)?;
+    // (Where the edges are not square to one another the box reaches past the centre along
+    // them, where the ball rolling away along each edge (from the centre on) leaves room:
+    // that taken from it too.)
+    let square = (0..3).all(|i| (0..i).all(|j| along[i].normalized().dot(along[j].normalized()).abs() <= tolerance::ANGULAR.sqrt()));
+    if !square {
+        let reach = 2.0 * t.iter().zip(&along).map(|(t, a)| t * a.length()).sum::<f64>() + radius;
+        for a in &along {
+            let Some(z) = Direction::try_from_vector(*a) else { continue };
+            let rolled = crate::primitives::Cylinder::new(radius, reach).with_frame(Frame::from_z(center, z)).build(model)?;
+            fill = boolean::difference(model, fill, rolled)?;
+        }
+    }
+    Ok(Some(fill))
 }
 
 /// A fillet tool's faces as made from the `edges` it rounds (for the history: the faces the
@@ -4837,6 +4850,52 @@ mod tests {
         assert!((v - 8099.88202).abs() < 1e-7 * v, "{v}");
         let a = properties::area(&model, rounded).mass;
         assert!((a - 3247.92919).abs() < 1e-7 * a, "{a}");
+    }
+
+    /// The same pocket's three edges at the 135 degree corner (the floor's two and the
+    /// walls' upright one) rounded R 2 at once: the corner filled where no ball reaches,
+    /// but not past the ball's centre along the edges set aslant, where the ball rolling
+    /// away along each edge passes.
+    #[test]
+    fn a_slanting_corner_is_filled_only_where_no_ball_reaches() {
+        let mut model = Model::new();
+        let block = Cuboid::from_corners(Point::new(-20.0, -20.0, 0.0), Point::new(20.0, 20.0, 10.0)).build(&mut model).unwrap();
+        let outline = [(-10.0, -10.0), (5.0, -10.0), (5.0, 2.0), (-1.0, 8.0), (-10.0, 8.0)].map(|(x, y)| Point::new(x, y, 4.0));
+        let sides: Vec<Shape> = (0..5).map(|i| make::edge_between(&mut model, outline[i], outline[(i + 1) % 5]).unwrap()).collect();
+        let wire = make::wire(&mut model, &sides).unwrap();
+        let face = make::planar_face(&mut model, wire).unwrap();
+        let pocket = sweep::extrude(&mut model, face, Vector::new(0.0, 0.0, 10.0)).unwrap().shape;
+        let body = boolean::difference(&mut model, block, pocket).unwrap();
+        let corner = Point::new(5.0, 2.0, 4.0);
+        let edges: Vec<Shape> = model
+            .unique_subshapes(body, NodeKind::Edge)
+            .into_iter()
+            .filter(|&e| {
+                let (a, b) = model.edge_vertices(e);
+                model.point(a).distance(corner) < 1e-9 || model.point(b).distance(corner) < 1e-9
+            })
+            .collect();
+        assert_eq!(edges.len(), 3);
+        let rounded = fillet(&mut model, body, &edges, 2.0).unwrap();
+        assert!(validity::check(&model, rounded).is_valid());
+        // The ball in the corner (2 from the wall x = 5, the floor and the wall x + y = 7),
+        // rolled on along each edge: nothing of the solid within it.
+        let center = Point::new(3.0, 7.0 - 3.0 - 2.0 * 2f64.sqrt(), 6.0);
+        let along = [Vector::new(0.0, -1.0, 0.0), Vector::new(-1.0, 1.0, 0.0).normalized(), Vector::new(0.0, 0.0, 1.0)];
+        for d in along {
+            for s in [0.25, 0.5, 1.0, 2.0] {
+                for k in 0..26 {
+                    let (i, j, l) = (k % 3, (k / 3) % 3, k / 9);
+                    let offset = Vector::new(i as f64 - 1.0, j as f64 - 1.0, l as f64 - 1.0);
+                    if offset.length() == 0.0 {
+                        continue;
+                    }
+                    let p = center + d * s + offset.normalized() * 1.95;
+                    let at = boolean::classify_point(&model, rounded, p).unwrap();
+                    assert!(matches!(at, boolean::PointLocation::Outside), "{p:?} along {d:?} is {at:?}");
+                }
+            }
+        }
     }
 
     /// A 40 x 40 x 10 block with a pocket 6 deep, one wall of which turns 135 degrees
