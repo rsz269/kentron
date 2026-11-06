@@ -5427,6 +5427,45 @@ mod tests {
         assert!(least > 0.01, "a face of {least}");
     }
 
+    /// A 30 x 20 pocket 10 deep, its rim rounded R 1 (the rim's fillets meeting in mitre
+    /// ellipses in the pocket's inner corners), its floor's two short edges R 2, then a long
+    /// one R 2: the rounding runs on round the short ones' ends, up the corners and on along
+    /// the valleys between the rim's fillets, a ball larger than their rounding. Its tool's
+    /// sections there, closed far out along the rays, came back on one another (the tool
+    /// folding through itself and its union left open, the fillet run on over the solid);
+    /// closed at the edge they run on. OCCT: 42052.09372.
+    #[test]
+    fn a_floor_fillet_runs_up_into_the_valleys_of_a_rounded_rim() {
+        let mut model = Model::new();
+        let block = Cuboid::from_corners(Point::new(-30.0, -20.0, -10.0), Point::new(30.0, 20.0, 10.0)).build(&mut model).unwrap();
+        let pocket = Cuboid::from_corners(Point::new(-15.0, -10.0, 0.0), Point::new(15.0, 10.0, 11.0)).build(&mut model).unwrap();
+        let mut body = boolean::difference(&mut model, block, pocket).unwrap();
+        let along = |model: &Model, body: Shape, keep: &dyn Fn(Point, Point) -> bool| -> Vec<Shape> {
+            model
+                .unique_subshapes(body, NodeKind::Edge)
+                .into_iter()
+                .filter(|&e| {
+                    let (a, b) = model.edge_vertices(e);
+                    keep(model.point(a), model.point(b))
+                })
+                .collect()
+        };
+        let rim = along(&model, body, &|p, q| p.z == 10.0 && q.z == 10.0 && p.x.abs() <= 15.0 && q.x.abs() <= 15.0 && p.y.abs() <= 10.0 && q.y.abs() <= 10.0);
+        assert_eq!(rim.len(), 4);
+        body = fillet(&mut model, body, &rim, 1.0).unwrap();
+        for x in [-15.0, 15.0] {
+            let floor = along(&model, body, &|p, q| (p.x - x).abs() < 1e-9 && (q.x - x).abs() < 1e-9 && p.z.abs() < 1e-9 && q.z.abs() < 1e-9);
+            assert_eq!(floor.len(), 1);
+            body = fillet(&mut model, body, &floor, 2.0).unwrap();
+        }
+        let long = along(&model, body, &|p, q| (p.y - 10.0).abs() < 1e-9 && (q.y - 10.0).abs() < 1e-9 && p.z.abs() < 1e-9 && q.z.abs() < 1e-9);
+        assert_eq!(long.len(), 1);
+        let rounded = fillet(&mut model, body, &long, 2.0).unwrap();
+        assert!(validity::check(&model, rounded).is_valid());
+        let v = properties::volume(&model, rounded).mass;
+        assert!((v - 42052.09372).abs() < 1e-5 * v, "{v}");
+    }
+
     #[test]
     fn concave_edge() {
         // The inner edge of an L-shaped solid gets material added.

@@ -821,9 +821,10 @@ pub(super) fn rolling_tool(model: &mut Model, shape: Shape, edge: Shape, radius:
     let first_off_above = sections.iter().filter(|s| s.t > hi && !on_ball(s)).map(|s| s.t).fold(f64::INFINITY, f64::min);
     let last_off_below = sections.iter().filter(|s| s.t < lo && !on_ball(s)).map(|s| s.t).fold(f64::NEG_INFINITY, f64::max);
     let kept: Vec<&Section> = sections.iter().filter(|s| if s.t < lo { below && s.t > last_off_below } else if s.t > hi { above && s.t < first_off_above } else { true }).collect();
-    let mut wires = Vec::with_capacity(kept.len());
     let kept_radius = kept.iter().map(|s| s.radius).fold(0.0, f64::max);
-    let mut clear = true;
+    // Each section: its centre, the rays to its contacts, half the angle between them and how
+    // far along them it reaches.
+    let mut shapes = Vec::with_capacity(kept.len());
     for s in kept {
         let (a, b) = (s.contacts[0] - s.center, s.contacts[1] - s.center);
         let half = 0.5 * a.cross(b).length().atan2(a.dot(b));
@@ -841,16 +842,45 @@ pub(super) fn rolling_tool(model: &mut Model, shape: Shape, edge: Shape, radius:
         } else {
             (s.radius / half.sin().max(1e-3) + 0.5 * s.radius) / half.cos().max(1e-3)
         };
-        // (Where the contacts lie further out than that, the segment may cut the arc: the
-        // tool is then left as the booleans have met it, its arcs sampled.)
-        clear &= reach * half.cos() > a.length().max(b.length());
-        let far = [s.center + a.normalized() * reach, s.center + b.normalized() * reach];
+        shapes.push((s.center, a, b, half, reach, s.radius, s.t));
+    }
+    let far = |&(center, a, b, _, reach, _, _): &(Point, Vector, Vector, f64, f64, f64, f64)| [center + a.normalized() * reach, center + b.normalized() * reach];
+    // (Where the path of the centres turns tighter than the rays reach, the far ends of the
+    // sections come back on those before them, the tool folding through itself, as where a
+    // ball larger than the faces' rounding runs along the valley between them: on a solid,
+    // a concave tool's sections closed instead at the edge itself, a twentieth of the radius
+    // past it, away from the ball, by the faces' chords from the contacts. The edge's points
+    // run on along it, and the chords of faces rounded towards the solid lie within it.)
+    let edge_curve = model.edge_curve(Shape { orientation: Orientation::Forward, ..edge }).map(|(c, _, _)| c);
+    let folds = solid
+        && !convex
+        && edge_curve.is_some()
+        && shapes.windows(2).any(|w| {
+            let along = w[1].0 - w[0].0;
+            let (p, q) = (far(&w[0]), far(&w[1]));
+            (0..2).any(|k| (q[k] - p[k]).dot(along) < 0.0)
+        });
+    let mut wires = Vec::with_capacity(shapes.len());
+    let mut clear = true;
+    for shape in &shapes {
+        let &(center, a, b, half, reach, radius, t) = shape;
         let normal = a.cross(b);
-        let frame = Frame::new(s.center, Direction::from_vector(normal), Direction::from_vector(a));
+        let frame = Frame::new(center, Direction::from_vector(normal), Direction::from_vector(a));
         // (The lines start where the arc ends, the contacts being only nearly on it.)
         let circle = Circle::new(frame, a.length());
         let ends = [circle.point(0.0), circle.point(2.0 * half)];
         let arc = crate::make::edge_from_curve_range(model, Curve::Circle(circle), 0.0, 2.0 * half)?;
+        if let (true, Some(curve)) = (folds, &edge_curve) {
+            let on = curve.point(t);
+            let apex = on + (on - center).normalized() * (0.05 * radius);
+            let edges = [arc, crate::make::edge_between(model, ends[1], apex)?, crate::make::edge_between(model, apex, ends[0])?];
+            wires.push(crate::make::wire(model, &edges)?);
+            continue;
+        }
+        // (Where the contacts lie further out than that, the segment may cut the arc: the
+        // tool is then left as the booleans have met it, its arcs sampled.)
+        clear &= reach * half.cos() > a.length().max(b.length());
+        let far = far(shape);
         let edges = [
             arc,
             crate::make::edge_between(model, ends[1], far[1])?,
