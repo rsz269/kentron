@@ -2623,6 +2623,34 @@ mod tests {
         section_covering_nothing_twice(include_str!("tests/mirrored_walls_section_ends_a.brep"), include_str!("tests/mirrored_walls_section_ends_b.brep"));
     }
 
+    /// A blade lofted through ellipses and a cap on its end: a half ellipse turned half a turn
+    /// about the axis it ends on, its flat face the blade's end, both bounded by the one
+    /// ellipse. A vertex found on one operand's ellipse did not split the other's (not taken
+    /// for one curve), and the cap's edges along it, made of the blade's, had their pcurves
+    /// fitted on the other branch of the surface (past the axis, the half ellipse turned half
+    /// a turn passes through the same points) near the poles: the cap lost, the union
+    /// invalid. The union is the two together.
+    #[test]
+    fn a_revolved_cap_on_a_lofted_blade_end() {
+        let mut model = Model::new();
+        let a = crate::io::brep::read(&mut model, &mut include_str!("tests/lofted_blade_a.brep").as_bytes()).unwrap();
+        let b = crate::io::brep::read(&mut model, &mut include_str!("tests/revolved_cap_on_blade_b.brep").as_bytes()).unwrap();
+        let expected = properties::volume(&model, a).mass + properties::volume(&model, b).mass;
+        let u = union(&mut model, a, b).unwrap();
+        assert!(validity::check(&model, u).is_valid());
+        assert!((properties::volume(&model, u).mass - expected).abs() <= 1e-6 * expected, "{} vs {expected}", properties::volume(&model, u).mass);
+        assert_eq!(model.unique_subshapes(u, NodeKind::Face).len(), 8);
+        // The blade again with the capped one: within it, its end face inside, though found
+        // past the cap's axis where the ray meets the cap near its pole (the cap's
+        // parameters there on the other branch, off the face, the hit missed).
+        let again = union(&mut model, a, u).unwrap();
+        assert!(validity::check(&model, again).is_valid());
+        assert!((properties::volume(&model, again).mass - expected).abs() <= 1e-6 * expected, "{} vs {expected}", properties::volume(&model, again).mass);
+        let common = intersection(&mut model, a, u).unwrap();
+        let blade = properties::volume(&model, a).mass;
+        assert!((properties::volume(&model, common).mass - blade).abs() <= 1e-6 * blade, "{} vs {blade}", properties::volume(&model, common).mass);
+    }
+
     /// At a corner of two cells of a gyroid lattice: one plate's offset face and wall along
     /// the cell's top face, and the walls of the neighbouring cell's plate (its mirror image)
     /// along the face below and their shared face. The latter's short edge across its walls

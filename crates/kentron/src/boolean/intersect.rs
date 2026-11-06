@@ -2811,7 +2811,9 @@ impl Graph {
                 continue;
             }
             let Some(c) = &e.curve else { continue };
-            if !same_carrier(&curve, c) {
+            // (Or one ellipse, as where a revolved cap is set on a lofted blade's end: there the
+            // edges still cross where their stretches in common end, found as for any curves.)
+            if !(same_carrier(&curve, c) || same_ellipse(&curve, c)) {
                 continue;
             }
             let (s, d) = geom::project(c, e.first, e.last, p);
@@ -3651,6 +3653,19 @@ fn onto_both(a: &Surface, b: &Surface, mut p: Point) -> Point {
         p = p + na * alpha + nb * beta;
     }
     p
+}
+
+/// True if two curves are one ellipse: the same centre, radii and plane, the major axes
+/// along one line.
+fn same_ellipse(a: &Curve, b: &Curve) -> bool {
+    let (Curve::Ellipse(x), Curve::Ellipse(y)) = (a, b) else { return false };
+    let tol = on_tol();
+    let axis = |f: &crate::math::Frame| Vector::from(f.x()).cross(Vector::from(f.y()));
+    x.center().distance(y.center()) <= tol
+        && (x.major_radius() - y.major_radius()).abs() <= tol
+        && (x.minor_radius() - y.minor_radius()).abs() <= tol
+        && axis(x.frame()).cross(axis(y.frame())).length() <= 1e-9
+        && Vector::from(x.frame().x()).cross(Vector::from(y.frame().x())).length() * x.major_radius() <= tol
 }
 
 /// True if two curves are the same circle or B-spline, or lie on the same line.

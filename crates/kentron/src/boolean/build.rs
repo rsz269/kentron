@@ -320,7 +320,28 @@ impl Output {
                             let start = [arc.uv[0], arc.uv[arc.uv.len() - 1]]
                                 .into_iter()
                                 .find(|uv| geom::surface_point(near, *uv).distance(curve.point(out.first)) <= 1e3 * TOL);
-                            aligned_pcurve(curve, near, out.first, out.last, middle, periods, face_data.drift, start)?
+                            let fitted = aligned_pcurve(curve, near, out.first, out.last, middle, periods, face_data.drift, start)?;
+                            // (Where the fit is not on the arc's own pcurve (up to whole
+                            // periods) at its ends and middle, the curve's parameters were found
+                            // on another branch of the surface passing through the same points
+                            // (a half ellipse turned about the axis it ends on, past the axis,
+                            // near a pole, where either branch carries on smoothly): from the
+                            // arc's own pcurve, along its edge, instead.)
+                            let off_middle = arc.pcurve.as_ref().zip(graph.edges[piece.edge].curve.as_ref()).is_some_and(|(own, own_curve)| {
+                                let (lo, hi) = (piece.first.min(piece.last), piece.first.max(piece.last));
+                                [out.first, 0.5 * (out.first + out.last), out.last].iter().any(|&t| {
+                                    let (m, o) = (fitted.point(t), own.point(geom::project(own_curve, lo, hi, curve.point(t)).0));
+                                    [(m.x, o.x, periods[0]), (m.y, o.y, periods[1])].iter().any(|&(x, y, period)| {
+                                        let d = x - y;
+                                        let d = period.map_or(d, |p| d - (d / p).round() * p);
+                                        d.abs() > 1e-6 * (1.0 + y.abs())
+                                    })
+                                })
+                            });
+                            match (&arc.pcurve, off_middle) {
+                                (Some(own), true) => along_own_pcurve(graph, piece, own, curve, out.first, out.last, near).unwrap_or(fitted),
+                                _ => fitted,
+                            }
                         }
                         (None, None) => return Err(Error::InvalidInput("a degenerate edge without a pcurve".into())),
                     };
@@ -434,6 +455,32 @@ fn result_vertex(model: &mut Model, graph: &Graph, v: usize) -> VertexId {
         Some(&id) => id,
         None => model.add_vertex(graph.vertices.points[v], TOL),
     }
+}
+
+/// The pcurve of `curve` over `[first, last]` (a representative of `piece`, lying along it)
+/// taken from `own`, the pcurve of the piece's edge on the face: each sample's point found on
+/// the piece's edge and mapped through `own`. `None` where the edge has no curve or the fit
+/// strays from the surface by more than the tolerance.
+fn along_own_pcurve(graph: &Graph, piece: &Piece, own: &Curve2, curve: &Curve, first: f64, last: f64, surface: &crate::geometry::surface::Surface) -> Option<Curve2> {
+    let edge = &graph.edges[piece.edge];
+    let own_curve = edge.curve.as_ref()?;
+    let (lo, hi) = (piece.first.min(piece.last), piece.first.max(piece.last));
+    let n = 32;
+    let params: Vec<f64> = (0..=n).map(|i| first + (last - first) * i as f64 / n as f64).collect();
+    let points: Vec<crate::math::Point2> = params
+        .iter()
+        .map(|&t| {
+            let s = geom::project(own_curve, lo, hi, curve.point(t)).0;
+            own.point(s)
+        })
+        .collect();
+    let fit = crate::geometry::fit::interpolate_with_parameters(&points, &params).ok()?;
+    let fit = Curve2::BSpline(fit);
+    let strays = params.windows(2).map(|w| 0.5 * (w[0] + w[1])).map(|t| {
+        let uv = fit.point(t);
+        surface.point(uv.x, uv.y).distance(curve.point(t))
+    });
+    strays.fold(0.0, f64::max).le(&(10.0 * TOL)).then_some(fit)
 }
 
 /// The pcurve of `curve` over `[first, last]` on `surface`, shifted by whole periods of

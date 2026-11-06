@@ -277,6 +277,26 @@ impl Face {
         [self.shift_u(u), self.shift_v(v)]
     }
 
+    /// `uv`, the parameters found for a point of the surface, or, on a surface of revolution
+    /// whose meridian crosses its axis (a half ellipse turned about the axis it ends on),
+    /// where no copy of them across periods is within the face's ranges, the point's
+    /// parameters with `v` within the face's range: past the axis the meridian turned half a
+    /// turn passes through the same points, and a point near the axis may be found on that
+    /// other branch, `u` half a turn off and `v` mirrored.
+    pub fn on_face_branch(&self, p: Point, uv: Uv) -> Uv {
+        let crate::geometry::surface::Surface::Revolution(r) = &self.surface else { return uv };
+        if self.representatives(uv).next().is_some() {
+            return uv;
+        }
+        let (lo, hi) = (self.v_range.0.min(self.v_range.1), self.v_range.0.max(self.v_range.1));
+        if !(lo < hi) {
+            return uv;
+        }
+        let (u, v) = r.parameters_between(p, lo, hi);
+        let off = |q: Uv| geom::surface_point(&self.surface, q).distance(p);
+        if off([u, v]) <= off(uv) + on_tol() { [u, v] } else { uv }
+    }
+
     /// `u` moved by whole periods into (or next to) the face's u range.
     pub fn shift_u(&self, u: f64) -> f64 {
         shift(u, self.u_period, self.u_range)
@@ -333,6 +353,7 @@ impl Face {
         // their size): beyond its edge.
         let reach = 1e-3 * self.extent.0.distance(self.extent.1) + on_tol();
         let Some(uv) = geom::uv_within(&self.surface, p, reach) else { return Location::Outside };
+        let uv = self.on_face_branch(p, uv);
         // (Within the polylines' sag of the boundary, by the nearest edge's own curve: a face
         // narrower than its arcs' chords stray, a sliver between circles, is told apart from
         // what lies beside it only so.)
