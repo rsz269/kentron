@@ -2623,6 +2623,31 @@ mod tests {
         section_covering_nothing_twice(include_str!("tests/mirrored_walls_section_ends_a.brep"), include_str!("tests/mirrored_walls_section_ends_b.brep"));
     }
 
+    /// At a corner of two cells of a gyroid lattice: one plate's offset face and wall along
+    /// the cell's top face, and the walls of the neighbouring cell's plate (its mirror image)
+    /// along the face below and their shared face. The latter's short edge across its walls
+    /// at the corner crosses the offset face 1.8e-4 off the face's edge (both 0.05 long
+    /// there), within the face's loose tolerance: taken for crossing that edge, it was split
+    /// 2.1e-4 off its own curve, and the sections through the corner ended at that point
+    /// twice, a lens between them.
+    #[test]
+    fn mirrored_plates_corner_edges_cross_the_face_not_its_edge() {
+        let mut model = Model::new();
+        let a = crate::io::brep::read(&mut model, &mut include_str!("tests/mirrored_plates_corner_a.brep").as_bytes()).unwrap();
+        let b = crate::io::brep::read(&mut model, &mut include_str!("tests/mirrored_plates_corner_b.brep").as_bytes()).unwrap();
+        let s = section(&mut model, a, b).unwrap();
+        let mut ends: Vec<(u32, u32)> = Vec::new();
+        for e in model.unique_subshapes(s, NodeKind::Edge) {
+            if properties::length(&model, e).mass <= 1e-2 {
+                continue;
+            }
+            let (v0, v1) = model.edge_vertices(e);
+            let key = (v0.node.index.min(v1.node.index), v0.node.index.max(v1.node.index));
+            assert!(!ends.contains(&key), "two section edges from {:?} to {:?}", model.point(v0), model.point(v1));
+            ends.push(key);
+        }
+    }
+
     /// An end wall of a thickened plate (a cell of a Schwarz lattice) and its mirror image
     /// across y = 1.99, hinged on the arc they share there and twisting through the plane:
     /// their section is the arc and two branches, where the walls cross the plane, from the

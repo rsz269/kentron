@@ -2928,6 +2928,12 @@ impl Graph {
             return None;
         }
         let loose = if tangent && geom::freeform(&face.surface) { (on_tol() / sine.max(1e-6)).min(1e-3) } else { 0.0 };
+        // (The face's own tolerance only up to a thousandth of the shorter edge: a short
+        // edge passing a little off the boundary edge, as the walls' corner edges of two
+        // mirrored plates meeting at a cell's corner, crosses the face there, not the
+        // boundary edge; split at that point, it would be cut off its own curve.)
+        let short = curve.point(first).distance(curve.point(last)).min(other_curve.point(other.first).distance(other_curve.point(other.last)));
+        let within = within.min(1e-3 * short);
         (gap <= loose.max(other.tolerance).max(within)).then_some((u, x, Some((nearest.1, s))))
     }
 
