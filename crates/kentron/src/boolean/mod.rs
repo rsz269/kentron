@@ -2576,6 +2576,53 @@ mod tests {
         }
     }
 
+    /// Panics where two edges of the section of `a` and `b` (BRep text) cover one stretch:
+    /// their ends a hair apart, and their middles.
+    fn section_covering_nothing_twice(a: &str, b: &str) {
+        use crate::geometry::ParametricCurve;
+        let mut model = Model::new();
+        let a = crate::io::brep::read(&mut model, &mut a.as_bytes()).unwrap();
+        let b = crate::io::brep::read(&mut model, &mut b.as_bytes()).unwrap();
+        let s = section(&mut model, a, b).unwrap();
+        let edges: Vec<(Point, Point, Point)> = model
+            .unique_subshapes(s, NodeKind::Edge)
+            .into_iter()
+            .map(|e| {
+                let (c, t0, t1) = model.edge_curve(e).unwrap();
+                let (v0, v1) = model.edge_vertices(e);
+                (model.point(v0), model.point(v1), c.point(0.5 * (t0 + t1)))
+            })
+            .collect();
+        for (i, &(a0, a1, am)) in edges.iter().enumerate() {
+            for &(b0, b1, bm) in &edges[i + 1..] {
+                let near = |p: Point, q: Point| p.distance(q) <= 2e-3;
+                let ends = (near(a0, b0) && near(a1, b1)) || (near(a0, b1) && near(a1, b0));
+                assert!(!(ends && near(am, bm) && a0.distance(a1) > 1e-2), "the stretch {a0:?} to {a1:?} twice");
+            }
+        }
+    }
+
+    /// The two end walls of a thickened plate (a cell of a gyroid lattice) along the cell's
+    /// face x = 10, and those of its image mirrored across x = 10 and y = 5 (the next cell's):
+    /// both hold the plate's edge in that face, one B-spline, the image's the same curve run
+    /// the other way. Vertices found on either edge where sections end on it split the other
+    /// too; taken for different curves, each was split at its own, and the stretch between
+    /// two such vertices a hair apart was covered by a piece of each, leaving a loop.
+    #[test]
+    fn mirrored_walls_share_their_edge_run_the_other_way() {
+        section_covering_nothing_twice(include_str!("tests/mirrored_walls_reversed_edge_a.brep"), include_str!("tests/mirrored_walls_reversed_edge_b.brep"));
+    }
+
+    /// As above, the walls of two other cells of the lattice along their shared face: a
+    /// section ending where the walls meet nearly tangent met the two edges there (one of
+    /// each, coincident) a little apart, and each took its own vertex; the other edge, with a
+    /// vertex of its own that near, did not take it, and the edges were split a hair apart.
+    /// One vertex for both.
+    #[test]
+    fn mirrored_walls_meet_their_coincident_edges_at_one_vertex() {
+        section_covering_nothing_twice(include_str!("tests/mirrored_walls_section_ends_a.brep"), include_str!("tests/mirrored_walls_section_ends_b.brep"));
+    }
+
     /// An end wall of a thickened plate (a cell of a Schwarz lattice) and its mirror image
     /// across y = 1.99, hinged on the arc they share there and twisting through the plane:
     /// their section is the arc and two branches, where the walls cross the plane, from the

@@ -806,6 +806,27 @@ fn same_shadow(a: &Curve, b: &Curve, d: Vector) -> bool {
         })
 }
 
+/// Whether two B-spline curves are one curve run in opposite directions: equal degrees,
+/// the knots' spans, multiplicities, weights and poles of one those of the other in reverse
+/// (poles within the meeting tolerance).
+fn same_reversed(a: &Curve, b: &Curve) -> bool {
+    let (Curve::BSpline(a), Curve::BSpline(b)) = (a, b) else { return false };
+    let near = |p: f64, q: f64| (p - q).abs() <= 1e-12 * (1.0 + p.abs().max(q.abs()));
+    let (ka, kb) = (a.knots(), b.knots());
+    let (wa, wb) = (a.weights(), b.weights());
+    a.degree() == b.degree()
+        && a.multiplicities().iter().eq(b.multiplicities().iter().rev())
+        && ka.len() == kb.len()
+        && ka.windows(2).zip(kb.windows(2).rev()).all(|(x, y)| near(x[1] - x[0], y[1] - y[0]))
+        && match (wa, wb) {
+            (None, None) => true,
+            (Some(x), Some(y)) => x.len() == y.len() && x.iter().zip(y.iter().rev()).all(|(&p, &q)| near(p, q)),
+            _ => false,
+        }
+        && a.poles().len() == b.poles().len()
+        && a.poles().iter().zip(b.poles().iter().rev()).all(|(&p, &q)| p.distance(q) <= on_tol())
+}
+
 /// A curve where two faces' surfaces meet.
 enum Section {
     /// A line, restricted to a range covering both faces.
@@ -3090,9 +3111,14 @@ impl Graph {
                     // has one already, or the sections cross: a vertex there lying on the
                     // edge. Found along the edge only roughly, where the surfaces touch.)
                     let e = &self.edges[edge];
+                    // (Or, the section's end met already on an edge this one coincides with,
+                    // as the two operands' edges along a mirror do, there as roughly: one
+                    // vertex on both, within a thousandth of the edge.)
+                    let rough = e.curve.as_ref().map_or(0.0, |c| 1e-3 * c.point(e.first).distance(c.point(e.last)));
                     let on_edge = |v: usize| {
                         let x = self.vertices.points[v];
-                        x.distance(q) <= 100.0 * on_tol() && e.curve.as_ref().is_some_and(|c| geom::project(c, e.first, e.last, x).1 <= 10.0 * on_tol())
+                        let near = x.distance(q) <= 100.0 * on_tol() || (met.iter().any(|m| m.1 == v) && x.distance(q) <= rough);
+                        near && e.curve.as_ref().is_some_and(|c| geom::project(c, e.first, e.last, x).1 <= 10.0 * on_tol())
                     };
                     let known = met.iter().map(|m| m.1).chain(e.paves.iter().map(|p| p.1)).chain(self.faces[fa].vertices_on.iter().chain(&self.faces[fb].vertices_on).copied());
                     if let Some(v) = known.filter(|&v| on_edge(v)).min_by(|&v, &w| self.vertices.points[v].distance(q).total_cmp(&self.vertices.points[w].distance(q))) {
@@ -3635,8 +3661,8 @@ fn same_carrier(a: &Curve, b: &Curve) -> bool {
             x.center().distance(y.center()) <= tol && (x.radius() - y.radius()).abs() <= tol && axis(x).cross(axis(y)).length() <= 1e-9
         }
         // (One B-spline twice, as a copy of a shape fused with it: the same knots, weights
-        // and poles.)
-        (Curve::BSpline(_), Curve::BSpline(_)) => same_shadow(a, b, Vector::new(0.0, 0.0, 0.0)),
+        // and poles; or run the other way, as a mirrored copy's edge along the mirror.)
+        (Curve::BSpline(_), Curve::BSpline(_)) => same_shadow(a, b, Vector::new(0.0, 0.0, 0.0)) || same_reversed(a, b),
         _ => false,
     }
 }
