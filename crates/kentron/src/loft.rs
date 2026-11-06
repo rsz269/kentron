@@ -48,6 +48,10 @@ pub struct LoftOptions {
     pub matching: Matching,
     /// Where a smooth loft passes through each section, along the way across them.
     pub spacing: Spacing,
+    /// B-spline section edges kept as they are (made alike with the others), not sampled:
+    /// so that the surface holds them exactly, as the walls a face is thickened with hold
+    /// its offset's edges (OCCT's loft samples them where samples follow them closely).
+    pub exact_splines: bool,
 }
 
 /// Where a smooth [`loft`] passes through its sections, along its parameter across them
@@ -208,7 +212,7 @@ fn loft_traced(model: &mut Model, sections: &[Shape], options: &LoftOptions, bre
     let ring = looped && options.solid;
     let shell_options = LoftOptions { solid: options.solid && !ring, ..*options };
     make_compatible(&mut parsed, closed, looped, options.matching, &mut marks);
-    let grid = Grid::sample(&parsed, options.spacing, exact_arcs);
+    let grid = Grid::sample(&parsed, options.spacing, exact_arcs, options.exact_splines);
     let mut built = build(model, &parsed, &grid, closed, looped, periodic && looped, &shell_options, breaks)?;
     if ring {
         let shells = model.unique_subshapes(built.shape, NodeKind::Shell);
@@ -843,7 +847,7 @@ struct Grid {
 }
 
 impl Grid {
-    fn sample(sections: &[Section], spacing: Spacing, exact_arcs: bool) -> Grid {
+    fn sample(sections: &[Section], spacing: Spacing, exact_arcs: bool, exact_splines: bool) -> Grid {
         let edges = sections.iter().find_map(|s| if let Section::Wire(w) = s { Some(w.pieces.len()) } else { None }).expect("a wire");
         let mut curves: Vec<Vec<BSplineCurve>> = Vec::with_capacity(edges);
         let mut exact = vec![false; edges];
@@ -919,7 +923,7 @@ impl Grid {
                     _ => false,
                 })
             };
-            let sampled: Vec<BSplineCurve> = match alike.as_ref().filter(|_| strays(&sampled)) {
+            let sampled: Vec<BSplineCurve> = match alike.as_ref().filter(|_| exact_splines || strays(&sampled)) {
                 Some(splines) => {
                     alike_rows[i] = true;
                     let like = splines.iter().flatten().next().map(|cs| cs[i].clone()).expect("a wire section");
@@ -1885,6 +1889,30 @@ mod tests {
             }
         }
         assert_eq!((arcs, lines), (4, 4));
+    }
+
+    /// A wall ruled between an edge of a Schwarz plate (an arc) and the edge of the plate's
+    /// offset across from it (a B-spline), as the plate is thickened: with `exact_splines`
+    /// the wall holds the offset's edge as it is (sampled, it strays from it by 1e-5, and
+    /// the thickened solid's edge there from its wall as far).
+    #[test]
+    fn a_thickened_plates_wall_holds_its_offsets_edge_exactly() {
+        let mut model = Model::new();
+        let mut read = |text: &str| crate::io::brep::read(&mut model, &mut text.as_bytes()).unwrap();
+        let (edge, offset) = (read(include_str!("boolean/tests/thickened_plate_wall_edge.brep")), read(include_str!("boolean/tests/thickened_plate_wall_offset.brep")));
+        let (low, high) = (make::wire(&mut model, &[edge]).unwrap(), make::wire(&mut model, &[offset]).unwrap());
+        let edge_id = model.unique_subshapes(offset, crate::topology::NodeKind::Edge)[0];
+        let (curve, first, last) = model.edge_curve(edge_id).unwrap();
+        let strays = |model: &mut Model, exact_splines: bool| {
+            let wall = loft(model, &[low, high], &LoftOptions { ruled: true, exact_splines, ..Default::default() }).unwrap().shape;
+            let face = model.unique_subshapes(wall, crate::topology::NodeKind::Face)[0];
+            let surface = model.face_surface(crate::topology::FaceId::try_from(face.node).unwrap()).unwrap().clone();
+            (0..=100).map(|i| crate::geometry::extrema::nearest_on_surface(curve.point(first + (last - first) * i as f64 / 100.0), &surface, None).2).fold(0.0, f64::max)
+        };
+        let sampled = strays(&mut model, false);
+        let exact = strays(&mut model, true);
+        assert!(sampled > 1e-6, "{sampled}");
+        assert!(exact < 1e-9, "{exact}");
     }
 
     /// A strip 0.1 high ruled between a helix winding forty times round a unit cylinder

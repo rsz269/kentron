@@ -715,10 +715,11 @@ fn revolve_recorded(profile: Handle, origin: Xyz, axis: Xyz, angle: f64) -> PyRe
 /// spaced as `spacing` says: "chordal" (by their distances apart), "centripetal" (by those
 /// distances' square roots) or "uniform" (evenly), CadQuery's names. Their edges are
 /// matched as `matching` says: "rays" (as OCCT), "length", or "as_given" (in order, none
-/// turned or restarted: sections known to correspond, as turned copies of one).
+/// turned or restarted: sections known to correspond, as turned copies of one). With
+/// `exact`, B-spline section edges are kept as they are, the surface holding them exactly.
 #[pyfunction]
-#[pyo3(signature = (sections, solid=true, ruled=false, spacing="chordal", matching="rays"))]
-fn make_loft(sections: Vec<Handle>, solid: bool, ruled: bool, spacing: &str, matching: &str) -> PyResult<Handle> {
+#[pyo3(signature = (sections, solid=true, ruled=false, spacing="chordal", matching="rays", exact=false))]
+fn make_loft(sections: Vec<Handle>, solid: bool, ruled: bool, spacing: &str, matching: &str, exact: bool) -> PyResult<Handle> {
     let sections: Vec<Shape> = sections.iter().map(|h| h.shape).collect();
     let spacing = match spacing.to_ascii_lowercase().as_str() {
         "chordal" | "chordlength" => loft::Spacing::ByDistance,
@@ -732,7 +733,7 @@ fn make_loft(sections: Vec<Handle>, solid: bool, ruled: bool, spacing: &str, mat
         "as_given" => loft::Matching::AsGiven,
         other => return Err(PyValueError::new_err(format!("unknown loft matching {other}"))),
     };
-    with_model(|m| loft::loft(m, &sections, &loft::LoftOptions { solid, ruled, matching, spacing }).map(|l| l.shape)).map(handle)
+    with_model(|m| loft::loft(m, &sections, &loft::LoftOptions { solid, ruled, matching, spacing, exact_splines: exact }).map(|l| l.shape)).map(handle)
 }
 
 /// [`make_loft`], with its history: each section edge and vertex (by node) with what it
@@ -755,7 +756,7 @@ fn make_loft_recorded(sections: Vec<Handle>, solid: bool, ruled: bool, spacing: 
         other => return Err(PyValueError::new_err(format!("unknown loft matching {other}"))),
     };
     with_model(|m| {
-        let lofted = loft::loft(m, &sections, &loft::LoftOptions { solid, ruled, matching, spacing })?;
+        let lofted = loft::loft(m, &sections, &loft::LoftOptions { solid, ruled, matching, spacing, exact_splines: false })?;
         let generated = lofted.history().iter().map(|(n, s)| (handle(Shape::from(*n)), s.iter().map(|&x| handle(x)).collect())).collect();
         let [first, last] = lofted.caps();
         Ok((handle(lofted.shape), generated, (first.map(handle), last.map(handle))))

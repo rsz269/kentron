@@ -375,6 +375,39 @@ fn contact_from(curve: &Curve, first: f64, last: f64, surface: &Surface, toleran
     roots.sort_by(f64::total_cmp);
     let resolution = 1e-9 * (last - first).abs().max(1e-12);
     roots.dedup_by(|b, a| (*b - *a).abs() <= resolution);
+    // (Where the curve lies along the surface for a while, within the classifying distance
+    // at three samples running or more, weaving across it at that scale (as a plate's corner
+    // edge along the wall of its mirror image, from the vertex they share): it lies on it
+    // there. It crosses the surface over that stretch only if on either side of it, met
+    // once, where it leaves the surface; from an end of the curve, or back on the side it
+    // came from, it lies along the surface and turns away, not met within the stretch.)
+    let mut i = 0;
+    while i <= n {
+        if !(found[i] && values[i].abs() <= on_tol()) {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i <= n && found[i] && values[i].abs() <= on_tol() {
+            i += 1;
+        }
+        if i - start < 3 {
+            continue;
+        }
+        let (lo, hi) = (ts[start], ts[i - 1]);
+        let before = (start > 0).then(|| values[start - 1]).filter(|v| v.abs() > on_tol());
+        let after = (i <= n).then(|| values[i]).filter(|v| v.abs() > on_tol());
+        let crossing = matches!((before, after), (Some(b), Some(a)) if a * b < 0.0);
+        let at_ends = |t: f64| (t - first).abs() <= resolution || (t - last).abs() <= resolution;
+        let inside: Vec<usize> = (0..roots.len()).filter(|&k| roots[k] >= lo - resolution && roots[k] <= hi + resolution && !at_ends(roots[k])).collect();
+        let keep = if crossing { inside.last().copied() } else { None };
+        let mut k = 0;
+        roots.retain(|_| {
+            let kept = !inside.contains(&k) || Some(k) == keep;
+            k += 1;
+            kept
+        });
+    }
     Contact::At(roots)
 }
 
@@ -3417,6 +3450,33 @@ impl Graph {
         })
     }
 
+    /// Whether the piece of `section` from `t0` to `t1` (from vertex `v0` to `v1`) runs along
+    /// a boundary edge of either face through both its ends, within the faces' tolerance over
+    /// the sine of the angle between their surfaces all the way (as [`Self::along_edge_on_both`]
+    /// for an edge lying on the other face only along the piece): the edge of a plate's wall
+    /// along the offset face of its mirror image, the two offset faces continuing each other
+    /// across the plane between them, met over a stretch a hair apart. Made of it, the face
+    /// would be cut by two curves that close, a sliver of no area between them.
+    fn along_own_edge(&self, fa: usize, fb: usize, section: &Section, (t0, v0): (f64, usize), (t1, v1): (f64, usize)) -> bool {
+        let (a, b) = (&self.faces[fa], &self.faces[fb]);
+        // (Between free-form faces only, and within a hundred times the classifying distance
+        // at most: pieces a fair way off an edge are sections of their own, as where faces
+        // read from files with loose tolerances meet along their edges.)
+        if !(geom::freeform(&a.surface) && geom::freeform(&b.surface)) {
+            return false;
+        }
+        let tolerance = (a.drift.max(b.drift) + 10.0 * on_tol()).min(100.0 * on_tol());
+        let through = |e: &Edge, v: usize| e.start == v || e.end == v || e.paves.iter().any(|&(_, w)| w == v);
+        [a, b].iter().flat_map(|f| f.boundary.iter().map(|u| u.edge)).any(|ei| {
+            let edge = &self.edges[ei];
+            let Some(curve) = &edge.curve else { return false };
+            if !(through(edge, v0) && through(edge, v1)) {
+                return false;
+            }
+            (1..8).all(|i| geom::project(curve, edge.first, edge.last, section.point(t0 + (t1 - t0) * i as f64 / 8.0)).1 <= tolerance)
+        })
+    }
+
     /// Whether the piece of `section` from `t0` to `t1` runs along the boundary of either
     /// face past its surface's bound: in that face's parameters on its boundary all the way
     /// (a point past a patch's bound found on it), near the face in space, and somewhere off
@@ -3497,6 +3557,9 @@ impl Graph {
                 continue;
             }
             if self.along_edge_on_both(fa, fb, section, (t0, v0), (t1, v1), &lying) {
+                continue;
+            }
+            if self.along_own_edge(fa, fb, section, (t0, v0), (t1, v1)) {
                 continue;
             }
             // (A marched section, followed a little past the surfaces' bounds: there off them,

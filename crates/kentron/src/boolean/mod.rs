@@ -2619,6 +2619,52 @@ mod tests {
         assert!(u.abs() < 1e-9 && s.abs() < 1e-9, "{u} {s}");
     }
 
+    /// The section of `a` and `b` mirrored across the plane `normal` · (p - `origin`) = 0:
+    /// its edges' lengths and ends.
+    fn mirrored_section(a: &str, b: &str, origin: Point, normal: Direction) -> Vec<(f64, Point, Point)> {
+        use crate::math::Transform;
+        let mut model = Model::new();
+        let mut read = |text: &str| crate::io::brep::read(&mut model, &mut text.as_bytes()).unwrap();
+        let (a, b) = (read(a), read(b));
+        let b = crate::modify::transform(&mut model, b, &Transform::mirror_plane(origin, normal), Default::default()).unwrap();
+        let s = section(&mut model, a, b).unwrap();
+        model
+            .unique_subshapes(s, NodeKind::Edge)
+            .into_iter()
+            .map(|e| {
+                let (v0, v1) = model.edge_vertices(e);
+                (properties::length(&model, e).mass, model.point(v0), model.point(v1))
+            })
+            .collect()
+    }
+
+    /// A thickened Schwarz plate's wall lying flat in a face of its cell (z = 0), and its
+    /// mirror image across x = 1.99, continuing it from the corner edge they share: their
+    /// section is that corner, in the plane. Their corner edges leave it a hair apart, each
+    /// within the classifying distance of the other's wall for a while, weaving across it:
+    /// each was met by the other's wall at every sample there, 0.0035 apart, splitting both
+    /// walls into a staircase of slivers. Lying along it there and turning away, never
+    /// crossing it, they meet it nowhere within that stretch.
+    #[test]
+    fn mirrored_flat_walls_meet_along_their_corner_alone() {
+        let wall = include_str!("tests/thickened_plate_flat_wall.brep");
+        let edges = mirrored_section(wall, wall, Point::new(1.99, 0.0, 0.0), Direction::X);
+        assert_eq!(edges.len(), 1, "{edges:?}");
+        assert!((edges[0].0 - 0.44994).abs() < 1e-4, "{edges:?}");
+    }
+
+    /// The same flat wall and the plate's offset face mirrored across y = 1.99: the offset
+    /// faces continue each other across that plane, and the wall's offset edge passes along
+    /// the mirrored one within 1.5e-5 for a little way near the plane, crossing it there.
+    /// That piece of their section, 0.0011 long, runs along the wall's own edge through both
+    /// its ends (within the faces' tolerance): the edge itself, not another cut a hair beside
+    /// it, which left a sliver face of no area, inside out.
+    #[test]
+    fn a_section_along_a_walls_own_edge_is_that_edge() {
+        let edges = mirrored_section(include_str!("tests/thickened_plate_flat_wall.brep"), include_str!("tests/mirrored_offset_faces_a.brep"), Point::new(0.0, 1.99, 0.0), Direction::Y);
+        assert!(edges.is_empty(), "{edges:?}");
+    }
+
     /// A disc with screw holes round its rim, their axes on its side, each blind hole's drill
     /// tip a cone whose apex lies on the side: cut by the next hole's tool, away from them.
     /// The cones' halves end at the apex on a degenerate edge whose pcurve stops a little

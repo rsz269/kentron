@@ -44,7 +44,6 @@ tests/blend/tolblend_simple/A3
 tests/blend/tolblend_simple/A4
 tests/blend/tolblend_simple/A5
 tests/blend/tolblend_simple/A6
-tests/blend/tolblend_simple/A7
 tests/blend/tolblend_simple/A8
 tests/blend/tolblend_simple/B6
 tests/blend/tolblend_simple/C5
@@ -217,7 +216,6 @@ tests/bugs/modalg_1/buc60703_3
 tests/bugs/modalg_1/buc60703_4
 tests/bugs/modalg_1/buc60714
 tests/bugs/modalg_1/buc60728
-tests/bugs/modalg_1/buc60776_1
 tests/bugs/modalg_1/buc60782_1
 tests/bugs/modalg_1/buc60830_2
 tests/bugs/modalg_1/buc60830_3

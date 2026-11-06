@@ -3937,7 +3937,7 @@ mod tests {
                 crate::make::wire(&mut model, &[edge]).unwrap()
             })
             .collect();
-        let options = crate::loft::LoftOptions { solid: true, ruled: false, matching: crate::loft::Matching::ByRays, spacing: crate::loft::Spacing::ByDistance };
+        let options = crate::loft::LoftOptions { solid: true, ruled: false, matching: crate::loft::Matching::ByRays, spacing: crate::loft::Spacing::ByDistance, exact_splines: false };
         let loft = crate::loft::loft(&mut model, &sections, &options).unwrap().shape;
         let block = Cuboid::from_corners(Point::new(-50.0, -50.0, 0.0), Point::new(50.0, 50.0, 20.5)).build(&mut model).unwrap();
         let spout = crate::boolean::intersection(&mut model, loft, block).unwrap();

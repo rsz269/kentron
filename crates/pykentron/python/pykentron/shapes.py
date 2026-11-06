@@ -2469,7 +2469,9 @@ def _thickened(face: "Face", thickness: float, made: Optional[dict] = None) -> "
         # (Run the same way as `e`.)
         if (g.startPoint() - a).Length + (g.endPoint() - b).Length > (g.endPoint() - a).Length + (g.startPoint() - b).Length:
             g = Shape.cast(g.wrapped.Reversed())
-        walls.append(native.make_loft([native.make_wire([e.wrapped]), native.make_wire([g.wrapped])], False, True))
+        # (Holding `g` exactly, the offset face's own edge it is sewn to: a wall sampled from
+        # it strays from it, and the solid's edge there from the wall, by as much.)
+        walls.append(native.make_loft([native.make_wire([e.wrapped]), native.make_wire([g.wrapped])], False, True, exact=True))
     if made is None:
         shell = Shape.cast(native.sew([face.wrapped, moved.wrapped] + walls, 1e-6))
         return Shape.cast(native.make_solid([s.wrapped for s in shell.Shells()]))
