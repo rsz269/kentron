@@ -137,16 +137,18 @@ impl Graph {
             // (Points of one on the other: the curves may be parametrized differently, as an
             // arc and a B-spline along it.)
             // (Two sections, traced where different faces meet along one curve, within a
-            // little of their length: one curve.)
+            // little of their length: one curve. So too a section traced along an operand's
+            // edge, as where a sloped wall meets another's upright one along the ellipse they
+            // both end on.)
             let chord = self.vertices.points[p.start].distance(self.vertices.points[p.end]);
             let found = candidates.iter().copied().find(|&j| {
                 let q = &pieces[j];
                 let Some(curve) = &self.edges[q.edge].curve else { return false };
-                let sections = self.edges[p.edge].operand.is_none() && self.edges[q.edge].operand.is_none();
+                let traced = self.edges[p.edge].operand.is_none() || self.edges[q.edge].operand.is_none();
                 // (Or within either edge's own tolerance: an edge read from a file straying
                 // from its surfaces that much, and another lying on them.)
                 let strays = self.edges[p.edge].tolerance.max(self.edges[q.edge].tolerance).min(1e-3 * chord);
-                let within = if sections { on_tol().max(2e-4 * chord) } else { on_tol().max(strays) };
+                let within = if traced { on_tol().max(2e-4 * chord) } else { on_tol().max(strays) };
                 [0.5, 0.25, 0.75].iter().all(|&s| geom::project(curve, q.first.min(q.last), q.first.max(q.last), probe(p, s)).1 <= within)
             });
             match found {

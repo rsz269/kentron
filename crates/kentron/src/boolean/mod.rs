@@ -550,6 +550,7 @@ fn classified(model: &Model, graph: &mut Graph) -> (Vec<split::Piece>, Vec<Vec<s
     graph.intersect_edges_on_faces();
     graph.share_vertices();
     graph.intersect_faces();
+    graph.drop_spurious_paves();
     let (mut pieces, of_edge) = graph.pieces();
     // (A face's boundary arcs over whole edges are the same each time: kept in the model
     // with the face, while their departure step stays the same, as when the face is moved.)
@@ -2623,6 +2624,25 @@ mod tests {
         section_covering_nothing_twice(include_str!("tests/mirrored_walls_section_ends_a.brep"), include_str!("tests/mirrored_walls_section_ends_b.brep"));
     }
 
+    /// An elliptic base, its sloped side ending on the ellipse of its top, and two planks
+    /// laid on the top: one cut to the ellipse (its upright wall rising from an arc of it),
+    /// one running past the base. The section of the sloped side with the plank's wall,
+    /// traced along the arc, is the base's own edge there, and is taken for it (the two
+    /// between the same vertices, within a little of their length): covering it twice, the
+    /// side made no region, and the union lost it.
+    #[test]
+    fn planks_on_an_elliptic_base_cut_to_its_edge() {
+        let mut model = Model::new();
+        let a = crate::io::brep::read(&mut model, &mut include_str!("tests/elliptic_base_a.brep").as_bytes()).unwrap();
+        let b = crate::io::brep::read(&mut model, &mut include_str!("tests/planks_cut_to_the_ellipse_b.brep").as_bytes()).unwrap();
+        let common = intersection(&mut model, a, b).unwrap();
+        let common = properties::volume(&model, common).mass;
+        let expected = properties::volume(&model, a).mass + properties::volume(&model, b).mass - common;
+        let u = union(&mut model, a, b).unwrap();
+        assert!(validity::check(&model, u).is_valid());
+        assert!((properties::volume(&model, u).mass - expected).abs() <= 1e-6 * expected, "{} vs {expected}", properties::volume(&model, u).mass);
+    }
+
     /// A blade lofted through ellipses and a cap on its end: a half ellipse turned half a turn
     /// about the axis it ends on, its flat face the blade's end, both bounded by the one
     /// ellipse. A vertex found on one operand's ellipse did not split the other's (not taken
@@ -2640,6 +2660,9 @@ mod tests {
         assert!(validity::check(&model, u).is_valid());
         assert!((properties::volume(&model, u).mass - expected).abs() <= 1e-6 * expected, "{} vs {expected}", properties::volume(&model, u).mass);
         assert_eq!(model.unique_subshapes(u, NodeKind::Face).len(), 8);
+        // (Along the ellipse the operands' edges split each other only where they end: a few
+        // edges there, not hundreds.)
+        assert!(model.unique_subshapes(u, NodeKind::Edge).len() < 40, "{} edges", model.unique_subshapes(u, NodeKind::Edge).len());
         // The blade again with the capped one: within it, its end face inside, though found
         // past the cap's axis where the ray meets the cap near its pole (the cap's
         // parameters there on the other branch, off the face, the hit missed).

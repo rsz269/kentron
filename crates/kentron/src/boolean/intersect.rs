@@ -2825,6 +2825,42 @@ impl Graph {
         }
     }
 
+    /// Drops the split points of coincident edges found nowhere else: a vertex no edge ends
+    /// at, splitting only edges on one ellipse (the two operands' edges along it, as a cap
+    /// revolved onto a lofted blade's elliptic end: met all along where they are searched for
+    /// crossings, each point found splitting both). The edges are left whole there, a few
+    /// pieces each where they end, not hundreds.
+    pub fn drop_spurious_paves(&mut self) {
+        let mut ending: crate::hashing::FastSet<usize> = Default::default();
+        for e in &self.edges {
+            ending.insert(e.start);
+            ending.insert(e.end);
+        }
+        let mut paved: HashMap<usize, Vec<usize>> = HashMap::default();
+        for (ei, e) in self.edges.iter().enumerate() {
+            for &(_, v) in &e.paves {
+                paved.entry(v).or_default().push(ei);
+            }
+        }
+        let mut drop: crate::hashing::FastSet<usize> = Default::default();
+        for (v, edges) in &paved {
+            if ending.contains(v) || edges.len() < 2 {
+                continue;
+            }
+            let curves: Option<Vec<&Curve>> = edges.iter().map(|&e| self.edges[e].curve.as_ref()).collect();
+            let Some(curves) = curves else { continue };
+            if curves.iter().all(|c| same_ellipse(curves[0], c)) {
+                drop.insert(*v);
+            }
+        }
+        if drop.is_empty() {
+            return;
+        }
+        for e in &mut self.edges {
+            e.paves.retain(|&(_, v)| !drop.contains(&v));
+        }
+    }
+
     pub fn add_pave(&mut self, ei: usize, t: f64, v: usize) {
         let e = &mut self.edges[ei];
         if v == e.start || v == e.end {
