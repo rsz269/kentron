@@ -1,0 +1,203 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+# Translated from usd-brep's tests into kentron's case format, with the checks strengthened:
+# changed from the originals as each case's notes say. See crates/occt-tests/README.md.
+case: shell_outward_open_top
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestOffsetShell.test_shell_brep_preserves_source_across_modes
+brute:
+  result:
+    test: (x>=-1)&(x<=11)&(y>=-1)&(y<=11)&(z>=-1)&(z<=10) & ~s(x,y,z)
+    box:
+    - - -1
+      - -1
+      - -1
+    - - 11
+      - 11
+      - 10
+build:
+- s:
+    box:
+      size: [10, 10, 10]
+      corner: [0, 0, 0]
+- top:
+    select:
+      of: s
+      face: [5, 5, 10]
+- result:
+    thick_solid:
+      shape: s
+      faces: [top]
+      thickness: 1
+      join: intersection
+checks:
+- valid: result
+- count: result
+  eq:
+    faces: 11
+    edges: 24
+    vertices: 16
+- volume: result
+  eq: 584
+  rel: 1.0e-06
+- bounds: result
+  eq: [[-1, -1, -1], [11, 11, 10]]
+  abs: 1.0e-06
+---
+case: shell_inward_open_top
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestOffsetShell.test_shell_brep_preserves_source_across_modes
+brute:
+  result: s(x,y,z) & ~((x>1)&(x<9)&(y>1)&(y<9)&(z>1))
+build:
+- s:
+    box:
+      size: [10, 10, 10]
+      corner: [0, 0, 0]
+- top:
+    select:
+      of: s
+      face: [5, 5, 10]
+- result:
+    thick_solid:
+      shape: s
+      faces: [top]
+      thickness: -1
+      join: intersection
+checks:
+- valid: result
+- count: result
+  eq:
+    faces: 11
+    edges: 24
+    vertices: 16
+- volume: result
+  eq: 424
+  rel: 1.0e-06
+- bounds: result
+  eq: [[0, 0, 0], [10, 10, 10]]
+  abs: 1.0e-06
+---
+case: shell_cylinder_outward
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestOffsetShell.test_shell_brep_cylinder_volume_honors_requested_accuracy
+notes:
+- The bottom's offset extends the wall down by the thickness, as usd-brep's expected value has it.
+brute:
+  result:
+    test: (x*x+y*y<=34**2)&(z>=-3)&(z<=86)&~s(x,y,z)
+    box:
+    - - -34
+      - -34
+      - -3
+    - - 34
+      - 34
+      - 86
+build:
+- s:
+    cylinder:
+      radius: 31
+      height: 86
+      frame:
+        origin: [0, 0, 0]
+- top:
+    select:
+      of: s
+      face: [0, 0, 86]
+- result:
+    thick_solid:
+      shape: s
+      faces: [top]
+      thickness: 3
+      join: intersection
+checks:
+- valid: result
+- volume: result
+  eq: pi*((31+3)^2*(86+3) - 31^2*86)
+  rel: 1.0e-05
+---
+case: shell_cylinder_inward
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestOffsetShell.test_shell_brep_cylinder_volume_honors_requested_accuracy
+brute:
+  result: s(x,y,z)&~((x*x+y*y<28**2)&(z>3))
+build:
+- s:
+    cylinder:
+      radius: 31
+      height: 86
+      frame:
+        origin: [0, 0, 0]
+- top:
+    select:
+      of: s
+      face: [0, 0, 86]
+- result:
+    thick_solid:
+      shape: s
+      faces: [top]
+      thickness: -3
+      join: intersection
+checks:
+- valid: result
+- volume: result
+  eq: pi*(31^2*86 - (31-3)^2*(86-3))
+  rel: 1.0e-05
+---
+case: offset_box_outward
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestOffsetShell.test_offset_brep
+notes:
+- 'The checks replace usd-brep''s that the result has faces: SMLib''s offset keeps a box''s corners sharp, as the
+  join by intersection does.'
+brute:
+  result:
+    test: (x>=-1)&(x<=11)&(y>=-1)&(y<=11)&(z>=-1)&(z<=11)
+    box:
+    - - -1
+      - -1
+      - -1
+    - - 11
+      - 11
+      - 11
+build:
+- s:
+    box:
+      size: [10, 10, 10]
+      corner: [0, 0, 0]
+- result:
+    offset_shape:
+      shape: s
+      distance: 1
+      join: intersection
+checks:
+- valid: result
+- count: result
+  eq:
+    faces: 6
+- volume: result
+  eq: 1728
+  rel: 1.0e-06
+- bounds: result
+  eq: [[-1, -1, -1], [11, 11, 11]]
+  abs: 1.0e-06

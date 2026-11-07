@@ -1,0 +1,302 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+# Translated from usd-brep's tests into kentron's case format, with the checks strengthened:
+# changed from the originals as each case's notes say. See crates/occt-tests/README.md.
+case: sphere_radius_10
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: tests/SM_API_test/src/TestSmPrimitives.cpp
+  test: TestSmCreateSphere
+notes:
+- 'usd-brep only checks that the call succeeds: the measures added, in closed form.'
+build:
+- result:
+    sphere:
+      radius: 10
+      frame:
+        origin: [0, 0, 0]
+checks:
+- valid: result
+- count: result
+  eq:
+    solids: 1
+- volume: result
+  eq: 4/3*pi*1000
+  rel: 1.0e-06
+- area: result
+  eq: 400*pi
+  rel: 1.0e-06
+- bounds: result
+  eq: [[-10, -10, -10], [10, 10, 10]]
+  abs: 1.0e-06
+---
+case: box_5_10_20
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: tests/SM_API_test/src/TestSmPrimitives.cpp
+  test: TestSmCreateBox
+notes:
+- 'usd-brep only checks that the call succeeds: the measures added, in closed form.'
+build:
+- result:
+    box:
+      size: [5, 10, 20]
+      corner: [0, 0, 0]
+checks:
+- valid: result
+- count: result
+  eq:
+    faces: 6
+- volume: result
+  eq: 1000
+  rel: 1.0e-06
+- area: result
+  eq: 700
+  rel: 1.0e-06
+- centroid: result
+  eq: [2.5, 5, 10]
+---
+case: cone_widening_upward
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: tests/SM_API_test/src/TestSmPrimitives.cpp
+  test: TestSmCreateCone
+notes:
+- 'usd-brep only checks that the call succeeds: the measures added, in closed form.'
+build:
+- result:
+    cone:
+      r1: 5
+      r2: 10
+      height: 20
+checks:
+- valid: result
+- count: result
+  eq:
+    solids: 1
+- volume: result
+  eq: pi/3*20*(25 + 50 + 100)
+  rel: 1.0e-06
+- area: result
+  eq: pi*125 + pi*15*sqrt(425)
+  rel: 1.0e-06
+- bounds: result
+  eq: [[-10, -10, 0], [10, 10, 20]]
+  abs: 1.0e-06
+---
+case: torus_10_5
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: tests/SM_API_test/src/TestSmPrimitives.cpp
+  test: TestSmCreateTorus
+notes:
+- 'usd-brep only checks that the call succeeds: the measures added, in closed form.'
+build:
+- result:
+    torus:
+      major: 10
+      minor: 5
+checks:
+- valid: result
+- count: result
+  eq:
+    solids: 1
+- volume: result
+  eq: 2*pi^2*10*25
+  rel: 1.0e-06
+- area: result
+  eq: 4*pi^2*50
+  rel: 1.0e-06
+- bounds: result
+  eq: [[-15, -15, -5], [15, 15, 5]]
+  abs: 1.0e-06
+---
+case: plane_10_by_15
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: tests/SM_API_test/src/TestSmPrimitives.cpp
+  test: TestSmCreatePlane
+notes:
+- 'usd-brep only checks that the call succeeds: the measures added, in closed form.'
+build:
+- resultw:
+    polyline:
+      points: [[0, 0, 0], [10, 0, 0], [10, 15, 0], [0, 15, 0], [0, 0, 0]]
+- result:
+    face:
+      wire: resultw
+checks:
+- count: result
+  eq:
+    faces: 1
+- area: result
+  eq: 150
+  rel: 1.0e-06
+---
+case: planar_circle_radius_10
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: tests/SM_API_test/src/TestSmPrimitives.cpp
+  test: TestSmCreatePlanarCircle
+notes:
+- 'usd-brep only checks that the call succeeds: the measures added, in closed form.'
+build:
+- resultc:
+    circle:
+      center: [0, 0, 0]
+      normal: [0, 0, 1]
+      radius: 10
+- resulte:
+    edge:
+      curve: resultc
+- resultw:
+    wire:
+      edges: [resulte]
+- result:
+    face:
+      wire: resultw
+checks:
+- count: result
+  eq:
+    faces: 1
+- area: result
+  eq: 100*pi
+  rel: 1.0e-06
+---
+case: box_far_from_the_origin
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: tests/SM_API_test/src/TestSmBrep.cpp
+  test: TestSmPrecisePropertySelection
+notes:
+- 'usd-brep checks its faces'' areas at these coordinates: the volume, centroid and bounds added.'
+build:
+- result:
+    box:
+      size: [2, 3, 4]
+      corner: [100000.0, -200000.0, 300000.0]
+checks:
+- valid: result
+- area: result
+  eq: 52
+  rel: 1.0e-06
+- volume: result
+  eq: 24
+  rel: 1.0e-06
+- centroid: result
+  eq: [100001, -199998.5, 300002]
+  abs: 1.0e-06
+- bounds: result
+  eq: [[100000.0, -200000.0, 300000.0], [100002, -199997, 300004]]
+  abs: 1.0e-06
+---
+case: inertia_sphere_near_from_the_origin
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: tests/SM_API_test/src/TestSmBrep.cpp
+  test: TestSmMassPropertiesFarOrigin
+notes:
+- 'usd-brep takes moments about a distant origin with the sphere at its centre: here the sphere is moved the other
+  way, and its moments about its own centroid are checked at density 1.'
+build:
+- s:
+    sphere:
+      radius: 2
+      frame:
+        origin: [0, 0, 0]
+- result:
+    translate:
+      shape: s
+      by: [-5, 10, -15]
+checks:
+- volume: result
+  eq: 4/3*pi*8
+  rel: 1.0e-06
+- centroid: result
+  eq: [-5, 10, -15]
+  abs: 1.0e-06
+- inertia: result
+  eq: [0.4*(4/3*pi*8)*4, 0.4*(4/3*pi*8)*4, 0.4*(4/3*pi*8)*4]
+  rel: 1.0e-06
+---
+case: inertia_sphere_far_from_the_origin
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: tests/SM_API_test/src/TestSmBrep.cpp
+  test: TestSmMassPropertiesFarOrigin
+notes:
+- 'usd-brep takes moments about a distant origin with the sphere at its centre: here the sphere is moved the other
+  way, and its moments about its own centroid are checked at density 1.'
+build:
+- s:
+    sphere:
+      radius: 2
+      frame:
+        origin: [0, 0, 0]
+- result:
+    translate:
+      shape: s
+      by: [-100, 200, -300]
+checks:
+- volume: result
+  eq: 4/3*pi*8
+  rel: 1.0e-06
+- centroid: result
+  eq: [-100, 200, -300]
+  abs: 1.0e-06
+- inertia: result
+  eq: [0.4*(4/3*pi*8)*4, 0.4*(4/3*pi*8)*4, 0.4*(4/3*pi*8)*4]
+  rel: 1.0e-06
+---
+case: inertia_rotated_box
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: tests/SM_API_test/src/TestSmBrep.cpp
+  test: TestSmMassProperties
+notes:
+- usd-brep's closed forms at density 2 (2560, 2240, 800), halved for density 1.
+build:
+- s:
+    box:
+      size: [2, 6, 10]
+      corner: [0, 0, 0]
+- result:
+    rotate:
+      shape: s
+      axis:
+        origin: [1, 3, 5]
+        direction: [0, 0, 1]
+      angle: 30
+checks:
+- volume: result
+  eq: 120
+  rel: 1.0e-06
+- area: result
+  eq: 184
+  rel: 1.0e-06
+- centroid: result
+  eq: [1, 3, 5]
+  abs: 1.0e-07
+- inertia: result
+  eq: [1280, 1120, 400]
+  rel: 1.0e-07

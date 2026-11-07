@@ -5,9 +5,9 @@ edition.workspace = true
 publish = false
 repository.workspace = true
 rust-version.workspace = true
-# Translations of OCCT's tests (LGPL-2.1 with the Open CASCADE exception) and of BRL-CAD's
-# libbg tests (LGPL-2.1): see README.md.
-license = "LGPL-2.1-only WITH OCCT-exception-1.0 AND LGPL-2.1-only"
+# Translations of OCCT's tests (LGPL-2.1 with the Open CASCADE exception), of BRL-CAD's
+# libbg tests (LGPL-2.1) and of USD BRep's tests (Apache-2.0): see README.md.
+license = "LGPL-2.1-only WITH OCCT-exception-1.0 AND LGPL-2.1-only AND Apache-2.0"
 description = "Tests converted from OCCT (GTests and DRAW scripts) by tools/draw2rs.py and by hand, plus the support code they use."
 
 [dependencies]

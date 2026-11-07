@@ -88,7 +88,7 @@ pub fn build(case: &Case) -> Result<(Model, Vec<(String, Shape)>), String> {
 }
 
 pub fn run(case: &Case) -> Result<(), String> {
-    let (env, failed) = built(case)?;
+    let (mut env, failed) = built(case)?;
     if let Some(e) = failed {
         return Err(e);
     }
@@ -619,7 +619,7 @@ impl Env {
             }
             "select" => self.select(a),
             // transforms
-            "translate" | "rotate" | "scale" | "reverse" | "orient" | "copy" => {
+            "translate" | "rotate" | "scale" | "mirror" | "reverse" | "orient" | "copy" => {
                 let s = self.shape(&a["shape"])?;
                 let moved = match op {
                     "translate" => s.moved(&Transform::translation(self.vector(&a["by"])?)),
@@ -630,6 +630,10 @@ impl Env {
                     }
                     "scale" => {
                         let t = Transform::scaling(self.point(&a["center"])?, self.number(&a["factor"])?);
+                        modify::transform(&mut self.model, s, &t, Default::default()).map_err(err)?
+                    }
+                    "mirror" => {
+                        let t = Transform::mirror_plane(self.point(&a["origin"])?, self.direction(&a["normal"])?);
                         modify::transform(&mut self.model, s, &t, Default::default()).map_err(err)?
                     }
                     "reverse" => s.reversed(),
@@ -651,6 +655,10 @@ impl Env {
             "extrude" => {
                 let p = self.shape(&a["profile"])?;
                 let by = self.vector(&a["by"])?;
+                if !a["angle"].is_badvalue() {
+                    let angle = self.number(&a["angle"])?.to_radians();
+                    return shape(sweep::extrude_drafted(&mut self.model, p, by, angle).map_err(err)?);
+                }
                 shape(sweep::extrude(&mut self.model, p, by).map_err(err)?.shape)
             }
             "revolve" => {
@@ -661,6 +669,10 @@ impl Env {
             }
             "pipe" => {
                 let (p, spine) = (self.shape(&a["profile"])?, self.shape(&a["spine"])?);
+                if a["corner"].as_str() == Some("mitred") {
+                    let options = sweep::PipeOptions::default();
+                    return shape(sweep::pipe_cornered(&mut self.model, p, spine, &options, sweep::Corner::Mitred).map_err(err)?);
+                }
                 shape(sweep::pipe(&mut self.model, p, spine).map_err(err)?.shape)
             }
             "to_nurbs" => {
@@ -806,6 +818,25 @@ impl Env {
                 };
                 shape(r.map_err(err)?)
             }
+            "helix" => {
+                // About the world's z axis, starting along x.
+                let (start, height, turns) = (self.number(&a["start_radius"])?, self.number(&a["height"])?, self.number(&a["turns"])?);
+                let end = if a["end_radius"].is_badvalue() { start } else { self.number(&a["end_radius"])? };
+                let part = kentron::helix::HelixPart { height, pitch: height / turns, end_diameter: 2.0 * end };
+                let options = kentron::helix::HelixOptions { left_handed: a["left_handed"].as_bool() == Some(true), ..Default::default() };
+                shape(kentron::helix::helix(&mut self.model, &Frame::WORLD, 2.0 * start, &[part], &options).map_err(err)?.wire)
+            }
+            "chamfer" => {
+                let s = self.shape(&a["shape"])?;
+                let edges = self.shapes(&a["edges"])?;
+                let distance = self.number(&a["distance"])?;
+                shape(blend::chamfer(&mut self.model, s, &edges, distance).map_err(err)?)
+            }
+            "remove_faces" => {
+                let s = self.shape(&a["shape"])?;
+                let faces = self.shapes(&a["faces"])?;
+                shape(kentron::defeature::remove_faces(&mut self.model, s, &faces).map_err(err)?.shape)
+            }
             other => Err(format!("unknown operation {other}")),
         }
     }
@@ -861,11 +892,11 @@ impl Env {
 
     // --- checks ---------------------------------------------------------------------------
 
-    fn check(&self, y: &Yaml) -> R<()> {
+    fn check(&mut self, y: &Yaml) -> R<()> {
         guarded(|| self.check_inner(y))
     }
 
-    fn check_inner(&self, y: &Yaml) -> R<()> {
+    fn check_inner(&mut self, y: &Yaml) -> R<()> {
         if let Some(name) = y["valid"].as_str() {
             let s = self.shape(&y["valid"])?;
             let report = validity::check(&self.model, s);
@@ -960,6 +991,43 @@ impl Env {
             } else {
                 Err(format!("the centroid is {c:?}, expected {want:?}"))
             };
+        }
+        // (`bounds` is also an option of `free_edges`.)
+        if !y["bounds"].is_badvalue() && y["free_edges"].is_badvalue() {
+            let s = self.shape(&y["bounds"])?;
+            let (lo, hi) = (self.point(&y["eq"][0])?, self.point(&y["eq"][1])?);
+            let tol = if y["abs"].is_badvalue() { 1e-6 } else { self.number(&y["abs"])? };
+            let b = properties::tight_bounding_box(&self.model, s);
+            let near = |p: Point, q: Point| (p.x - q.x).abs() <= tol && (p.y - q.y).abs() <= tol && (p.z - q.z).abs() <= tol;
+            return if near(b.min, lo) && near(b.max, hi) { Ok(()) } else { Err(format!("the bounds are {b:?}, expected {lo:?} to {hi:?}")) };
+        }
+        if !y["inertia"].is_badvalue() {
+            // About the centroid: the solids' moments about the axes through it.
+            let s = self.shape(&y["inertia"])?;
+            let props = properties::volume(&self.model, s);
+            let want = self.numbers(&y["eq"])?;
+            let rel = if y["rel"].is_badvalue() { 1e-6 } else { self.number(&y["rel"])? };
+            let m = props.inertia;
+            let have = [m[(0, 0)], m[(1, 1)], m[(2, 2)]];
+            let scale = want.iter().fold(0.0_f64, |m, v| m.max(v.abs()));
+            return if have.iter().zip(&want).all(|(h, w)| (h - w).abs() <= rel * scale) { Ok(()) } else { Err(format!("the moments are {have:?}, expected {want:?}")) };
+        }
+        if !y["distance"].is_badvalue() {
+            let (a, b) = (self.shape(&y["distance"][0])?, self.shape(&y["distance"][1])?);
+            let actual = kentron::distance::distance(&mut self.model, a, b).map_err(err)?.value;
+            return self.compare("distance", actual, y);
+        }
+        if !y["contains"].is_badvalue() {
+            let s = self.shape(&y["contains"])?;
+            let want = y["inside"].as_bool().ok_or("contains: inside")?;
+            for p in y["points"].as_vec().ok_or("contains: points")? {
+                let p = self.point(p)?;
+                let inside = boolean::classify_point(&self.model, s, p).map_err(err)? == boolean::PointLocation::Inside;
+                if inside != want {
+                    return Err(format!("{p:?} is {}inside {:?}", if inside { "" } else { "not " }, y["contains"]));
+                }
+            }
+            return Ok(());
         }
         if !y["kind"].is_badvalue() {
             let s = self.shape(&y["kind"])?;

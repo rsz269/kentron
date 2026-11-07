@@ -1,0 +1,427 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+# Translated from usd-brep's tests into kentron's case format, with the checks strengthened:
+# changed from the originals as each case's notes say. See crates/occt-tests/README.md.
+case: round_box_5_10_15
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: tests/SM_API_test/src/TestSmFillets.cpp
+  test: TestSmCircularFillet
+notes:
+- 'Every edge of the box rounded: Steiner''s formula for the volume and area.'
+params:
+  hx: 2.5
+  hy: 5
+  hz: 7.5
+  r: 0.5
+brute:
+  rounded: (np.maximum(abs(x-hx)-(hx-r),0)**2 + np.maximum(abs(y-hy)-(hy-r),0)**2 + np.maximum(abs(z-hz)-(hz-r),0)**2
+    <= r*r)
+  result: (np.maximum(abs(x-hx)-(hx-r),0)**2 + np.maximum(abs(y-hy)-(hy-r),0)**2 + np.maximum(abs(z-hz)-(hz-r),0)**2
+    <= r*r)
+build:
+- s:
+    box:
+      size: [5, 10, 15]
+      corner: [0, 0, 0]
+- e0:
+    select:
+      of: s
+      edge: [0, 0, 7.5]
+- e1:
+    select:
+      of: s
+      edge: [0, 10, 7.5]
+- e2:
+    select:
+      of: s
+      edge: [5, 0, 7.5]
+- e3:
+    select:
+      of: s
+      edge: [5, 10, 7.5]
+- e4:
+    select:
+      of: s
+      edge: [2.5, 0, 0]
+- e5:
+    select:
+      of: s
+      edge: [2.5, 0, 15]
+- e6:
+    select:
+      of: s
+      edge: [2.5, 10, 0]
+- e7:
+    select:
+      of: s
+      edge: [2.5, 10, 15]
+- e8:
+    select:
+      of: s
+      edge: [0, 5.0, 0]
+- e9:
+    select:
+      of: s
+      edge: [0, 5.0, 15]
+- e10:
+    select:
+      of: s
+      edge: [5, 5.0, 0]
+- e11:
+    select:
+      of: s
+      edge: [5, 5.0, 15]
+- rounded:
+    fillet:
+      shape: s
+      edges: [e0, e1, e2, e3, e4, e5, e6, e7, e8, e9, e10, e11]
+      radius: 0.5
+- result: rounded
+checks:
+- valid: result
+- count: result
+  eq:
+    faces: 26
+- volume: result
+  eq: 4.0*9.0*14.0 + 2*0.5*(4.0*9.0 + 9.0*14.0 + 14.0*4.0) + pi*0.5^2*(4.0 + 9.0 + 14.0) + 4/3*pi*0.5^3
+  rel: 1.0e-06
+- area: result
+  eq: 2*(4.0*9.0 + 9.0*14.0 + 14.0*4.0) + 2*pi*0.5*(4.0 + 9.0 + 14.0) + 4*pi*0.5^2
+  rel: 1.0e-06
+- bounds: result
+  eq: [[0, 0, 0], [5, 10, 15]]
+  abs: 1.0e-06
+---
+case: chamfer_box_5_10_15
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: tests/SM_API_test/src/TestSmFillets.cpp
+  test: TestSmChamferFillet
+notes:
+- usd-brep's chamfer of width 0.5 is one of distance sqrt(2)/4 along each face.
+params:
+  d: sqrt(2)/4
+brute:
+  result: s(x,y,z)&(abs(x-2.5)+abs(y-5)<=7.5-d)&(abs(y-5)+abs(z-7.5)<=12.5-d)&(abs(x-2.5)+abs(z-7.5)<=10-d)
+build:
+- s:
+    box:
+      size: [5, 10, 15]
+      corner: [0, 0, 0]
+- e0:
+    select:
+      of: s
+      edge: [0, 0, 7.5]
+- e1:
+    select:
+      of: s
+      edge: [0, 10, 7.5]
+- e2:
+    select:
+      of: s
+      edge: [5, 0, 7.5]
+- e3:
+    select:
+      of: s
+      edge: [5, 10, 7.5]
+- e4:
+    select:
+      of: s
+      edge: [2.5, 0, 0]
+- e5:
+    select:
+      of: s
+      edge: [2.5, 0, 15]
+- e6:
+    select:
+      of: s
+      edge: [2.5, 10, 0]
+- e7:
+    select:
+      of: s
+      edge: [2.5, 10, 15]
+- e8:
+    select:
+      of: s
+      edge: [0, 5.0, 0]
+- e9:
+    select:
+      of: s
+      edge: [0, 5.0, 15]
+- e10:
+    select:
+      of: s
+      edge: [5, 5.0, 0]
+- e11:
+    select:
+      of: s
+      edge: [5, 5.0, 15]
+- result:
+    chamfer:
+      shape: s
+      edges: [e0, e1, e2, e3, e4, e5, e6, e7, e8, e9, e10, e11]
+      distance: sqrt(2)/4
+checks:
+- valid: result
+- count: result
+  eq:
+    solids: 1
+- bounds: result
+  eq: [[0, 0, 0], [5, 10, 15]]
+  abs: 1.0e-06
+---
+case: round_four_edges_four_radii
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: tests/SM_API_test/src/TestSmFillets.cpp
+  test: TestSmFilletEdgesPerEdge
+notes:
+- 'usd-brep''s first four edges by position, with radii 0.5 to 1.25: three of them meet at corners, whose blend
+  is a kernel''s choice, so the volume is bounded by the fillets'' straight runs.'
+build:
+- s:
+    box:
+      size: [10, 10, 10]
+      corner: [0, 0, 0]
+- e0:
+    select:
+      of: s
+      edge: [10, 5, 10]
+- e1:
+    select:
+      of: s
+      edge: [5, 10, 10]
+- e2:
+    select:
+      of: s
+      edge: [0, 5, 0]
+- e3:
+    select:
+      of: s
+      edge: [0, 5, 10]
+- result:
+    fillet:
+      shape: s
+      edges: [{edge: e0, radius: 0.5}, {edge: e1, radius: 0.75}, {edge: e2, radius: 1.0}, {edge: e3, radius: 1.25}]
+checks:
+- valid: result
+- count: result
+  eq:
+    solids: 1
+- volume: result
+  lt: 1000
+- volume: result
+  gt: 1000 - (1 - pi/4)*10*(0.25 + 0.5625 + 1 + 1.5625)
+- bounds: result
+  eq: [[0, 0, 0], [10, 10, 10]]
+  abs: 1.0e-06
+---
+case: round_edge_radius_law_along_x
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: tests/SM_API_test/src/TestSmFillets.cpp
+  test: TestSmVariableRadiusFillet
+notes:
+- 'One of usd-brep''s four edges, alone: the four meet at corners with radii that differ.'
+build:
+- s:
+    box:
+      size: [10, 10, 10]
+      corner: [0, 0, 0]
+- e:
+    select:
+      of: s
+      edge: [0, 5, 0]
+- result:
+    fillet:
+      shape: s
+      edges: [{edge: e, law: [[0, 0.5], [1, 2]]}]
+checks:
+- valid: result
+- count: result
+  eq:
+    faces: 7
+---
+case: remove_fillets_of_a_nurbs_box
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: tests/SM_API_test/src/TestSmFillets.cpp
+  test: TestSmRemoveFilletNurbsPlanes
+notes:
+- 'A known gap: kentron leaves no faces where SMLib, OCCT and sampling give the box. All the fillets are one feature, connected at the corners, and defeature.rs carries the faces around a feature over it as cells.'
+- 'usd-brep also makes the flat faces'' control points uneven, reaching into its B-spline surfaces: left out.'
+expect: not_done
+brute:
+  result:
+    test: s(x,y,z)
+    box:
+    - - 0
+      - 0
+      - 0
+    - - 10
+      - 10
+      - 10
+build:
+- s:
+    box:
+      size: [10, 10, 10]
+      corner: [0, 0, 0]
+- e0:
+    select:
+      of: s
+      edge: [0, 0, 5.0]
+- e1:
+    select:
+      of: s
+      edge: [0, 10, 5.0]
+- e2:
+    select:
+      of: s
+      edge: [10, 0, 5.0]
+- e3:
+    select:
+      of: s
+      edge: [10, 10, 5.0]
+- e4:
+    select:
+      of: s
+      edge: [5.0, 0, 0]
+- e5:
+    select:
+      of: s
+      edge: [5.0, 0, 10]
+- e6:
+    select:
+      of: s
+      edge: [5.0, 10, 0]
+- e7:
+    select:
+      of: s
+      edge: [5.0, 10, 10]
+- e8:
+    select:
+      of: s
+      edge: [0, 5.0, 0]
+- e9:
+    select:
+      of: s
+      edge: [0, 5.0, 10]
+- e10:
+    select:
+      of: s
+      edge: [10, 5.0, 0]
+- e11:
+    select:
+      of: s
+      edge: [10, 5.0, 10]
+- r:
+    fillet:
+      shape: s
+      edges: [e0, e1, e2, e3, e4, e5, e6, e7, e8, e9, e10, e11]
+      radius: 1
+- n:
+    to_nurbs:
+      shape: r
+- f0:
+    select:
+      of: n
+      face: [1 - 2/pi, 1 - 2/pi, 5]
+- f1:
+    select:
+      of: n
+      face: [1 - 2/pi, 9 + 2/pi, 5]
+- f2:
+    select:
+      of: n
+      face: [9 + 2/pi, 1 - 2/pi, 5]
+- f3:
+    select:
+      of: n
+      face: [9 + 2/pi, 9 + 2/pi, 5]
+- f4:
+    select:
+      of: n
+      face: [1 - 2/pi, 5, 1 - 2/pi]
+- f5:
+    select:
+      of: n
+      face: [1 - 2/pi, 5, 9 + 2/pi]
+- f6:
+    select:
+      of: n
+      face: [9 + 2/pi, 5, 1 - 2/pi]
+- f7:
+    select:
+      of: n
+      face: [9 + 2/pi, 5, 9 + 2/pi]
+- f8:
+    select:
+      of: n
+      face: [5, 1 - 2/pi, 1 - 2/pi]
+- f9:
+    select:
+      of: n
+      face: [5, 1 - 2/pi, 9 + 2/pi]
+- f10:
+    select:
+      of: n
+      face: [5, 9 + 2/pi, 1 - 2/pi]
+- f11:
+    select:
+      of: n
+      face: [5, 9 + 2/pi, 9 + 2/pi]
+- f12:
+    select:
+      of: n
+      face: [0.5, 0.5, 0.5]
+- f13:
+    select:
+      of: n
+      face: [0.5, 0.5, 9.5]
+- f14:
+    select:
+      of: n
+      face: [0.5, 9.5, 0.5]
+- f15:
+    select:
+      of: n
+      face: [0.5, 9.5, 9.5]
+- f16:
+    select:
+      of: n
+      face: [9.5, 0.5, 0.5]
+- f17:
+    select:
+      of: n
+      face: [9.5, 0.5, 9.5]
+- f18:
+    select:
+      of: n
+      face: [9.5, 9.5, 0.5]
+- f19:
+    select:
+      of: n
+      face: [9.5, 9.5, 9.5]
+- result:
+    remove_faces:
+      shape: n
+      faces: [f0, f1, f2, f3, f4, f5, f6, f7, f8, f9, f10, f11, f12, f13, f14, f15, f16, f17, f18, f19]
+checks:
+- valid: result
+- count: result
+  eq:
+    faces: 6
+- volume: result
+  eq: 1000
+  rel: 1.0e-06

@@ -60,7 +60,7 @@ it honest. Every change is checked against the test sources below before it is c
 and no change may make a passing test fail.
 
 <!-- effort -->
-So far (2026-09-25 to 2026-11-07): about 330 hours of the agent's active work, 22.8 million
+So far (2026-09-25 to 2026-11-07): about 332 hours of the agent's active work, 23.0 million
 tokens written by it, and 12.6 billion tokens processed in all (nearly all of them its
 conversation's context, read back from the cache).
 <!-- /effort -->
@@ -167,7 +167,8 @@ kentron and pykentron are dual-licensed under the [MIT](LICENSE-MIT) and
 [Apache 2.0](LICENSE-APACHE) licences, at your option. These parts keep the licences of the
 code they come from:
 - [`crates/occt-tests`](crates/occt-tests), translated from OCCT's and BRL-CAD's tests: LGPL-2.1 (OCCT's with the
-  Open CASCADE exception). Nothing else depends on it.
+  Open CASCADE exception), and from USD BRep's ([`cases/usd_brep`](crates/occt-tests/cases/usd_brep)): Apache-2.0.
+  Nothing else depends on it.
 - kentron's SLSQP optimizer ([`crates/kentron/src/constraints/slsqp.rs`](crates/kentron/src/constraints/slsqp.rs),
   which solves CadQuery's sketch constraints), translated line by line from NLopt's:
   BSD-3-Clause, and MIT for NLopt's stopping tests ([`LICENSE-SLSQP`](LICENSE-SLSQP)).

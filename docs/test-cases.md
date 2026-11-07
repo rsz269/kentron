@@ -97,11 +97,11 @@ Topology:
 | `select` | a sub-shape by position (below) |
 
 Transforms (each makes a new value): `translate` (`shape`, `by`), `rotate` (`shape`, `axis:
-{origin, direction}`, `angle`), `scale` (`shape`, `center`, `factor`), `reverse` (`shape`),
+{origin, direction}`, `angle`), `scale` (`shape`, `center`, `factor`), `mirror` (`shape`, `origin`, `normal`: in that plane), `reverse` (`shape`),
 `orient` (`shape`, `as: forward | reversed | internal | external`), `copy` (`shape`).
 
-Sweeps: `extrude` (`profile`, `by`), `revolve` (`profile`, `axis`, `angle`), `pipe` (`profile`,
-`spine`). Conversions: `to_nurbs` (`shape`).
+Sweeps: `extrude` (`profile`, `by`, and `angle`: the sides drafted by it), `revolve` (`profile`, `axis`, `angle`), `pipe` (`profile`,
+`spine`, and `corner: mitred`: the profile turning with the spine, the sweeps meeting in the plane bisecting each corner, as OCCT's `RightCorner`; otherwise carried on unturned, as `BRepOffsetAPI_MakePipe`). Conversions: `to_nurbs` (`shape`).
 
 Sketches: `profile` (`frame`, `steps`, `outcome`) draws with a pen in the frame's XY plane. The
 pen starts at the origin heading along X; each step is a one-key map:
@@ -150,6 +150,12 @@ Fillets:
 | `fillet` | `shape`, `edges: [{edge, radius}]` or `edges` with one `radius`, or `edges: [{edge, law: [[u, r], ...]}]` for a radius varying along the edge |
 | `filleted_union`, `filleted_difference` | `object`, `tool`, `radius`: the union or difference, the edges where the operands met filleted |
 
+`helix` (`start_radius`, `end_radius` (default the start's), `height`, `turns`, `left_handed`): a
+wire about the Z axis, starting along X.
+
+`chamfer` (`shape`, `edges`, `distance`: the same distance along both faces). `remove_faces`
+(`shape`, `faces`): the solid without them, its neighbours extended to close the gap.
+
 ## Selecting sub-shapes
 
 ```yaml
@@ -179,6 +185,10 @@ of a solid; it must be within 1e-5 (1 + |P|) of the point, and exactly one sub-s
 | `free_vertices: s` | the number of vertices met an odd number of times along the edges, with a comparison |
 | `count: s` | with `eq: {vertices, edges, wires, faces, shells, solids, compsolids, compounds, shapes}` (or `lt`, `le`, `gt`, `ge` with such a map): distinct sub-shapes, the shape included (`shapes` sums them), one placed twice counting once; with `placements: true` distinct placed sub-shapes; with `occurrences: true` each use (an edge of two faces twice) |
 | `centroid: s` | `eq: P`, within `abs` (default 1e-7) per coordinate: the centre of the solids' volume, else of the faces' area, else of the edges' length |
+| `bounds: s` | `eq: [P, Q]`, the tight box's lowest and highest corners, within `abs` (default 1e-6) per coordinate |
+| `inertia: s` | `eq: [Ixx, Iyy, Izz]`, the solids' moments about the axes through their centroid, within `rel` (default 1e-6) of the largest |
+| `distance: [a, b]` | the smallest distance between two shapes, compared as `volume` is |
+| `contains: s` | with `points: [P, ...]` and `inside: true` or `false`: all those points are strictly inside the solids, or none is |
 
 Assertions may also use `lt`, `le`, `gt`, `ge` in place of `eq`.
 

@@ -1,0 +1,594 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+# Translated from usd-brep's tests into kentron's case format, with the checks strengthened:
+# changed from the originals as each case's notes say. See crates/occt-tests/README.md.
+case: section_of_a_rounded_box
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: tests/SM_API_test/src/TestSmIntersectors.cpp
+  test: TestSmIntersectBrepWithPlane
+notes:
+- 'A rounded rectangle: straight sides and a circle of radius 0.5. usd-brep checks the call.'
+build:
+- s:
+    box:
+      size: [5, 10, 15]
+      corner: [0, 0, 0]
+- e0:
+    select:
+      of: s
+      edge: [0, 0, 7.5]
+- e1:
+    select:
+      of: s
+      edge: [0, 10, 7.5]
+- e2:
+    select:
+      of: s
+      edge: [5, 0, 7.5]
+- e3:
+    select:
+      of: s
+      edge: [5, 10, 7.5]
+- e4:
+    select:
+      of: s
+      edge: [2.5, 0, 0]
+- e5:
+    select:
+      of: s
+      edge: [2.5, 0, 15]
+- e6:
+    select:
+      of: s
+      edge: [2.5, 10, 0]
+- e7:
+    select:
+      of: s
+      edge: [2.5, 10, 15]
+- e8:
+    select:
+      of: s
+      edge: [0, 5.0, 0]
+- e9:
+    select:
+      of: s
+      edge: [0, 5.0, 15]
+- e10:
+    select:
+      of: s
+      edge: [5, 5.0, 0]
+- e11:
+    select:
+      of: s
+      edge: [5, 5.0, 15]
+- rounded:
+    fillet:
+      shape: s
+      edges: [e0, e1, e2, e3, e4, e5, e6, e7, e8, e9, e10, e11]
+      radius: 0.5
+- pw:
+    polyline:
+      points: [[-20, -20, 7], [20, -20, 7], [20, 20, 7], [-20, 20, 7], [-20, -20, 7]]
+- p:
+    face:
+      wire: pw
+- result:
+    section:
+      object: rounded
+      tool: p
+checks:
+- length: result
+  eq: 2*(4 + 9) + pi
+  rel: 1.0e-06
+---
+case: section_of_a_box_and_a_sphere
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: tests/SM_API_test/src/TestSmIntersectors.cpp
+  test: TestSmIntersectBreps
+notes:
+- Four arcs, one on each of the box's faces x = 0, x = 5, y = 0, y = 10, in closed form.
+build:
+- a:
+    box:
+      size: [5, 10, 15]
+      corner: [0, 0, 0]
+- b:
+    sphere:
+      radius: 10
+      frame:
+        origin: [3, 5, 0]
+- result:
+    section:
+      object: a
+      tool: b
+checks:
+- length: result
+  eq: sqrt(91)*(pi - 2*acos(5/sqrt(91))) + sqrt(96)*(pi - 2*acos(5/sqrt(96))) + 2*sqrt(75)*(pi - acos(3/sqrt(75))
+    - acos(2/sqrt(75)))
+  rel: 1.0e-06
+---
+case: section_circle_crossing_a_tilted_plane
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: tests/SM_API_test/src/TestSmIntersectors.cpp
+  test: TestSmIntersectCurveSurface
+build:
+- cc:
+    circle:
+      center: [5, 5, 0]
+      normal: [0, 0, 1]
+      radius: 3
+- ce:
+    edge:
+      curve: cc
+- fw:
+    polyline:
+      points: [[0, 0, -5], [10, 0, -5], [10, 10, 5], [0, 10, 5], [0, 0, -5]]
+- f:
+    face:
+      wire: fw
+- result:
+    section:
+      object: ce
+      tool: f
+- p:
+    vertex:
+      at: [2, 5, 0]
+- q:
+    vertex:
+      at: [8, 5, 0]
+checks:
+- count: result
+  eq:
+    vertices: 2
+- distance: [p, result]
+  eq: 0
+  abs: 1.0e-07
+- distance: [q, result]
+  eq: 0
+  abs: 1.0e-07
+---
+case: section_circle_lying_on_a_plane
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: tests/SM_API_test/src/TestSmIntersectors.cpp
+  test: TestSmIntersectCurveSurface
+build:
+- cc:
+    circle:
+      center: [5, 5, 0]
+      normal: [0, 0, 1]
+      radius: 2
+- ce:
+    edge:
+      curve: cc
+- fw:
+    polyline:
+      points: [[0, 0, 0], [10, 0, 0], [10, 10, 0], [0, 10, 0], [0, 0, 0]]
+- f:
+    face:
+      wire: fw
+- result:
+    section:
+      object: ce
+      tool: f
+checks:
+- length: result
+  eq: 4*pi
+  rel: 1.0e-06
+---
+case: section_segment_through_a_box_face
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: tests/SM_API_test/src/TestSmIntersectors.cpp
+  test: TestSmIntersectCurveFace
+build:
+- s:
+    box:
+      size: [10, 10, 10]
+      corner: [0, 0, 0]
+- f:
+    select:
+      of: s
+      face: [0, 5, 5]
+- l:
+    edge:
+      from: [-5, 5, 5]
+      to: [15, 5, 5]
+- result:
+    section:
+      object: l
+      tool: f
+- p:
+    vertex:
+      at: [0, 5, 5]
+checks:
+- count: result
+  eq:
+    vertices: 1
+- distance: [p, result]
+  eq: 0
+  abs: 1.0e-07
+---
+case: section_circle_lying_on_a_box_face
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: tests/SM_API_test/src/TestSmIntersectors.cpp
+  test: TestSmIntersectCurveFace
+build:
+- s:
+    box:
+      size: [10, 10, 10]
+      corner: [0, 0, 0]
+- top:
+    select:
+      of: s
+      face: [5, 5, 10]
+- cc:
+    circle:
+      center: [5, 5, 10]
+      normal: [0, 0, 1]
+      radius: 2
+- ce:
+    edge:
+      curve: cc
+- result:
+    section:
+      object: ce
+      tool: top
+checks:
+- length: result
+  eq: 4*pi
+  rel: 1.0e-06
+---
+case: section_axis_through_a_hole_in_a_face
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: tests/SM_API_test/src/TestSmIntersectors.cpp
+  test: TestSmIntersectCurveFace
+notes:
+- 'The hit falls in the hole: it is not on the face.'
+build:
+- b:
+    box:
+      size: [10, 10, 10]
+      corner: [0, 0, 0]
+- h:
+    cylinder:
+      radius: 2
+      height: 12
+      frame:
+        origin: [5, 5, -1]
+- s:
+    difference:
+      object: b
+      tool: h
+- top:
+    select:
+      of: s
+      face: [5, 5, 10]
+      area: 100 - 4*pi
+- l:
+    edge:
+      from: [5, 5, -5]
+      to: [5, 5, 15]
+- result:
+    section:
+      object: l
+      tool: top
+checks:
+- count: result
+  eq:
+    vertices: 0
+---
+case: section_segment_off_a_hole_through_a_face
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: tests/SM_API_test/src/TestSmIntersectors.cpp
+  test: TestSmIntersectCurveFace
+build:
+- b:
+    box:
+      size: [10, 10, 10]
+      corner: [0, 0, 0]
+- h:
+    cylinder:
+      radius: 2
+      height: 12
+      frame:
+        origin: [5, 5, -1]
+- s:
+    difference:
+      object: b
+      tool: h
+- top:
+    select:
+      of: s
+      face: [5, 5, 10]
+      area: 100 - 4*pi
+- l:
+    edge:
+      from: [1, 1, -5]
+      to: [1, 1, 15]
+- result:
+    section:
+      object: l
+      tool: top
+- p:
+    vertex:
+      at: [1, 1, 10]
+checks:
+- count: result
+  eq:
+    vertices: 1
+- distance: [p, result]
+  eq: 0
+  abs: 1.0e-06
+---
+case: section_segment_through_a_box
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: tests/SM_API_test/src/TestSmIntersectors.cpp
+  test: TestSmIntersectCurveBrep
+build:
+- s:
+    box:
+      size: [10, 10, 10]
+      corner: [0, 0, 0]
+- l:
+    edge:
+      from: [-5, 5, 5]
+      to: [15, 5, 5]
+- result:
+    section:
+      object: l
+      tool: s
+- p:
+    vertex:
+      at: [0, 5, 5]
+- q:
+    vertex:
+      at: [10, 5, 5]
+checks:
+- count: result
+  eq:
+    vertices: 2
+- distance: [p, result]
+  eq: 0
+  abs: 1.0e-07
+- distance: [q, result]
+  eq: 0
+  abs: 1.0e-07
+---
+case: section_segment_along_a_box_edge
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: tests/SM_API_test/src/TestSmIntersectors.cpp
+  test: TestSmIntersectCurveBrep
+notes:
+- One overlap of length 6, not one per face. With the same test in TestSmIntersectCurveFace's manner.
+build:
+- s:
+    box:
+      size: [10, 10, 10]
+      corner: [0, 0, 0]
+- l:
+    edge:
+      from: [2, 0, 0]
+      to: [8, 0, 0]
+- result:
+    section:
+      object: l
+      tool: s
+checks:
+- length: result
+  eq: 6
+  rel: 1.0e-06
+---
+case: section_axis_missing_a_holed_box
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: tests/SM_API_test/src/TestSmIntersectors.cpp
+  test: TestSmIntersectCurveBrep
+build:
+- b:
+    box:
+      size: [10, 10, 10]
+      corner: [0, 0, 0]
+- h:
+    cylinder:
+      radius: 2
+      height: 12
+      frame:
+        origin: [5, 5, -1]
+- s:
+    difference:
+      object: b
+      tool: h
+- top:
+    select:
+      of: s
+      face: [5, 5, 10]
+      area: 100 - 4*pi
+- l:
+    edge:
+      from: [5, 5, -5]
+      to: [5, 5, 15]
+- result:
+    section:
+      object: l
+      tool: s
+checks:
+- count: result
+  eq:
+    vertices: 0
+---
+case: section_segment_crossing_two_box_edges
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: tests/SM_API_test/src/TestSmIntersectors.cpp
+  test: TestSmIntersectCurveBrep
+notes:
+- Each crossing is reported once, though two faces meet there.
+build:
+- s:
+    box:
+      size: [10, 10, 10]
+      corner: [0, 0, 0]
+- l:
+    edge:
+      from: [-5, -5, 5]
+      to: [15, 15, 5]
+- result:
+    section:
+      object: l
+      tool: s
+- p:
+    vertex:
+      at: [0, 0, 5]
+- q:
+    vertex:
+      at: [10, 10, 5]
+checks:
+- count: result
+  eq:
+    vertices: 2
+- distance: [p, result]
+  eq: 0
+  abs: 1.0e-07
+- distance: [q, result]
+  eq: 0
+  abs: 1.0e-07
+---
+case: rounded_box_cut_by_a_plane
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: tests/SM_API_test/src/TestSmBrep.cpp
+  test: TestSmCut
+notes:
+- 'usd-brep''s cut by the plane z = 7, as a difference: the volume is the rounded end and the straight run up to
+  7.'
+params:
+  hx: 2.5
+  hy: 5
+  hz: 7.5
+  r: 0.5
+brute:
+  rounded: (np.maximum(abs(x-hx)-(hx-r),0)**2 + np.maximum(abs(y-hy)-(hy-r),0)**2 + np.maximum(abs(z-hz)-(hz-r),0)**2
+    <= r*r)
+  result:
+    test: (np.maximum(abs(x-hx)-(hx-r),0)**2 + np.maximum(abs(y-hy)-(hy-r),0)**2 + np.maximum(abs(z-hz)-(hz-r),0)**2
+      <= r*r) & (z <= 7)
+    box:
+    - - 0
+      - 0
+      - 0
+    - - 5
+      - 10
+      - 7
+build:
+- s:
+    box:
+      size: [5, 10, 15]
+      corner: [0, 0, 0]
+- e0:
+    select:
+      of: s
+      edge: [0, 0, 7.5]
+- e1:
+    select:
+      of: s
+      edge: [0, 10, 7.5]
+- e2:
+    select:
+      of: s
+      edge: [5, 0, 7.5]
+- e3:
+    select:
+      of: s
+      edge: [5, 10, 7.5]
+- e4:
+    select:
+      of: s
+      edge: [2.5, 0, 0]
+- e5:
+    select:
+      of: s
+      edge: [2.5, 0, 15]
+- e6:
+    select:
+      of: s
+      edge: [2.5, 10, 0]
+- e7:
+    select:
+      of: s
+      edge: [2.5, 10, 15]
+- e8:
+    select:
+      of: s
+      edge: [0, 5.0, 0]
+- e9:
+    select:
+      of: s
+      edge: [0, 5.0, 15]
+- e10:
+    select:
+      of: s
+      edge: [5, 5.0, 0]
+- e11:
+    select:
+      of: s
+      edge: [5, 5.0, 15]
+- rounded:
+    fillet:
+      shape: s
+      edges: [e0, e1, e2, e3, e4, e5, e6, e7, e8, e9, e10, e11]
+      radius: 0.5
+- above:
+    box:
+      size: [40, 40, 40]
+      corner: [-20, -20, 7]
+- result:
+    difference:
+      object: rounded
+      tool: above
+checks:
+- valid: result
+- count: result
+  eq:
+    solids: 1
+- volume: result
+  eq: (4.0*9.0*14.0 + 2*0.5*(4.0*9.0 + 9.0*14.0 + 14.0*4.0) + pi*0.5^2*(4.0 + 9.0 + 14.0) + 4/3*pi*0.5^3 - (50 -
+    (4 - pi)*0.25)*14)/2 + (50 - (4 - pi)*0.25)*6.5
+  rel: 1.0e-06
+- bounds: result
+  eq: [[0, 0, 0], [5, 10, 7]]
+  abs: 1.0e-06

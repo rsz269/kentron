@@ -1,0 +1,290 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+# Translated from usd-brep's tests into kentron's case format, with the checks strengthened:
+# changed from the originals as each case's notes say. See crates/occt-tests/README.md.
+case: translate_box
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestTransforms.test_translate
+build:
+- s:
+    box:
+      size: [10, 10, 10]
+      corner: [0, 0, 0]
+- result:
+    translate:
+      shape: s
+      by: [5, 5, 5]
+- p:
+    vertex:
+      at: [5, 5, 5]
+checks:
+- distance: [p, result]
+  eq: 0
+  abs: 1.0e-07
+- bounds: result
+  eq: [[5, 5, 5], [15, 15, 15]]
+  abs: 1.0e-06
+---
+case: rotate_box_about_its_centre
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestTransforms.test_rotate
+build:
+- s:
+    box:
+      size: [10, 10, 10]
+      corner: [0, 0, 0]
+- result:
+    rotate:
+      shape: s
+      axis:
+        origin: [5, 5, 5]
+        direction: [0, 0, 1]
+      angle: 90
+checks:
+- count: result
+  eq:
+    faces: 6
+- volume: result
+  eq: 1000
+  rel: 1.0e-06
+- bounds: result
+  eq: [[0, 0, 0], [10, 10, 10]]
+  abs: 1.0e-06
+---
+case: scale_box
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestTransforms.test_scale
+build:
+- s:
+    box:
+      size: [10, 10, 10]
+      corner: [0, 0, 0]
+- result:
+    scale:
+      shape: s
+      center: [0, 0, 0]
+      factor: 2
+checks:
+- volume: result
+  eq: 8000
+  rel: 1.0e-06
+- bounds: result
+  eq: [[0, 0, 0], [20, 20, 20]]
+  abs: 1.0e-06
+---
+case: reflected_box_keeps_its_material_x
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestTransforms.test_reflected_brep_preserves_material_orientation
+notes:
+- 'usd-brep''s scale by -1 along these axes, as mirrors. Its last case, by (-2, 3, 4), is not a similarity: left
+  out.'
+build:
+- m0:
+    box:
+      size: [8, 6, 4]
+      corner: [-4, -3, -2]
+- m1:
+    mirror:
+      shape: m0
+      origin: [0, 0, 0]
+      normal: x
+- inner:
+    box:
+      size: [2, 2, 2]
+      corner: [-1, -1, -1]
+- overlap:
+    intersection:
+      object: m1
+      tool: inner
+checks:
+- valid: m1
+- volume: m1
+  eq: 192
+  rel: 1.0e-06
+- valid: overlap
+- volume: overlap
+  eq: 8
+  rel: 1.0e-06
+---
+case: reflected_box_keeps_its_material_y
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestTransforms.test_reflected_brep_preserves_material_orientation
+notes:
+- 'usd-brep''s scale by -1 along these axes, as mirrors. Its last case, by (-2, 3, 4), is not a similarity: left
+  out.'
+build:
+- m0:
+    box:
+      size: [8, 6, 4]
+      corner: [-4, -3, -2]
+- m1:
+    mirror:
+      shape: m0
+      origin: [0, 0, 0]
+      normal: y
+- inner:
+    box:
+      size: [2, 2, 2]
+      corner: [-1, -1, -1]
+- overlap:
+    intersection:
+      object: m1
+      tool: inner
+checks:
+- valid: m1
+- volume: m1
+  eq: 192
+  rel: 1.0e-06
+- valid: overlap
+- volume: overlap
+  eq: 8
+  rel: 1.0e-06
+---
+case: reflected_box_keeps_its_material_z
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestTransforms.test_reflected_brep_preserves_material_orientation
+notes:
+- 'usd-brep''s scale by -1 along these axes, as mirrors. Its last case, by (-2, 3, 4), is not a similarity: left
+  out.'
+build:
+- m0:
+    box:
+      size: [8, 6, 4]
+      corner: [-4, -3, -2]
+- m1:
+    mirror:
+      shape: m0
+      origin: [0, 0, 0]
+      normal: z
+- inner:
+    box:
+      size: [2, 2, 2]
+      corner: [-1, -1, -1]
+- overlap:
+    intersection:
+      object: m1
+      tool: inner
+checks:
+- valid: m1
+- volume: m1
+  eq: 192
+  rel: 1.0e-06
+- valid: overlap
+- volume: overlap
+  eq: 8
+  rel: 1.0e-06
+---
+case: reflected_box_keeps_its_material_xy
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestTransforms.test_reflected_brep_preserves_material_orientation
+notes:
+- 'usd-brep''s scale by -1 along these axes, as mirrors. Its last case, by (-2, 3, 4), is not a similarity: left
+  out.'
+build:
+- m0:
+    box:
+      size: [8, 6, 4]
+      corner: [-4, -3, -2]
+- m1:
+    mirror:
+      shape: m0
+      origin: [0, 0, 0]
+      normal: x
+- m2:
+    mirror:
+      shape: m1
+      origin: [0, 0, 0]
+      normal: y
+- inner:
+    box:
+      size: [2, 2, 2]
+      corner: [-1, -1, -1]
+- overlap:
+    intersection:
+      object: m2
+      tool: inner
+checks:
+- valid: m2
+- volume: m2
+  eq: 192
+  rel: 1.0e-06
+- valid: overlap
+- volume: overlap
+  eq: 8
+  rel: 1.0e-06
+---
+case: reflected_box_keeps_its_material_xyz
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestTransforms.test_reflected_brep_preserves_material_orientation
+notes:
+- 'usd-brep''s scale by -1 along these axes, as mirrors. Its last case, by (-2, 3, 4), is not a similarity: left
+  out.'
+build:
+- m0:
+    box:
+      size: [8, 6, 4]
+      corner: [-4, -3, -2]
+- m1:
+    mirror:
+      shape: m0
+      origin: [0, 0, 0]
+      normal: x
+- m2:
+    mirror:
+      shape: m1
+      origin: [0, 0, 0]
+      normal: y
+- m3:
+    mirror:
+      shape: m2
+      origin: [0, 0, 0]
+      normal: z
+- inner:
+    box:
+      size: [2, 2, 2]
+      corner: [-1, -1, -1]
+- overlap:
+    intersection:
+      object: m3
+      tool: inner
+checks:
+- valid: m3
+- volume: m3
+  eq: 192
+  rel: 1.0e-06
+- valid: overlap
+- volume: overlap
+  eq: 8
+  rel: 1.0e-06

@@ -1,0 +1,477 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+# Translated from usd-brep's tests into kentron's case format, with the checks strengthened:
+# changed from the originals as each case's notes say. See crates/occt-tests/README.md.
+case: round_every_edge
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestFillets.test_circular_fillet
+notes:
+- The volume in closed form and the 26 faces of the small box's case replace usd-brep's check that faces were added.
+params:
+  c: 5
+  r: 1
+brute:
+  result: (np.maximum(abs(x-c)-(c-r),0)**2 + np.maximum(abs(y-c)-(c-r),0)**2 + np.maximum(abs(z-c)-(c-r),0)**2 <=
+    r*r)
+build:
+- s:
+    box:
+      size: [10, 10, 10]
+      corner: [0, 0, 0]
+- e0:
+    select:
+      of: s
+      edge: [0.0, 0.0, 5.0]
+- e1:
+    select:
+      of: s
+      edge: [10.0, 0.0, 5.0]
+- e2:
+    select:
+      of: s
+      edge: [0.0, 10.0, 5.0]
+- e3:
+    select:
+      of: s
+      edge: [10.0, 10.0, 5.0]
+- e4:
+    select:
+      of: s
+      edge: [5.0, 0.0, 0.0]
+- e5:
+    select:
+      of: s
+      edge: [5.0, 10.0, 0.0]
+- e6:
+    select:
+      of: s
+      edge: [5.0, 0.0, 10.0]
+- e7:
+    select:
+      of: s
+      edge: [5.0, 10.0, 10.0]
+- e8:
+    select:
+      of: s
+      edge: [0.0, 5.0, 0.0]
+- e9:
+    select:
+      of: s
+      edge: [10.0, 5.0, 0.0]
+- e10:
+    select:
+      of: s
+      edge: [0.0, 5.0, 10.0]
+- e11:
+    select:
+      of: s
+      edge: [10.0, 5.0, 10.0]
+- result:
+    fillet:
+      shape: s
+      edges: [e0, e1, e2, e3, e4, e5, e6, e7, e8, e9, e10, e11]
+      radius: 1
+checks:
+- valid: result
+- count: result
+  eq:
+    faces: 26
+- volume: result
+  eq: (10 - 2*1)^3 + 6*(10 - 2*1)^2*1 + 3*(10 - 2*1)*pi*1^2 + 4/3*pi*1^3
+  rel: 1.0e-06
+- bounds: result
+  eq: [[0, 0, 0], [10, 10, 10]]
+  abs: 1.0e-06
+---
+case: round_every_edge_small_box
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestFillets.test_circular_fillet_small_box
+params:
+  c: 0.0005
+  r: 0.0001
+brute:
+  result: (np.maximum(abs(x-c)-(c-r),0)**2 + np.maximum(abs(y-c)-(c-r),0)**2 + np.maximum(abs(z-c)-(c-r),0)**2 <=
+    r*r)
+build:
+- s:
+    box:
+      size: [0.001, 0.001, 0.001]
+      corner: [0, 0, 0]
+- e0:
+    select:
+      of: s
+      edge: [0.0, 0.0, 0.0005]
+- e1:
+    select:
+      of: s
+      edge: [0.001, 0.0, 0.0005]
+- e2:
+    select:
+      of: s
+      edge: [0.0, 0.001, 0.0005]
+- e3:
+    select:
+      of: s
+      edge: [0.001, 0.001, 0.0005]
+- e4:
+    select:
+      of: s
+      edge: [0.0005, 0.0, 0.0]
+- e5:
+    select:
+      of: s
+      edge: [0.0005, 0.001, 0.0]
+- e6:
+    select:
+      of: s
+      edge: [0.0005, 0.0, 0.001]
+- e7:
+    select:
+      of: s
+      edge: [0.0005, 0.001, 0.001]
+- e8:
+    select:
+      of: s
+      edge: [0.0, 0.0005, 0.0]
+- e9:
+    select:
+      of: s
+      edge: [0.001, 0.0005, 0.0]
+- e10:
+    select:
+      of: s
+      edge: [0.0, 0.0005, 0.001]
+- e11:
+    select:
+      of: s
+      edge: [0.001, 0.0005, 0.001]
+- result:
+    fillet:
+      shape: s
+      edges: [e0, e1, e2, e3, e4, e5, e6, e7, e8, e9, e10, e11]
+      radius: 0.0001
+checks:
+- valid: result
+- count: result
+  eq:
+    faces: 26
+- volume: result
+  eq: (0.001 - 2*0.0001)^3 + 6*(0.001 - 2*0.0001)^2*0.0001 + 3*(0.001 - 2*0.0001)*pi*0.0001^2 + 4/3*pi*0.0001^3
+  rel: 1.0e-05
+---
+case: round_every_edge_minimum_radius
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestFillets.test_fillet_radius_at_minimum_is_solid
+notes:
+- 8e-5 is usd-brep's smallest allowed radius on this box. Its check that the volume is above 0.99e-6 becomes the
+  closed form.
+params:
+  c: 0.005
+  r: 8.0e-05
+brute:
+  result: (np.maximum(abs(x-c)-(c-r),0)**2 + np.maximum(abs(y-c)-(c-r),0)**2 + np.maximum(abs(z-c)-(c-r),0)**2 <=
+    r*r)
+build:
+- s:
+    box:
+      size: [0.01, 0.01, 0.01]
+      corner: [0, 0, 0]
+- e0:
+    select:
+      of: s
+      edge: [0.0, 0.0, 0.005]
+- e1:
+    select:
+      of: s
+      edge: [0.01, 0.0, 0.005]
+- e2:
+    select:
+      of: s
+      edge: [0.0, 0.01, 0.005]
+- e3:
+    select:
+      of: s
+      edge: [0.01, 0.01, 0.005]
+- e4:
+    select:
+      of: s
+      edge: [0.005, 0.0, 0.0]
+- e5:
+    select:
+      of: s
+      edge: [0.005, 0.01, 0.0]
+- e6:
+    select:
+      of: s
+      edge: [0.005, 0.0, 0.01]
+- e7:
+    select:
+      of: s
+      edge: [0.005, 0.01, 0.01]
+- e8:
+    select:
+      of: s
+      edge: [0.0, 0.005, 0.0]
+- e9:
+    select:
+      of: s
+      edge: [0.01, 0.005, 0.0]
+- e10:
+    select:
+      of: s
+      edge: [0.0, 0.005, 0.01]
+- e11:
+    select:
+      of: s
+      edge: [0.01, 0.005, 0.01]
+- result:
+    fillet:
+      shape: s
+      edges: [e0, e1, e2, e3, e4, e5, e6, e7, e8, e9, e10, e11]
+      radius: 8.0e-05
+checks:
+- valid: result
+- volume: result
+  eq: (0.01 - 2*8e-05)^3 + 6*(0.01 - 2*8e-05)^2*8e-05 + 3*(0.01 - 2*8e-05)*pi*8e-05^2 + 4/3*pi*8e-05^3
+  rel: 1.0e-05
+---
+case: round_first_four_edges
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestFillets.test_fillet_edges
+notes:
+- 'usd-brep''s box.edges()[:4], named by position: its first four edges in its own order. The volume is checked
+  by sampling.'
+brute:
+  result: s(x,y,z) & ~((x>9)&(z>9)&((x-9)**2+(z-9)**2>1)) & ~((y>9)&(z>9)&((y-9)**2+(z-9)**2>1)) & ~((x<1)&(z<1)&((x-1)**2+(z-1)**2>1))
+    & ~((x<1)&(z>9)&((x-1)**2+(z-9)**2>1))
+build:
+- s:
+    box:
+      size: [10, 10, 10]
+      corner: [0, 0, 0]
+- e0:
+    select:
+      of: s
+      edge: [10.0, 5.0, 10.0]
+- e1:
+    select:
+      of: s
+      edge: [5.0, 10.0, 10.0]
+- e2:
+    select:
+      of: s
+      edge: [0.0, 5.0, 0.0]
+- e3:
+    select:
+      of: s
+      edge: [0.0, 5.0, 10.0]
+- result:
+    fillet:
+      shape: s
+      edges: [e0, e1, e2, e3]
+      radius: 1
+checks:
+- valid: result
+- count: result
+  eq:
+    faces: 10
+---
+case: round_edge_radius_law
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestFillets.test_variable_radius_fillet
+notes:
+- The radius runs from 0.5 to 2 along the edge. The direction of the law along the edge is a kernel's choice, and
+  the volume does not depend on it. Volume by sampling, the radius linear along the edge.
+brute:
+  result: s(x,y,z) & ~((x>10-(0.5+0.15*y))&(z>10-(0.5+0.15*y))&((x-10+(0.5+0.15*y))**2+(z-10+(0.5+0.15*y))**2>(0.5+0.15*y)**2))
+build:
+- s:
+    box:
+      size: [10, 10, 10]
+      corner: [0, 0, 0]
+- e:
+    select:
+      of: s
+      edge: [10, 5, 10]
+- result:
+    fillet:
+      shape: s
+      edges: [{edge: e, law: [[0, 0.5], [1, 2]]}]
+checks:
+- valid: result
+- count: result
+  eq:
+    faces: 7
+---
+case: round_two_edges_two_radii
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestFillets.test_fillet_edges_per_edge
+notes:
+- 'usd-brep''s box.edges()[:2], named by position: two edges meeting at a corner, with different radii. Its corner
+  is a kernel''s choice.'
+build:
+- s:
+    box:
+      size: [10, 10, 10]
+      corner: [0, 0, 0]
+- e0:
+    select:
+      of: s
+      edge: [10, 5, 10]
+- e1:
+    select:
+      of: s
+      edge: [5, 10, 10]
+- result:
+    fillet:
+      shape: s
+      edges: [{edge: e0, radius: 1}, {edge: e1, radius: 2}]
+checks:
+- valid: result
+- volume: result
+  lt: 1000
+---
+case: chamfer_every_edge
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestFillets.test_chamfer_fillet
+notes:
+- usd-brep's chamfer of width 1 is one of distance sqrt(2)/2 along each face. Upstream's check that faces were added
+  becomes the shape's bounds; the volume is by sampling.
+params:
+  d: sqrt(2)/2
+brute:
+  result: s(x,y,z) & (abs(x-5)+abs(y-5)<=10-d) & (abs(y-5)+abs(z-5)<=10-d) & (abs(x-5)+abs(z-5)<=10-d)
+build:
+- s:
+    box:
+      size: [10, 10, 10]
+      corner: [0, 0, 0]
+- e0:
+    select:
+      of: s
+      edge: [0.0, 0.0, 5.0]
+- e1:
+    select:
+      of: s
+      edge: [10.0, 0.0, 5.0]
+- e2:
+    select:
+      of: s
+      edge: [0.0, 10.0, 5.0]
+- e3:
+    select:
+      of: s
+      edge: [10.0, 10.0, 5.0]
+- e4:
+    select:
+      of: s
+      edge: [5.0, 0.0, 0.0]
+- e5:
+    select:
+      of: s
+      edge: [5.0, 10.0, 0.0]
+- e6:
+    select:
+      of: s
+      edge: [5.0, 0.0, 10.0]
+- e7:
+    select:
+      of: s
+      edge: [5.0, 10.0, 10.0]
+- e8:
+    select:
+      of: s
+      edge: [0.0, 5.0, 0.0]
+- e9:
+    select:
+      of: s
+      edge: [10.0, 5.0, 0.0]
+- e10:
+    select:
+      of: s
+      edge: [0.0, 5.0, 10.0]
+- e11:
+    select:
+      of: s
+      edge: [10.0, 5.0, 10.0]
+- result:
+    chamfer:
+      shape: s
+      edges: [e0, e1, e2, e3, e4, e5, e6, e7, e8, e9, e10, e11]
+      distance: sqrt(2)/2
+checks:
+- valid: result
+- count: result
+  eq:
+    solids: 1
+- bounds: result
+  eq: [[0, 0, 0], [10, 10, 10]]
+  abs: 1.0e-06
+---
+case: remove_fillet_restores_box
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestFillets.test_remove_fillet_restores_box
+brute:
+  result: s(x,y,z)
+build:
+- s:
+    box:
+      size: [10, 10, 10]
+      corner: [0, 0, 0]
+- e:
+    select:
+      of: s
+      edge: [10, 5, 10]
+- r:
+    fillet:
+      shape: s
+      edges: [e]
+      radius: 2
+- f:
+    select:
+      of: r
+      face: [8 + 4/pi, 5, 8 + 4/pi]
+- result:
+    remove_faces:
+      shape: r
+      faces: [f]
+checks:
+- valid: result
+- count: result
+  eq:
+    faces: 6
+- volume: result
+  eq: 1000
+  rel: 1.0e-06

@@ -1,0 +1,1955 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+# Translated from usd-brep's tests into kentron's case format, with the checks strengthened:
+# changed from the originals as each case's notes say. See crates/occt-tests/README.md.
+case: two_boxes_union
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestBooleans.test_boolean_union
+notes:
+- 'usd-brep only checks the number of faces against a bound: the volume added, and the number exact.'
+build:
+- a:
+    box:
+      size: [10, 10, 10]
+      corner: [0, 0, 0]
+- b:
+    box:
+      size: [10, 10, 10]
+      corner: [5, 5, 5]
+- result:
+    union:
+      object: a
+      tool: b
+checks:
+- valid: result
+- count: result
+  eq:
+    solids: 1
+- count: result
+  eq:
+    faces: 12
+- volume: result
+  eq: 1875
+  rel: 1.0e-06
+---
+case: two_boxes_difference
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestBooleans.test_boolean_difference
+notes:
+- 'usd-brep only checks the number of faces against a bound: the volume added, and the number exact.'
+build:
+- a:
+    box:
+      size: [10, 10, 10]
+      corner: [0, 0, 0]
+- b:
+    box:
+      size: [10, 10, 10]
+      corner: [5, 5, 5]
+- result:
+    difference:
+      object: a
+      tool: b
+checks:
+- valid: result
+- count: result
+  eq:
+    solids: 1
+- count: result
+  eq:
+    faces: 9
+- volume: result
+  eq: 875
+  rel: 1.0e-06
+---
+case: two_boxes_intersection
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestBooleans.test_boolean_intersection
+notes:
+- 'usd-brep only checks the number of faces against a bound: the volume added, and the number exact.'
+build:
+- a:
+    box:
+      size: [10, 10, 10]
+      corner: [0, 0, 0]
+- b:
+    box:
+      size: [10, 10, 10]
+      corner: [5, 5, 5]
+- result:
+    intersection:
+      object: a
+      tool: b
+checks:
+- valid: result
+- count: result
+  eq:
+    solids: 1
+- count: result
+  eq:
+    faces: 6
+- volume: result
+  eq: 125
+  rel: 1.0e-06
+---
+case: mirrored_copy_union
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestBooleans.test_booleans_with_mirrored_copy_sharing_trimmed_coplanar_faces
+notes:
+- 'The expected volumes in closed form: usd-brep takes the part''s from its own kernel.'
+build:
+- bx:
+    box:
+      size: [30, 10, 6]
+      corner: [0, -5, 0]
+- cy:
+    cylinder:
+      radius: 8
+      height: 6
+      frame:
+        origin: [0, 0, 0]
+- p:
+    union:
+      object: bx
+      tool: cy
+- q:
+    mirror:
+      shape: p
+      origin: [0, 0, 0]
+      normal: x
+- result:
+    union:
+      object: p
+      tool: q
+checks:
+- valid: result
+- volume: result
+  eq: 2*6*(300 + 64*pi - (5*sqrt(39) + 64*asin(5/8))) - pi*64*6
+  rel: 1.0e-06
+- volume: p
+  eq: 6*(300 + 64*pi - (5*sqrt(39) + 64*asin(5/8)))
+  rel: 1.0e-06
+---
+case: mirrored_copy_intersection
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestBooleans.test_booleans_with_mirrored_copy_sharing_trimmed_coplanar_faces
+notes:
+- 'The expected volumes in closed form: usd-brep takes the part''s from its own kernel.'
+build:
+- bx:
+    box:
+      size: [30, 10, 6]
+      corner: [0, -5, 0]
+- cy:
+    cylinder:
+      radius: 8
+      height: 6
+      frame:
+        origin: [0, 0, 0]
+- p:
+    union:
+      object: bx
+      tool: cy
+- q:
+    mirror:
+      shape: p
+      origin: [0, 0, 0]
+      normal: x
+- result:
+    intersection:
+      object: p
+      tool: q
+checks:
+- valid: result
+- volume: result
+  eq: pi*64*6
+  rel: 1.0e-06
+- volume: p
+  eq: 6*(300 + 64*pi - (5*sqrt(39) + 64*asin(5/8)))
+  rel: 1.0e-06
+---
+case: mirrored_copy_difference
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestBooleans.test_booleans_with_mirrored_copy_sharing_trimmed_coplanar_faces
+notes:
+- 'The expected volumes in closed form: usd-brep takes the part''s from its own kernel.'
+build:
+- bx:
+    box:
+      size: [30, 10, 6]
+      corner: [0, -5, 0]
+- cy:
+    cylinder:
+      radius: 8
+      height: 6
+      frame:
+        origin: [0, 0, 0]
+- p:
+    union:
+      object: bx
+      tool: cy
+- q:
+    mirror:
+      shape: p
+      origin: [0, 0, 0]
+      normal: x
+- result:
+    difference:
+      object: p
+      tool: q
+checks:
+- valid: result
+- volume: result
+  eq: 6*(300 + 64*pi - (5*sqrt(39) + 64*asin(5/8))) - pi*64*6
+  rel: 1.0e-06
+- volume: p
+  eq: 6*(300 + 64*pi - (5*sqrt(39) + 64*asin(5/8)))
+  rel: 1.0e-06
+---
+case: three_cylinders_union_xyz
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestBooleans.test_booleans_of_three_crossing_equal_radius_cylinders
+build:
+- base:
+    cylinder:
+      radius: 1
+      height: 4
+      frame:
+        origin: [0.0, 0, -2]
+- x:
+    rotate:
+      shape: base
+      axis:
+        origin: [0, 0, 0]
+        direction: [0, 1, 0]
+      angle: 90
+- y:
+    rotate:
+      shape: base
+      axis:
+        origin: [0, 0, 0]
+        direction: [1, 0, 0]
+      angle: 90
+- z:
+    cylinder:
+      radius: 1
+      height: 4
+      frame:
+        origin: [0.0, 0, -2]
+- ab:
+    union:
+      object: x
+      tool: y
+- result:
+    union:
+      object: ab
+      tool: z
+checks:
+- valid: result
+- count: result
+  eq:
+    solids: 1
+- volume: result
+  eq: 12*pi - 16 + 8*(2 - sqrt(2))
+  rel: 1.0e-06
+---
+case: three_cylinders_union_xyz_z_off
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestBooleans.test_booleans_of_three_crossing_equal_radius_cylinders
+notes:
+- 'The z cylinder 1e-6 off its axis: the cuts fall just outside faces'' corners. The volume is that of the centred
+  cylinders.'
+build:
+- base:
+    cylinder:
+      radius: 1
+      height: 4
+      frame:
+        origin: [0.0, 0, -2]
+- x:
+    rotate:
+      shape: base
+      axis:
+        origin: [0, 0, 0]
+        direction: [0, 1, 0]
+      angle: 90
+- y:
+    rotate:
+      shape: base
+      axis:
+        origin: [0, 0, 0]
+        direction: [1, 0, 0]
+      angle: 90
+- z:
+    cylinder:
+      radius: 1
+      height: 4
+      frame:
+        origin: [1.0e-06, 0, -2]
+- ab:
+    union:
+      object: x
+      tool: y
+- result:
+    union:
+      object: ab
+      tool: z
+checks:
+- valid: result
+- count: result
+  eq:
+    solids: 1
+- volume: result
+  eq: 12*pi - 16 + 8*(2 - sqrt(2))
+  rel: 0.0002
+---
+case: three_cylinders_drill_xyz
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestBooleans.test_booleans_of_three_crossing_equal_radius_cylinders
+build:
+- base:
+    cylinder:
+      radius: 1
+      height: 4
+      frame:
+        origin: [0.0, 0, -2]
+- x:
+    rotate:
+      shape: base
+      axis:
+        origin: [0, 0, 0]
+        direction: [0, 1, 0]
+      angle: 90
+- y:
+    rotate:
+      shape: base
+      axis:
+        origin: [0, 0, 0]
+        direction: [1, 0, 0]
+      angle: 90
+- z:
+    cylinder:
+      radius: 1
+      height: 4
+      frame:
+        origin: [0.0, 0, -2]
+- c0:
+    box:
+      size: [3, 3, 3]
+      corner: [-1.5, -1.5, -1.5]
+- c1:
+    difference:
+      object: c0
+      tool: x
+- c2:
+    difference:
+      object: c1
+      tool: y
+- result:
+    difference:
+      object: c2
+      tool: z
+checks:
+- valid: result
+- volume: result
+  eq: 27 - (9*pi - 16 + 8*(2 - sqrt(2)))
+  rel: 1.0e-06
+---
+case: three_cylinders_union_xzy
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestBooleans.test_booleans_of_three_crossing_equal_radius_cylinders
+build:
+- base:
+    cylinder:
+      radius: 1
+      height: 4
+      frame:
+        origin: [0.0, 0, -2]
+- x:
+    rotate:
+      shape: base
+      axis:
+        origin: [0, 0, 0]
+        direction: [0, 1, 0]
+      angle: 90
+- y:
+    rotate:
+      shape: base
+      axis:
+        origin: [0, 0, 0]
+        direction: [1, 0, 0]
+      angle: 90
+- z:
+    cylinder:
+      radius: 1
+      height: 4
+      frame:
+        origin: [0.0, 0, -2]
+- ab:
+    union:
+      object: x
+      tool: z
+- result:
+    union:
+      object: ab
+      tool: y
+checks:
+- valid: result
+- count: result
+  eq:
+    solids: 1
+- volume: result
+  eq: 12*pi - 16 + 8*(2 - sqrt(2))
+  rel: 1.0e-06
+---
+case: three_cylinders_union_xzy_z_off
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestBooleans.test_booleans_of_three_crossing_equal_radius_cylinders
+notes:
+- 'The z cylinder 1e-6 off its axis: the cuts fall just outside faces'' corners. The volume is that of the centred
+  cylinders.'
+build:
+- base:
+    cylinder:
+      radius: 1
+      height: 4
+      frame:
+        origin: [0.0, 0, -2]
+- x:
+    rotate:
+      shape: base
+      axis:
+        origin: [0, 0, 0]
+        direction: [0, 1, 0]
+      angle: 90
+- y:
+    rotate:
+      shape: base
+      axis:
+        origin: [0, 0, 0]
+        direction: [1, 0, 0]
+      angle: 90
+- z:
+    cylinder:
+      radius: 1
+      height: 4
+      frame:
+        origin: [1.0e-06, 0, -2]
+- ab:
+    union:
+      object: x
+      tool: z
+- result:
+    union:
+      object: ab
+      tool: y
+checks:
+- valid: result
+- count: result
+  eq:
+    solids: 1
+- volume: result
+  eq: 12*pi - 16 + 8*(2 - sqrt(2))
+  rel: 0.0002
+---
+case: three_cylinders_drill_xzy
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestBooleans.test_booleans_of_three_crossing_equal_radius_cylinders
+build:
+- base:
+    cylinder:
+      radius: 1
+      height: 4
+      frame:
+        origin: [0.0, 0, -2]
+- x:
+    rotate:
+      shape: base
+      axis:
+        origin: [0, 0, 0]
+        direction: [0, 1, 0]
+      angle: 90
+- y:
+    rotate:
+      shape: base
+      axis:
+        origin: [0, 0, 0]
+        direction: [1, 0, 0]
+      angle: 90
+- z:
+    cylinder:
+      radius: 1
+      height: 4
+      frame:
+        origin: [0.0, 0, -2]
+- c0:
+    box:
+      size: [3, 3, 3]
+      corner: [-1.5, -1.5, -1.5]
+- c1:
+    difference:
+      object: c0
+      tool: x
+- c2:
+    difference:
+      object: c1
+      tool: z
+- result:
+    difference:
+      object: c2
+      tool: y
+checks:
+- valid: result
+- volume: result
+  eq: 27 - (9*pi - 16 + 8*(2 - sqrt(2)))
+  rel: 1.0e-06
+---
+case: three_cylinders_union_yxz
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestBooleans.test_booleans_of_three_crossing_equal_radius_cylinders
+build:
+- base:
+    cylinder:
+      radius: 1
+      height: 4
+      frame:
+        origin: [0.0, 0, -2]
+- x:
+    rotate:
+      shape: base
+      axis:
+        origin: [0, 0, 0]
+        direction: [0, 1, 0]
+      angle: 90
+- y:
+    rotate:
+      shape: base
+      axis:
+        origin: [0, 0, 0]
+        direction: [1, 0, 0]
+      angle: 90
+- z:
+    cylinder:
+      radius: 1
+      height: 4
+      frame:
+        origin: [0.0, 0, -2]
+- ab:
+    union:
+      object: y
+      tool: x
+- result:
+    union:
+      object: ab
+      tool: z
+checks:
+- valid: result
+- count: result
+  eq:
+    solids: 1
+- volume: result
+  eq: 12*pi - 16 + 8*(2 - sqrt(2))
+  rel: 1.0e-06
+---
+case: three_cylinders_union_yxz_z_off
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestBooleans.test_booleans_of_three_crossing_equal_radius_cylinders
+notes:
+- 'The z cylinder 1e-6 off its axis: the cuts fall just outside faces'' corners. The volume is that of the centred
+  cylinders.'
+build:
+- base:
+    cylinder:
+      radius: 1
+      height: 4
+      frame:
+        origin: [0.0, 0, -2]
+- x:
+    rotate:
+      shape: base
+      axis:
+        origin: [0, 0, 0]
+        direction: [0, 1, 0]
+      angle: 90
+- y:
+    rotate:
+      shape: base
+      axis:
+        origin: [0, 0, 0]
+        direction: [1, 0, 0]
+      angle: 90
+- z:
+    cylinder:
+      radius: 1
+      height: 4
+      frame:
+        origin: [1.0e-06, 0, -2]
+- ab:
+    union:
+      object: y
+      tool: x
+- result:
+    union:
+      object: ab
+      tool: z
+checks:
+- valid: result
+- count: result
+  eq:
+    solids: 1
+- volume: result
+  eq: 12*pi - 16 + 8*(2 - sqrt(2))
+  rel: 0.0002
+---
+case: three_cylinders_drill_yxz
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestBooleans.test_booleans_of_three_crossing_equal_radius_cylinders
+build:
+- base:
+    cylinder:
+      radius: 1
+      height: 4
+      frame:
+        origin: [0.0, 0, -2]
+- x:
+    rotate:
+      shape: base
+      axis:
+        origin: [0, 0, 0]
+        direction: [0, 1, 0]
+      angle: 90
+- y:
+    rotate:
+      shape: base
+      axis:
+        origin: [0, 0, 0]
+        direction: [1, 0, 0]
+      angle: 90
+- z:
+    cylinder:
+      radius: 1
+      height: 4
+      frame:
+        origin: [0.0, 0, -2]
+- c0:
+    box:
+      size: [3, 3, 3]
+      corner: [-1.5, -1.5, -1.5]
+- c1:
+    difference:
+      object: c0
+      tool: y
+- c2:
+    difference:
+      object: c1
+      tool: x
+- result:
+    difference:
+      object: c2
+      tool: z
+checks:
+- valid: result
+- volume: result
+  eq: 27 - (9*pi - 16 + 8*(2 - sqrt(2)))
+  rel: 1.0e-06
+---
+case: three_cylinders_union_yzx
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestBooleans.test_booleans_of_three_crossing_equal_radius_cylinders
+build:
+- base:
+    cylinder:
+      radius: 1
+      height: 4
+      frame:
+        origin: [0.0, 0, -2]
+- x:
+    rotate:
+      shape: base
+      axis:
+        origin: [0, 0, 0]
+        direction: [0, 1, 0]
+      angle: 90
+- y:
+    rotate:
+      shape: base
+      axis:
+        origin: [0, 0, 0]
+        direction: [1, 0, 0]
+      angle: 90
+- z:
+    cylinder:
+      radius: 1
+      height: 4
+      frame:
+        origin: [0.0, 0, -2]
+- ab:
+    union:
+      object: y
+      tool: z
+- result:
+    union:
+      object: ab
+      tool: x
+checks:
+- valid: result
+- count: result
+  eq:
+    solids: 1
+- volume: result
+  eq: 12*pi - 16 + 8*(2 - sqrt(2))
+  rel: 1.0e-06
+---
+case: three_cylinders_union_yzx_z_off
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestBooleans.test_booleans_of_three_crossing_equal_radius_cylinders
+notes:
+- 'The z cylinder 1e-6 off its axis: the cuts fall just outside faces'' corners. The volume is that of the centred
+  cylinders.'
+build:
+- base:
+    cylinder:
+      radius: 1
+      height: 4
+      frame:
+        origin: [0.0, 0, -2]
+- x:
+    rotate:
+      shape: base
+      axis:
+        origin: [0, 0, 0]
+        direction: [0, 1, 0]
+      angle: 90
+- y:
+    rotate:
+      shape: base
+      axis:
+        origin: [0, 0, 0]
+        direction: [1, 0, 0]
+      angle: 90
+- z:
+    cylinder:
+      radius: 1
+      height: 4
+      frame:
+        origin: [1.0e-06, 0, -2]
+- ab:
+    union:
+      object: y
+      tool: z
+- result:
+    union:
+      object: ab
+      tool: x
+checks:
+- valid: result
+- count: result
+  eq:
+    solids: 1
+- volume: result
+  eq: 12*pi - 16 + 8*(2 - sqrt(2))
+  rel: 0.0002
+---
+case: three_cylinders_drill_yzx
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestBooleans.test_booleans_of_three_crossing_equal_radius_cylinders
+build:
+- base:
+    cylinder:
+      radius: 1
+      height: 4
+      frame:
+        origin: [0.0, 0, -2]
+- x:
+    rotate:
+      shape: base
+      axis:
+        origin: [0, 0, 0]
+        direction: [0, 1, 0]
+      angle: 90
+- y:
+    rotate:
+      shape: base
+      axis:
+        origin: [0, 0, 0]
+        direction: [1, 0, 0]
+      angle: 90
+- z:
+    cylinder:
+      radius: 1
+      height: 4
+      frame:
+        origin: [0.0, 0, -2]
+- c0:
+    box:
+      size: [3, 3, 3]
+      corner: [-1.5, -1.5, -1.5]
+- c1:
+    difference:
+      object: c0
+      tool: y
+- c2:
+    difference:
+      object: c1
+      tool: z
+- result:
+    difference:
+      object: c2
+      tool: x
+checks:
+- valid: result
+- volume: result
+  eq: 27 - (9*pi - 16 + 8*(2 - sqrt(2)))
+  rel: 1.0e-06
+---
+case: three_cylinders_union_zxy
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestBooleans.test_booleans_of_three_crossing_equal_radius_cylinders
+build:
+- base:
+    cylinder:
+      radius: 1
+      height: 4
+      frame:
+        origin: [0.0, 0, -2]
+- x:
+    rotate:
+      shape: base
+      axis:
+        origin: [0, 0, 0]
+        direction: [0, 1, 0]
+      angle: 90
+- y:
+    rotate:
+      shape: base
+      axis:
+        origin: [0, 0, 0]
+        direction: [1, 0, 0]
+      angle: 90
+- z:
+    cylinder:
+      radius: 1
+      height: 4
+      frame:
+        origin: [0.0, 0, -2]
+- ab:
+    union:
+      object: z
+      tool: x
+- result:
+    union:
+      object: ab
+      tool: y
+checks:
+- valid: result
+- count: result
+  eq:
+    solids: 1
+- volume: result
+  eq: 12*pi - 16 + 8*(2 - sqrt(2))
+  rel: 1.0e-06
+---
+case: three_cylinders_union_zxy_z_off
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestBooleans.test_booleans_of_three_crossing_equal_radius_cylinders
+notes:
+- 'The z cylinder 1e-6 off its axis: the cuts fall just outside faces'' corners. The volume is that of the centred
+  cylinders.'
+build:
+- base:
+    cylinder:
+      radius: 1
+      height: 4
+      frame:
+        origin: [0.0, 0, -2]
+- x:
+    rotate:
+      shape: base
+      axis:
+        origin: [0, 0, 0]
+        direction: [0, 1, 0]
+      angle: 90
+- y:
+    rotate:
+      shape: base
+      axis:
+        origin: [0, 0, 0]
+        direction: [1, 0, 0]
+      angle: 90
+- z:
+    cylinder:
+      radius: 1
+      height: 4
+      frame:
+        origin: [1.0e-06, 0, -2]
+- ab:
+    union:
+      object: z
+      tool: x
+- result:
+    union:
+      object: ab
+      tool: y
+checks:
+- valid: result
+- count: result
+  eq:
+    solids: 1
+- volume: result
+  eq: 12*pi - 16 + 8*(2 - sqrt(2))
+  rel: 0.0002
+---
+case: three_cylinders_drill_zxy
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestBooleans.test_booleans_of_three_crossing_equal_radius_cylinders
+build:
+- base:
+    cylinder:
+      radius: 1
+      height: 4
+      frame:
+        origin: [0.0, 0, -2]
+- x:
+    rotate:
+      shape: base
+      axis:
+        origin: [0, 0, 0]
+        direction: [0, 1, 0]
+      angle: 90
+- y:
+    rotate:
+      shape: base
+      axis:
+        origin: [0, 0, 0]
+        direction: [1, 0, 0]
+      angle: 90
+- z:
+    cylinder:
+      radius: 1
+      height: 4
+      frame:
+        origin: [0.0, 0, -2]
+- c0:
+    box:
+      size: [3, 3, 3]
+      corner: [-1.5, -1.5, -1.5]
+- c1:
+    difference:
+      object: c0
+      tool: z
+- c2:
+    difference:
+      object: c1
+      tool: x
+- result:
+    difference:
+      object: c2
+      tool: y
+checks:
+- valid: result
+- volume: result
+  eq: 27 - (9*pi - 16 + 8*(2 - sqrt(2)))
+  rel: 1.0e-06
+---
+case: three_cylinders_union_zyx
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestBooleans.test_booleans_of_three_crossing_equal_radius_cylinders
+build:
+- base:
+    cylinder:
+      radius: 1
+      height: 4
+      frame:
+        origin: [0.0, 0, -2]
+- x:
+    rotate:
+      shape: base
+      axis:
+        origin: [0, 0, 0]
+        direction: [0, 1, 0]
+      angle: 90
+- y:
+    rotate:
+      shape: base
+      axis:
+        origin: [0, 0, 0]
+        direction: [1, 0, 0]
+      angle: 90
+- z:
+    cylinder:
+      radius: 1
+      height: 4
+      frame:
+        origin: [0.0, 0, -2]
+- ab:
+    union:
+      object: z
+      tool: y
+- result:
+    union:
+      object: ab
+      tool: x
+checks:
+- valid: result
+- count: result
+  eq:
+    solids: 1
+- volume: result
+  eq: 12*pi - 16 + 8*(2 - sqrt(2))
+  rel: 1.0e-06
+---
+case: three_cylinders_union_zyx_z_off
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestBooleans.test_booleans_of_three_crossing_equal_radius_cylinders
+notes:
+- 'The z cylinder 1e-6 off its axis: the cuts fall just outside faces'' corners. The volume is that of the centred
+  cylinders.'
+build:
+- base:
+    cylinder:
+      radius: 1
+      height: 4
+      frame:
+        origin: [0.0, 0, -2]
+- x:
+    rotate:
+      shape: base
+      axis:
+        origin: [0, 0, 0]
+        direction: [0, 1, 0]
+      angle: 90
+- y:
+    rotate:
+      shape: base
+      axis:
+        origin: [0, 0, 0]
+        direction: [1, 0, 0]
+      angle: 90
+- z:
+    cylinder:
+      radius: 1
+      height: 4
+      frame:
+        origin: [1.0e-06, 0, -2]
+- ab:
+    union:
+      object: z
+      tool: y
+- result:
+    union:
+      object: ab
+      tool: x
+checks:
+- valid: result
+- count: result
+  eq:
+    solids: 1
+- volume: result
+  eq: 12*pi - 16 + 8*(2 - sqrt(2))
+  rel: 0.0002
+---
+case: three_cylinders_drill_zyx
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestBooleans.test_booleans_of_three_crossing_equal_radius_cylinders
+build:
+- base:
+    cylinder:
+      radius: 1
+      height: 4
+      frame:
+        origin: [0.0, 0, -2]
+- x:
+    rotate:
+      shape: base
+      axis:
+        origin: [0, 0, 0]
+        direction: [0, 1, 0]
+      angle: 90
+- y:
+    rotate:
+      shape: base
+      axis:
+        origin: [0, 0, 0]
+        direction: [1, 0, 0]
+      angle: 90
+- z:
+    cylinder:
+      radius: 1
+      height: 4
+      frame:
+        origin: [0.0, 0, -2]
+- c0:
+    box:
+      size: [3, 3, 3]
+      corner: [-1.5, -1.5, -1.5]
+- c1:
+    difference:
+      object: c0
+      tool: z
+- c2:
+    difference:
+      object: c1
+      tool: y
+- result:
+    difference:
+      object: c2
+      tool: x
+checks:
+- valid: result
+- volume: result
+  eq: 27 - (9*pi - 16 + 8*(2 - sqrt(2)))
+  rel: 1.0e-06
+---
+case: tangent_sphere_cut_dimple_intersection
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestBooleans.test_intersection_deleting_sphere_cut_tangent_to_a_face
+notes:
+- 'A sphere cut tangent to a box face: its face has a loop of one vertex. usd-brep compares with its own difference:
+  the volumes here are those SMLib, OCCT and sampling the definition agree on.'
+build:
+- p0:
+    box:
+      size: [4.5, 3.5, 2.5]
+      corner: [0, 0, 0]
+- t1:
+    box:
+      size: [1, 3, 2.5]
+      corner: [3.5, 0, 0.75]
+- p1:
+    difference:
+      object: p0
+      tool: t1
+- t2:
+    box:
+      size: [0.5, 2, 1]
+      corner: [3.25, 1, 1]
+- p2:
+    difference:
+      object: p1
+      tool: t2
+- b0:
+    cylinder:
+      radius: 1.25
+      height: 1.5
+      frame:
+        origin: [0, 0, -0.75]
+- b1:
+    rotate:
+      shape: b0
+      axis:
+        origin: [0, 0, 0]
+        direction: [1, 0, 0]
+      angle: 90
+- b2:
+    translate:
+      shape: b1
+      by: [3.5, 0.5, 0.5]
+- p3:
+    union:
+      object: p2
+      tool: b2
+- sp:
+    sphere:
+      radius: 1
+      frame:
+        origin: [0.5, 2.5, 1.5]
+- p:
+    difference:
+      object: p3
+      tool: sp
+- tool:
+    cylinder:
+      radius: 1.25
+      height: 2
+      frame:
+        origin: [2, 3, -1]
+- result:
+    intersection:
+      object: p
+      tool: tool
+checks:
+- valid: result
+- volume: result
+  eq: 3.55695
+  rel: 1.0e-05
+- bounds: result
+  eq: [[0.75, 1.75, 0], [3.25, 3.5, 1]]
+  abs: 1.0e-06
+---
+case: tangent_sphere_cut_dimple_difference
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestBooleans.test_intersection_deleting_sphere_cut_tangent_to_a_face
+notes:
+- 'A sphere cut tangent to a box face: its face has a loop of one vertex. usd-brep compares with its own difference:
+  the volumes here are those SMLib, OCCT and sampling the definition agree on.'
+build:
+- p0:
+    box:
+      size: [4.5, 3.5, 2.5]
+      corner: [0, 0, 0]
+- t1:
+    box:
+      size: [1, 3, 2.5]
+      corner: [3.5, 0, 0.75]
+- p1:
+    difference:
+      object: p0
+      tool: t1
+- t2:
+    box:
+      size: [0.5, 2, 1]
+      corner: [3.25, 1, 1]
+- p2:
+    difference:
+      object: p1
+      tool: t2
+- b0:
+    cylinder:
+      radius: 1.25
+      height: 1.5
+      frame:
+        origin: [0, 0, -0.75]
+- b1:
+    rotate:
+      shape: b0
+      axis:
+        origin: [0, 0, 0]
+        direction: [1, 0, 0]
+      angle: 90
+- b2:
+    translate:
+      shape: b1
+      by: [3.5, 0.5, 0.5]
+- p3:
+    union:
+      object: p2
+      tool: b2
+- sp:
+    sphere:
+      radius: 1
+      frame:
+        origin: [0.5, 2.5, 1.5]
+- p:
+    difference:
+      object: p3
+      tool: sp
+- tool:
+    cylinder:
+      radius: 1.25
+      height: 2
+      frame:
+        origin: [2, 3, -1]
+- result:
+    difference:
+      object: p
+      tool: tool
+checks:
+- valid: result
+- volume: result
+  eq: 30.71185
+  rel: 1.0e-05
+---
+case: tangent_sphere_cut_pocket_intersection
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestBooleans.test_intersection_deleting_sphere_cut_tangent_to_a_face
+notes:
+- 'A sphere cut tangent to a box face: its face has a loop of one vertex. usd-brep compares with its own difference:
+  the volumes here are those SMLib, OCCT and sampling the definition agree on.'
+build:
+- p0:
+    box:
+      size: [4, 2.5, 3]
+      corner: [0, 0, 0]
+- t1:
+    box:
+      size: [2.5, 2.5, 1]
+      corner: [-0.25, 0.25, 1]
+- p1:
+    difference:
+      object: p0
+      tool: t1
+- sp:
+    sphere:
+      radius: 0.5
+      frame:
+        origin: [1.5, 2, 2.5]
+- p2:
+    difference:
+      object: p1
+      tool: sp
+- cy:
+    cylinder:
+      radius: 1.25
+      height: 1.5
+      frame:
+        origin: [0.5, 2, -0.25]
+- p:
+    union:
+      object: p2
+      tool: cy
+- tool:
+    sphere:
+      radius: 0.75
+      frame:
+        origin: [0.5, 1.5, 2.5]
+- result:
+    intersection:
+      object: p
+      tool: tool
+checks:
+- valid: result
+- volume: result
+  eq: 1.35969
+  rel: 1.0e-05
+- bounds: result
+  eq: [[0, 0.75, 2], [1.25, 2.25, 3]]
+  abs: 1.0e-06
+---
+case: tangent_sphere_cut_pocket_difference
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestBooleans.test_intersection_deleting_sphere_cut_tangent_to_a_face
+notes:
+- 'A sphere cut tangent to a box face: its face has a loop of one vertex. usd-brep compares with its own difference:
+  the volumes here are those SMLib, OCCT and sampling the definition agree on.'
+build:
+- p0:
+    box:
+      size: [4, 2.5, 3]
+      corner: [0, 0, 0]
+- t1:
+    box:
+      size: [2.5, 2.5, 1]
+      corner: [-0.25, 0.25, 1]
+- p1:
+    difference:
+      object: p0
+      tool: t1
+- sp:
+    sphere:
+      radius: 0.5
+      frame:
+        origin: [1.5, 2, 2.5]
+- p2:
+    difference:
+      object: p1
+      tool: sp
+- cy:
+    cylinder:
+      radius: 1.25
+      height: 1.5
+      frame:
+        origin: [0.5, 2, -0.25]
+- p:
+    union:
+      object: p2
+      tool: cy
+- tool:
+    sphere:
+      radius: 0.75
+      frame:
+        origin: [0.5, 1.5, 2.5]
+- result:
+    difference:
+      object: p
+      tool: tool
+checks:
+- valid: result
+- volume: result
+  eq: 27.72432
+  rel: 1.0e-05
+---
+case: merge_union
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestBooleans.test_merge_breps_operation_semantics
+build:
+- a:
+    box:
+      size: [10, 10, 10]
+      corner: [0, 0, 0]
+- b:
+    box:
+      size: [4, 8, 6]
+      corner: [8, 6, 3]
+- result:
+    union:
+      object: a
+      tool: b
+checks:
+- valid: result
+- volume: result
+  eq: 1144
+  rel: 1.0e-06
+---
+case: merge_intersection
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestBooleans.test_merge_breps_operation_semantics
+build:
+- a:
+    box:
+      size: [10, 10, 10]
+      corner: [0, 0, 0]
+- b:
+    box:
+      size: [4, 8, 6]
+      corner: [8, 6, 3]
+- result:
+    intersection:
+      object: a
+      tool: b
+checks:
+- valid: result
+- volume: result
+  eq: 48
+  rel: 1.0e-06
+---
+case: merge_difference
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestBooleans.test_merge_breps_operation_semantics
+notes:
+- Difference is written second minus first, the order usd-brep's merge_breps folds in.
+build:
+- a:
+    box:
+      size: [10, 10, 10]
+      corner: [0, 0, 0]
+- b:
+    box:
+      size: [4, 8, 6]
+      corner: [8, 6, 3]
+- result:
+    difference:
+      object: b
+      tool: a
+checks:
+- valid: result
+- volume: result
+  eq: 144
+  rel: 1.0e-06
+---
+case: merge_three_union
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestBooleans.test_merge_breps_three_input_union
+build:
+- a:
+    box:
+      size: [10, 10, 10]
+      corner: [0, 0, 0]
+- b:
+    box:
+      size: [10, 10, 10]
+      corner: [5, 5, 5]
+- c:
+    box:
+      size: [10, 10, 10]
+      corner: [8, 8, 8]
+- ab:
+    union:
+      object: a
+      tool: b
+- result:
+    union:
+      object: ab
+      tool: c
+checks:
+- valid: result
+- count: result
+  eq:
+    solids: 1
+- volume: result
+  eq: 2532
+  rel: 1.0e-06
+---
+case: merge_three_difference
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestBooleans.test_merge_breps_three_input_difference_preserves_legacy_order
+build:
+- c:
+    box:
+      size: [2, 2, 2]
+      corner: [1, 1, 1.5]
+- b:
+    box:
+      size: [4, 8, 6]
+      corner: [8, 6, 3]
+- a:
+    box:
+      size: [10, 10, 10]
+      corner: [0, 0, 0]
+- ab:
+    difference:
+      object: a
+      tool: b
+- result:
+    difference:
+      object: ab
+      tool: c
+checks:
+- valid: result
+- volume: result
+  eq: 944
+  rel: 1.0e-06
+- bounds: result
+  eq: [[0, 0, 0], [10, 10, 10]]
+  abs: 1.0e-06
+---
+case: union_sphere_inside_box
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestBooleans.test_boolean_with_options_post_process
+notes:
+- 'A sphere wholly inside the box: the union is the box. The exact checks replace usd-brep''s that faces exist.'
+build:
+- a:
+    box:
+      size: [10, 10, 10]
+      corner: [0, 0, 0]
+- b:
+    sphere:
+      radius: 4
+      frame:
+        origin: [5, 5, 5]
+- result:
+    union:
+      object: a
+      tool: b
+checks:
+- valid: result
+- count: result
+  eq:
+    solids: 1
+- count: result
+  eq:
+    faces: 6
+- volume: result
+  eq: 1000
+  rel: 1.0e-06
+---
+case: discs_union
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestBooleans.test_boolean_2d_union
+build:
+- ca:
+    circle:
+      center: [0, 0, 0]
+      normal: [0, 0, 1]
+      radius: 10
+- ea:
+    edge:
+      curve: ca
+- wa:
+    wire:
+      edges: [ea]
+- a:
+    face:
+      wire: wa
+- cb:
+    circle:
+      center: [8, 0, 0]
+      normal: [0, 0, 1]
+      radius: 10
+- eb:
+    edge:
+      curve: cb
+- wb:
+    wire:
+      edges: [eb]
+- b:
+    face:
+      wire: wb
+- result:
+    union:
+      object: a
+      tool: b
+checks:
+- area: result
+  eq: 200*pi - (200*acos(0.4) - 4*sqrt(336))
+  rel: 1.0e-06
+---
+case: discs_intersection
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestBooleans.test_boolean_2d_intersection
+build:
+- ca:
+    circle:
+      center: [0, 0, 0]
+      normal: [0, 0, 1]
+      radius: 10
+- ea:
+    edge:
+      curve: ca
+- wa:
+    wire:
+      edges: [ea]
+- a:
+    face:
+      wire: wa
+- cb:
+    circle:
+      center: [8, 0, 0]
+      normal: [0, 0, 1]
+      radius: 10
+- eb:
+    edge:
+      curve: cb
+- wb:
+    wire:
+      edges: [eb]
+- b:
+    face:
+      wire: wb
+- result:
+    intersection:
+      object: a
+      tool: b
+checks:
+- area: result
+  eq: (200*acos(0.4) - 4*sqrt(336))
+  rel: 1.0e-06
+---
+case: discs_difference
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestBooleans.test_boolean_2d_difference
+build:
+- ca:
+    circle:
+      center: [0, 0, 0]
+      normal: [0, 0, 1]
+      radius: 10
+- ea:
+    edge:
+      curve: ca
+- wa:
+    wire:
+      edges: [ea]
+- a:
+    face:
+      wire: wa
+- cb:
+    circle:
+      center: [8, 0, 0]
+      normal: [0, 0, 1]
+      radius: 10
+- eb:
+    edge:
+      curve: cb
+- wb:
+    wire:
+      edges: [eb]
+- b:
+    face:
+      wire: wb
+- result:
+    difference:
+      object: a
+      tool: b
+checks:
+- area: result
+  eq: 100*pi - (200*acos(0.4) - 4*sqrt(336))
+  rel: 1.0e-06
+---
+case: rectangles_overlapping_union
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestBooleans.test_boolean_2d_partially_overlapping_rectangle_operation_areas
+build:
+- wa:
+    polyline:
+      points: [[-5, -5, 0], [5, -5, 0], [5, 5, 0], [-5, 5, 0], [-5, -5, 0]]
+- a:
+    face:
+      wire: wa
+- wb:
+    polyline:
+      points: [[0, -5, 0], [10, -5, 0], [10, 5, 0], [0, 5, 0], [0, -5, 0]]
+- b:
+    face:
+      wire: wb
+- result:
+    union:
+      object: a
+      tool: b
+checks:
+- area: result
+  eq: 150
+  rel: 1.0e-06
+- bounds: result
+  eq: [[-5, -5, 0], [10, 5, 0]]
+  abs: 1.0e-06
+---
+case: rectangles_overlapping_intersection
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestBooleans.test_boolean_2d_partially_overlapping_rectangle_operation_areas
+build:
+- wa:
+    polyline:
+      points: [[-5, -5, 0], [5, -5, 0], [5, 5, 0], [-5, 5, 0], [-5, -5, 0]]
+- a:
+    face:
+      wire: wa
+- wb:
+    polyline:
+      points: [[0, -5, 0], [10, -5, 0], [10, 5, 0], [0, 5, 0], [0, -5, 0]]
+- b:
+    face:
+      wire: wb
+- result:
+    intersection:
+      object: a
+      tool: b
+checks:
+- area: result
+  eq: 50
+  rel: 1.0e-06
+- bounds: result
+  eq: [[0, -5, 0], [5, 5, 0]]
+  abs: 1.0e-06
+---
+case: rectangles_overlapping_difference
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestBooleans.test_boolean_2d_partially_overlapping_rectangle_operation_areas
+build:
+- wa:
+    polyline:
+      points: [[-5, -5, 0], [5, -5, 0], [5, 5, 0], [-5, 5, 0], [-5, -5, 0]]
+- a:
+    face:
+      wire: wa
+- wb:
+    polyline:
+      points: [[0, -5, 0], [10, -5, 0], [10, 5, 0], [0, 5, 0], [0, -5, 0]]
+- b:
+    face:
+      wire: wb
+- result:
+    difference:
+      object: a
+      tool: b
+checks:
+- area: result
+  eq: 50
+  rel: 1.0e-06
+- bounds: result
+  eq: [[-5, -5, 0], [0, 5, 0]]
+  abs: 1.0e-06
+---
+case: rectangles_disjoint_union
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestBooleans.test_boolean_2d_disjoint_rectangle_operation_areas
+build:
+- wa:
+    polyline:
+      points: [[-5, -5, 0], [5, -5, 0], [5, 5, 0], [-5, 5, 0], [-5, -5, 0]]
+- a:
+    face:
+      wire: wa
+- wb:
+    polyline:
+      points: [[10, -5, 0], [20, -5, 0], [20, 5, 0], [10, 5, 0], [10, -5, 0]]
+- b:
+    face:
+      wire: wb
+- result:
+    union:
+      object: a
+      tool: b
+checks:
+- area: result
+  eq: 200
+  rel: 1.0e-06
+- bounds: result
+  eq: [[-5, -5, 0], [20, 5, 0]]
+  abs: 1.0e-06
+---
+case: rectangles_disjoint_difference
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestBooleans.test_boolean_2d_disjoint_rectangle_operation_areas
+build:
+- wa:
+    polyline:
+      points: [[-5, -5, 0], [5, -5, 0], [5, 5, 0], [-5, 5, 0], [-5, -5, 0]]
+- a:
+    face:
+      wire: wa
+- wb:
+    polyline:
+      points: [[10, -5, 0], [20, -5, 0], [20, 5, 0], [10, 5, 0], [10, -5, 0]]
+- b:
+    face:
+      wire: wb
+- result:
+    difference:
+      object: a
+      tool: b
+checks:
+- area: result
+  eq: 100
+  rel: 1.0e-06
+- bounds: result
+  eq: [[-5, -5, 0], [5, 5, 0]]
+  abs: 1.0e-06

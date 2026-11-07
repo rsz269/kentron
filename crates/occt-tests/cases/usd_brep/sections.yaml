@@ -1,0 +1,153 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+# Translated from usd-brep's tests into kentron's case format, with the checks strengthened:
+# changed from the originals as each case's notes say. See crates/occt-tests/README.md.
+case: section_two_boxes
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestIntersectors.test_intersect_breps
+notes:
+- 'The six edges of the common cube each lie on a face of both: the check that curves exist becomes their total
+  length.'
+build:
+- a:
+    box:
+      size: [10, 10, 10]
+      corner: [0, 0, 0]
+- b:
+    box:
+      size: [10, 10, 10]
+      corner: [5, 5, 5]
+- result:
+    section:
+      object: a
+      tool: b
+checks:
+- length: result
+  eq: 30
+  rel: 1.0e-09
+---
+case: section_box_plane
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestIntersectors.test_intersect_brep_with_plane
+build:
+- s:
+    box:
+      size: [10, 10, 10]
+      corner: [0, 0, 0]
+- rw:
+    polyline:
+      points: [[-15, -15, 5], [25, -15, 5], [25, 25, 5], [-15, 25, 5], [-15, -15, 5]]
+- r:
+    face:
+      wire: rw
+- result:
+    section:
+      object: s
+      tool: r
+checks:
+- length: result
+  eq: 40
+  rel: 1.0e-09
+---
+case: section_crossing_segments
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestIntersectors.test_intersect_curves
+build:
+- a:
+    edge:
+      from: [0, 0, 0]
+      to: [10, 10, 0]
+- b:
+    edge:
+      from: [0, 10, 0]
+      to: [10, 0, 0]
+- result:
+    section:
+      object: a
+      tool: b
+- p:
+    vertex:
+      at: [5, 5, 0]
+checks:
+- count: result
+  eq:
+    vertices: 1
+- distance: [p, result]
+  eq: 0
+  abs: 1.0e-07
+---
+case: section_two_plane_patches
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestIntersectors.test_intersect_surfaces
+notes:
+- The check that a curve exists becomes its length.
+build:
+- aw:
+    polyline:
+      points: [[0, 0, 0], [10, 0, 0], [10, 10, 0], [0, 10, 0], [0, 0, 0]]
+- a:
+    face:
+      wire: aw
+- bw:
+    polyline:
+      points: [[5, 0, -5], [5, 10, -5], [5, 10, 5], [5, 0, 5], [5, 0, -5]]
+- b:
+    face:
+      wire: bw
+- result:
+    section:
+      object: a
+      tool: b
+checks:
+- length: result
+  eq: 10
+  rel: 1.0e-09
+---
+case: section_segment_plane_patch
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestIntersectors.test_intersect_curve_surface
+build:
+- aw:
+    polyline:
+      points: [[0, 0, 0], [10, 0, 0], [10, 10, 0], [0, 10, 0], [0, 0, 0]]
+- a:
+    face:
+      wire: aw
+- l:
+    edge:
+      from: [5, 5, -5]
+      to: [5, 5, 5]
+- result:
+    section:
+      object: l
+      tool: a
+- p:
+    vertex:
+      at: [5, 5, 0]
+checks:
+- count: result
+  eq:
+    vertices: 1
+- distance: [p, result]
+  eq: 0
+  abs: 1.0e-07

@@ -1,0 +1,747 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+# Translated from usd-brep's tests into kentron's case format, with the checks strengthened:
+# changed from the originals as each case's notes say. See crates/occt-tests/README.md.
+case: distance_point_to_box
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestQueries.test_brep_closest_point
+build:
+- s:
+    box:
+      size: [10, 10, 10]
+      corner: [0, 0, 0]
+- p:
+    vertex:
+      at: [5, 5, 15]
+checks:
+- distance: [p, s]
+  eq: 5
+  abs: 1.0e-06
+---
+case: distance_point_to_segment
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestQueries.test_curve_closest_point
+build:
+- s:
+    edge:
+      from: [0, 0, 0]
+      to: [10, 0, 0]
+- p:
+    vertex:
+      at: [5, 3, 0]
+checks:
+- distance: [p, s]
+  eq: 3
+  abs: 1.0e-06
+---
+case: distance_point_to_plane_patch
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestQueries.test_surface_closest_point
+notes:
+- usd-brep's 4 x 4 grid of points in z = 0 makes a surface that is this square.
+build:
+- rw:
+    polyline:
+      points: [[0.0, 0.0, 0], [15.0, 0.0, 0], [15.0, 15.0, 0], [0.0, 15.0, 0], [0.0, 0.0, 0]]
+- r:
+    face:
+      wire: rw
+- p:
+    vertex:
+      at: [5, 5, 3]
+checks:
+- distance: [p, r]
+  eq: 3
+  abs: 1.0e-06
+---
+case: distance_point_to_annulus_keeps_its_trims
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestQueries.test_surface_closest_point_ignores_owning_face_trims
+notes:
+- usd-brep checks that a surface's closest point ignores its face's trims (0). A shape's distance is to the face,
+  so here the trims count.
+build:
+- ac:
+    circle:
+      center: [0, 0, 0]
+      normal: [0, 0, 1]
+      radius: 5
+- ae:
+    edge:
+      curve: ac
+- aw:
+    wire:
+      edges: [ae]
+- a:
+    face:
+      wire: aw
+- bc:
+    circle:
+      center: [0, 0, 0]
+      normal: [0, 0, 1]
+      radius: 2
+- be:
+    edge:
+      curve: bc
+- bw:
+    wire:
+      edges: [be]
+- b:
+    face:
+      wire: bw
+- result:
+    difference:
+      object: a
+      tool: b
+- p:
+    vertex:
+      at: [0, 0, 0]
+checks:
+- area: result
+  eq: pi*21
+  rel: 1.0e-06
+- distance: [p, result]
+  eq: 2
+  abs: 1.0e-06
+---
+case: distance_circle_from_axis
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestClosestPointAll.test_curve_closest_point_all
+notes:
+- 'Every point of the circle is closest: usd-brep checks that there is at least one.'
+build:
+- c:
+    circle:
+      center: [0, 0, 0]
+      normal: [0, 0, 1]
+      radius: 5
+- e:
+    edge:
+      curve: c
+- p:
+    vertex:
+      at: [0, 0, 3]
+checks:
+- distance: [p, e]
+  eq: sqrt(34)
+  abs: 1.0e-06
+---
+case: distance_disjoint
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestQueries.test_brep_distance_disjoint
+notes:
+- With test_brep_distance_symmetric.
+build:
+- a:
+    box:
+      size: [1, 1, 1]
+      corner: [0, 0, 0]
+- b:
+    box:
+      size: [1, 1, 1]
+      corner: [4, 0, 0]
+checks:
+- distance: [a, b]
+  eq: 3
+  abs: 1.0e-06
+- distance: [b, a]
+  eq: 3
+  abs: 1.0e-06
+---
+case: distance_touching
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestQueries.test_brep_distance_touching_is_zero
+build:
+- a:
+    box:
+      size: [1, 1, 1]
+      corner: [0, 0, 0]
+- b:
+    box:
+      size: [1, 1, 1]
+      corner: [1, 0, 0]
+checks:
+- distance: [a, b]
+  eq: 0
+  abs: 1.0e-07
+---
+case: distance_overlapping
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestQueries.test_brep_distance_interpenetrating_is_zero
+build:
+- a:
+    box:
+      size: [10, 10, 10]
+      corner: [0, 0, 0]
+- b:
+    box:
+      size: [4, 4, 4]
+      corner: [8, 3, 3]
+checks:
+- distance: [a, b]
+  eq: 0
+  abs: 1.0e-07
+---
+case: distance_far_box
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestQueries.test_brep_distance_matches_relationship_distance
+build:
+- a:
+    box:
+      size: [10, 10, 10]
+      corner: [0, 0, 0]
+- b:
+    box:
+      size: [1, 1, 1]
+      corner: [20, 0, 0]
+checks:
+- distance: [a, b]
+  eq: 10
+  abs: 1.0e-06
+---
+case: distance_cones_side_by_side
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestQueries.test_brep_relationship_cones_separate
+build:
+- a:
+    cone:
+      r1: 0.07
+      r2: 0.05
+      height: 0.45
+- b0:
+    cone:
+      r1: 0.07
+      r2: 0.05
+      height: 0.45
+- b:
+    translate:
+      shape: b0
+      by: [0.165, 0, 0]
+checks:
+- distance: [a, b]
+  eq: 0.025
+  abs: 1.0e-06
+---
+case: relationship_separate
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestQueries.test_brep_relationship_separate
+notes:
+- 'usd-brep''s relationship label, as the facts behind it: here a positive distance and no shared volume.'
+build:
+- a:
+    box:
+      size: [1, 1, 1]
+      corner: [0, 0, 0]
+- b:
+    box:
+      size: [1, 1, 1]
+      corner: [4, 0, 0]
+- i:
+    intersection:
+      object: a
+      tool: b
+checks:
+- distance: [a, b]
+  eq: 3
+  abs: 1.0e-06
+- volume: i
+  eq: 0
+  abs: 1.0e-09
+---
+case: relationship_touching
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestQueries.test_brep_relationship_touching
+build:
+- a:
+    box:
+      size: [1, 1, 1]
+      corner: [0, 0, 0]
+- b:
+    box:
+      size: [1, 1, 1]
+      corner: [1, 0, 0]
+- i:
+    intersection:
+      object: a
+      tool: b
+checks:
+- distance: [a, b]
+  eq: 0
+  abs: 1.0e-07
+- volume: i
+  eq: 0
+  abs: 1.0e-09
+---
+case: relationship_interpenetrating
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestQueries.test_brep_relationship_interpenetrating
+build:
+- a:
+    box:
+      size: [10, 10, 10]
+      corner: [0, 0, 0]
+- b:
+    box:
+      size: [4, 4, 4]
+      corner: [8, 3, 3]
+- i:
+    intersection:
+      object: a
+      tool: b
+checks:
+- volume: i
+  eq: 32
+  rel: 1.0e-06
+---
+case: relationship_a_contains_b
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestQueries.test_brep_relationship_a_contains_b
+notes:
+- 'usd-brep gives 3 as the distance here, the wall''s clearance: to kentron and OCCT a solid inside another is at
+  distance 0, so the case states containment instead.'
+build:
+- a:
+    box:
+      size: [10, 10, 10]
+      corner: [0, 0, 0]
+- b:
+    box:
+      size: [2, 2, 2]
+      corner: [3, 3, 3]
+- i:
+    intersection:
+      object: a
+      tool: b
+checks:
+- volume: i
+  eq: 8
+  rel: 1.0e-06
+- contains: a
+  points: [[3.5, 3.5, 3.5], [4.5, 4.5, 4.5], [4, 4, 4]]
+  inside: true
+---
+case: relationship_b_contains_a
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestQueries.test_brep_relationship_b_contains_a
+build:
+- a:
+    box:
+      size: [2, 2, 2]
+      corner: [3, 3, 3]
+- b:
+    box:
+      size: [10, 10, 10]
+      corner: [0, 0, 0]
+- i:
+    intersection:
+      object: a
+      tool: b
+checks:
+- volume: i
+  eq: 8
+  rel: 1.0e-06
+- contains: b
+  points: [[3.5, 3.5, 3.5], [4.5, 4.5, 4.5], [4, 4, 4]]
+  inside: true
+---
+case: relationship_cylinder_box_interpenetrating
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestQueries.test_brep_relationship_cylinder_box_interpenetrating
+notes:
+- Only the box's edges crossing the cylinder have points in the overlap.
+build:
+- a:
+    cylinder:
+      radius: 0.07
+      height: 0.45
+      frame:
+        origin: [0, 0, -0.225]
+- b:
+    box:
+      size: [0.4, 0.3, 0.25]
+      corner: [0.05, -0.15, -0.125]
+- i:
+    intersection:
+      object: a
+      tool: b
+checks:
+- volume: i
+  gt: 0
+- contains: i
+  points: [[0.06, 0, 0]]
+  inside: true
+---
+case: relationship_stacked_cylinders_touching
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestQueries.test_brep_relationship_stacked_cylinders_touching
+build:
+- a:
+    cylinder:
+      radius: 1
+      height: 2
+      frame:
+        origin: [0, 0, 0]
+- b:
+    cylinder:
+      radius: 1
+      height: 2
+      frame:
+        origin: [0, 0, 2]
+- i:
+    intersection:
+      object: a
+      tool: b
+checks:
+- distance: [a, b]
+  eq: 0
+  abs: 1.0e-07
+- volume: i
+  eq: 0
+  abs: 1.0e-09
+---
+case: hollow_box
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestQueries.test_material_census_hollow_has_void
+build:
+- o:
+    box:
+      size: [10, 10, 10]
+      corner: [0, 0, 0]
+- h:
+    box:
+      size: [4, 4, 4]
+      corner: [3, 3, 3]
+- result:
+    difference:
+      object: o
+      tool: h
+checks:
+- valid: result
+- count: result
+  eq:
+    solids: 1
+    shells: 2
+- volume: result
+  eq: 936
+  rel: 1.0e-06
+- contains: result
+  points: [[1, 1, 1]]
+  inside: true
+- contains: result
+  points: [[5, 5, 5]]
+  inside: false
+---
+case: disjoint_boxes_union
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestQueries.test_material_census_disjoint_solids
+build:
+- a:
+    box:
+      size: [2, 2, 2]
+      corner: [0, 0, 0]
+- b:
+    box:
+      size: [2, 2, 2]
+      corner: [20, 0, 0]
+- result:
+    union:
+      object: a
+      tool: b
+checks:
+- valid: result
+- count: result
+  eq:
+    solids: 2
+- volume: result
+  eq: 16
+  rel: 1.0e-06
+---
+case: solid_nested_in_a_cavity
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestQueries.test_material_census_nested_solid_in_cavity
+build:
+- o:
+    box:
+      size: [10, 10, 10]
+      corner: [0, 0, 0]
+- h:
+    box:
+      size: [4, 4, 4]
+      corner: [3, 3, 3]
+- hollow:
+    difference:
+      object: o
+      tool: h
+- n:
+    box:
+      size: [2, 2, 2]
+      corner: [4, 4, 4]
+- result:
+    union:
+      object: hollow
+      tool: n
+checks:
+- valid: result
+- count: result
+  eq:
+    solids: 2
+- volume: result
+  eq: 944
+  rel: 1.0e-06
+- contains: result
+  points: [[5, 5, 5], [1, 1, 1]]
+  inside: true
+- contains: result
+  points: [[3.5, 3.5, 3.5]]
+  inside: false
+---
+case: volume_box
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestQueries.test_compute_volume
+notes:
+- 'With test_mass_properties_box: the moments of inertia are about the centroid.'
+build:
+- s:
+    box:
+      size: [10, 10, 10]
+      corner: [0, 0, 0]
+checks:
+- volume: s
+  eq: 1000
+  rel: 1.0e-06
+- area: s
+  eq: 600
+  rel: 1.0e-06
+- centroid: s
+  eq: [5, 5, 5]
+- inertia: s
+  eq: [1000*200/12, 1000*200/12, 1000*200/12]
+  rel: 1.0e-09
+---
+case: volume_sphere
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestQueries.test_compute_volume_sphere
+build:
+- s:
+    sphere:
+      radius: 5
+      frame:
+        origin: [0, 0, 0]
+checks:
+- volume: s
+  eq: 4/3*pi*125
+  rel: 1.0e-06
+---
+case: volume_sphere_tight_accuracy
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestQueries.test_mass_properties_honours_accuracy_below_1e4
+notes:
+- With test_brep_area_honours_accuracy_below_1e4.
+build:
+- s:
+    sphere:
+      radius: 3
+      frame:
+        origin: [0, 0, 0]
+checks:
+- volume: s
+  eq: 4/3*pi*27
+  rel: 1.0e-07
+- area: s
+  eq: 4*pi*9
+  rel: 1.0e-07
+---
+case: area_torus
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestQueries.test_brep_area_curved_matches_faces_and_mass_properties
+build:
+- s:
+    torus:
+      major: 5
+      minor: 1
+checks:
+- area: s
+  eq: 4*pi^2*5
+  rel: 1.0e-06
+---
+case: volume_thin_half_shell
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestQueries.test_mass_properties_volume_error_is_controlled
+notes:
+- 'usd-brep allows 1e-2: the closed form is held to 1e-6.'
+build:
+- o:
+    cylinder:
+      radius: 1.7
+      height: 3
+      frame:
+        origin: [0, 0, 0]
+      angle: 180
+- i:
+    cylinder:
+      radius: 1.6
+      height: 3
+      frame:
+        origin: [0, 0, 0]
+      angle: 180
+- result:
+    difference:
+      object: o
+      tool: i
+checks:
+- valid: result
+- volume: result
+  eq: 0.5*pi*(1.7^2 - 1.6^2)*3
+  rel: 1.0e-06
+---
+case: centroid_off_bounds_midpoint
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestQueries.test_mass_properties_centroid_offset_from_bbox_midpoint
+build:
+- base:
+    box:
+      size: [20, 10, 10]
+      corner: [0, 0, 0]
+- tower:
+    box:
+      size: [10, 10, 15]
+      corner: [0, 0, 5]
+- result:
+    union:
+      object: base
+      tool: tower
+checks:
+- valid: result
+- volume: result
+  eq: 3000
+  rel: 1.0e-06
+- centroid: result
+  eq: [25/3, 5, 25/3]
+  abs: 1.0e-06
+- bounds: result
+  eq: [[0, 0, 0], [20, 10, 20]]
+  abs: 1.0e-06
+---
+case: inertia_box_off_origin
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestQueries.test_mass_properties_origin_parallel_axis
+notes:
+- 'usd-brep checks the parallel axis theorem between its own results: here the moments about the centroid in closed
+  form.'
+build:
+- s:
+    box:
+      size: [2, 4, 6]
+      corner: [0, 0, 0]
+checks:
+- inertia: s
+  eq: [48*(16 + 36)/12, 48*(4 + 36)/12, 48*(4 + 16)/12]
+  rel: 1.0e-09

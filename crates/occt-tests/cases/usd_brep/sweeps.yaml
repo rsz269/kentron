@@ -1,0 +1,95 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+# Translated from usd-brep's tests into kentron's case format, with the checks strengthened:
+# changed from the originals as each case's notes say. See crates/occt-tests/README.md.
+case: extrude_disc
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestSweeps.test_linear_sweep
+notes:
+- The check that faces exist becomes the shape's measures.
+build:
+- dc:
+    circle:
+      center: [0, 0, 0]
+      normal: [0, 0, 1]
+      radius: 5
+- de:
+    edge:
+      curve: dc
+- dw:
+    wire:
+      edges: [de]
+- d:
+    face:
+      wire: dw
+- result:
+    extrude:
+      profile: d
+      by: [0, 0, 10]
+checks:
+- valid: result
+- count: result
+  eq:
+    solids: 1
+- volume: result
+  eq: pi*250
+  rel: 1.0e-06
+- area: result
+  eq: 2*pi*25 + 2*pi*50
+  rel: 1.0e-06
+- bounds: result
+  eq: [[-5, -5, 0], [5, 5, 10]]
+  abs: 1.0e-06
+---
+case: pipe_straight
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestSweeps.test_sweep_along_planar_path
+brute:
+  result:
+    test: (x*x+y*y<=1)&(z>=0)&(z<=10)
+    box:
+    - - -1
+      - -1
+      - 0
+    - - 1
+      - 1
+      - 10
+build:
+- dc:
+    circle:
+      center: [0, 0, 0]
+      normal: [0, 0, 1]
+      radius: 1
+- de:
+    edge:
+      curve: dc
+- dw:
+    wire:
+      edges: [de]
+- d:
+    face:
+      wire: dw
+- spine:
+    edge:
+      from: [0, 0, 0]
+      to: [0, 0, 10]
+- result:
+    pipe:
+      profile: d
+      spine: spine
+checks:
+- valid: result
+- volume: result
+  eq: 10*pi
+  rel: 1.0e-06
+- count: result
+  eq:
+    faces: 3

@@ -1,0 +1,167 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+# Translated from usd-brep's tests into kentron's case format, with the checks strengthened:
+# changed from the originals as each case's notes say. See crates/occt-tests/README.md.
+case: line_length
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestCurveMethods.test_line_length
+build:
+- result:
+    edge:
+      from: [0, 0, 0]
+      to: [10, 0, 0]
+checks:
+- length: result
+  eq: 10
+  rel: 1.0e-07
+---
+case: circle_length
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestCurveMethods.test_circle_length
+build:
+- c:
+    circle:
+      center: [0, 0, 0]
+      normal: [0, 0, 1]
+      radius: 5
+- result:
+    edge:
+      curve: c
+checks:
+- length: result
+  eq: 10*pi
+  rel: 1.0e-07
+---
+case: circle_length_off_origin
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestCurves.test_create_circle_is_analytic_circle
+build:
+- c:
+    circle:
+      center: [1, 2, 3]
+      normal: [0, 0, 1]
+      radius: 7
+- result:
+    edge:
+      curve: c
+checks:
+- length: result
+  eq: 14*pi
+  rel: 1.0e-07
+---
+case: helix_constant_radius
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestCurves.test_create_helix_constant_radius
+notes:
+- 'usd-brep allows 0.5 on this length: it is held to 1e-5 of the closed form.'
+build:
+- result:
+    helix:
+      start_radius: 2
+      height: 10
+      turns: 5
+checks:
+- length: result
+  eq: sqrt((2*pi*2*5)^2 + 100)
+  rel: 1.0e-05
+---
+case: helix_conical
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestCurves.test_create_helix_conical
+notes:
+- Its length by quadrature of the parametrisation.
+build:
+- result:
+    helix:
+      start_radius: 1
+      end_radius: 3
+      height: 10
+      turns: 4
+checks:
+- length: result
+  eq: 51.383889574
+  rel: 1.0e-05
+---
+case: helix_left_handed
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestCurves.test_create_helix_left_handed
+build:
+- result:
+    helix:
+      start_radius: 2
+      height: 10
+      turns: 1
+      left_handed: true
+checks:
+- length: result
+  eq: sqrt((4*pi)^2 + 100)
+  rel: 1.0e-05
+---
+case: rectangle_perimeter
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestCurves.test_create_rectangle
+build:
+- w:
+    polyline:
+      points: [[-5, -2.5, 0], [5, -2.5, 0], [5, 2.5, 0], [-5, 2.5, 0], [-5, -2.5, 0]]
+- result:
+    face:
+      wire: w
+checks:
+- area: result
+  eq: 50
+  rel: 1.0e-06
+- count: result
+  eq:
+    edges: 4
+---
+case: hexagon_face_of_a_regular_polygon
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: source/SmPyLib/tests/test_omni_solid.py
+  test: TestCurves.test_create_regular_polygon
+build:
+- w:
+    polyline:
+      points: [[5.0, 0.0, 0], [2.5, 4.330127018922, 0], [-2.5, 4.330127018922, 0], [-5.0, 0.0, 0], [-2.5, -4.330127018922,
+          0], [2.5, -4.330127018922, 0], [5.0, 0.0, 0]]
+- result:
+    face:
+      wire: w
+checks:
+- area: result
+  eq: 3*sqrt(3)/2*25
+  rel: 1.0e-06
+- count: result
+  eq:
+    edges: 6

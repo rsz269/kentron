@@ -1,0 +1,210 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+# Translated from usd-brep's tests into kentron's case format, with the checks strengthened:
+# changed from the originals as each case's notes say. See crates/occt-tests/README.md.
+case: rotate_box_about_y_through_the_origin
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: tests/SM_API_test/src/TestSmGeneral.cpp
+  test: TestSmTransform
+notes:
+- usd-brep checks the call.
+build:
+- s:
+    box:
+      size: [5, 10, 15]
+      corner: [0, 0, 0]
+- result:
+    rotate:
+      shape: s
+      axis:
+        origin: [0, 0, 0]
+        direction: [0, 1, 0]
+      angle: 45
+checks:
+- valid: result
+- volume: result
+  eq: 750
+  rel: 1.0e-06
+- bounds: result
+  eq: [[0, 0, -5*sqrt(0.5)], [20*sqrt(0.5), 10, 15*sqrt(0.5)]]
+  abs: 1.0e-06
+---
+case: rotate_cube_about_z
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: tests/SM_API_test/src/TestSmGeneral.cpp
+  test: TestSmRotate
+notes:
+- usd-brep checks the call.
+build:
+- s:
+    box:
+      size: [5, 5, 5]
+      corner: [0, 0, 0]
+- result:
+    rotate:
+      shape: s
+      axis:
+        origin: [0, 0, 0]
+        direction: [0, 0, 1]
+      angle: 45
+checks:
+- valid: result
+- bounds: result
+  eq: [[-5*sqrt(0.5), 0, 0], [5*sqrt(0.5), 10*sqrt(0.5), 5]]
+  abs: 1.0e-06
+---
+case: translate_cube
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: tests/SM_API_test/src/TestSmGeneral.cpp
+  test: TestSmTranslate
+notes:
+- usd-brep checks the call.
+build:
+- s:
+    box:
+      size: [5, 5, 5]
+      corner: [0, 0, 0]
+- result:
+    translate:
+      shape: s
+      by: [1, 2, 4]
+checks:
+- valid: result
+- bounds: result
+  eq: [[1, 2, 4], [6, 7, 9]]
+  abs: 1.0e-06
+---
+case: arc_of_135_degrees
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: tests/SM_API_test/src/TestSmCurves.cpp
+  test: TestSmCreateArc
+notes:
+- usd-brep checks the call.
+build:
+- c:
+    circle:
+      center: [0, 0, 0]
+      normal: [0, 0, 1]
+      radius: 10
+- result:
+    edge:
+      curve: c
+      range: [0, 3*pi/4]
+checks:
+- length: result
+  eq: 10*3*pi/4
+  rel: 1.0e-06
+---
+case: rectangle_10_by_6
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: tests/SM_API_test/src/TestSmCurves.cpp
+  test: TestSmCreateRectangle
+notes:
+- usd-brep checks the call.
+build:
+- resultw:
+    polyline:
+      points: [[-5, -3, 0], [5, -3, 0], [5, 3, 0], [-5, 3, 0], [-5, -3, 0]]
+- result:
+    face:
+      wire: resultw
+checks:
+- area: result
+  eq: 60
+  rel: 1.0e-06
+- length: resultw
+  eq: 32
+  rel: 1.0e-09
+---
+case: regular_hexagon
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: tests/SM_API_test/src/TestSmCurves.cpp
+  test: TestSmCreateRegularPolygon
+notes:
+- usd-brep checks the number of sides.
+build:
+- resultw:
+    polyline:
+      points: [[5.0, 0.0, 0], [2.5000000000000004, 4.330127018922193, 0], [-2.499999999999999, 4.330127018922194,
+          0], [-5.0, 6.123233995736766e-16, 0], [-2.500000000000002, -4.330127018922192, 0], [2.5000000000000004,
+          -4.330127018922193, 0], [5.0, 0.0, 0]]
+- result:
+    face:
+      wire: resultw
+checks:
+- area: result
+  eq: 3*sqrt(3)/2*25
+  rel: 1.0e-06
+- length: resultw
+  eq: 30
+  rel: 1.0e-09
+---
+case: planar_face_with_two_holes
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: tests/SM_API_test/src/TestSmTrimmedSurfaces.cpp
+  test: TestSmCreatePlanarFaces
+notes:
+- 'With TestSmTrimSurfaceWith3dCurves: an L, less a triangle and a disc.'
+build:
+- lw:
+    polyline:
+      points: [[0, 0, 0], [10, 0, 0], [10, 5, 0], [5, 5, 0], [5, 10, 0], [0, 10, 0], [0, 0, 0]]
+- l:
+    face:
+      wire: lw
+- tw:
+    polyline:
+      points: [[1, 5, 0], [1, 8, 0], [4, 5, 0], [1, 5, 0]]
+- t:
+    face:
+      wire: tw
+- cc:
+    circle:
+      center: [6, 2.5, 0]
+      normal: [0, 0, 1]
+      radius: 1.5
+- ce:
+    edge:
+      curve: cc
+- cw:
+    wire:
+      edges: [ce]
+- c:
+    face:
+      wire: cw
+- m:
+    difference:
+      object: l
+      tool: t
+- result:
+    difference:
+      object: m
+      tool: c
+checks:
+- count: result
+  eq:
+    faces: 1
+- area: result
+  eq: 75 - 4.5 - 2.25*pi
+  rel: 1.0e-06

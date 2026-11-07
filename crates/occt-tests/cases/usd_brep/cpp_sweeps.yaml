@@ -1,0 +1,1235 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+# Translated from usd-brep's tests into kentron's case format, with the checks strengthened:
+# changed from the originals as each case's notes say. See crates/occt-tests/README.md.
+case: revolve_semicircle_to_a_sphere
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: tests/SM_API_test/src/TestSmPrimitives.cpp
+  test: TestSmCreateRotationalSweep
+notes:
+- 'With TestSmCreateSurfaceRevolutionSphere. usd-brep only checks that the call succeeds: the measures added, in
+  closed form.'
+build:
+- c:
+    circle:
+      center: [0, 0, 0]
+      normal: [0, 0, 1]
+      radius: 10
+- arc:
+    edge:
+      curve: c
+      range: [0, pi]
+- result:
+    revolve:
+      profile: arc
+      axis:
+        origin: [0, 0, 0]
+        direction: [1, 0, 0]
+      angle: 360
+checks:
+- area: result
+  eq: 400*pi
+  rel: 1.0e-06
+- bounds: result
+  eq: [[-10, -10, -10], [10, 10, 10]]
+  abs: 1.0e-06
+---
+case: extrude_half_disc
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: tests/SM_API_test/src/TestSmPrimitives.cpp
+  test: TestSmCreateLinearSweep
+notes:
+- 'usd-brep only checks that the call succeeds: the measures added, in closed form.'
+brute:
+  result:
+    test: (x*x + y*y <= 100) & (y >= 0) & (z >= 0) & (z <= 10)
+    box:
+    - - -10
+      - 0
+      - 0
+    - - 10
+      - 10
+      - 10
+build:
+- c:
+    circle:
+      center: [0, 0, 0]
+      normal: [0, 0, 1]
+      radius: 10
+- arc:
+    edge:
+      curve: c
+      range: [0, pi]
+- line:
+    edge:
+      from: [-10, 0, 0]
+      to: [10, 0, 0]
+- w:
+    wire:
+      edges: [arc, line]
+- f:
+    face:
+      wire: w
+- result:
+    extrude:
+      profile: f
+      by: [0, 0, 10]
+checks:
+- valid: result
+- count: result
+  eq:
+    solids: 1
+- volume: result
+  eq: 500*pi
+  rel: 1.0e-06
+- area: result
+  eq: 100*pi + 100*pi + 200
+  rel: 1.0e-06
+- bounds: result
+  eq: [[-10, 0, 0], [10, 10, 10]]
+  abs: 1.0e-06
+---
+case: extrude_segment_to_a_plane
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: tests/SM_API_test/src/TestSmPrimitives.cpp
+  test: TestSmCreateLinearSweepPlane
+notes:
+- 'usd-brep only checks that the call succeeds: the measures added, in closed form.'
+build:
+- l:
+    edge:
+      from: [0, 0, 0]
+      to: [4, 2, 0]
+- result:
+    extrude:
+      profile: l
+      by: [0, 0, 10]
+checks:
+- count: result
+  eq:
+    faces: 1
+- area: result
+  eq: 10*sqrt(20)
+  rel: 1.0e-06
+- bounds: result
+  eq: [[0, 0, 0], [4, 2, 10]]
+  abs: 1.0e-06
+---
+case: extrude_circle_to_a_cylinder
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: tests/SM_API_test/src/TestSmPrimitives.cpp
+  test: TestSmCreateLinearSweepCylinder
+notes:
+- 'usd-brep only checks that the call succeeds: the measures added, in closed form.'
+build:
+- dc:
+    circle:
+      center: [0, 0, 0]
+      normal: [0, 0, 1]
+      radius: 10
+- de:
+    edge:
+      curve: dc
+- dw:
+    wire:
+      edges: [de]
+- d:
+    face:
+      wire: dw
+- result:
+    extrude:
+      profile: d
+      by: [0, 0, 10]
+checks:
+- valid: result
+- volume: result
+  eq: 1000*pi
+  rel: 1.0e-06
+- area: result
+  eq: 200*pi + 200*pi
+  rel: 1.0e-06
+---
+case: extrude_square_oblique
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: tests/SM_API_test/src/TestSmPrimitives.cpp
+  test: TestSmCreateLinearSweepOblique
+build:
+- qw:
+    polyline:
+      points: [[-1, -1, 0], [1, -1, 0], [1, 1, 0], [-1, 1, 0], [-1, -1, 0]]
+- q:
+    face:
+      wire: qw
+- result:
+    extrude:
+      profile: q
+      by: [3*sqrt(0.5), 0, 3*sqrt(0.5)]
+checks:
+- valid: result
+- volume: result
+  eq: 12*sqrt(0.5)
+  rel: 1.0e-06
+---
+case: extrude_square_oblique_backwards
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: tests/SM_API_test/src/TestSmPrimitives.cpp
+  test: TestSmCreateLinearSweepOblique
+build:
+- qw:
+    polyline:
+      points: [[-1, -1, 0], [1, -1, 0], [1, 1, 0], [-1, 1, 0], [-1, -1, 0]]
+- q:
+    face:
+      wire: qw
+- result:
+    extrude:
+      profile: q
+      by: [-3*sqrt(0.5), 0, -3*sqrt(0.5)]
+checks:
+- valid: result
+- volume: result
+  eq: 12*sqrt(0.5)
+  rel: 1.0e-06
+---
+case: extrude_circle_tilted_0_3_degrees
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: tests/SM_API_test/src/TestSmPrimitives.cpp
+  test: TestSmCreateLinearSweepOblique
+build:
+- dc:
+    circle:
+      center: [0, 0, 0]
+      normal: [0, 0, 1]
+      radius: 5
+- de:
+    edge:
+      curve: dc
+- dw:
+    wire:
+      edges: [de]
+- d:
+    face:
+      wire: dw
+- result:
+    extrude:
+      profile: d
+      by: [10*sin(0.3*pi/180), 0, 10*cos(0.3*pi/180)]
+checks:
+- valid: result
+- volume: result
+  eq: pi*25*10*cos(0.3*pi/180)
+  rel: 1.0e-06
+---
+case: extrude_circle_long_at_a_tiny_angle
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: tests/SM_API_test/src/TestSmPrimitives.cpp
+  test: TestSmCreateLinearSweepOblique
+notes:
+- The cap is about 9e-4 off a right cylinder's.
+build:
+- dc:
+    circle:
+      center: [0, 0, 0]
+      normal: [0, 0, 1]
+      radius: 5
+- de:
+    edge:
+      curve: dc
+- dw:
+    wire:
+      edges: [de]
+- d:
+    face:
+      wire: dw
+- result:
+    extrude:
+      profile: d
+      by: [1000*sin(5.0e-5*pi/180), 0, 1000*cos(5.0e-5*pi/180)]
+checks:
+- valid: result
+- volume: result
+  eq: pi*25*1000*cos(5.0e-5*pi/180)
+  rel: 1.0e-06
+---
+case: extrude_circle_backwards_at_30_degrees
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: tests/SM_API_test/src/TestSmPrimitives.cpp
+  test: TestSmCreateLinearSweepOblique
+build:
+- dc:
+    circle:
+      center: [0, 0, 0]
+      normal: [0, 0, 1]
+      radius: 5
+- de:
+    edge:
+      curve: dc
+- dw:
+    wire:
+      edges: [de]
+- d:
+    face:
+      wire: dw
+- result:
+    extrude:
+      profile: d
+      by: [-10*sin(pi/6), 0, -10*cos(pi/6)]
+checks:
+- valid: result
+- volume: result
+  eq: pi*25*10*cos(pi/6)
+  rel: 1.0e-06
+---
+case: extrude_circle_backwards
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: tests/SM_API_test/src/TestSmPrimitives.cpp
+  test: TestSmCreateLinearSweepOblique
+build:
+- dc:
+    circle:
+      center: [0, 0, 0]
+      normal: [0, 0, 1]
+      radius: 5
+- de:
+    edge:
+      curve: dc
+- dw:
+    wire:
+      edges: [de]
+- d:
+    face:
+      wire: dw
+- result:
+    extrude:
+      profile: d
+      by: [0, 0, -10]
+checks:
+- valid: result
+- volume: result
+  eq: pi*250
+  rel: 1.0e-06
+- bounds: result
+  eq: [[-5, -5, -10], [5, 5, 0]]
+  abs: 1.0e-06
+---
+case: extrude_square_repeated_straight
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: tests/SM_API_test/src/TestSmPrimitives.cpp
+  test: TestSmCreateLinearSweepRepeatedCapped
+notes:
+- 'usd-brep sweeps in three repeated steps, one band of faces each: kentron has no repetitions, so the case is the
+  whole sweep.'
+build:
+- qw:
+    polyline:
+      points: [[-1, -1, 0], [1, -1, 0], [1, 1, 0], [-1, 1, 0], [-1, -1, 0]]
+- q:
+    face:
+      wire: qw
+- result:
+    extrude:
+      profile: q
+      by: [0, 0, 3]
+checks:
+- valid: result
+- volume: result
+  eq: 4*3*1
+  rel: 1.0e-06
+---
+case: extrude_annulus_repeated_straight
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: tests/SM_API_test/src/TestSmPrimitives.cpp
+  test: TestSmCreateLinearSweepRepeatedCapped
+notes:
+- 'usd-brep sweeps in three repeated steps, one band of faces each: kentron has no repetitions, so the case is the
+  whole sweep.'
+build:
+- oc:
+    circle:
+      center: [0, 0, 0]
+      normal: [0, 0, 1]
+      radius: 2
+- oe:
+    edge:
+      curve: oc
+- ow:
+    wire:
+      edges: [oe]
+- o:
+    face:
+      wire: ow
+- ic:
+    circle:
+      center: [0, 0, 0]
+      normal: [0, 0, 1]
+      radius: 1
+- ie:
+    edge:
+      curve: ic
+- iw:
+    wire:
+      edges: [ie]
+- i:
+    face:
+      wire: iw
+- f:
+    difference:
+      object: o
+      tool: i
+- result:
+    extrude:
+      profile: f
+      by: [0, 0, 3]
+checks:
+- valid: result
+- count: result
+  eq:
+    solids: 1
+- volume: result
+  eq: 3*pi*3*1
+  rel: 1.0e-06
+---
+case: extrude_two_circles_repeated_straight
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: tests/SM_API_test/src/TestSmPrimitives.cpp
+  test: TestSmCreateLinearSweepRepeatedCapped
+notes:
+- 'usd-brep sweeps in three repeated steps, one band of faces each: kentron has no repetitions, so the case is the
+  whole sweep.'
+build:
+- ac:
+    circle:
+      center: [0, 0, 0]
+      normal: [0, 0, 1]
+      radius: 1
+- ae:
+    edge:
+      curve: ac
+- aw:
+    wire:
+      edges: [ae]
+- a:
+    face:
+      wire: aw
+- bc:
+    circle:
+      center: [5, 0, 0]
+      normal: [0, 0, 1]
+      radius: 1
+- be:
+    edge:
+      curve: bc
+- bw:
+    wire:
+      edges: [be]
+- b:
+    face:
+      wire: bw
+- f:
+    union:
+      object: a
+      tool: b
+- result:
+    extrude:
+      profile: f
+      by: [0, 0, 3]
+checks:
+- valid: result
+- count: result
+  eq:
+    solids: 2
+- volume: result
+  eq: 2*pi*3*1
+  rel: 1.0e-06
+---
+case: extrude_square_repeated_oblique
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: tests/SM_API_test/src/TestSmPrimitives.cpp
+  test: TestSmCreateLinearSweepRepeatedCapped
+notes:
+- 'usd-brep sweeps in three repeated steps, one band of faces each: kentron has no repetitions, so the case is the
+  whole sweep.'
+build:
+- qw:
+    polyline:
+      points: [[-1, -1, 0], [1, -1, 0], [1, 1, 0], [-1, 1, 0], [-1, -1, 0]]
+- q:
+    face:
+      wire: qw
+- result:
+    extrude:
+      profile: q
+      by: [3*sqrt(0.5), 0, 3*sqrt(0.5)]
+checks:
+- valid: result
+- volume: result
+  eq: 4*3*sqrt(0.5)
+  rel: 1.0e-06
+---
+case: extrude_annulus_repeated_oblique
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: tests/SM_API_test/src/TestSmPrimitives.cpp
+  test: TestSmCreateLinearSweepRepeatedCapped
+notes:
+- 'usd-brep sweeps in three repeated steps, one band of faces each: kentron has no repetitions, so the case is the
+  whole sweep.'
+build:
+- oc:
+    circle:
+      center: [0, 0, 0]
+      normal: [0, 0, 1]
+      radius: 2
+- oe:
+    edge:
+      curve: oc
+- ow:
+    wire:
+      edges: [oe]
+- o:
+    face:
+      wire: ow
+- ic:
+    circle:
+      center: [0, 0, 0]
+      normal: [0, 0, 1]
+      radius: 1
+- ie:
+    edge:
+      curve: ic
+- iw:
+    wire:
+      edges: [ie]
+- i:
+    face:
+      wire: iw
+- f:
+    difference:
+      object: o
+      tool: i
+- result:
+    extrude:
+      profile: f
+      by: [3*sqrt(0.5), 0, 3*sqrt(0.5)]
+checks:
+- valid: result
+- count: result
+  eq:
+    solids: 1
+- volume: result
+  eq: 3*pi*3*sqrt(0.5)
+  rel: 1.0e-06
+---
+case: extrude_two_circles_repeated_oblique
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: tests/SM_API_test/src/TestSmPrimitives.cpp
+  test: TestSmCreateLinearSweepRepeatedCapped
+notes:
+- 'usd-brep sweeps in three repeated steps, one band of faces each: kentron has no repetitions, so the case is the
+  whole sweep.'
+build:
+- ac:
+    circle:
+      center: [0, 0, 0]
+      normal: [0, 0, 1]
+      radius: 1
+- ae:
+    edge:
+      curve: ac
+- aw:
+    wire:
+      edges: [ae]
+- a:
+    face:
+      wire: aw
+- bc:
+    circle:
+      center: [5, 0, 0]
+      normal: [0, 0, 1]
+      radius: 1
+- be:
+    edge:
+      curve: bc
+- bw:
+    wire:
+      edges: [be]
+- b:
+    face:
+      wire: bw
+- f:
+    union:
+      object: a
+      tool: b
+- result:
+    extrude:
+      profile: f
+      by: [3*sqrt(0.5), 0, 3*sqrt(0.5)]
+checks:
+- valid: result
+- count: result
+  eq:
+    solids: 2
+- volume: result
+  eq: 2*pi*3*sqrt(0.5)
+  rel: 1.0e-06
+---
+case: drafted_square_leaning_in
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: tests/SM_API_test/src/TestSmBrep.cpp
+  test: TestSmTaperExtrude
+notes:
+- 'usd-brep only checks that the call succeeds: the measures added, in closed form.'
+params:
+  t: tan(5*pi/180)
+brute:
+  result:
+    test: (z>=0)&(z<=10)&(np.maximum(abs(x-5),abs(y-5))<=5-z*t)
+    box:
+    - - 0
+      - 0
+      - 0
+    - - 10
+      - 10
+      - 10
+build:
+- qw:
+    polyline:
+      points: [[0, 0, 0], [10, 0, 0], [10, 10, 0], [0, 10, 0], [0, 0, 0]]
+- q:
+    face:
+      wire: qw
+- result:
+    extrude:
+      profile: q
+      by: [0, 0, 10]
+      angle: 5
+checks:
+- valid: result
+- count: result
+  eq:
+    solids: 1
+- count: result
+  eq:
+    faces: 6
+- volume: result
+  eq: 1000 - 2000*tan(5*pi/180) + 4000/3*tan(5*pi/180)^2
+  rel: 1.0e-06
+- bounds: result
+  eq: [[0, 0, 0], [10, 10, 10]]
+  abs: 1.0e-06
+---
+case: drafted_rectangle_leaning_out
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: tests/SM_API_test/src/TestSmPrimitives.cpp
+  test: TestSmCreateDraftSweep
+notes:
+- 'usd-brep only checks that the call succeeds: the measures added, in closed form.'
+- 'OCCT''s LocOpe_DPrism, leaning out, adds a face at each corner (10 faces, volume 2270.48): the closed form is
+  of the sides meeting, as SMLib''s and the sampled volume have it, and its face count is left out, SMLib splitting
+  the sides into 14.'
+params:
+  t: tan(5*pi/180)
+brute:
+  result:
+    test: (z>=0)&(z<=10)&(abs(x-5)<=5+z*t)&(abs(y-10)<=10+z*t)
+    box:
+    - - -1
+      - -1
+      - 0
+    - - 11
+      - 21
+      - 10
+build:
+- qw:
+    polyline:
+      points: [[0, 0, 0], [10, 0, 0], [10, 20, 0], [0, 20, 0], [0, 0, 0]]
+- q:
+    face:
+      wire: qw
+- result:
+    extrude:
+      profile: q
+      by: [0, 0, 10]
+      angle: -5
+checks:
+- valid: result
+- count: result
+  eq:
+    solids: 1
+- volume: result
+  eq: 2000 + 3000*tan(5*pi/180) + 4000/3*tan(5*pi/180)^2
+  rel: 1.0e-06
+---
+case: ruled_loft_of_three_circles
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: tests/SM_API_test/src/TestSmPrimitives.cpp
+  test: TestSmCreateSkinPrimitive
+brute:
+  result:
+    test: (x*x + y*y <= np.where(z < 5, 5 + 0.6*z, 13 - z)**2) & (z >= 0) & (z <= 10)
+    box:
+    - - -8
+      - -8
+      - 0
+    - - 8
+      - 8
+      - 10
+build:
+- o0c:
+    circle:
+      center: [0, 0, 0]
+      normal: [0, 0, 1]
+      radius: 5
+- o0e:
+    edge:
+      curve: o0c
+- o0w:
+    wire:
+      edges: [o0e]
+- o1c:
+    circle:
+      center: [0, 0, 5]
+      normal: [0, 0, 1]
+      radius: 8
+- o1e:
+    edge:
+      curve: o1c
+- o1w:
+    wire:
+      edges: [o1e]
+- o2c:
+    circle:
+      center: [0, 0, 10]
+      normal: [0, 0, 1]
+      radius: 3
+- o2e:
+    edge:
+      curve: o2c
+- o2w:
+    wire:
+      edges: [o2e]
+- result:
+    loft:
+      sections: [o0w, o1w, o2w]
+      solid: true
+      ruled: true
+checks:
+- valid: result
+- count: result
+  eq:
+    solids: 1
+- volume: result
+  eq: 1130*pi/3
+  rel: 1.0e-06
+- bounds: result
+  eq: [[-8, -8, 0], [8, 8, 10]]
+  abs: 1.0e-06
+---
+case: ruled_loft_annulus
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: tests/SM_API_test/src/TestSmPrimitives.cpp
+  test: TestSmCreateSkinPrimitive
+notes:
+- 'usd-brep lofts two loops per section: here the outer loft less the inner one.'
+brute:
+  a:
+    test: (x*x + y*y <= np.where(z < 5, 5 + 0.6*z, 13 - z)**2) & (z >= 0) & (z <= 10)
+    box: &id001
+    - - -8
+      - -8
+      - 0
+    - - 8
+      - 8
+      - 10
+  b:
+    test: (x*x + y*y < np.where(z < 5, 2 + 0.4*z, 7 - 0.6*z)**2)
+    box: *id001
+  result:
+    test: ((x*x + y*y <= np.where(z < 5, 5 + 0.6*z, 13 - z)**2) & (z >= 0) & (z <= 10)) & ~((x*x + y*y < np.where(z
+      < 5, 2 + 0.4*z, 7 - 0.6*z)**2))
+    box: *id001
+build:
+- o0c:
+    circle:
+      center: [0, 0, 0]
+      normal: [0, 0, 1]
+      radius: 5
+- o0e:
+    edge:
+      curve: o0c
+- o0w:
+    wire:
+      edges: [o0e]
+- o1c:
+    circle:
+      center: [0, 0, 5]
+      normal: [0, 0, 1]
+      radius: 8
+- o1e:
+    edge:
+      curve: o1c
+- o1w:
+    wire:
+      edges: [o1e]
+- o2c:
+    circle:
+      center: [0, 0, 10]
+      normal: [0, 0, 1]
+      radius: 3
+- o2e:
+    edge:
+      curve: o2c
+- o2w:
+    wire:
+      edges: [o2e]
+- i0c:
+    circle:
+      center: [0, 0, 0]
+      normal: [0, 0, 1]
+      radius: 2
+- i0e:
+    edge:
+      curve: i0c
+- i0w:
+    wire:
+      edges: [i0e]
+- i1c:
+    circle:
+      center: [0, 0, 5]
+      normal: [0, 0, 1]
+      radius: 4
+- i1e:
+    edge:
+      curve: i1c
+- i1w:
+    wire:
+      edges: [i1e]
+- i2c:
+    circle:
+      center: [0, 0, 10]
+      normal: [0, 0, 1]
+      radius: 1
+- i2e:
+    edge:
+      curve: i2c
+- i2w:
+    wire:
+      edges: [i2e]
+- a:
+    loft:
+      sections: [o0w, o1w, o2w]
+      solid: true
+      ruled: true
+- b:
+    loft:
+      sections: [i0w, i1w, i2w]
+      solid: true
+      ruled: true
+- result:
+    difference:
+      object: a
+      tool: b
+checks:
+- valid: result
+- count: result
+  eq:
+    solids: 1
+- volume: result
+  eq: 295*pi
+  rel: 1.0e-06
+---
+case: smooth_loft_of_three_circles
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: tests/SM_API_test/src/TestSmPrimitives.cpp
+  test: TestSmCreateSkinPrimitive
+notes:
+- 'Degree 3: a smooth surface through the sections is a kernel''s choice, so its volume is not checked.'
+build:
+- o0c:
+    circle:
+      center: [0, 0, 0]
+      normal: [0, 0, 1]
+      radius: 5
+- o0e:
+    edge:
+      curve: o0c
+- o0w:
+    wire:
+      edges: [o0e]
+- o1c:
+    circle:
+      center: [0, 0, 5]
+      normal: [0, 0, 1]
+      radius: 8
+- o1e:
+    edge:
+      curve: o1c
+- o1w:
+    wire:
+      edges: [o1e]
+- o2c:
+    circle:
+      center: [0, 0, 10]
+      normal: [0, 0, 1]
+      radius: 3
+- o2e:
+    edge:
+      curve: o2c
+- o2w:
+    wire:
+      edges: [o2e]
+- result:
+    loft:
+      sections: [o0w, o1w, o2w]
+      solid: true
+      ruled: false
+checks:
+- valid: result
+- count: result
+  eq:
+    solids: 1
+- count: result
+  eq:
+    faces: 3
+---
+case: pipe_rectangle_along_x
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: tests/SM_API_test/src/TestSmBrep.cpp
+  test: TestSmSweepAlongPlanarPath
+notes:
+- 'usd-brep''s rectangle lies in the XY plane and it moves it square to the path: here it is drawn there.'
+brute:
+  result:
+    test: (x>=0)&(x<=20)&(abs(y)<=1)&(abs(z)<=0.5)
+    box:
+    - - 0
+      - -1
+      - -0.5
+    - - 20
+      - 1
+      - 0.5
+build:
+- rw:
+    polyline:
+      points: [[0, -1, -0.5], [0, 1, -0.5], [0, 1, 0.5], [0, -1, 0.5], [0, -1, -0.5]]
+- r:
+    face:
+      wire: rw
+- spine:
+    edge:
+      from: [0, 0, 0]
+      to: [20, 0, 0]
+- result:
+    pipe:
+      profile: r
+      spine: spine
+checks:
+- valid: result
+- volume: result
+  eq: 40
+  rel: 1.0e-06
+- count: result
+  eq:
+    faces: 6
+---
+case: pipe_along_a_bent_path
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: tests/SM_API_test/src/TestSmBrep.cpp
+  test: TestSmSweepAlongPlanarPath
+notes:
+- 'usd-brep allows 2%: the mitred pipe''s volume is the closed form exactly.'
+params:
+  n1: sin(pi/8)
+  n3: cos(pi/8)
+brute:
+  result:
+    test: ((x*x+y*y<=1)&(z>=0)&(((z-10)*n3+x*n1)<=0)) | (((x**2+y**2+(z-10)**2-((x+z-10)/sqrt(2))**2)<=1)&(((z-10)*n3+x*n1)>=0)&((x+z-10)/sqrt(2)<=sqrt(50)))
+    box:
+    - - -2
+      - -1.5
+      - -1
+    - - 7
+      - 1.5
+      - 17
+build:
+- dc:
+    circle:
+      center: [0, 0, 0]
+      normal: [0, 0, 1]
+      radius: 1
+- de:
+    edge:
+      curve: dc
+- dw:
+    wire:
+      edges: [de]
+- d:
+    face:
+      wire: dw
+- l1:
+    edge:
+      from: [0, 0, 0]
+      to: [0, 0, 10]
+- l2:
+    edge:
+      from: [0, 0, 10]
+      to: [5, 0, 15]
+- spine:
+    wire:
+      edges: [l1, l2]
+- result:
+    pipe:
+      profile: d
+      spine: spine
+      corner: mitred
+checks:
+- valid: result
+- count: result
+  eq:
+    solids: 1
+- count: result
+  eq:
+    faces: 4
+- volume: result
+  eq: pi*(10 + sqrt(50))
+  rel: 1.0e-06
+---
+case: pipe_along_a_straight_bezier
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: tests/SM_API_test/src/TestSmBrep.cpp
+  test: TestSmCurveSweep
+notes:
+- 'usd-brep only checks that the call succeeds: the measures added, in closed form.'
+brute:
+  result:
+    test: (x*x+y*y<=4)&(z>=0)&(z<=10)
+    box:
+    - - -2
+      - -2
+      - 0
+    - - 2
+      - 2
+      - 10
+build:
+- dc:
+    circle:
+      center: [0, 0, 0]
+      normal: [0, 0, 1]
+      radius: 2
+- de:
+    edge:
+      curve: dc
+- dw:
+    wire:
+      edges: [de]
+- d:
+    face:
+      wire: dw
+- b:
+    bezier:
+      poles: [[0, 0, 0], [0, 0, 3], [0, 0, 7], [0, 0, 10]]
+- spine:
+    edge:
+      curve: b
+- result:
+    pipe:
+      profile: d
+      spine: spine
+checks:
+- valid: result
+- volume: result
+  eq: 40*pi
+  rel: 1.0e-06
+---
+case: pipe_along_an_s_curve
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: tests/SM_API_test/src/TestSmBrep.cpp
+  test: TestSmPipeSweep
+notes:
+- usd-brep's curve through these four points is this cubic Bezier. A pipe's volume is its section's area times the
+  path's length (Pappus), the length here by midpoint quadrature at 2e6 points.
+build:
+- dc:
+    circle:
+      center: [0, 0, 0]
+      normal: [1, 1, 0]
+      radius: 1
+- de:
+    edge:
+      curve: dc
+- dw:
+    wire:
+      edges: [de]
+- d:
+    face:
+      wire: dw
+- b:
+    bezier:
+      poles: [[0, 0, 0], [5, 5, 0], [10, 0, 0], [15, 5, 0]]
+- spine:
+    edge:
+      curve: b
+- result:
+    pipe:
+      profile: d
+      spine: spine
+checks:
+- valid: result
+- count: result
+  eq:
+    solids: 1
+- volume: result
+  eq: pi*16.341441198371452
+  rel: 1.0e-05
+---
+case: revolve_segment_to_a_cylinder
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: tests/SM_API_test/src/TestSmSurfaces.cpp
+  test: TestSmCreateSurfaceRevolutionCylinder
+notes:
+- 'usd-brep makes a surface and checks the call: here the face''s area.'
+build:
+- l:
+    edge:
+      from: [5, 0, 0]
+      to: [5, 0, 10]
+- result:
+    revolve:
+      profile: l
+      axis:
+        origin: [0, 0, 0]
+        direction: [0, 0, 1]
+      angle: 360
+checks:
+- area: result
+  eq: 100*pi
+  rel: 1.0e-06
+---
+case: revolve_segment_to_a_cone
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: tests/SM_API_test/src/TestSmSurfaces.cpp
+  test: TestSmCreateSurfaceRevolutionCone
+notes:
+- 'usd-brep makes a surface and checks the call: here the face''s area.'
+build:
+- l:
+    edge:
+      from: [5, 0, 0]
+      to: [0, 0, 10]
+- result:
+    revolve:
+      profile: l
+      axis:
+        origin: [0, 0, 0]
+        direction: [0, 0, 1]
+      angle: 360
+checks:
+- area: result
+  eq: 5*pi*sqrt(125)
+  rel: 1.0e-06
+---
+case: revolve_segment_to_a_truncated_cone
+ported_from:
+  project: usd-brep
+  repo: https://github.com/NVIDIA-Omniverse/usd-brep
+  git_hash: 3fd5b9548d19aa8c12c29bc9637a96d42a06f8a5
+  file: tests/SM_API_test/src/TestSmSurfaces.cpp
+  test: TestSmCreateSurfaceRevolutionTruncCone
+notes:
+- 'usd-brep makes a surface and checks the call: here the face''s area.'
+build:
+- l:
+    edge:
+      from: [5, 0, 0]
+      to: [3, 0, 10]
+- result:
+    revolve:
+      profile: l
+      axis:
+        origin: [0, 0, 0]
+        direction: [0, 0, 1]
+      angle: 360
+checks:
+- area: result
+  eq: 8*pi*sqrt(104)
+  rel: 1.0e-06
