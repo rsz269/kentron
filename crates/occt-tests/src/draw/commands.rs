@@ -787,6 +787,21 @@ impl Draw {
             let (p, q) = self.model.edge_vertices(e);
             p.node == v.node || q.node == v.node
         })).collect();
+        // (OCCT's command intersects the surfaces: where a face's boundary meets the other
+        // face is a section's point, not one of theirs.)
+        let mut boundary: Vec<Shape> = self.model.unique_subshapes(a, NodeKind::Edge);
+        boundary.extend(self.model.unique_subshapes(b, NodeKind::Edge));
+        let mut touching = Vec::new();
+        for v in points {
+            let mut on_boundary = false;
+            for &e in &boundary {
+                on_boundary |= kentron::distance::distance(&mut self.model, v, e)?.value <= 1e-6;
+            }
+            if !on_boundary {
+                touching.push(v);
+            }
+        }
+        let points = touching;
         if edges.is_empty() {
             return Ok(if points.is_empty() { " has no 3d curves\n has no 3d points\n".into() } else { format!(" has no 3d curves\n{} point(s) found.\n", points.len()) });
         }

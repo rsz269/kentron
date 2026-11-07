@@ -256,8 +256,11 @@ pub fn planar_face(model: &mut Model, wire: Shape) -> Result<Shape> {
         return Err(Error::InvalidInput("a planar face needs a closed wire".into()));
     }
     let (points, normal, tolerance) = wire_polygon(model, wire)?;
+    // (`normal` is an area: a wire is degenerate when it is narrower than the tolerance, which
+    // on a wire much smaller than a unit is far less area than the tolerance's value.)
+    let extent = points.iter().map(|p| p.distance(points[0])).fold(0.0, f64::max);
     let normal = Direction::try_from_vector(normal)
-        .filter(|_| normal.length() > tolerance)
+        .filter(|_| normal.length() > tolerance * extent.min(1.0))
         .ok_or_else(|| Error::InvalidInput("the wire encloses no area".into()))?;
     let plane = Plane::new(points[0], normal);
     if points.iter().any(|&p| plane.distance(p) > tolerance) {

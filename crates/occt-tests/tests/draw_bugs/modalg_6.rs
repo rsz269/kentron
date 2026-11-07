@@ -3677,20 +3677,17 @@ fn bug27762_1() -> DrawResult<()> {
 
 /// `tests/bugs/modalg_6/bug27773`
 #[test]
-#[should_panic]
-fn bug27773() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.circle(&["c", "1", "0", "0", "20"])?;
-        d.offset(&["c1", "c", "10", "0", "0", "1"])?;
-        d.mkedge(&["e1", "c1"])?;
-        d.vertex(&["v1", "0", "35", "0"])?;
-        d.vertex(&["v2", "0", "-35", "0"])?;
-        d.edge(&["e2", "v1", "v2"])?;
-        d.bsection(&["result", "e1", "e2"])?;
-        d.checknbshapes(&["result", "-vertex", "2"])?;
-        Ok(())
-    })
+fn bug27773() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.circle(&["c", "1", "0", "0", "20"])?;
+    d.offset(&["c1", "c", "10", "0", "0", "1"])?;
+    d.mkedge(&["e1", "c1"])?;
+    d.vertex(&["v1", "0", "35", "0"])?;
+    d.vertex(&["v2", "0", "-35", "0"])?;
+    d.edge(&["e2", "v1", "v2"])?;
+    d.bsection(&["result", "e1", "e2"])?;
+    d.checknbshapes(&["result", "-vertex", "2"])?;
+    Ok(())
 }
 
 /// `tests/bugs/modalg_6/bug27802`

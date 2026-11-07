@@ -1560,22 +1560,19 @@ fn bug25106() -> DrawResult<()> {
 
 /// `tests/bugs/modalg_5/bug25111`
 #[test]
-#[should_panic]
-fn bug25111() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.restore(&[data_file("bug25111_s1.draw").as_str(), "s1"])?;
-        d.restore(&[data_file("bug25111_s2.draw").as_str(), "s2"])?;
-        d.mkface(&["f1", "s1"])?;
-        d.mkface(&["f2", "s2"])?;
-        d.bop(&["f1", "f2"])?;
-        d.bopsection(&["result"])?;
-        d.checkprops(&["result", "-l", "53.1714"])?;
-        d.checkshape(&["result"])?;
-        d.checksection(&["result"])?;
-        d.checknbshapes(&["result", "-vertex", "4", "-edge", "2", "-wire", "0", "-face", "0", "-shell", "0", "-solid", "0", "-compsolid", "0", "-compound", "1", "-shape", "7"])?;
-        Ok(())
-    })
+fn bug25111() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.restore(&[data_file("bug25111_s1.draw").as_str(), "s1"])?;
+    d.restore(&[data_file("bug25111_s2.draw").as_str(), "s2"])?;
+    d.mkface(&["f1", "s1"])?;
+    d.mkface(&["f2", "s2"])?;
+    d.bop(&["f1", "f2"])?;
+    d.bopsection(&["result"])?;
+    d.checkprops(&["result", "-l", "53.1714"])?;
+    d.checkshape(&["result"])?;
+    d.checksection(&["result"])?;
+    d.checknbshapes(&["result", "-vertex", "4", "-edge", "2", "-wire", "0", "-face", "0", "-shell", "0", "-solid", "0", "-compsolid", "0", "-compound", "1", "-shape", "7"])?;
+    Ok(())
 }
 
 /// `tests/bugs/modalg_5/bug25175`

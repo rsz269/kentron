@@ -1713,7 +1713,6 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/bugs/modalg_5/bug25354_34
-expect: not_done
 build:
   - b1: {box: {size: [10, 10, 10]}}
   - b2: {box: {size: [10, 10, 10]}}

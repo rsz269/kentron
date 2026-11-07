@@ -379,10 +379,12 @@ pub(super) fn section(model: &mut Model, mut graph: Graph) -> Result<Shape> {
         ends.extend([pieces[pi].start, pieces[pi].end]);
     }
     // Vertices of either operand on the other, away from the section's edges.
+    // (An edge's pieces end at its own ends and where it crosses the other operand.)
     let mut vertices: Vec<(usize, usize)> = graph.free_vertices.clone();
-    for e in &graph.edges {
+    for (ei, e) in graph.edges.iter().enumerate() {
         if let Some(k) = e.operand {
             vertices.extend([(k, e.start), (k, e.end)]);
+            vertices.extend(of_edge[ei].iter().flat_map(|&pi| [(k, pieces[pi].start), (k, pieces[pi].end)]));
         }
     }
     for &(k, v) in &vertices {
