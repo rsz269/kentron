@@ -201,6 +201,26 @@ pub(crate) fn difference_once(model: &mut Model, a: Shape, b: Shape) -> Result<S
     Ok(run_tolerant(model, a, b, Operation::Difference)?.0)
 }
 
+/// [`difference`], given `first`, [`difference_once`]'s result for the same operands: what
+/// it would have built again first is not.
+pub(crate) fn difference_after(model: &mut Model, a: Shape, b: Shape, first: Shape) -> Result<Shape> {
+    // (Where `difference` takes another way, that way.)
+    let meets = |model: &Model, s: Shape| only_solids(model, s).is_some_and(|solids| solids.len() > 1 && arguments::meeting(model, &solids));
+    if SPLITTING_CELLS.with(|f| f.get()) || meets(model, a) || meets(model, b) || is_empty(model, a) || is_empty(model, b) {
+        return difference(model, a, b);
+    }
+    if crate::tolerance::loosened() || closed_shells(model, first) {
+        return Ok(first);
+    }
+    // (As [`run_with_sections`] goes on: again with the looser tolerances, taken if its only
+    // problem is a face's boundary crossing itself; else the first.)
+    let crossing = |p: &crate::validity::Problem| p.kind == crate::validity::ProblemKind::SelfIntersection;
+    match crate::tolerance::with_loosened(true, || run_tolerant(model, a, b, Operation::Difference)) {
+        Ok((r, _, _)) if crate::validity::check(model, r).errors().all(crossing) => Ok(r),
+        _ => Ok(first),
+    }
+}
+
 /// The intersection of `a` and `b`.
 #[doc(alias = "BRepAlgoAPI_Common")]
 #[doc(alias = "common")]

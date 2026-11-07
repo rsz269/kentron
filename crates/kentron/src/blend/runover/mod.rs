@@ -812,7 +812,7 @@ fn by_booleans(model: &mut Model, shape: Shape, rolled: Rolled, radius: f64) -> 
     let cut = boolean::difference_once(model, shape, wedge).map_err(|e| Error::Failed(format!("cutting the wedge: {e}")))?;
     // (Its shells left open, as where the wedge's faces meet the solid's along curves
     // only nearly the same: with the looser tolerances too.)
-    let cut = if closed_shells(model, cut) { cut } else { boolean::difference(model, shape, wedge).map_err(|e| Error::Failed(format!("cutting the wedge: {e}")))? };
+    let cut = if closed_shells(model, cut) { cut } else { boolean::difference_after(model, shape, wedge, cut).map_err(|e| Error::Failed(format!("cutting the wedge: {e}")))? };
     // (Or nothing cut at all, the wedge's edges along the contacts not found to split the
     // faces they lie on (as where a contact ends on an edge between tangent faces): with the
     // looser tolerances.)
