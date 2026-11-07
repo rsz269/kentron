@@ -100,6 +100,6 @@ jobs:
           cd /tmp
           printf 'import cadquery as cq\nr = cq.Workplane("XY").box(2, 3, 4).faces(">Z").workplane().hole(1)\nprint(round(r.val().Volume(), 4))\n' > script.py
           test "$(pykentron-run script.py)" = "20.8584"
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.3.3
       - name: CadQuery's own test suite (against tests/cadquery_baseline.txt)
         run: python crates/pykentron/scripts/cadquery_tests.py
