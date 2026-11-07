@@ -43,6 +43,8 @@ struct Bounded {
     bbox: crate::math::BoundingBox,
     surface: Surface,
     loops: Vec<Vec<Point2>>,
+    /// The pcurves `loops` samples, each with its range.
+    loop_curves: Vec<(crate::geometry::curve2::Curve2, f64, f64)>,
     edges: Vec<(Curve, f64, f64)>,
     /// The edges themselves.
     edge_shapes: Vec<Shape>,
@@ -66,11 +68,13 @@ impl Bounded {
         let surface = model.surface(face)?;
         let surface = if face.placement == Transform::IDENTITY { surface.clone() } else { surface.transformed(&face.placement) };
         let mut loops = Vec::new();
+        let mut loop_curves = Vec::new();
         for coedge in model.unique_subshapes(face, NodeKind::CoEdge) {
             let Ok(id) = CoEdgeId::try_from(coedge.node) else { continue };
             let Some((pcurve, first, last)) = model.effective_pcurve(id) else { continue };
             const N: usize = 128;
             loops.push((0..=N).map(|i| pcurve.point(first + (last - first) * i as f64 / N as f64)).collect::<Vec<Point2>>());
+            loop_curves.push((pcurve, first, last));
         }
         let mut edges = Vec::new();
         let mut edge_shapes = Vec::new();
@@ -96,7 +100,7 @@ impl Bounded {
         }
         let uv_tolerance = 1e-7 * lo.distance(hi);
         let bbox = if whole { crate::properties::bounding_box(model, face) } else { crate::math::BoundingBox::default() };
-        Some(Bounded { face, bbox, edge_shapes, u_period: surface.u_period(), v_period: surface.v_period(), surface, loops, edges, beyond, uv_tolerance, near: std::cell::Cell::new(None) })
+        Some(Bounded { face, bbox, edge_shapes, u_period: surface.u_period(), v_period: surface.v_period(), surface, loops, loop_curves, edges, beyond, uv_tolerance, near: std::cell::Cell::new(None) })
     }
 
     /// Whether `(u, v)` lies on the face (inside its loops, even-odd, or on them).
@@ -107,10 +111,11 @@ impl Bounded {
     /// Where `(u, v)` lies: inside the face (`Some(true)`), on its loops (`None`) or outside
     /// (`Some(false)`).
     fn locate(&self, (u, v): (f64, f64)) -> Option<bool> {
-        let on = |a: Point2, b: Point2, q: Point2| {
+        // How far `q` lies from the segment `a b`.
+        let gap = |a: Point2, b: Point2, q: Point2| {
             let (ab, aq) = (b - a, q - a);
             let s = (aq.dot(ab) / ab.dot(ab).max(1e-300)).clamp(0.0, 1.0);
-            (aq - ab * s).length() <= self.uv_tolerance
+            (aq - ab * s).length()
         };
         let shifts = |period: Option<f64>| match period {
             Some(p) => vec![0.0, -p, p],
@@ -119,18 +124,34 @@ impl Bounded {
         for su in shifts(self.u_period) {
             for sv in shifts(self.v_period) {
                 let q = Point2::new(u + su, v + sv);
-                if self.loops.iter().any(|l| l.windows(2).any(|w| on(w[0], w[1], q))) {
-                    return None;
-                }
                 // (The ray a little off `q`, by less than the loops are told from: through a
                 // point where a loop closes, its two ends a rounding error apart, as a circle's
                 // start level with `q`, it would cross it once too few.)
                 let y = q.y + 0.37 * self.uv_tolerance;
-                let crossings: usize = self
-                    .loops
-                    .iter()
-                    .map(|l| l.windows(2).filter(|w| (w[0].y > y) != (w[1].y > y) && w[0].x + (y - w[0].y) / (w[1].y - w[0].y) * (w[1].x - w[0].x) > q.x).count())
-                    .sum();
+                let crosses = |a: Point2, b: Point2| (a.y > y) != (b.y > y) && a.x + (y - a.y) / (b.y - a.y) * (b.x - a.x) > q.x;
+                let mut crossings = 0;
+                for (l, (pcurve, first, last)) in self.loops.iter().zip(&self.loop_curves) {
+                    let step = (last - first) / (l.len() - 1) as f64;
+                    for (i, w) in l.windows(2).enumerate() {
+                        // (Near a curve its samples stray from, its own points: within their
+                        // sag a point is told from the loop by the loop itself.)
+                        if gap(w[0], w[1], q) <= 0.25 * w[0].distance(w[1]) + self.uv_tolerance {
+                            const FINE: usize = 128;
+                            let at = |j: usize| if j == 0 { w[0] } else if j == FINE { w[1] } else { pcurve.point(first + step * (i as f64 + j as f64 / FINE as f64)) };
+                            let mut a = w[0];
+                            for j in 1..=FINE {
+                                let b = at(j);
+                                if gap(a, b, q) <= self.uv_tolerance {
+                                    return None;
+                                }
+                                crossings += usize::from(crosses(a, b));
+                                a = b;
+                            }
+                        } else {
+                            crossings += usize::from(crosses(w[0], w[1]));
+                        }
+                    }
+                }
                 if crossings % 2 == 1 {
                     return Some(true);
                 }
@@ -490,14 +511,19 @@ fn roll_on(model: &Model, spine: &Spine, side_set: [Side; 2], faces: [(Shape, f6
     for t in ts {
         let (section, support) = solve(t, offset)?;
         if let (Some(&previous), Some(&before)) = (supports.last(), sections.last()) {
-            if previous != support && switches != Switches::Ignored {
+            let (mut previous, mut before) = (previous, before);
+            // (Each switch within the step in turn: the two sides may switch close together.)
+            for _ in 0..4 {
+                if previous == support || switches == Switches::Ignored {
+                    break;
+                }
                 let (mut lo, mut hi, mut start) = (last_t, t, before.center - before.at);
                 let (v_lo, v_hi) = (onto_edge(&before, previous, support), onto_edge(&section, previous, support));
-                let s = match (v_lo, v_hi) {
+                let (s, reached) = match (v_lo, v_hi) {
                     // (A section already at the switch, as a symmetrical solid's may be: no way
                     // into the face to measure along, and that section is the switch.)
                     (Some((v_lo, first)), Some((v_hi, _))) if switches == Switches::Found && (if first { v_lo } else { v_hi }).length() <= 1e-9 * (1.0 + largest) => {
-                        if first { before } else { section }
+                        (if first { before } else { section }, support)
                     }
                     // Where the ball rolls from a face onto its edge (or back): how far into the
                     // face the surface's point nearest the centre lies, through nothing at the
@@ -534,8 +560,8 @@ fn roll_on(model: &Model, spine: &Spine, side_set: [Side; 2], faces: [(Shape, f6
                             start = s.center - s.at;
                         }
                         match found {
-                            Some(s) => s,
-                            None => solve(past.0, start)?.0,
+                            Some(s) => (s, support),
+                            None => (solve(past.0, start)?.0, support),
                         }
                     }
                     _ => {
@@ -551,7 +577,7 @@ fn roll_on(model: &Model, spine: &Spine, side_set: [Side; 2], faces: [(Shape, f6
                                 hi = mid;
                             }
                         }
-                        solve(hi, start)?.0
+                        solve(hi, start)?
                     }
                 };
                 // (A switch found a hair from the section before or this one (as where the
@@ -560,15 +586,19 @@ fn roll_on(model: &Model, spine: &Spine, side_set: [Side; 2], faces: [(Shape, f6
                 let near = 1e-6 * (t1 - t0).abs();
                 if (s.t - last_t).abs() <= near {
                     let k = sections.len() - 1;
-                    breaks.push(k);
-                    supports[k] = support;
+                    if breaks.last() != Some(&k) {
+                        breaks.push(k);
+                    }
+                    supports[k] = reached;
                 } else if (t - s.t).abs() <= near {
                     breaks.push(sections.len());
+                    break;
                 } else {
                     breaks.push(sections.len());
                     sections.push(s);
-                    supports.push(support);
+                    supports.push(reached);
                 }
+                (previous, before, last_t) = (reached, s, s.t);
             }
         }
         offset = section.center - section.at;
@@ -1077,6 +1107,9 @@ fn directly(model: &mut Model, shape: Shape, edge: Shape, law: &dyn Fn(f64) -> f
     if !closed_shells(model, result) {
         return Err(Error::Failed("a run-over fillet that does not come out right".into()));
     }
+    // (The contact curves' pcurves pass through their sections only, straying between by what
+    // the fit leaves.)
+    tolerant_of_pcurves(model, result, 1e-5 * (1.0 + largest(law)))?;
     Ok(result)
 }
 

@@ -79,12 +79,12 @@ struct Patch {
 }
 
 /// What a contact curve along a stretch is: new edges on a face (in order along the
-/// fillet, run forward), or a piece of an edge the ball rolls over (with whether the edge
-/// runs along the fillet).
+/// fillet, run forward), or the pieces of an edge the ball rolls over, in order (each with
+/// whether it runs along the fillet).
 #[derive(Clone)]
 enum Contact {
     OnFace(usize, Vec<EdgeId>),
-    OnEdge(EdgeId, bool),
+    OnEdge(Vec<(EdgeId, bool)>),
 }
 
 /// Which side of a run of contact curves on a face is kept: away from the fillet's edge
@@ -149,10 +149,12 @@ pub(super) fn build(model: &mut Model, shape: Shape, edge: Shape, sections: &[Se
     // The boundaries: before each stretch, and (along an open edge) after the last.
     let bounds = if closed { count } else { count + 1 };
     let next = |i: usize| (i + 1) % bounds;
-    // (What the contacts lie on along a stretch: at its sections past the switch.)
+    // (What the contacts lie on along a stretch: at its sections past the switch; along one
+    // section long, between two switches close together, at the switch it starts from, the
+    // next being past the next switch already.)
     let support_of = |i: usize| -> [Support; 2] {
         let (a, b) = stretches[i];
-        supp[(a + 1).min(b)]
+        supp[if b <= a + 1 { a } else { a + 1 }]
     };
 
     // The fillet surfaces.
@@ -310,14 +312,9 @@ pub(super) fn build(model: &mut Model, shape: Shape, edge: Shape, sections: &[Se
                 (f, Some(r)) => {
                     let original = edge_id(sides[k].0[f].edge_shapes[r])?;
                     let candidates = pieces.get(&original).cloned().unwrap_or_else(|| vec![original]);
-                    let piece = candidates
-                        .into_iter()
-                        .find(|&p| {
-                            let (x, y) = model.edge_end_vertices(p);
-                            (x == a && y == b) || (x == b && y == a)
-                        })
-                        .ok_or_else(|| failed("no piece of an edge the ball rolls over between its switches"))?;
-                    Contact::OnEdge(piece, model.edge_end_vertices(piece).0 == a)
+                    let (first, last) = stretches[i];
+                    let along = pieces_between(model, &candidates, a, b, secs[(first + last) / 2].contacts[k]).ok_or_else(|| failed("no piece of an edge the ball rolls over between its switches"))?;
+                    Contact::OnEdge(along)
                 }
             });
         }
@@ -432,11 +429,15 @@ pub(super) fn build(model: &mut Model, shape: Shape, edge: Shape, sections: &[Se
         let side = |model: &mut Model, k: usize| -> Result<Vec<(EdgeId, bool, Curve2)>> {
             Ok(match &contacts[i][k] {
                 Contact::OnFace(_, along) => along.iter().map(|&e| (e, true, line(Point2::new(if k == 0 { u0 } else { u1 }, 0.0), false))).collect(),
-                Contact::OnEdge(e, forward) => {
-                    let (curve, first, last) = model.edge_curve(Shape::from(*e)).ok_or_else(|| failed("an edge without a curve"))?;
-                    let (pcurve, deviation) = pcurve_along_side(&curve, first, last, patch, if k == 0 { u0 } else { u1 }).ok_or_else(|| failed("no pcurve on the fillet of an edge it rolls over"))?;
-                    raise_tolerance(model, *e, deviation)?;
-                    vec![(*e, *forward, pcurve)]
+                Contact::OnEdge(along) => {
+                    let mut uses = Vec::with_capacity(along.len());
+                    for &(e, forward) in along {
+                        let (curve, first, last) = model.edge_curve(Shape::from(e)).ok_or_else(|| failed("an edge without a curve"))?;
+                        let (pcurve, deviation) = pcurve_along_side(&curve, first, last, patch, if k == 0 { u0 } else { u1 }).ok_or_else(|| failed("no pcurve on the fillet of an edge it rolls over"))?;
+                        raise_tolerance(model, e, deviation)?;
+                        uses.push((e, forward, pcurve));
+                    }
+                    uses
                 }
             })
         };
@@ -613,6 +614,46 @@ fn fillet_surface(secs: &[Section]) -> Result<Patch> {
     let v = KnotVector::new(rows[0].knots().to_vec(), rows[0].multiplicities().to_vec(), rows[0].degree());
     let surface = BSplineSurface::try_new(poles, u, v)?.with_weights(vec![vec![1.0; n], w_poles, vec![1.0; n]]);
     Ok(Patch { surface: Surface::BSpline(surface), u: (0.0, 1.0), v: (ts[0], ts[ts.len() - 1]) })
+}
+
+/// The run of `pieces` of an edge (in order along it, round a closed one) from vertex `a` to
+/// `b`, each with whether it runs that way: of the two ways round, the one passing `through`.
+fn pieces_between(model: &Model, pieces: &[EdgeId], a: VertexId, b: VertexId, through: Point) -> Option<Vec<(EdgeId, bool)>> {
+    let n = pieces.len();
+    let mut ways: Vec<Vec<(EdgeId, bool)>> = Vec::new();
+    for (start, &piece) in pieces.iter().enumerate() {
+        let (x, y) = model.edge_end_vertices(piece);
+        for (from, step, forward) in [(x, 1, true), (y, n - 1, false)] {
+            if from != a {
+                continue;
+            }
+            let mut way = Vec::new();
+            for j in 0..n {
+                let p = pieces[(start + j * step) % n];
+                way.push((p, forward));
+                let (x, y) = model.edge_end_vertices(p);
+                if (if forward { y } else { x }) == b {
+                    ways.push(way);
+                    break;
+                }
+                // (Not on past the end of an open edge's pieces.)
+                let next = pieces[(start + (j + 1) * step) % n];
+                let (u, v) = model.edge_end_vertices(next);
+                if (if forward { u != y } else { v != x }) {
+                    break;
+                }
+            }
+        }
+    }
+    let gap = |way: &Vec<(EdgeId, bool)>| {
+        way.iter()
+            .filter_map(|&(e, _)| {
+                let (curve, first, last) = model.edge_curve(Shape::from(e))?;
+                Some(nearest_on_curve(through, &curve, first, last).distance)
+            })
+            .fold(f64::INFINITY, f64::min)
+    };
+    ways.into_iter().min_by(|x, y| gap(x).total_cmp(&gap(y)))
 }
 
 /// Splits whichever piece of `edge` (split before, as recorded in `pieces`) holds curve
@@ -804,6 +845,26 @@ fn rebuilt(model: &mut Model, face: Shape, runs: &[(Vec<EdgeId>, Kept)], pcurves
         }
         chains.push(uses);
     }
+
+    // (Cut where they cross a seam: the kept part's boundary leaves them there along the seam,
+    // a loop on the face closing only in its parameters otherwise.)
+    let seam_vertices: Vec<VertexId> = seams(model, node).into_iter().flat_map(|s| {
+        let (a, b) = model.edge_end_vertices(s);
+        [a, b]
+    }).collect();
+    let chains: Vec<Vec<Use>> = chains
+        .into_iter()
+        .flat_map(|chain| {
+            let mut parts: Vec<Vec<Use>> = vec![Vec::new()];
+            for (j, u) in chain.into_iter().enumerate() {
+                if j > 0 && seam_vertices.contains(&u.start(model)) {
+                    parts.push(Vec::new());
+                }
+                parts.last_mut().expect("a part").push(u);
+            }
+            parts
+        })
+        .collect();
 
     // Round the kept part: along a chain, then along the face's loop from where it ends to
     // where the next starts, and so on until back at the first.

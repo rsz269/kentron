@@ -3094,7 +3094,6 @@ ported_from:
   file: tests/blend/simple/U1
 notes:
   - "OCCT TODO OCC22817 (All): Faulty shapes in variables faulty_1 to faulty_2 "
-expect: not_done
 build:
   - s: {load: {brep: "6_G56.draw"}}
   - s: {scale: {shape: s, center: [0, 0, 0], factor: 1}}
@@ -3140,7 +3139,6 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/simple/U4
-expect: not_done
 build:
   - s: {load: {brep: "CFI_6_h56fhg.rle"}}
   - s: {scale: {shape: s, center: [0, 0, 0], factor: 1}}
@@ -3172,7 +3170,6 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/simple/U6
-expect: not_done
 build:
   - s: {load: {brep: "CFI_6_i12fhh.rle"}}
   - s: {scale: {shape: s, center: [0, 0, 0], factor: 1}}

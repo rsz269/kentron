@@ -489,13 +489,10 @@ fn f1() -> DrawResult<()> {
 
 /// `tests/heal/split_angle/F2`
 #[test]
-#[should_panic]
-fn f2() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.restore(&[data_file("wrong_checkshape_2.brep").as_str(), "a"])?;
-        d.DT_SplitAngle(&["result", "a"])?;
-        d.checkshape(&["result"])?;
-        Ok(())
-    })
+fn f2() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.restore(&[data_file("wrong_checkshape_2.brep").as_str(), "a"])?;
+    d.DT_SplitAngle(&["result", "a"])?;
+    d.checkshape(&["result"])?;
+    Ok(())
 }

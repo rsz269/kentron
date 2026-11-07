@@ -7,7 +7,7 @@ use crate::geometry::curve::Curve;
 use crate::geometry::curve2::{Curve2, Line2};
 use crate::geometry::surface::Surface;
 use crate::geometry::{project, ParametricCurve, ParametricSurface};
-use crate::math::{AffineTransform, AffineTransformable, Direction2, Point2, Transform, Transform2, Transformable, Transformable2};
+use crate::math::{AffineTransform, AffineTransformable, Direction2, Point2, Transform, Transform2, Transformable, Transformable2, Vector2};
 use crate::topology::{CoEdgeId, Model, NodeId, NodeKind, Orientation, Shape, VertexId, EdgeId};
 
 /// Options for [`transform`].
@@ -571,7 +571,17 @@ impl Copier {
                         // (Refitted as closely as it goes; else, where the shape's own pcurve
                         // strays from its edge already, that one as it is.)
                         match project::pcurve_on_range_within(c, &surface, first, last, &[1e-9, 1e-7, 1e-5]) {
-                            Some(p) => (Curve2::BSpline(p), scaled),
+                            // (In the same period as the one it replaces: on a periodic surface
+                            // the fit may come out a period off, on the seam's other side.)
+                            Some(p) => {
+                                let p = Curve2::BSpline(p);
+                                let by = scaled.as_ref().map_or(Vector2::new(0.0, 0.0), |old| {
+                                    let (was, now) = (old.point(first), p.point(first));
+                                    let shift = |d: f64, period: Option<f64>| period.map_or(0.0, |period| (d / period).round() * period);
+                                    Vector2::new(shift(was.x - now.x, surface.u_period()), shift(was.y - now.y, surface.v_period()))
+                                });
+                                (if by.length() > 0.0 { p.transformed(&Transform2::translation(by)) } else { p }, scaled)
+                            }
                             None => (scaled.ok_or_else(|| Error::InvalidInput("no pcurve for a transformed edge".into()))?, None),
                         }
                     }

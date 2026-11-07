@@ -628,13 +628,10 @@ fn g4() -> DrawResult<()> {
 
 /// `tests/heal/split_closed_faces/G5`
 #[test]
-#[should_panic]
-fn g5() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.restore(&[data_file("wrong_checkshape_2.brep").as_str(), "a"])?;
-        d.DT_ClosedSplit(&["result", "a"])?;
-        d.checkshape(&["result"])?;
-        Ok(())
-    })
+fn g5() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.restore(&[data_file("wrong_checkshape_2.brep").as_str(), "a"])?;
+    d.DT_ClosedSplit(&["result", "a"])?;
+    d.checkshape(&["result"])?;
+    Ok(())
 }

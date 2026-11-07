@@ -29,10 +29,7 @@ tests/blend/encoderegularity/A6
 tests/blend/encoderegularity/A7
 tests/blend/simple/D1
 tests/blend/simple/Q3
-tests/blend/simple/U1
-tests/blend/simple/U4
 tests/blend/simple/U5
-tests/blend/simple/U6
 tests/blend/simple/U7
 tests/blend/simple/V6
 tests/blend/simple/W7
@@ -905,7 +902,6 @@ tests/heal/same_parameter_locked/A1
 tests/heal/same_parameter_locked/A2
 tests/heal/same_parameter_locked/A6
 tests/heal/split_angle/D7
-tests/heal/split_angle/F2
 tests/heal/split_angle_advanced/S8
 tests/heal/split_angle_advanced/ZA2
 tests/heal/split_angle_standard/F5
@@ -915,7 +911,6 @@ tests/heal/split_closed_faces/C9
 tests/heal/split_closed_faces/E4
 tests/heal/split_closed_faces/E9
 tests/heal/split_closed_faces/F4
-tests/heal/split_closed_faces/G5
 tests/heal/split_continuity_standard/C2
 tests/heal/split_continuity_standard/C3
 tests/heal/split_continuity_standard/C9
