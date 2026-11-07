@@ -977,6 +977,9 @@ fn fillet_solid_edges_as(model: &mut Model, shape: Shape, edges: &[(Shape, f64)]
     // (The planes of the tools' ends, where the faces the tools leave there may lie on the
     // solid's own: merged into them at the end.)
     let mut caps: Vec<Plane> = Vec::new();
+    // (The tools of a run of edges turning the same way, taken together at its end.)
+    let mut pending: (Vec<Shape>, bool) = (Vec::new(), true);
+    let sound = std::cell::OnceCell::new();
     for (i, ((((corner, radius), extend), mitre), overhang)) in corners.iter().zip(extended).zip(&mitred).zip(&overhangs).enumerate() {
         let (extend, beyond) = if corner.convex { (extend, Vec::new()) } else { concave_ends(model, shape, &corners, i)? };
         let tool = corner.tool(model, *radius, mitre_runs(corner, *radius, extend, mitre))?;
@@ -1003,9 +1006,13 @@ fn fillet_solid_edges_as(model: &mut Model, shape: Shape, edges: &[(Shape, f64)]
         if let Path::Line { .. } = corner.path {
             caps.extend(cap_planes(model, tool, corner.tangent));
         }
-        result = if corner.convex { boolean::difference(model, result, tool)? } else { boolean::union(model, result, tool)? };
-        result = keep(model, result)?;
+        if corner.convex != pending.1 {
+            result = take_tools(model, result, shape, &sound, &pending.0, pending.1, closed, &keep)?;
+            pending = (Vec::new(), corner.convex);
+        }
+        pending.0.push(tool);
     }
+    result = take_tools(model, result, shape, &sound, &pending.0, pending.1, closed, &keep)?;
     result = inward_corners(model, result, &corners, &meetings, &mitred, &runs, &keep, &|model: &mut Model, k: usize, run: [f64; 2]| corners[k].0.tool(model, corners[k].1, run))?;
     for (tool, convex, local_shape, edge, radius, filleted) in rolling_tools {
         record_tool(model, tool, &[edge.node]);
@@ -1039,22 +1046,21 @@ fn fillet_solid_edges_as(model: &mut Model, shape: Shape, edges: &[(Shape, f64)]
     }
     let mut made = Vec::new();
     let tools = patches.iter().map(|patch| patch.tool(model, &mut made)).collect::<Result<Vec<_>>>()?;
-    result = cut_corners(model, result, &tools, closed, &keep)?;
-    for fill in fills {
-        result = boolean::union(model, result, fill)?;
-        result = keep(model, result)?;
-    }
+    result = take_tools(model, result, shape, &sound, &tools, true, closed, &keep)?;
+    result = take_tools(model, result, shape, &sound, &fills, false, closed, &keep)?;
     merged_at_caps(model, result, &caps)
 }
 
-/// The corner tools `tools` cut from `result`, those well apart from one another in one
-/// operation: each operation goes through the whole solid, and a box's corners need not wait
-/// for one another. A group failing, or leaving a sound solid's shells open, is taken one tool
-/// at a time. (Only corners' tools, each a box less a ball or the like: the tools of edges
-/// taken together have left a wrong solid, on a block hollowed with arcs at its corners.)
-fn cut_corners(model: &mut Model, mut result: Shape, tools: &[Shape], closed: bool, keep: &impl Fn(&Model, Shape) -> Result<Shape>) -> Result<Shape> {
+/// `tools` cut from `result` (`convex`) or added to it, those well apart from one another in
+/// one operation: each operation goes through the whole solid, and a box's parallel edges or
+/// corners need not wait for one another. A group failing, or leaving a sound solid's shells
+/// open, is taken one tool at a time. So is every tool where `shape`, what is being rounded,
+/// is not sound (`sound`, found when first needed): on the inside-out walls an offset hands
+/// over, passing through one another, where a point lies depends on what was cut before it.
+#[allow(clippy::too_many_arguments)]
+fn take_tools(model: &mut Model, mut result: Shape, shape: Shape, sound: &std::cell::OnceCell<bool>, tools: &[Shape], convex: bool, closed: bool, keep: &impl Fn(&Model, Shape) -> Result<Shape>) -> Result<Shape> {
     let take = |model: &mut Model, result: Shape, tool: Shape| -> Result<Shape> {
-        let taken = boolean::difference(model, result, tool)?;
+        let taken = if convex { boolean::difference(model, result, tool)? } else { boolean::union(model, result, tool)? };
         keep(model, taken)
     };
     let mut groups: Vec<(Vec<Shape>, Vec<BoundingBox>)> = Vec::new();
@@ -1071,6 +1077,13 @@ fn cut_corners(model: &mut Model, mut result: Shape, tools: &[Shape], closed: bo
             }
             None => groups.push((vec![tool], vec![b])),
         }
+    }
+    // (In their order, as there it matters.)
+    if groups.iter().any(|(group, _)| group.len() > 1) && !*sound.get_or_init(|| crate::validity::check_unmeasured(model, shape).is_valid()) {
+        for &tool in tools {
+            result = take(model, result, tool)?;
+        }
+        return Ok(result);
     }
     for (group, _) in groups {
         if let [tool] = group[..] {
