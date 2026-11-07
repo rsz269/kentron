@@ -447,6 +447,8 @@ fn rolling_on(model: &Model, shape: Shape, edge: Shape, profile: &Profile, far: 
         let mut positions: Vec<usize> = (0..=n).collect();
         let mut previous_worst = f64::INFINITY;
         let mut previous_poor = false;
+        let mut previous_along = f64::INFINITY;
+        let mut previous_flat = false;
         loop {
             // (Past each end, as many steps as the stretch along the edge at that end makes of
             // it: as a sweep at every step's where the stretch is one.)
@@ -600,6 +602,9 @@ fn rolling_on(model: &Model, shape: Shape, edge: Shape, profile: &Profile, far: 
             };
             let contacts = [contact(0)?, contact(1)?];
             let mut worst: f64 = 0.0;
+            // (The same along the edge, and past its ends but for where the spine passes from
+            // the edge's curve to the faces' own meeting, a step more sections do not close.)
+            let (mut along, mut beyond): (f64, f64) = (0.0, 0.0);
             // (The positions of the ends of those along the edge whose middle was missed.)
             let mut missed: Vec<usize> = Vec::new();
             restart(sections.first());
@@ -614,6 +619,12 @@ fn rolling_on(model: &Model, shape: Shape, edge: Shape, profile: &Profile, far: 
                 };
                 let gap = (0..2).map(|i| contacts[i].point(mid.t).distance(mid.contacts[i])).fold(0.0, f64::max);
                 worst = worst.max(gap);
+                let (low, high) = (t0.min(t1), t0.max(t1));
+                if w[0] >= low && w[1] <= high {
+                    along = along.max(gap);
+                } else if w[1] < low || w[0] > high {
+                    beyond = beyond.max(gap);
+                }
                 if gap > target {
                     if let (Some(a), Some(_)) = (at[j], at[j + 1]) {
                         missed.push(a);
@@ -627,7 +638,13 @@ fn rolling_on(model: &Model, shape: Shape, edge: Shape, profile: &Profile, far: 
             let ratio = previous_worst / worst;
             let poor = (0.25..4.0).contains(&ratio);
             let stalled = n >= 4 * SECTIONS && worst > 100.0 * target && poor && previous_poor;
-            if worst <= target || stalled || n >= 32 * SECTIONS {
+            // (Nor where the gap along the edge stays as it is, a little above the target, from
+            // round to round: the edge's fitted curve wavers by that much, and the sections
+            // follow it. Once what lies past the ends has come down to that, more of them
+            // close nothing, along an edge that is no rough place.)
+            let flat = (0.5..2.0).contains(&(previous_along / along));
+            let settled = !closed && along > target && along <= 100.0 * target && flat && previous_flat && beyond <= 4.0 * along;
+            if worst <= target || stalled || settled || n >= 32 * SECTIONS {
                 // (The parameters a sweep at every step would have found its sections at: along
                 // the edge the steps between those found filled in. What crosses the fillet is
                 // looked for at them, not where the sections happen to lie.)
@@ -642,10 +659,12 @@ fn rolling_on(model: &Model, shape: Shape, edge: Shape, profile: &Profile, far: 
                         previous = *k;
                     }
                 }
-                return Ok((sections, contacts, scan, !stalled || worst <= target));
+                return Ok((sections, contacts, scan, !stalled || worst <= target || settled));
             }
             previous_worst = worst;
             previous_poor = poor;
+            previous_along = along;
+            previous_flat = flat;
             n *= 2;
             // (Twice as many steps: a section midway in each stretch missed.)
             let mut next = Vec::with_capacity(2 * positions.len());
