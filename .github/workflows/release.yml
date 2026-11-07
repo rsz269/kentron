@@ -1,8 +1,9 @@
 name: Release
 
-# Builds pykentron's wheels and source distribution and publishes them to PyPI, and the
-# kentron crate to crates.io (trusted publishing: PyPI and crates.io trust this workflow, no
-# token is stored). Runs for a version tag, or by hand.
+# Builds pykentron's wheels (Linux, macOS and Windows) and source distribution, checks each
+# wheel on its own platform, and publishes them to PyPI, and the kentron crate to crates.io
+# (trusted publishing: PyPI and crates.io trust this workflow, no token is stored). Publishes
+# for a version tag only: run by hand, it builds and checks without publishing.
 on:
   push:
     tags: ["v*"]
@@ -10,67 +11,92 @@ on:
 
 jobs:
   wheels:
-    name: Wheels (Linux x86-64)
-    runs-on: ubuntu-latest
+    name: Wheel (${{ matrix.name }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: Linux x86-64, runner: ubuntu-latest, target: x86_64, manylinux: auto }
+          - { name: Linux ARM64, runner: ubuntu-24.04-arm, target: aarch64, manylinux: auto }
+          - { name: macOS ARM64, runner: macos-15, target: aarch64 }
+          - { name: macOS x86-64, runner: macos-15-intel, target: x86_64 }
+          - { name: Windows x86-64, runner: windows-2025, target: x64 }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: PyO3/maturin-action@v1
         with:
-          target: x86_64
-          manylinux: auto
+          target: ${{ matrix.target }}
+          manylinux: ${{ matrix.manylinux }}
           # (Built with the `dist` profile pyproject.toml names: `--release` would override it.)
           args: --out dist -m crates/pykentron/Cargo.toml
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
-          name: wheels-linux-x86_64
+          name: wheel-${{ matrix.runner }}
           path: dist
 
   sdist:
     name: Source distribution
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: PyO3/maturin-action@v1
         with:
           command: sdist
           args: --out dist -m crates/pykentron/Cargo.toml
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: sdist
           path: dist
 
   check:
-    name: Check the wheel
+    name: Check the wheel (${{ matrix.runner }})
     needs: wheels
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm, macos-15, macos-15-intel, windows-2025]
+    defaults:
+      run:
+        shell: bash
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
-          name: wheels-linux-x86_64
+          name: wheel-${{ matrix.runner }}
           path: dist
       - name: Install it and run a CadQuery script on it
         run: |
           python -m pip install --quiet "$(ls dist/*.whl)[cadquery]"
-          cd /tmp
+          cd "$RUNNER_TEMP"
           python -c "import pykentron as cq; assert abs(cq.Workplane().box(1, 2, 3).val().Volume() - 6) < 1e-9"
           printf 'import cadquery as cq\nr = cq.Workplane("XY").box(2, 3, 4).faces(">Z").workplane().hole(1)\nprint(round(r.val().Volume(), 4))\n' > script.py
-          test "$(pykentron-run script.py)" = "20.8584"
+          test "$(pykentron-run script.py | tr -d '\r')" = "20.8584"
+          # (And a fillet, a boolean and text: what differs most between platforms' builds.)
+          python -c "
+          import math, pykentron as cq
+          r = cq.Workplane().box(10, 10, 10).edges().fillet(1)
+          v = 512 + 6 * 64 + 3 * 8 * math.pi + 4 / 3 * math.pi
+          assert r.val().isValid() and abs(r.val().Volume() - v) < 1e-6 * v, r.val().Volume()
+          print('fillet', r.val().Volume())
+          "
 
   crate:
     name: Publish kentron to crates.io
+    if: github.ref_type == 'tag'
+    needs: check
     runs-on: ubuntu-latest
     # (Trusted publishing, as for PyPI: crates.io trusts this workflow in this environment.)
     environment: crates-io
     permissions:
       id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: The tag names the crate's version
-        if: github.ref_type == 'tag'
         run: |
           version=$(cargo metadata --no-deps --format-version 1 | python3 -c "import json, sys; print(next(p['version'] for p in json.load(sys.stdin)['packages'] if p['name'] == 'kentron'))")
           test "${GITHUB_REF_NAME}" = "v${version}" || { echo "tag ${GITHUB_REF_NAME} is not v${version}"; exit 1; }
@@ -82,13 +108,14 @@ jobs:
 
   publish:
     name: Publish to PyPI
+    if: github.ref_type == 'tag'
     needs: [wheels, sdist, check]
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
       id-token: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true

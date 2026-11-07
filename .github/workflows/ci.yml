@@ -17,12 +17,12 @@ jobs:
       # CI machines are slower than the ones the per-case limit (40 s of CPU) was set on.
       KENTRON_CASE_TIMEOUT: "120"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Cache OCCT's test dataset
         id: dataset
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/occt-data
           key: occt-dataset-7.9.0-source-data-3d097a03
@@ -59,7 +59,7 @@ jobs:
           done
       - name: Keep the test log
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: test-log
           path: test.log
@@ -68,7 +68,7 @@ jobs:
     name: Minimum Rust version (1.88)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install Rust 1.88
         run: rustup toolchain install 1.88.0 --profile minimal
       - uses: Swatinem/rust-cache@v2
@@ -80,8 +80,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - uses: dtolnay/rust-toolchain@stable
@@ -100,6 +100,6 @@ jobs:
           cd /tmp
           printf 'import cadquery as cq\nr = cq.Workplane("XY").box(2, 3, 4).faces(">Z").workplane().hole(1)\nprint(round(r.val().Volume(), 4))\n' > script.py
           test "$(pykentron-run script.py)" = "20.8584"
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v10
       - name: CadQuery's own test suite (against tests/cadquery_baseline.txt)
         run: python crates/pykentron/scripts/cadquery_tests.py
