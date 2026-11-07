@@ -1322,6 +1322,9 @@ fn newton(start: Point, f: impl Fn(Point) -> Result<([f64; 3], Option<[Vector; 3
     newton_damped(start, f, false)
 }
 
+/// Steps of a section's solver without coming nearer to solved after which it stops.
+const STALLED: usize = 16;
+
 /// [`newton`], with each step shortened (`damped`) where the whole of it leaves the system
 /// further from solved.
 fn newton_damped(start: Point, f: impl Fn(Point) -> Result<([f64; 3], Option<[Vector; 3]>)>, damped: bool) -> Result<Point> {
@@ -1334,6 +1337,9 @@ fn newton_damped(start: Point, f: impl Fn(Point) -> Result<([f64; 3], Option<[Ve
     // or back and forth, for as long as they are let, most of a fillet's time where a ball
     // is tried on faces it does not reach.)
     let mut before = [None::<Point>; 2];
+    // (And how near it has come, and how long ago: damped steps wandering among the faces'
+    // bounds, no nearer for many of them, do not settle. Whole steps may yet, as a chamfer's.)
+    let (mut nearest, mut since) = (f64::INFINITY, 0);
     for _ in 0..60 {
         if before.iter().flatten().any(|p: &Point| p.distance(x) <= 1e-13 * scale) {
             break;
@@ -1345,6 +1351,12 @@ fn newton_damped(start: Point, f: impl Fn(Point) -> Result<([f64; 3], Option<[Ve
         };
         if fx.iter().all(|v| v.abs() <= 1e-12 * scale) {
             return Ok(x);
+        }
+        let off = fx.iter().fold(0.0_f64, |m, v| m.max(v.abs()));
+        since = if off < 0.9 * nearest { 0 } else { since + 1 };
+        nearest = nearest.min(off);
+        if damped && since >= STALLED {
+            break;
         }
         let columns: [[f64; 3]; 3] = match rows {
             Some(rows) => std::array::from_fn(|c| std::array::from_fn(|r| rows[r][c])),
