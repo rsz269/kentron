@@ -1330,7 +1330,15 @@ fn newton_damped(start: Point, f: impl Fn(Point) -> Result<([f64; 3], Option<[Ve
     let mut x = start;
     // (A damped step's value kept for the next one.)
     let mut known = None;
+    // (The last two points: a foot held on a bound of its face can leave steps going nowhere,
+    // or back and forth, for as long as they are let, most of a fillet's time where a ball
+    // is tried on faces it does not reach.)
+    let mut before = [None::<Point>; 2];
     for _ in 0..60 {
+        if before.iter().flatten().any(|p: &Point| p.distance(x) <= 1e-13 * scale) {
+            break;
+        }
+        before = [Some(x), before[0]];
         let (fx, rows) = match known.take() {
             Some(found) => found,
             None => f(x)?,
