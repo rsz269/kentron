@@ -6,7 +6,8 @@ runs REPEATS times a round, and each step's least time over all of them counts. 
 the times: parsing cases, picking sub-shapes, and the copies of operands SMLib's operations
 need, consuming them as they do. Only cases all three finish count in the comparisons.
 
-  tools/bench_cases.py run --kentron BIN --smlib-python P --occt-python P --out OUT.json [--pin CPU]
+  cargo build --profile dist -p occt-tests --bin bench_cases
+  tools/bench_cases.py run --kentron target/dist/bench_cases --smlib-python P --occt-python P --out OUT.json [--pin CPU]
                            [--parallel] [--rounds N] FILE...
   tools/bench_cases.py report OUT.json [--clock cpu|wall]
 
@@ -87,7 +88,7 @@ def run_case(leg, case):
 
 
 def worker(leg, repeats, only, files):
-    """The Python kernels' counterpart of the bench_cases example."""
+    """The Python kernels' counterpart of the bench_cases binary."""
     if os.environ.get("BENCH_PARALLEL") and leg == "occt":
         from OCP.BOPAlgo import BOPAlgo_Options
         BOPAlgo_Options.SetParallelMode_s(True)
