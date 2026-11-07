@@ -29,7 +29,6 @@ tests/blend/encoderegularity/A6
 tests/blend/encoderegularity/A7
 tests/blend/simple/D1
 tests/blend/simple/Q3
-tests/blend/simple/S9
 tests/blend/simple/U1
 tests/blend/simple/U4
 tests/blend/simple/U5

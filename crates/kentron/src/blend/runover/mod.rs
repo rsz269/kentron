@@ -122,10 +122,14 @@ impl Bounded {
                 if self.loops.iter().any(|l| l.windows(2).any(|w| on(w[0], w[1], q))) {
                     return None;
                 }
+                // (The ray a little off `q`, by less than the loops are told from: through a
+                // point where a loop closes, its two ends a rounding error apart, as a circle's
+                // start level with `q`, it would cross it once too few.)
+                let y = q.y + 0.37 * self.uv_tolerance;
                 let crossings: usize = self
                     .loops
                     .iter()
-                    .map(|l| l.windows(2).filter(|w| (w[0].y > q.y) != (w[1].y > q.y) && w[0].x + (q.y - w[0].y) / (w[1].y - w[0].y) * (w[1].x - w[0].x) > q.x).count())
+                    .map(|l| l.windows(2).filter(|w| (w[0].y > y) != (w[1].y > y) && w[0].x + (y - w[0].y) / (w[1].y - w[0].y) * (w[1].x - w[0].x) > q.x).count())
                     .sum();
                 if crossings % 2 == 1 {
                     return Some(true);
@@ -490,6 +494,11 @@ fn roll_on(model: &Model, spine: &Spine, side_set: [Side; 2], faces: [(Shape, f6
                 let (mut lo, mut hi, mut start) = (last_t, t, before.center - before.at);
                 let (v_lo, v_hi) = (onto_edge(&before, previous, support), onto_edge(&section, previous, support));
                 let s = match (v_lo, v_hi) {
+                    // (A section already at the switch, as a symmetrical solid's may be: no way
+                    // into the face to measure along, and that section is the switch.)
+                    (Some((v_lo, first)), Some((v_hi, _))) if switches == Switches::Found && (if first { v_lo } else { v_hi }).length() <= 1e-9 * (1.0 + largest) => {
+                        if first { before } else { section }
+                    }
                     // Where the ball rolls from a face onto its edge (or back): how far into the
                     // face the surface's point nearest the centre lies, through nothing at the
                     // switch (along the way into the face where it lies on it), by secants
@@ -1253,4 +1262,30 @@ pub(super) fn rolls_off(model: &Model, faces: [Shape; 2], tangent: Vector, lengt
             d <= 1e-6 * (1.0 + length) && !bounded.contains((u, v)) && (narrowing || !from_an_end(p))
         })
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::primitives::Cylinder;
+
+    /// A disc's middle level with where its circle starts and ends: on the face, though the
+    /// circle's two ends lie a rounding error apart there and a ray from the point along
+    /// that level passes between them.
+    #[test]
+    fn a_point_level_with_where_a_loop_closes_lies_within_it() {
+        let mut model = Model::new();
+        let solid = Cylinder::new(5.0, 12.0).build(&mut model).unwrap();
+        let discs: Vec<Shape> = model.unique_subshapes(solid, NodeKind::Face).into_iter().filter(|&f| matches!(model.surface(f), Some(Surface::Plane(_)))).collect();
+        assert_eq!(discs.len(), 2);
+        for disc in discs {
+            let bounded = Bounded::of_with(&model, disc, false).unwrap();
+            for p in [Point::new(2.0, 0.0, 0.0), Point::new(-2.0, 0.0, 0.0), Point::new(0.0, 0.0, 0.0)] {
+                let (u, v, _) = nearest_on_surface(p, &bounded.surface, None);
+                assert_eq!(bounded.locate((u, v)), Some(true), "{p:?}");
+            }
+            let (u, v, _) = nearest_on_surface(Point::new(7.0, 0.0, 0.0), &bounded.surface, None);
+            assert_eq!(bounded.locate((u, v)), Some(false));
+        }
+    }
 }
