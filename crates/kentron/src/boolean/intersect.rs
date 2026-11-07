@@ -3401,9 +3401,11 @@ impl Graph {
                 found.into_iter().map(move |(t, near)| (t, v, near))
             })
             .collect();
-        // (Only where the section would otherwise have too few to make a piece of: elsewhere
-        // the points found exactly bound it. Points within a few tolerances of each other
-        // count once: the same point met by the edges of both faces, each off its face.)
+        // (Only where the section would otherwise have too few to make a piece of, or the faces'
+        // edges are tolerant: where two faces are exact the points found exactly bound it, but
+        // a tolerant edge may end a section between two such, its crossing off the section by
+        // as far as it strays. Points within a few tolerances of each other count once: the
+        // same point met by the edges of both faces, each off its face.)
         let mut distinct: Vec<Point> = Vec::new();
         for &(_, v, _) in &exact {
             let p = self.vertices.points[v];
@@ -3412,12 +3414,15 @@ impl Graph {
             }
         }
         let enough = if section.closed() { 1 } else { 2 };
-        if distinct.len() >= enough {
+        let bounded = distinct.len() >= enough;
+        // (Nor where they stray by far more, as a fitted tool's: nothing is close to tell by.)
+        if bounded && (drift <= on_tol() || drift > 1e4 * on_tol()) {
             return exact;
         }
         // Points where an edge meets a face not found exactly on the section: their point on
         // both surfaces may be (an edge strays from its face by its tolerance, which where the
         // surfaces meet at a shallow angle moves the point along them by more).
+        let known = exact.len();
         let mut found = exact;
         for &v in candidates.iter().filter(|&&v| crossings.contains(&v)) {
             if found.iter().any(|&(_, w, _)| w == v) {
@@ -3464,6 +3469,35 @@ impl Graph {
                 passes = [lo, hi].into_iter().filter(|&t| section.point(t).distance(p) <= reach).map(|t| (t, false)).collect();
             }
             found.extend(passes.into_iter().map(|(t, near)| (t, v, near)));
+        }
+        // (Bounded already, one of these only close by, and where the section clearly leaves a
+        // face at it, inside both faces on one side and off one by more than its edges stray on
+        // the other: a section running along a tolerant boundary may pass it, within those
+        // tolerances, and stays whole.)
+        if bounded && found.len() > known {
+            let added = found.split_off(known);
+            let off = |t: f64| {
+                let m = section.point(t);
+                [fa, fb].iter().any(|&f| {
+                    let face = &self.faces[f];
+                    face.locate(m, &self.edges, &self.vertices) == Location::Outside && !face.near_boundary(m, drift, &self.edges, &self.vertices)
+                })
+            };
+            let inside = |t: f64| {
+                let m = section.point(t);
+                [fa, fb].iter().all(|&f| self.faces[f].locate(m, &self.edges, &self.vertices) == Location::Inside)
+            };
+            let at: Vec<f64> = found.iter().map(|f| f.0).collect();
+            for point in added {
+                let t = point.0;
+                let before = at.iter().copied().filter(|&x| x < t).fold(lo, f64::max);
+                let after = at.iter().copied().filter(|&x| x > t).fold(hi, f64::min);
+                let (a, b) = (0.5 * (before + t), 0.5 * (t + after));
+                let close = self.vertices.points[point.1].distance(section.point(t)) <= 1e3 * on_tol();
+                if close && ((off(a) && inside(b)) || (inside(a) && off(b))) {
+                    found.push(point);
+                }
+            }
         }
         found
     }

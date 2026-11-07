@@ -48,6 +48,7 @@ tests/blend/tolblend_simple/D7
 tests/blend/tolblend_simple/D8
 tests/blend/tolblend_simple/D9
 tests/blend/tolblend_simple/E2
+tests/blend/tolblend_simple/E4
 tests/blend/tolblend_simple/E5
 tests/blend/tolblend_simple/E9
 tests/blend/tolblend_simple/F3
@@ -84,7 +85,6 @@ tests/boolean/bopfuse_complex/L9
 tests/boolean/bopsection/D3
 tests/boolean/boptuc_complex/C7
 tests/boolean/bsection/G5
-tests/boolean/bsection/L8
 tests/boolean/bsection/M2
 tests/boolean/bsection/M3
 tests/boolean/bsection/M4
@@ -223,11 +223,6 @@ tests/bugs/modalg_1/buc60899_2
 tests/bugs/modalg_1/bug1013
 tests/bugs/modalg_1/bug10435_1
 tests/bugs/modalg_1/bug10435_2
-tests/bugs/modalg_1/bug10605_1
-tests/bugs/modalg_1/bug10605_2
-tests/bugs/modalg_1/bug10605_3
-tests/bugs/modalg_1/bug10605_4
-tests/bugs/modalg_1/bug10605_5
 tests/bugs/modalg_1/bug108
 tests/bugs/modalg_1/bug12213
 tests/bugs/modalg_1/bug12918

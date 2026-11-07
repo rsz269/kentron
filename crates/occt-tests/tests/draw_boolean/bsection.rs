@@ -586,19 +586,16 @@ fn l7() -> DrawResult<()> {
 
 /// `tests/boolean/bsection/L8`
 #[test]
-#[should_panic]
-fn l8() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.dset(&["SCALE", "100"])?;
-        d.restore(&[data_file("GEN747_nofog.rle").as_str(), "a"])?;
-        d.explode(&["a"])?;
-        d.bsection(&["result", "a_1", "a_2"])?;
-        d.checkprops(&["result", "-l", "72.4222"])?;
-        d.checksection(&["result"])?;
-        d.checkshape(&["result"])?;
-        Ok(())
-    })
+fn l8() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.dset(&["SCALE", "100"])?;
+    d.restore(&[data_file("GEN747_nofog.rle").as_str(), "a"])?;
+    d.explode(&["a"])?;
+    d.bsection(&["result", "a_1", "a_2"])?;
+    d.checkprops(&["result", "-l", "72.4222"])?;
+    d.checksection(&["result"])?;
+    d.checkshape(&["result"])?;
+    Ok(())
 }
 
 /// `tests/boolean/bsection/L9`
