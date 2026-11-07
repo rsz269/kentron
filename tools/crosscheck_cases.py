@@ -640,9 +640,11 @@ class Smlib(Described):
         curves, caps = self._swept(profile)
         return self.sm.rotational_sweep(curves, origin, axis, angle, cap_ends=caps)
 
+    ACCURACIES = (1e-8, 1e-7, 1e-6, 1e-5, 1e-4)
+
     def _accurately(self, measure):
         # (A tight accuracy can fail, as it does on a whole sphere: the next is taken.)
-        for accuracy in (1e-8, 1e-7, 1e-6, 1e-5, 1e-4):
+        for accuracy in self.ACCURACIES:
             try:
                 return measure(accuracy)
             except RuntimeError:
@@ -754,18 +756,18 @@ class Occt(Described):
     def wedge(self, size, top):
         return self.BRepPrimAPI.BRepPrimAPI_MakeWedge(*size, *top).Shape()
 
-    def _moved(self, s, t):
-        return self.BRepBuilderAPI.BRepBuilderAPI_Transform(s, t, True).Shape()
+    def _moved(self, s, t, copy=True):
+        return self.BRepBuilderAPI.BRepBuilderAPI_Transform(s, t, copy).Shape()
 
     def translate(self, s, v):
         t = self.gp.gp_Trsf()
         t.SetTranslation(self.gp.gp_Vec(*v))
-        return self._moved(s, t)
+        return self._moved(s, t, False)
 
     def rotate(self, s, origin, axis, angle):
         t = self.gp.gp_Trsf()
         t.SetRotation(self.gp.gp_Ax1(self.pnt(origin), self.gp.gp_Dir(*axis)), math.radians(angle))
-        return self._moved(s, t)
+        return self._moved(s, t, False)
 
     def scale(self, s, center, factor):
         t = self.gp.gp_Trsf()

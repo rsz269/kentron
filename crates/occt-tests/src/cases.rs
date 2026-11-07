@@ -108,6 +108,57 @@ pub fn run(case: &Case) -> Result<(), String> {
     Ok(())
 }
 
+/// A case's operations and checks, each with what `clock` read across it, as `(name, clock
+/// difference)` (for `bench_cases`). Picking sub-shapes is left out, being the runner's work.
+/// Each check runs on a build of its own: what one finds is kept in the model, and would make
+/// the next look quicker than it is.
+pub fn timed<const N: usize>(case: &Case, clock: impl Fn() -> [u64; N]) -> Result<Vec<(String, [u64; N])>, String> {
+    let across = |before: [u64; N]| {
+        let after = clock();
+        std::array::from_fn(|i| after[i] - before[i])
+    };
+    let mut times = Vec::new();
+    let build = |times: &mut Vec<(String, [u64; N])>| -> Result<Env, String> {
+        let mut env = Env::default();
+        if let Yaml::Hash(params) = &case.doc["params"] {
+            for (k, v) in params {
+                let value = env.number(v)?;
+                env.params.insert(k.as_str().ok_or("a parameter needs a name")?.to_string(), value);
+            }
+        }
+        for step in seq(&case.doc["build"]) {
+            let Yaml::Hash(map) = step else { return Err(format!("a build step is a map: {step:?}")) };
+            let (key, value) = map.iter().next().ok_or("an empty build step")?;
+            let name = match value {
+                Yaml::Hash(op) => op.keys().next().and_then(|k| k.as_str()).unwrap_or("").to_string(),
+                _ => String::new(),
+            };
+            let before = clock();
+            let v = env.operation(value)?;
+            let spent = across(before);
+            env.vars.insert(key.as_str().ok_or("a build step's key is a name")?.to_string(), v);
+            if name != "select" {
+                times.push((name, spent));
+            }
+        }
+        Ok(env)
+    };
+    build(&mut times)?;
+    for check in seq(&case.doc["checks"]) {
+        let name = ["volume", "area", "length", "centroid", "inertia", "bounds", "distance", "valid", "count", "contains"]
+            .into_iter()
+            .find(|k| !check[*k].is_badvalue());
+        let mut env = build(&mut Vec::new())?;
+        let before = clock();
+        env.check(check)?;
+        let spent = across(before);
+        if let Some(name) = name {
+            times.push((format!("check:{name}"), spent));
+        }
+    }
+    Ok(times)
+}
+
 /// The case's build steps run up to the first one that fails (with its error).
 fn built(case: &Case) -> Result<(Env, Option<String>), String> {
     let mut env = Env::default();
