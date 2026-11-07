@@ -13,7 +13,7 @@ use crate::geometry::surface::{Plane, Surface};
 use std::f64::consts::TAU;
 
 use crate::geometry::ParametricSurface;
-use crate::math::{Axis, Direction, Frame, Point, Transform, Transformable, Vector};
+use crate::math::{Axis, BoundingBox, Direction, Frame, Point, Transform, Transformable, Vector};
 use crate::topology::{CoEdgeId, EdgeId, Model, NodeId, NodeKind, Orientation, Shape};
 use crate::{boolean, make, sweep, tolerance};
 
@@ -1037,16 +1037,60 @@ fn fillet_solid_edges_as(model: &mut Model, shape: Shape, edges: &[(Shape, f64)]
             }
         };
     }
-    for patch in patches {
-        let tool = patch.tool(model)?;
-        result = boolean::difference(model, result, tool)?;
-        result = keep(model, result)?;
-    }
+    let mut made = Vec::new();
+    let tools = patches.iter().map(|patch| patch.tool(model, &mut made)).collect::<Result<Vec<_>>>()?;
+    result = cut_corners(model, result, &tools, closed, &keep)?;
     for fill in fills {
         result = boolean::union(model, result, fill)?;
         result = keep(model, result)?;
     }
     merged_at_caps(model, result, &caps)
+}
+
+/// The corner tools `tools` cut from `result`, those well apart from one another in one
+/// operation: each operation goes through the whole solid, and a box's corners need not wait
+/// for one another. A group failing, or leaving a sound solid's shells open, is taken one tool
+/// at a time. (Only corners' tools, each a box less a ball or the like: the tools of edges
+/// taken together have left a wrong solid, on a block hollowed with arcs at its corners.)
+fn cut_corners(model: &mut Model, mut result: Shape, tools: &[Shape], closed: bool, keep: &impl Fn(&Model, Shape) -> Result<Shape>) -> Result<Shape> {
+    let take = |model: &mut Model, result: Shape, tool: Shape| -> Result<Shape> {
+        let taken = boolean::difference(model, result, tool)?;
+        keep(model, taken)
+    };
+    let mut groups: Vec<(Vec<Shape>, Vec<BoundingBox>)> = Vec::new();
+    for &tool in tools {
+        let b = crate::properties::bounding_box(model, tool);
+        let apart = |o: &BoundingBox| {
+            let gap = 10.0 * tolerance::LINEAR;
+            b.min.x > o.max.x + gap || o.min.x > b.max.x + gap || b.min.y > o.max.y + gap || o.min.y > b.max.y + gap || b.min.z > o.max.z + gap || o.min.z > b.max.z + gap
+        };
+        match groups.iter_mut().find(|(_, boxes)| boxes.iter().all(apart)) {
+            Some((group, boxes)) => {
+                group.push(tool);
+                boxes.push(b);
+            }
+            None => groups.push((vec![tool], vec![b])),
+        }
+    }
+    for (group, _) in groups {
+        if let [tool] = group[..] {
+            result = take(model, result, tool)?;
+            continue;
+        }
+        let together = model.new_empty(NodeKind::Compound);
+        for &tool in &group {
+            model.add(together, tool)?;
+        }
+        match take(model, result, together) {
+            Ok(r) if !closed || boolean::closed_shells(model, r) => result = r,
+            _ => {
+                for &tool in &group {
+                    result = take(model, result, tool)?;
+                }
+            }
+        }
+    }
+    Ok(result)
 }
 
 /// The planes of `tool`'s planar faces square to `along` (the straight edge it rounds): its
@@ -3127,7 +3171,7 @@ fn sound(model: &Model, before: &std::collections::HashSet<crate::validity::Prob
 
 /// Whether a face of `shape` has a boundary crossing itself.
 fn crosses_itself(model: &Model, shape: Shape) -> bool {
-    crate::validity::check(model, shape).errors().any(|p| p.kind == crate::validity::ProblemKind::SelfIntersection)
+    crate::validity::check_unmeasured(model, shape).errors().any(|p| p.kind == crate::validity::ProblemKind::SelfIntersection)
 }
 
 /// A radius along an edge: the B-spline through `(s, r)` pairs (`s` from 0 to 1) as OCCT's
@@ -3351,7 +3395,9 @@ impl CornerPatch {
         Ok(Some(CornerPatch { vertex, center, radius, planes, planar }))
     }
 
-    fn tool(&self, model: &mut Model) -> Result<Shape> {
+    /// The tool cutting the corner away. `made` keeps the box-shaped tools so far, with the
+    /// sides, radius and frame of each: the corners of a box are the same tool, placed.
+    fn tool(&self, model: &mut Model, made: &mut Vec<([f64; 3], f64, Frame, Shape)>) -> Result<Shape> {
         let reach = self.vertex.distance(self.center) * 1.05 + self.radius * 0.05;
         // The spheres' poles away from the corner.
         let away = Direction::from_vector(self.center - self.vertex);
@@ -3366,9 +3412,16 @@ impl CornerPatch {
                 // (x, y and z along the planes' normals, right-handed.)
                 let (a, b, c) = if self.planes[2].cross(self.planes[0]).dot(self.planes[1]) > 0.0 { (0, 1, 2) } else { (1, 0, 2) };
                 let box_frame = Frame::new(self.center, Direction::from_vector(self.planes[c]), Direction::from_vector(self.planes[a]));
+                let key = [sides[a], sides[b], sides[c]];
+                let same = |p: f64, q: f64| (p - q).abs() <= 1e-12 * self.radius;
+                if let Some((_, _, from, tool)) = made.iter().find(|m| same(m.1, self.radius) && (0..3).all(|i| same(m.0[i], key[i]))) {
+                    return Ok(tool.moved(&Transform::frame_to_frame(from, &box_frame)));
+                }
                 let cube = crate::primitives::Cuboid::new(sides[a], sides[b], sides[c]).with_frame(box_frame).build(model)?;
                 let ball = crate::primitives::Sphere::new(self.radius).with_frame(frame).build(model)?;
-                return boolean::difference(model, cube, ball);
+                let tool = boolean::difference(model, cube, ball)?;
+                made.push((key, self.radius, box_frame, tool));
+                return Ok(tool);
             }
         }
         let outer = crate::primitives::Sphere::new(reach).with_frame(frame).build(model)?;

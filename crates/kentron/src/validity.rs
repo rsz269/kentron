@@ -137,12 +137,30 @@ pub fn self_interferences(model: &mut Model, shape: Shape) -> crate::error::Resu
     Ok(found)
 }
 
+/// Whether every shell of a solid of `shape` is closed, as [`check`] judges it (its
+/// [`ProblemKind::NotClosed`]), without the rest of what it looks into.
+pub fn shells_closed(model: &Model, shape: Shape) -> bool {
+    model.unique_subshapes(shape, NodeKind::Solid).into_iter().all(|solid| {
+        model.children(solid).into_iter().all(|shell| edge_uses(model, shell).into_iter().all(|(_, (forward, reversed))| forward == reversed))
+    })
+}
+
 /// Checks the topology and geometry of `shape` and everything below it: closed wires and
 /// shells, consistent orientations, vertices and pcurves within tolerance of the curves and
 /// surfaces they lie on, ...
 #[doc(alias = "BRepCheck_Analyzer")]
 pub fn check(model: &Model, shape: Shape) -> Report {
-    let mut checker = Checker { model, report: Report::default() };
+    check_with(model, shape, true)
+}
+
+/// [`check`], but for whether solids enclose a volume: for those asking after other problems,
+/// that being the one thing here that integrates over every face.
+pub(crate) fn check_unmeasured(model: &Model, shape: Shape) -> Report {
+    check_with(model, shape, false)
+}
+
+fn check_with(model: &Model, shape: Shape, measure: bool) -> Report {
+    let mut checker = Checker { model, report: Report::default(), measure };
     let mut seen = HashSet::new();
     for occurrence in std::iter::once(shape).chain(model.explore_all(shape)) {
         if !seen.insert(occurrence.node) {
@@ -201,6 +219,8 @@ fn surface_distance(surface: &Surface, p: Point) -> Option<f64> {
 struct Checker<'a> {
     model: &'a Model,
     report: Report,
+    /// Whether solids are checked to enclose a volume.
+    measure: bool,
 }
 
 impl Checker<'_> {
@@ -500,7 +520,7 @@ impl Checker<'_> {
             }
             self.closed_shell(id, Shape::from(shell_use.shell));
         }
-        if self.report.is_valid() {
+        if self.measure && self.report.is_valid() {
             // (Its shells are closed: from its faces' terms, which the model keeps.)
             let forward = Shape { orientation: Orientation::Forward, ..solid };
             let volume = properties::solid_volume(self.model, forward).map_or_else(|| properties::volume(self.model, forward).mass, |(v, _)| v);

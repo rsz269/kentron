@@ -496,7 +496,7 @@ fn run_with_sections(model: &mut Model, a: Shape, b: Shape, operation: Operation
 
 /// Whether every shell of `shape` is closed (each edge used by its faces once each way).
 pub(crate) fn closed_shells(model: &Model, shape: Shape) -> bool {
-    !crate::validity::check(model, shape).problems.iter().any(|p| p.kind == crate::validity::ProblemKind::NotClosed)
+    crate::validity::shells_closed(model, shape)
 }
 
 /// [`run_with_sections`] at the current tolerances, with whether the result's shells are

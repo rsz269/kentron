@@ -1065,6 +1065,12 @@ pub(super) fn interior_point_among(polylines: &[Vec<Uv>], obstacles: &Obstacles)
     };
     let (lo, hi) = (region_box.0[1].min(region_box.1[1]), region_box.1[1]);
     let size = (region_box.1[0] - region_box.0[0]).hypot(region_box.1[1] - region_box.0[1]);
+    // (On a strip far longer than it is wide, as on a cylinder of a small solid, where an
+    // angle runs along a tiny length, no point is clear by a part of the diagonal: there,
+    // nearly half the width, which only a straight strip's middle is. A curved sliver's box
+    // is wider than it is, and it is searched as any other.)
+    let (width, height) = (region_box.1[0] - region_box.0[0], region_box.1[1] - region_box.0[1]);
+    let narrow = if width.min(height) < 0.02 * width.max(height) { 0.45 * width.min(height) } else { f64::INFINITY };
     let mut best = ([0.0, lo], -1.0);
     let (mut xs, mut cuts_all, mut cuts) = (Vec::new(), Vec::new(), Vec::new());
     let mut try_line = |boundary: &[(Uv, Uv)], blocking: &[(Uv, Uv)], y: f64, best: &mut (Uv, f64)| {
@@ -1098,11 +1104,11 @@ pub(super) fn interior_point_among(polylines: &[Vec<Uv>], obstacles: &Obstacles)
     for k in 1..32u32 {
         let i = k.reverse_bits() >> 27;
         try_line(boundary, blocking, lo + (hi - lo) * (i as f64 + 0.123_456_7) / 32.0, &mut best);
-        if best.1 >= 0.05 * size {
+        if best.1 >= (0.05 * size).min(narrow) {
             return best.0;
         }
     }
-    if best.1 >= 1e-3 * size {
+    if best.1 >= (1e-3 * size).min(narrow) {
         return best.0;
     }
     let mut ys: Vec<f64> = polylines.iter().flatten().map(|p| p[1]).collect();
