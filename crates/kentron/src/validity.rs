@@ -482,7 +482,11 @@ impl Checker<'_> {
     /// loop or two) cross, nor one itself, other than at a vertex they share (OCCT's
     /// `BRepCheck_SelfIntersectingWire`, `BRepCheck_IntersectingWires`).
     fn boundary_crossings(&mut self, face: FaceId, coedges: &[CoEdgeId], surface: &Surface) {
-        if let Some((e1, e2, p)) = boundary_crossing(self.model, coedges, surface) {
+        // (Kept in the model with the face: an operation changes a few faces of a solid, and
+        // checking it again looks into all of them.)
+        struct Crossing(Option<(EdgeId, EdgeId, Point)>);
+        let found = self.model.derived(face.into(), self.model.face_fingerprint(face), || Crossing(boundary_crossing(self.model, coedges, surface)));
+        if let Some((e1, e2, p)) = found.0 {
             self.error(face, ProblemKind::SelfIntersection, format!("the boundary of {face:?} crosses itself ({e1:?} and {e2:?}) at {p:?}"));
         }
     }

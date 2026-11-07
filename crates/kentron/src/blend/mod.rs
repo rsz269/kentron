@@ -261,7 +261,7 @@ fn fillet_solid_edges(model: &mut Model, shape: Shape, edges: &[(Shape, f64)]) -
     // than the cube of their radii there: more would be material put back and not taken
     // away again.)
     let near = |model: &Model, rounded: Shape| match &plain {
-        Ok(p) => (crate::properties::volume(model, rounded).mass - crate::properties::volume(model, *p).mass).abs() <= radii.iter().map(|r| 0.5 * r * r * r).sum::<f64>(),
+        Ok(p) => (volume_of(model, rounded) - volume_of(model, *p)).abs() <= radii.iter().map(|r| 0.5 * r * r * r).sum::<f64>(),
         Err(_) => true,
     };
     // (The half of each fillet left and its half made again, on one cylinder, one face.
@@ -450,13 +450,13 @@ fn with_earlier_fillets(model: &mut Model, shape: Shape, edges: &[(Shape, f64)],
             let m = if m.dot(middle - p) > 0.0 { m } else { -m };
             back = mitred_tool(model, back, &[Some((p, m)), None])?;
         }
-        added += side * crate::properties::volume(model, back).mass;
+        added += side * volume_of(model, back);
         restored = if convex { boolean::union(model, restored, back)? } else { boolean::difference(model, restored, back)? };
         let sharp = Curve::Line(crate::geometry::curve::Line { origin: at(0.0) + corner * (1.0 / (1.0 + c)), direction: axis.direction });
         sharp_edges.push((sharp, t0 - 2.0 * radius, t1 + 2.0 * radius, radius));
     }
-    let before = crate::properties::volume(model, shape).mass;
-    if (crate::properties::volume(model, restored).mass - before - added).abs() > 1e-7 * before.abs().max(1.0) {
+    let before = volume_of(model, shape);
+    if (volume_of(model, restored) - before - added).abs() > 1e-7 * before.abs().max(1.0) {
         return Ok(None);
     }
     let restored = crate::unify::unify_same_domain(model, restored)?;
@@ -516,10 +516,10 @@ fn fillet_solid_edges_once(model: &mut Model, shape: Shape, edges: &[(Shape, f64
     // again if they pass.)
     let done = exact::exact_faces(model, rounded, &before, &before_edges);
     if !done.is_empty() {
-        let (exact_faults, exact_volume) = (fault_kinds(model, rounded), crate::properties::volume(model, rounded).mass);
+        let (exact_faults, exact_volume) = (fault_kinds(model, rounded), volume_of(model, rounded));
         exact::undo(model, done);
         let faults = fault_kinds(model, rounded);
-        let (volume, area) = (crate::properties::volume(model, rounded).mass, crate::properties::area(model, rounded).mass);
+        let (volume, area) = (volume_of(model, rounded), crate::properties::area(model, rounded).mass);
         let moved = (exact_volume - volume).abs();
         if exact_faults.is_subset(&faults) && moved <= 1e-6 * volume.abs().max(1.0) + 1e-5 * area {
             exact::exact_faces(model, rounded, &before, &before_edges);
@@ -1262,7 +1262,7 @@ fn inward_corners(
         }
         // (Only a sliver at the corner, no more than it holds taken away; each part a sound
         // solid, which cut away does not take what lies around it.)
-        let size: f64 = parts.iter().map(|&part| crate::properties::volume(model, part).mass).sum();
+        let size: f64 = parts.iter().map(|&part| volume_of(model, part)).sum();
         if parts.is_empty() || !(size > 0.0 && size < reach * reach * reach) || !parts.iter().all(|&part| crate::validity::check(model, part).is_valid()) {
             continue;
         }
@@ -1276,7 +1276,7 @@ fn inward_corners(
         return Ok(shape);
     }
     let takes_no_more = |before: f64, after: f64, size: f64| before - after <= size * (1.0 + 1e-6) + 1e-9;
-    let volume_before = crate::properties::volume(model, shape).mass;
+    let volume_before = volume_of(model, shape);
     if pieces.len() > 1 {
         // (Each part into the first cut whose parts' boxes are all apart from its own.)
         let mut cuts: Vec<(Vec<Shape>, Vec<crate::math::BoundingBox>)> = Vec::new();
@@ -1300,7 +1300,7 @@ fn inward_corners(
             cut = cut.and_then(|so_far| boolean::difference(model, so_far, all));
         }
         if let Ok(cut) = cut.and_then(|cut| keep(model, cut)) {
-            if takes_no_more(volume_before, crate::properties::volume(model, cut).mass, size) {
+            if takes_no_more(volume_before, volume_of(model, cut), size) {
                 return Ok(cut);
             }
         }
@@ -1312,7 +1312,7 @@ fn inward_corners(
             cut = boolean::difference(model, cut, part)?;
         }
         let cut = keep(model, cut)?;
-        let after = crate::properties::volume(model, cut).mass;
+        let after = volume_of(model, cut);
         if takes_no_more(before, after, size) {
             result = cut;
             before = after;
@@ -2014,7 +2014,7 @@ fn concave_ends(model: &mut Model, shape: Shape, corners: &[(Corner, f64)], i: u
         let prism = crate::sweep::extrude(model, copy, out * (2.0 * radius))?.shape;
         // (Swept from the face as the solid uses it, against its surface's normal or with it:
         // turned outward.)
-        let prism = if crate::properties::volume(model, prism).mass < 0.0 { prism.reversed() } else { prism };
+        let prism = if volume_of(model, prism) < 0.0 { prism.reversed() } else { prism };
         // (The contact on the face in the edge's middle, but off the face's outline carried
         // out a tenth of the edge in from either end: run off the face's sides. Nearer the
         // ends, a leaning edge's contact may stand past the face's own ends; and off it in the
