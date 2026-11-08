@@ -9,12 +9,13 @@
 //! vertices: those (with the solid's own faces, for a hollowed solid) divide space into
 //! cells, each wholly in the offset or out of it, kept or not by the distance of a point
 //! inside it. More surfaces only divide the cells further: a curved face is moved over the
-//! whole of its parameters' box. Faces on planes and cylinders (a cylinder moved through its
-//! axis turned round it), tubes about straight edges.
+//! whole of its parameters' box. Faces on planes, cylinders, cones, spheres and tori (moved
+//! through their axis or centre, turned round it: only dividing the cells), tubes about
+//! straight and circular edges and pipes about others.
 
 use crate::boolean::{PointClassifier, PointLocation};
 use crate::error::Result;
-use crate::geometry::surface::{Cone, Cylinder, Surface, Torus};
+use crate::geometry::surface::{Cone, Cylinder, Sphere, Surface, Torus};
 use crate::geometry::{ParametricCurve, ParametricSurface};
 use crate::heal::face_loops;
 use crate::math::{Direction, Frame, Point, Point2, Transform, Vector};
@@ -39,7 +40,12 @@ struct Bounded {
     reversed: bool,
     loops: Vec<Vec<Point2>>,
     edges: Vec<(crate::geometry::curve::Curve, f64, f64)>,
+    /// The edges' nodes, and whether each is measured from (not where the face meets a removed
+    /// face tangentially: the wall ends square to the edge there, see `strips`).
+    edge_nodes: Vec<NodeId>,
+    measured: Vec<bool>,
     u_period: Option<f64>,
+    v_period: Option<f64>,
 }
 
 impl Bounded {
@@ -50,11 +56,13 @@ impl Bounded {
             let (u, v, _) = crate::geometry::extrema::nearest_on_surface(p, &self.surface, None);
             (u, v)
         });
-        let shifts: &[f64] = if self.u_period.is_some() { &[0.0, -1.0, 1.0, -2.0, 2.0] } else { &[0.0] };
-        for &k in shifts {
-            let q = Point2::new(u + k * self.u_period.unwrap_or(0.0), v);
-            if winding(&self.loops, q) != 0 {
-                return (q, true);
+        let shifts = |period: Option<f64>| -> &[f64] { if period.is_some() { &[0.0, -1.0, 1.0, -2.0, 2.0] } else { &[0.0] } };
+        for &k in shifts(self.u_period) {
+            for &l in shifts(self.v_period) {
+                let q = Point2::new(u + k * self.u_period.unwrap_or(0.0), v + l * self.v_period.unwrap_or(0.0));
+                if winding(&self.loops, q) != 0 {
+                    return (q, true);
+                }
             }
         }
         (Point2::new(u, v), false)
@@ -66,7 +74,7 @@ impl Bounded {
         if on {
             return self.surface.point(q.x, q.y).distance(p);
         }
-        self.edges.iter().map(|(c, a, b)| crate::geometry::extrema::nearest_on_curve(p, c, *a, *b).distance).fold(f64::INFINITY, f64::min)
+        self.edges.iter().zip(&self.measured).filter(|(_, &m)| m).map(|((c, a, b), _)| crate::geometry::extrema::nearest_on_curve(p, c, *a, *b).distance).fold(f64::INFINITY, f64::min)
     }
 
     /// The face's outward normal at `p` (on it).
@@ -80,8 +88,8 @@ impl Bounded {
 }
 
 /// `solid` offset by `distance` as `made` says, joined by arcs; `None` where it is not a
-/// solid of planar and cylindrical faces whose offsets part along straight edges only, or
-/// its cells cannot be told apart.
+/// solid of faces on planes, cylinders, cones, spheres and tori, or its cells cannot be told
+/// apart.
 pub(super) fn offset(model: &mut Model, solid: Shape, distance: f64, made: Made) -> Result<Option<Shape>> {
     // (A compound of one solid: that solid.)
     let solid = match (solid.kind(), &model.unique_subshapes(solid, NodeKind::Solid)[..]) {
@@ -96,11 +104,6 @@ pub(super) fn offset(model: &mut Model, solid: Shape, distance: f64, made: Made)
         Made::Offset => &[],
         Made::Thick { removed } => removed,
     };
-    // (Walls grown outwards with faces removed end on the removed faces' planes, not
-    // where the distance takes them.)
-    if distance > 0.0 && !removed.is_empty() {
-        return Ok(None);
-    }
     // (Faces placed in the solid (as read from some files): measured on a copy with the
     // placements applied; not where faces are removed, which are named by node.)
     let placed = model.unique_subshapes(solid, NodeKind::Face).iter().any(|f| f.placement != Transform::IDENTITY);
@@ -111,18 +114,28 @@ pub(super) fn offset(model: &mut Model, solid: Shape, distance: f64, made: Made)
     };
     let mut faces = Vec::new();
     for face in model.unique_subshapes(solid, NodeKind::Face) {
-        let Some(surface @ (Surface::Plane(_) | Surface::Cylinder(_) | Surface::Cone(_))) = model.surface(face).cloned() else { return Ok(None) };
+        let Some(surface @ (Surface::Plane(_) | Surface::Cylinder(_) | Surface::Cone(_) | Surface::Sphere(_) | Surface::Torus(_))) = model.surface(face).cloned() else { return Ok(None) };
         let Some(uv) = face_loops(model, face) else { return Ok(None) };
         let loops = uv.iter().map(|l| l.iter().flat_map(|u| (0..16).map(move |i| u.at(i as f64 / 16.0))).collect()).collect();
-        let mut edges = Vec::new();
+        let (mut edges, mut edge_nodes) = (Vec::new(), Vec::new());
         for edge in model.unique_subshapes(face, NodeKind::Edge) {
-            let Some(curve) = model.edge_curve(edge) else { return Ok(None) };
+            // (A degenerate edge, at a pole, is a point its neighbours' ends are at already.)
+            let Some(curve) = model.edge_curve(edge) else { continue };
             edges.push(curve);
+            edge_nodes.push(edge.node);
         }
-        let u_period = surface.u_period();
-        faces.push(Bounded { shape: face, surface, reversed: face.orientation == Orientation::Reversed, loops, edges, u_period });
+        let measured = vec![true; edges.len()];
+        let (u_period, v_period) = (surface.u_period(), surface.v_period());
+        faces.push(Bounded { shape: face, surface, reversed: face.orientation == Orientation::Reversed, loops, edges, edge_nodes, measured, u_period, v_period });
     }
     let kept: Vec<usize> = (0..faces.len()).filter(|&i| !removed.contains(&faces[i].shape.node)).collect();
+    let (strips, all_tangent, openings) = strips(model, solid, &mut faces, removed, distance.abs())?;
+    // (Walls grown outwards with faces removed end on the removed faces' planes, not where
+    // the distance takes them: but where every kept face meets the removed ones
+    // tangentially, where they end on the strips.)
+    if distance > 0.0 && !removed.is_empty() && !all_tangent {
+        return Ok(None);
+    }
     let inside = PointClassifier::new(model, solid)?;
     let size = crate::properties::bounding_box(model, solid).size().length().max(1e-9);
     let (sign, d) = (distance.signum(), distance.abs());
@@ -204,6 +217,27 @@ pub(super) fn offset(model: &mut Model, solid: Shape, distance: f64, made: Made)
                     v1 = v1.min(apex);
                 }
                 crate::make::face_on_domain(model, Surface::Cone(cone), u0, u1, v0, v1)?
+            }
+            Surface::Sphere(sphere) => {
+                // (The whole sphere about the same centre, its radius grown by the distance;
+                // through the centre, the same sphere turned round: only dividing the cells
+                // further.)
+                let r = sphere.radius() + along;
+                if r.abs() <= 1e-9 * size {
+                    continue;
+                }
+                let moved = Surface::Sphere(Sphere::new(*sphere.frame(), r.abs()));
+                let half = 0.5 * std::f64::consts::PI;
+                crate::make::face_on_domain(model, moved, 0.0, std::f64::consts::TAU, -half, half)?
+            }
+            Surface::Torus(torus) => {
+                // (The whole torus, its tube's radius grown by the distance, as the sphere.)
+                let r = torus.minor_radius() + along;
+                if r.abs() <= 1e-9 * size {
+                    continue;
+                }
+                let moved = Surface::Torus(Torus::new(*torus.frame(), torus.major_radius(), r.abs()));
+                crate::make::face_on_domain(model, moved, 0.0, std::f64::consts::TAU, 0.0, std::f64::consts::TAU)?
             }
             _ => return Ok(None),
         };
@@ -324,6 +358,7 @@ pub(super) fn offset(model: &mut Model, solid: Shape, distance: f64, made: Made)
         let ball = crate::primitives::Sphere::new(d).with_frame(Frame::from_z(p, Direction::Z)).build(model)?;
         sheets.extend(model.unique_subshapes(ball, NodeKind::Face));
     }
+    sheets.extend(strips);
     // A hollowed solid's walls end on its faces.
     if matches!(made, Made::Thick { .. }) {
         sheets.push(solid);
@@ -333,7 +368,15 @@ pub(super) fn offset(model: &mut Model, solid: Shape, distance: f64, made: Made)
     let mut chosen = Vec::new();
     for &cell in &cells {
         let Some(p) = crate::boolean::point_inside(model, cell)? else { return Ok(None) };
-        let within = kept.iter().map(|&i| faces[i].distance(p)).fold(f64::INFINITY, f64::min) < d;
+        // (Over a removed face met tangentially all round, within the distance on the side the
+        // walls grow: the opening, as far as the strips round it (points there may be within
+        // the distance of the edges ending at its corners).)
+        let opening = openings.iter().any(|&r| {
+            let (q, on) = faces[r].foot(p);
+            let foot = faces[r].surface.point(q.x, q.y);
+            on && foot.distance(p) < d && (p - foot).dot(faces[r].normal(foot)) * sign > 0.0
+        });
+        let within = !opening && kept.iter().map(|&i| faces[i].distance(p)).fold(f64::INFINITY, f64::min) < d;
         // (A point on the solid's boundary is within the distance: it lies in an offset
         // outwards and out of one inwards; a hollowed solid's cells are bounded by the
         // solid's faces, and lie on one side of them.)
@@ -354,4 +397,67 @@ pub(super) fn offset(model: &mut Model, solid: Shape, distance: f64, made: Made)
     }
     // (Pieces of one moved face may come from its copy and the box grown past it.)
     super::regularize::joined(model, &chosen, false).map(Some)
+}
+
+/// Where a kept face meets a removed one tangentially (a fillet running into a removed top),
+/// the wall ends square to the edge, as OCCT's do: on the strip the edge sweeps along the
+/// removed face's normal (the kept face's offset reaches no further than that strip, where it
+/// is the removed face's offset, which is not there). The points within the distance of the
+/// edge itself, past the strip, are not the wall's: the edge is no longer measured from. The
+/// strips, a little longer and wider than the walls, as sheets dividing the cells; whether
+/// every edge between a kept face and a removed one is such an edge; and the removed faces
+/// (by index) all of whose edges with kept faces are.
+fn strips(model: &mut Model, solid: Shape, faces: &mut [Bounded], removed: &[NodeId], d: f64) -> Result<(Vec<Shape>, bool, Vec<usize>)> {
+    use crate::geometry::curve::Curve;
+    let mut out = Vec::new();
+    let mut all_tangent = true;
+    // (Removed faces with an edge met at an angle.)
+    let mut angled: Vec<usize> = Vec::new();
+    if removed.is_empty() {
+        return Ok((out, all_tangent, Vec::new()));
+    }
+    for edge in model.unique_subshapes(solid, NodeKind::Edge) {
+        let using: Vec<usize> = (0..faces.len()).filter(|&i| faces[i].edge_nodes.contains(&edge.node)).collect();
+        let [f, g] = using[..] else { continue };
+        let (k, r) = match (removed.contains(&faces[f].shape.node), removed.contains(&faces[g].shape.node)) {
+            (false, true) => (f, g),
+            (true, false) => (g, f),
+            _ => continue,
+        };
+        let Some((curve, c0, c1)) = model.edge_curve(edge) else { continue };
+        let middle = curve.point(0.5 * (c0 + c1));
+        let (nk, nr) = (faces[k].normal(middle), faces[r].normal(middle));
+        if nk.cross(nr).length() > 1e-6 {
+            all_tangent = false;
+            angled.push(r);
+            continue;
+        }
+        let Some(n) = Direction::try_from_vector(nr) else { continue };
+        if let Some(i) = faces[k].edge_nodes.iter().position(|&e| e == edge.node) {
+            faces[k].measured[i] = false;
+        }
+        let reach = 3.0 * d;
+        let sheet = match &curve {
+            Curve::Line(_) => {
+                let (a, b) = (curve.point(c0), curve.point(c1));
+                let length = a.distance(b);
+                let Some(t) = Direction::try_from_vector(b - a) else { continue };
+                let Some(normal) = Direction::try_from_vector(Vector::from(t).cross(Vector::from(n))) else { continue };
+                let plane = crate::geometry::surface::Plane::from_frame(Frame::new(a, normal, t));
+                crate::make::face_on_domain(model, Surface::Plane(plane), -reach, length + reach, -reach, reach)?
+            }
+            Curve::Circle(circle) if Vector::from(circle.frame().z()).cross(Vector::from(n)).length() < 1e-9 => {
+                let cylinder = Cylinder::new(*circle.frame(), circle.radius());
+                crate::make::face_on_domain(model, Surface::Cylinder(cylinder), 0.0, std::f64::consts::TAU, -reach, reach)?
+            }
+            _ => {
+                let swept = crate::geometry::surface::ExtrusionSurface::new(curve.clone(), n);
+                let moved = crate::make::face_on_domain(model, Surface::Extrusion(swept), c0.min(c1), c0.max(c1), 0.0, 2.0 * reach)?;
+                crate::modify::transform(model, moved, &Transform::translation(Vector::from(n) * -reach), Default::default())?
+            }
+        };
+        out.push(sheet);
+    }
+    let openings = (0..faces.len()).filter(|&i| removed.contains(&faces[i].shape.node) && !angled.contains(&i)).collect();
+    Ok((out, all_tangent, openings))
 }

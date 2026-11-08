@@ -150,7 +150,7 @@ fn each_solid<T: Copy>(model: &mut Model, shape: Shape, edges: &[T], edge: impl 
 /// Whether the faces at `edge` (of `shape`) meet smoothly there: a seam (a face meeting
 /// itself), or two faces tangent along it. As OCCT, such edges are left out of fillets and
 /// chamfers (there is no corner to round).
-fn smooth(model: &Model, shape: Shape, edge: Shape) -> bool {
+pub(crate) fn smooth(model: &Model, shape: Shape, edge: Shape) -> bool {
     use crate::geometry::ParametricCurve;
     let mut uses: Vec<NodeId> = Vec::new();
     for face in model.explore(shape, NodeKind::Face) {

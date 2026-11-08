@@ -40,7 +40,8 @@ pub fn shape_with_faces(model: &mut Model, shape: Shape, distance: f64, faces: &
         return Ok(stepped);
     }
     let rounded = moved_and_rounded(model, shape, distance, &own, join);
-    if join == Join::Arc && own.is_empty() {
+    // (Joined by intersection, as by arcs where no edge is sharp: no faces' offsets part.)
+    if (join == Join::Arc || smooth_everywhere(model, shape)) && own.is_empty() {
         return or_within(model, rounded, shape, distance, Made::Offset);
     }
     // Outwards by intersection, a solid of planar faces with concave edges: also as the
@@ -49,7 +50,7 @@ pub fn shape_with_faces(model: &mut Model, shape: Shape, distance: f64, faces: &
     // passing through one another unnoticed).
     if join == Join::Intersection && own.is_empty() && distance > 0.0 {
         if let Ok(Some(covered)) = super::cells::offset(model, shape, distance) {
-            let agree = rounded.as_ref().is_ok_and(|&r| {
+            let agree = rounded.as_ref().is_ok_and(|&(r, _)| {
                 let (a, b) = (crate::properties::volume(model, r).mass, crate::properties::volume(model, covered).mass);
                 (a - b).abs() <= 1e-6 * a.abs().max(b.abs()).max(1.0)
             });
@@ -58,7 +59,7 @@ pub fn shape_with_faces(model: &mut Model, shape: Shape, distance: f64, faces: &
             }
         }
     }
-    rounded
+    rounded.map(|(r, _)| r)
 }
 
 /// [`shape_with_faces`] where faces side by side on one plane (facing the same way) move by
@@ -136,7 +137,7 @@ fn stepped(model: &mut Model, shape: Shape, distance: f64, own: &[(NodeId, f64)]
     } else if alike {
         shape_with_faces(model, shape, distance, &[], join)?
     } else {
-        moved_and_rounded(model, shape, distance, &base_own, join)?
+        moved_and_rounded(model, shape, distance, &base_own, join)?.0
     };
     // Each face moved further: a prism of the rest along its normal, from where the base has
     // it (the face of the base on its plane moved by the least distance holding a point inside
@@ -228,12 +229,12 @@ fn stepped(model: &mut Model, shape: Shape, distance: f64, own: &[(NodeId, f64)]
 
 /// [`shape_with_faces`] by its faces moved one by one, and the edges where they part
 /// rounded.
-fn moved_and_rounded(model: &mut Model, shape: Shape, distance: f64, own: &[(NodeId, f64)], join: Join) -> Result<Shape> {
+fn moved_and_rounded(model: &mut Model, shape: Shape, distance: f64, own: &[(NodeId, f64)], join: Join) -> Result<(Shape, bool)> {
     let moved = offset_faces(model, shape, distance, own, &[], join)?;
     let result = rebuild(model, shape, &moved.faces, &moved.new_faces)?;
     let radius = moved.parting.first().map_or(0.0, |&(a, _)| own.iter().find(|(n, _)| *n == moved.faces[a].shape.node).map_or(distance, |(_, d)| *d).abs());
     let result = round_parting(model, result, &moved, radius)?;
-    super::regularize::regularized(model, result)
+    Ok((super::regularize::regularized(model, result)?, moved.strained))
 }
 
 /// `shape` (a solid) hollowed out to walls of `thickness`, open where `removed` (faces of
@@ -277,15 +278,21 @@ pub fn thick_solid(model: &mut Model, shape: Shape, removed: &[Shape], thickness
     }
     let kept: Vec<NodeId> = removed.iter().map(|f| f.node).collect();
     let rounded = hollowed(model, shape, &kept, thickness, join);
-    if join == Join::Arc {
+    // (Joined by intersection, as by arcs where no edge is sharp: no faces' offsets part.)
+    if join == Join::Arc || smooth_everywhere(model, shape) {
         return or_within(model, rounded, shape, thickness, Made::Thick { removed: &kept });
     }
-    rounded
+    rounded.map(|(r, _)| r)
+}
+
+/// Whether every edge of `shape` is smooth, its faces tangent along it (or degenerate, a pole).
+fn smooth_everywhere(model: &Model, shape: Shape) -> bool {
+    model.unique_subshapes(shape, NodeKind::Edge).into_iter().all(|e| model.edge_curve(e).is_none() || crate::blend::smooth(model, shape, e))
 }
 
 /// [`thick_solid`] of a solid in place by its faces moved one by one (but the removed ones,
 /// `kept` where they are), and the edges where they part rounded.
-fn hollowed(model: &mut Model, shape: Shape, kept: &[NodeId], thickness: f64, join: Join) -> Result<Shape> {
+fn hollowed(model: &mut Model, shape: Shape, kept: &[NodeId], thickness: f64, join: Join) -> Result<(Shape, bool)> {
     let moved = offset_faces(model, shape, thickness, &[], kept, join)?;
     let outwards = thickness > 0.0;
     let shell = model.new_empty(NodeKind::Shell);
@@ -321,18 +328,18 @@ fn hollowed(model: &mut Model, shape: Shape, kept: &[NodeId], thickness: f64, jo
         model.add(solid, cavity)?;
     }
     let solid = round_parting(model, solid, &moved, thickness.abs())?;
-    super::regularize::regularized(model, solid)
+    Ok((super::regularize::regularized(model, solid)?, moved.strained))
 }
 
 /// `rounded` (an offset of `shape` joined by arcs, its faces moved and the edges where they
 /// part rounded) where that is sound; otherwise the offset found as the points within the
 /// distance, where that can be.
-fn or_within(model: &mut Model, rounded: Result<Shape>, shape: Shape, distance: f64, made: Made) -> Result<Shape> {
-    if let Ok(r) = rounded {
-        if crate::validity::check(model, r).errors().next().is_none() {
-            return Ok(r);
-        }
-    }
+fn or_within(model: &mut Model, rounded: Result<(Shape, bool)>, shape: Shape, distance: f64, made: Made) -> Result<Shape> {
+    // (Unless it is strained: some faces' offsets meeting in no one point, as a face vanishing.)
+    let rounded = match rounded {
+        Ok((r, false)) if crate::validity::check(model, r).errors().next().is_none() => return Ok(r),
+        other => other.map(|(r, _)| r),
+    };
     match super::within::offset(model, shape, distance, made) {
         Ok(Some(found)) => Ok(found),
         _ => rounded,
@@ -384,6 +391,11 @@ struct Moved {
     /// The faces (by index) of the edges whose faces' offsets part, joined by arcs: their
     /// offsets meet sharply first, the edge rounded after.
     parting: Vec<(usize, usize)>,
+    /// Whether some new vertex lies clearly off the offsets of the faces round it: more than
+    /// three faces' offsets meeting in no one point, as where a face vanishes (a chamfered
+    /// box's corner triangle, offset inwards past its neighbours'). The offset is then
+    /// suspect though it may be sound.
+    strained: bool,
 }
 
 /// A face's use of an edge: the face (by index), the coedge and its curve in the face.
@@ -616,11 +628,13 @@ fn replace_surfaces(
     let tolerance = 1e-7 * scale.max(1.0);
     // (Each vertex's tolerance covering how far it lies from the faces round it: where more
     // than three faces' offsets would meet, they meet in no one point.)
+    let mut strained = false;
     let new_vertices: Vec<VertexId> = new_points
         .iter()
         .enumerate()
         .map(|(v, &p)| {
             let off = around[v].iter().map(|&(f, uv)| p.distance(foot_on(&faces[f].offset, p, uv, faces[f].nappe).1)).fold(0.0, f64::max);
+            strained |= off > 1e-5 * scale.max(1.0);
             model.add_vertex(p, tolerance.max(off * (1.0 + 1e-6)))
         })
         .collect();
@@ -671,7 +685,7 @@ fn replace_surfaces(
         }
         new_faces.push(new);
     }
-    Ok(Moved { faces, new_faces, parting: Vec::new() })
+    Ok(Moved { faces, new_faces, parting: Vec::new(), strained })
 }
 
 /// Whether the offsets of an edge's two (moved) faces part, leaving a gap there: at a convex

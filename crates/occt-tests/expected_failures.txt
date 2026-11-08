@@ -637,7 +637,6 @@ tests/bugs/modalg_7/bug83
 tests/bugs/modalg_7/optimal_bndbox_exception
 tests/bugs/modalg_8/bug31479_1
 tests/bugs/modalg_8/bug31479_2
-tests/bugs/modalg_8/bug31601
 tests/bugs/modalg_8/bug32214_3
 tests/bugs/modalg_8/bug32915
 tests/bugs/modalg_8/bug32929

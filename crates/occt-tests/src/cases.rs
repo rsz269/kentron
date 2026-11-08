@@ -848,7 +848,12 @@ impl Env {
                 let s = self.shape(&a["shape"])?;
                 let mut radii = Vec::new();
                 let mut laws = Vec::new();
-                for e in seq(&a["edges"]) {
+                // (`edges: all`: every edge of the shape, at `radius`.)
+                if a["edges"].as_str() == Some("all") {
+                    let r = self.number(&a["radius"])?;
+                    radii = self.model.unique_subshapes(s, NodeKind::Edge).into_iter().map(|e| (e, r)).collect();
+                }
+                for e in seq(&a["edges"]).into_iter().filter(|e| e.as_str() != Some("all")) {
                     if e.as_str().is_some() {
                         radii.push((self.shape(e)?, self.number(&a["radius"])?));
                     } else if !e["law"].is_badvalue() {
@@ -879,7 +884,8 @@ impl Env {
             }
             "chamfer" => {
                 let s = self.shape(&a["shape"])?;
-                let edges = self.shapes(&a["edges"])?;
+                // (`edges: all`: every edge of the shape.)
+                let edges = if a["edges"].as_str() == Some("all") { self.model.unique_subshapes(s, NodeKind::Edge) } else { self.shapes(&a["edges"])? };
                 let distance = self.number(&a["distance"])?;
                 shape(blend::chamfer(&mut self.model, s, &edges, distance).map_err(err)?)
             }
