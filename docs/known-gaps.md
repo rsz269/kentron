@@ -1,0 +1,107 @@
+# Known gaps
+
+Major gaps and errors found during development that were judged too complex or too
+time-consuming to fix when they were found, and remain to be fixed. Each entry says what
+fails, how to reproduce it, the evidence, what was tried, and why it was left. Remove an
+entry when it is fixed (the commit fixing it says so).
+
+Smaller differences on the public corpus are tracked by the corpus runs themselves; this
+log is for the root causes behind them that need real work.
+
+## Fillets
+
+### Saddle vertices: three concave and three convex edges at one corner
+
+*Found 2026-11-08.*
+
+Where six edges meet at a vertex, three concave and three convex (the inside corner where
+three box arms meet in 3D), filleting every edge gives a valid solid with the wrong shape at
+every mixed corner of that solid.
+
+- **Repro:** three 6×6 arms along +x, +y and +z from the origin
+  (`box(15, 6, 6).translate((7.5, 0, 0))` and the same along y and z), unioned, then
+  `edges().fillet(1)`. Its saddle vertex is (3, 3, 3).
+- **Evidence:** the volume is 1440.990 against CadQuery's 1441.091; the area is 1003.0
+  against 966.2, which CadQuery gets with tori and 8 B-spline corner patches that kentron
+  lacks. Against a brute-force rolling ball (the morphological closing then opening of the
+  solid by radius 1, on a 0.02 voxel grid round the mixed corner at (3, −3, 3)), 144 of
+  60 000 points are wrong on kentron, about 0.15 of volume at that corner, and none on
+  CadQuery.
+- **Cause:** `fillet_solid_edges_inner` rounds the concave edges first, so that the
+  convex ones go round their ends as tori, as OCCT does. After that first stage, the three
+  concave fills meet at the saddle vertex only along lines: six short non-manifold edges,
+  each bounding four faces. The second stage rejects them ("a fillet edge must bound two
+  faces, it bounds 4"), and the whole solid is filleted at once instead, every mixed corner
+  mitred.
+- **Needed:** a corner patch for saddle vertices (OCCT fills them with B-spline patches),
+  or a first stage that leaves the saddle manifold. Several days' work.
+- **Not affected:** planar L-shapes and other convex/concave corners without a saddle
+  vertex match CadQuery exactly.
+
+## Offsets and shells
+
+### Sliver faces in shells found by distance
+
+*Found 2026-11-08.*
+
+Shells and offsets that fall back on the points-within-the-distance construction
+(`offset/within.rs`, used where faces vanish) have the right volume and are valid, but
+their faces can come out split into thin slivers near the corners of the cavity.
+
+- **Repro:** `box(20, 20, 20).edges().chamfer(2).faces(">Z").shell(-3)` gives 123 faces
+  against 43 (volume 4482.848, exact), and a 60×40×25 block with vertical edges filleted 5
+  and top edges filleted 2, `faces("<Z").shell(-3)`, gives 43 faces against 27.
+- **Cause:** the cell containing the cavity leaks into the corner regions in thin slivers
+  (about 0.015 thick) where the moved faces' sheets nearly meet. The slivers' faces lie on
+  the right planes, folded back on themselves, and do not merge.
+- **Tried:** deciding tiny cells by the neighbours they share faces with, and growing every
+  planar sheet past its face. Neither changed anything.
+- **Matters because:** selectors such as `faces(">Z")` on the result can pick up slivers.
+
+### Gyroid lattice cells meeting at a corner
+
+*Found 2026-11-08.*
+
+LatticeQuery's gyroid unit cell is a union of eight thickened plates, some a hundred-
+millionth apart. The plates' pairwise unions are valid now (7d15022). The whole cell is
+not: where four plates meet at a corner of the cell, their side strips meet 1e-8 apart, and
+the union leaves an edge 3.5e-5 long used by seven faces.
+
+- **Repro:** the plates `g000`, `g110`, `g001` and `g011` of `lq/topologies/gyroid.py`
+  (see `test_gyroid_plates_a_hundred_millionth_apart` in
+  `crates/pykentron/tests/test_against_cadquery.py` for building them), unioned in turn.
+  The edge is at (10, 10, 10).
+- **Evidence:** it is the same before 7d15022, which only exposed it (the self-crossing
+  faces were reported first).
+- **Also:** CadQuery's own unions of these plates are wrong: a brute-force count puts the
+  first two plates' common part at 0.0024 ± 0.0004, not 0.18.
+- **Needed:** coincidence handling for several faces within tolerance of one another at a
+  point.
+
+## Booleans
+
+### Sweeps along separately fitted copies of one curve
+
+*Found 2026-10-24; still failing 2026-11-08 (`jhnphm_spiral_lamp/lamp.py`).*
+
+Two sweeps along B-splines fitted separately to the same parametric spiral, over
+different ranges, have faces that should coincide but differ by 1e-9 to 1e-4 (the frames'
+error times the 30 mm profile). Their union is wrong (61 faces and 2 solids against 37 and
+1), and the spiral lamp's later fillet fails on the invalid solid ("a fillet edge must bound
+two faces, it bounds 4").
+
+- **Tried:** a geometric test of partial coincidence (grid points with their feet inside
+  the other face all within 1e-6). It catches only some pairs, and accepting 1e-4 would be
+  unsafe. Reverted.
+
+### Section edges under-report their tolerance
+
+*Found 2026-10-23.*
+
+Fitted B-spline section curves stray from their surfaces between fit points by more than
+the tolerance recorded for them (the teapot spout: 5.75e-7 against 1e-7), so a later
+boolean may not find them on the surface.
+
+- **Tried:** recording the true deviation by dense sampling. It is correct, but it fails
+  OCCT's tolerance checks in bug32945 and buc60555_1, whose real gaps are larger.
+- **Needed:** tighter section fitting, so that the true deviation is small.

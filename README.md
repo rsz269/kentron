@@ -47,10 +47,10 @@ it is kentron's own code: OCCT is the reference to match, not a dependency.
   and its internal bookkeeping.
 
 It is pre-1.0. Some OCCT features are still missing, for example sweeps with several
-sections of different shapes, offsets that change a shape's topology, evolved solids, and
-fillets meeting in some kinds of corner (four or more faces at a vertex, convex and concave
-fillets together). Some rare pathological
-cases may still run very slowly or fail to converge.
+sections of different shapes, evolved solids, and fillets at saddle corners (three concave
+and three convex edges at one vertex). Some rare pathological
+cases may still run very slowly or fail to converge. The larger known gaps, with what was
+found and tried, are logged in [`docs/known-gaps.md`](docs/known-gaps.md).
 
 ## How it was made
 
