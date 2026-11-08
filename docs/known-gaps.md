@@ -180,9 +180,24 @@ curve lies in the mirror plane, and there the face and its mirror image cross at
   faces. Face A0 is then not split, and `clean_components` joins A0's regions inside
   and outside B0 into one group of 21. Its majority vote (Outside) then overrides the four
   regions classified Inside on their own.
-- **Next:** follow chain 318 from `intersect.rs` (`Section::Sampled` from `marched()`)
-  through `graph.intersect_faces` to where it is cut down to the faces' common part, with
-  the two faces exported alone (`section_probe` on them reproduces it).
+- **Where it is lost (found 2026-11-08, later):** in `Graph::intersect_faces` the chain
+  gets no vertices to cut it at. That needs one where it leaves the faces at (1.99, 0.094,
+  1.442) and one at their corner, (1.99, 0.0002, 1.4449). At the first, the faces touch:
+  the two crossings there (edge 1 of A0 meeting B0, and its mirror image meeting A0) were
+  found 4e-5 apart, off the plane, so the chain passes each only near (`passes_within`'s
+  `touching_across` case). Such a point is kept only when two arcs pass it, and here the
+  slanting branch's arcs end 0.006 short, its touching stretch dropped. At the corner the
+  two crossings lie about 1e-5 off the surfaces, so `passes_within` rejects them before
+  any test. Tried: keeping a point passed only near once wherever the chain leaves either
+  face there (its points just before and after it on opposite sides of a face's
+  boundary). Both near-duplicate vertices were then kept at the same parameter, and the
+  union came out invalid (volume 5.47 of 7.95). Kept neither.
+- **Needed:** each such pair found as one vertex. The point where an edge and its mirror
+  image cross the plane is an edge–edge crossing, better conditioned than either
+  edge–face crossing: find it so, and have `share_vertices` merge the edge–face crossings
+  near it. Likewise at the corner. Then the chain's near passes there can be kept (once
+  each, where it leaves a face), and the corner's points need to be allowed off the
+  surfaces by as far as the touching faces put them.
 
 ### Section edges under-report their tolerance
 
