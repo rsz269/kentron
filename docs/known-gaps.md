@@ -149,6 +149,41 @@ knurled cap is cut to 252 of volume, invalid, against CadQuery's 4804.
 - **Needed:** handling of faces that coincide only along a section (a curve of tangency
   sweeping through), on B-spline ruled surfaces.
 
+### Mirrored free-form faces meeting the mirror plane almost square
+
+*Found 2026-11-08.*
+
+A union of a solid with its mirror image, where a free-form face meets the mirror plane at
+nearly a right angle, keeps fragments of faces inside the other solid. Their intersection
+curve lies in the mirror plane, and there the face and its mirror image cross at only 1e-2 to
+1e-3 rad.
+
+- **Repro:** LatticeQuery's `lattice_scripts/hetero-shwarz.py` (one Schwarz-P cell, size
+  3.98, thickness 0.9). Its first step is enough: `s000 = schwartz_p_000(0.9, 1.99)` (an
+  `interpPlate` face thickened by ±0.45 and unioned) placed at (0.995, 0.995, 0.995), then
+  `s000.union(s000.mirror("ZY", (1.99, 0, 0)))`.
+- **Evidence:** the union's area is 31.732 on kentron (41 faces), against 31.589 from a
+  brute force on kentron's own two halves (a fine mesh of one half, each triangle near the
+  plane classified by OCCT against the other half). Classifying every face of the result
+  against both halves finds four fragments, 0.036 and 0.034 of area each side, lying up to
+  3.6e-3 inside the other half; that accounts for the whole 0.14 surplus. CadQuery's result
+  is wrong there too (31.583, with 0.14 of face inside and some missing). The whole cell,
+  after four more such unions, comes to 119.288 on kentron against CadQuery's 116.379. The
+  volumes are within 0.1%.
+- **Cause, as far as found:** the halves' offset faces (A0 and its mirror image B0) cross
+  in the plane x = 1.99, along y from 0 to 0.094 near (1.99, y, 1.444). That stretch is
+  nearly tangent; it ends at a point where the faces are tangent and a second, slanting
+  branch of A0 ∩ B0 crosses it. `march::trace` does trace that branch in the plane: a
+  318-point chain at x = 1.99, kept as a section, its tangent stretches at its ends.
+  But `boolean::section` of the two faces yields only a 1.85e-5 piece of it at the
+  corner. So the curve is lost after marching, where the traced sections are cut to the
+  faces. Face A0 is then not split, and `clean_components` joins A0's regions inside
+  and outside B0 into one group of 21. Its majority vote (Outside) then overrides the four
+  regions classified Inside on their own.
+- **Next:** follow chain 318 from `intersect.rs` (`Section::Sampled` from `marched()`)
+  through `graph.intersect_faces` to where it is cut down to the faces' common part, with
+  the two faces exported alone (`section_probe` on them reproduces it).
+
 ### Section edges under-report their tolerance
 
 *Found 2026-10-23; not re-checked since (bug32945 still passes as it stands).*
