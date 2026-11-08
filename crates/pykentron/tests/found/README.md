@@ -33,20 +33,20 @@ Scripts under other licences, or none, are not copied: [`cases.tsv`](cases.tsv) 
 
 ## Where they stand
 
-On 2026-10-31:
+On 2026-11-08:
 
 | | scripts |
 |---|---|
-| in the corpus | 751 |
+| in the corpus | 764 |
 | left out: they open windows or wait, and are not run | 5 |
-| left out: the result depends on face order (below) | 10 |
+| left out: the result depends on face order (below) | 14 |
 | left out: CadQuery itself fails | 0 |
-| compared | 736 |
-| build as on CadQuery | 673 |
-| differ where CadQuery's result is wrong (below) | 19 |
-| differ | 32 |
-| fail on pykentron | 12 |
-| **pykentron's failures** | **44** |
+| compared | 745 |
+| build as on CadQuery | 708 |
+| differ where CadQuery's result is wrong (below) | 27 |
+| differ | 8 |
+| fail on pykentron | 2 |
+| **pykentron's failures** | **10** |
 
 Of the 191 scripts that failed or built differently when found up to 2026-10-23, 131 now
 build as on CadQuery, and 15 more differ only where CadQuery's result is wrong. Of the 26 found
