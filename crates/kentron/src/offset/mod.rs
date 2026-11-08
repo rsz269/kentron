@@ -7,6 +7,7 @@
 //! * [`thick_shell`]: the solid between a face or shell and its offset.
 
 mod cells;
+mod prism;
 mod regularize;
 pub(crate) mod shape;
 mod thick;

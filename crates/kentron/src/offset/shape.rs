@@ -40,9 +40,10 @@ pub fn shape_with_faces(model: &mut Model, shape: Shape, distance: f64, faces: &
         return Ok(stepped);
     }
     let rounded = moved_and_rounded(model, shape, distance, &own, join);
-    // (Joined by intersection, as by arcs where no edge is sharp: no faces' offsets part.)
-    if (join == Join::Arc || smooth_everywhere(model, shape)) && own.is_empty() {
-        return or_within(model, rounded, shape, distance, Made::Offset);
+    // (Joined by intersection, as by arcs where no edge is sharp: no faces' offsets part; and
+    // inwards, a prism by its profile's offset, either way.)
+    if own.is_empty() && (join == Join::Arc || distance < 0.0 || smooth_everywhere(model, shape)) {
+        return or_fallbacks(model, rounded, shape, distance, Made::Offset, join);
     }
     // Outwards by intersection, a solid of planar faces with concave edges: also as the
     // space its pieces cover (super::cells), taken where moving its faces one by one fails
@@ -278,11 +279,7 @@ pub fn thick_solid(model: &mut Model, shape: Shape, removed: &[Shape], thickness
     }
     let kept: Vec<NodeId> = removed.iter().map(|f| f.node).collect();
     let rounded = hollowed(model, shape, &kept, thickness, join);
-    // (Joined by intersection, as by arcs where no edge is sharp: no faces' offsets part.)
-    if join == Join::Arc || smooth_everywhere(model, shape) {
-        return or_within(model, rounded, shape, thickness, Made::Thick { removed: &kept });
-    }
-    rounded.map(|(r, _)| r)
+    or_fallbacks(model, rounded, shape, thickness, Made::Thick { removed: &kept }, join)
 }
 
 /// Whether every edge of `shape` is smooth, its faces tangent along it (or degenerate, a pole).
@@ -331,15 +328,28 @@ fn hollowed(model: &mut Model, shape: Shape, kept: &[NodeId], thickness: f64, jo
     Ok((super::regularize::regularized(model, solid)?, moved.strained))
 }
 
-/// `rounded` (an offset of `shape` joined by arcs, its faces moved and the edges where they
-/// part rounded) where that is sound; otherwise the offset found as the points within the
-/// distance, where that can be.
-fn or_within(model: &mut Model, rounded: Result<(Shape, bool)>, shape: Shape, distance: f64, made: Made) -> Result<Shape> {
+/// `rounded` (an offset of `shape`, its faces moved and the edges where they part rounded)
+/// where that is sound; otherwise, inwards, a prism's by its profile's offset
+/// (super::prism), or the offset found as the points within the distance (joined by arcs,
+/// or by intersection where no edge is sharp), where either can be.
+fn or_fallbacks(model: &mut Model, rounded: Result<(Shape, bool)>, shape: Shape, distance: f64, made: Made, join: Join) -> Result<Shape> {
     // (Unless it is strained: some faces' offsets meeting in no one point, as a face vanishing.)
     let rounded = match rounded {
         Ok((r, false)) if crate::validity::check(model, r).errors().next().is_none() => return Ok(r),
         other => other.map(|(r, _)| r),
     };
+    let by_profile = match made {
+        Made::Offset => super::prism::offset(model, shape, distance, join),
+        Made::Thick { removed } => super::prism::thick(model, shape, removed, distance, join),
+    };
+    if let Ok(Some(found)) = by_profile {
+        if crate::validity::check(model, found).errors().next().is_none() {
+            return Ok(found);
+        }
+    }
+    if join != Join::Arc && !smooth_everywhere(model, shape) {
+        return rounded;
+    }
     match super::within::offset(model, shape, distance, made) {
         Ok(Some(found)) => Ok(found),
         _ => rounded,

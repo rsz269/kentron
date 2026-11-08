@@ -99,3 +99,51 @@ checks:
   - volume: result
     eq: 4482.848489486468
     rel: 1.0e-6
+---
+case: notched_outline_offset_inwards_to_two_touching_pieces
+# (The notch, 2 wide and 6 deep, offset inwards by 2 reaches the bottom's offset: two pieces
+# touching along a stretch, each a 5 by 6 rectangle and the 2 by 2 square under the notch's
+# corner arc, less the arc's quarter disc; nothing of the stretch between them.)
+build:
+  - outline: { polyline: { points: [[0, 0, 0], [20, 0, 0], [20, 10, 0], [11, 10, 0], [11, 4, 0], [9, 4, 0], [9, 10, 0], [0, 10, 0], [0, 0, 0]] } }
+  - w: { wire: { edges: [outline] } }
+  - result: { offset_wire: { shape: w, distance: -2 } }
+checks:
+  - count: result
+    eq: { wires: 2, edges: 10 }
+  - length: result
+    eq: "2*(22 + pi)"
+    rel: 1.0e-6
+---
+case: spline_prism_open_shell_past_its_tight_turns
+# (A prism of a closed spline through (0, 0), (10, 5), (20, 0), (20, 10), (0, 10), turning
+# tighter than 1 at its corners: its side's offset inwards crosses itself. The inside is the
+# profile's offset in its plane swept between the caps: the profile less its points within 1
+# of its boundary, of area 188.70344 by an adaptive grid over 100000 points of it (OCCT's
+# offset gives 188.6952), over the 9 of the height left above the bottom's thickness; the
+# profile 260.34330 by the shoelace over 200000.)
+build:
+  - curve:
+      bspline:
+        degree: 3
+        poles: [[0, 0, 0], [2.117516385414039, 6.452204821873335, 0], [9.93767870811436, 7.28751123675068, 0], [21.615892824166863, -4.745691409968523, 0], [22.229482201333838, 16.11815184473142, 0], [-2.1402952284686307, 23.763646083479657, 0], [-1.8939642325021744, -5.77102743458428, 0], [0, 0, 0]]
+        knots: [[0, 4], [11.180339887498949, 1], [22.360679774997898, 1], [32.3606797749979, 1], [52.3606797749979, 1], [62.3606797749979, 4]]
+  - e: { edge: { curve: curve } }
+  - w: { wire: { edges: [e] } }
+  - f: { face: { wire: w } }
+  - p: { extrude: { profile: f, by: [0, 0, 10] } }
+  - top: { select: { of: p, face: [10.37431446620745, 8.944290093358244, 10] } }
+  - result: { thick_solid: { shape: p, faces: [top], thickness: -1 } }
+  - closed: { thick_solid: { shape: p, faces: [], thickness: -1 } }
+checks:
+  - volume: p
+    eq: 2603.4330
+    rel: 1.0e-6
+  - valid: result
+  - volume: result
+    eq: "2603.4330 - 188.70344*9"
+    rel: 1.0e-5
+  - valid: closed
+  - volume: closed
+    eq: "2603.4330 - 188.70344*8"
+    rel: 1.0e-5

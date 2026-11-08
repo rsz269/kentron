@@ -52,7 +52,11 @@ pub fn planar_wire(model: &mut Model, wire: Shape, distance: f64, join: Join) ->
     }
     let raw = raw_contour(&path, side_distance, tolerance, join);
     let loops = trim(&raw, &path, side_distance.abs(), tolerance);
-    let loops: Vec<Vec<Piece>> = if join == Join::Intersection { loops.into_iter().map(join_collinear).collect() } else { loops };
+    // (Not the loops enclosing nothing: where the offset's pieces touch along a stretch, as an
+    // outline's notch offset inwards just to the opposite side, the stretch between them, run
+    // there and back.)
+    let loops = loops.into_iter().filter(|l| signed_area(l).abs() > tolerance * scale);
+    let loops: Vec<Vec<Piece>> = if join == Join::Intersection { loops.map(join_collinear).collect() } else { loops.collect() };
     build(model, &plane, &loops)
 }
 
