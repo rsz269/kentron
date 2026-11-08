@@ -58,6 +58,42 @@ their faces can come out split into thin slivers near the corners of the cavity.
   planar sheet past its face. Neither changed anything.
 - **Matters because:** selectors such as `faces(">Z")` on the result can pick up slivers.
 
+## Features
+
+### Extruding up to a curved face that not every ray meets
+
+*Found 2026-11-08 (`anniedoris_synthetic_cadquery/docs_examples/example24.py`).*
+
+`cutBlind(face)` / `extrude(face)` up to a curved face (pykentron's `Solid.dprism`) splits
+the profile's prism, extruded far, by the face's whole surface, and keeps the piece touching
+the profile. Where some of the profile's rays miss the face, that piece runs on along them
+for the whole length, cutting whatever it passes. OCCT cuts only along the rays that meet
+the face (the face itself, as trimmed), up to it, and leaves the others alone.
+
+- **Repro:** example24: a slot 2 wide from z −3 to 7 at x = 6, cut up to the spherical
+  cavity's face (r 5, trimmed at the box's top, z = 3). kentron removes 41.35 (through the
+  shaft above the box), CadQuery 15.43.
+- **Evidence:** a Monte Carlo count of the solid's points along the slot's rays that meet
+  the face, between x = 6 and it, gives 15.54 ± 0.09.
+- **Needed:** the face's shadow on the profile's plane (its edges' projections and its
+  silhouette), to keep only the rays meeting it; a face that rays cross twice (as here, a
+  sphere) rules out sweeping the face back instead.
+
+### Removing all the fillets of a rounded box
+
+*Found 2026-11-06 (usd-brep's `TestSmRemoveFilletNurbsPlanes`, the `expect: not_done` case
+`usd_brep::cpp_fillets::remove_fillets_of_a_nurbs_box`).*
+
+`defeature::remove_faces` of every fillet of a box rounded on all its edges leaves no faces,
+where SMLib, OCCT and sampling all give the box back.
+
+- **Cause:** all the fillets are one feature, connected at the corners, and `defeature.rs`
+  carries the faces round a feature over it as cells: with the feature everywhere, there is
+  nothing round it to carry.
+- **Needed:** removing a feature that surrounds the faces it should extend.
+
+## Booleans
+
 ### Gyroid lattice cells meeting at a corner
 
 *Found 2026-11-08.*
@@ -77,8 +113,6 @@ the union leaves an edge 3.5e-5 long used by seven faces.
   first two plates' common part at 0.0024 ± 0.0004, not 0.18.
 - **Needed:** coincidence handling for several faces within tolerance of one another at a
   point.
-
-## Booleans
 
 ### Sweeps along separately fitted copies of one curve
 
@@ -117,7 +151,7 @@ knurled cap is cut to 252 of volume, invalid, against CadQuery's 4804.
 
 ### Section edges under-report their tolerance
 
-*Found 2026-10-23.*
+*Found 2026-10-23; not re-checked since (bug32945 still passes as it stands).*
 
 Fitted B-spline section curves stray from their surfaces between fit points by more than
 the tolerance recorded for them (the teapot spout: 5.75e-7 against 1e-7), so a later
@@ -126,3 +160,19 @@ boolean may not find them on the surface.
 - **Tried:** recording the true deviation by dense sampling. It is correct, but it fails
   OCCT's tolerance checks in bug32945 and buc60555_1, whose real gaps are larger.
 - **Needed:** tighter section fitting, so that the true deviation is small.
+
+## pykentron
+
+### Solids from placed shells keep copies of their faces
+
+*Found 2026-11-08 (CadQuery's `tests/test_free_functions.py::test_solid`, the one test of
+its suite in `crates/pykentron/tests/cadquery_baseline.txt`).*
+
+`solid(faces, inner_faces, history=...)` with inner faces of placed shells (boxes `moved` to
+two places): the history's images do not include the solid's faces from the inner shells,
+because those faces are copies, not the inputs.
+
+- **Cause:** kentron's solids hold their shells unplaced (`make_solid` copies a placed shell),
+  where OCCT's hold placed ones, so its solid's faces are the placed inputs themselves.
+- **Needed:** placed shells in solids (a core invariant of the model), or a history whose
+  images are not the inputs' own faces. Not worth it for this alone.
