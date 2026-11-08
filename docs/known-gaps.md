@@ -38,37 +38,6 @@ every mixed corner of that solid.
 - **Not affected:** planar L-shapes and other convex/concave corners without a saddle
   vertex match CadQuery exactly.
 
-### Run-over fillet round a hole whose rim narrows in places
-
-*Found 2026-11-08.*
-
-A fillet round a closed edge whose ball runs off a narrow face onto the face beyond only
-in some stretches falls back to a plain torus all the way round, which cuts too deep there.
-
-- **Repro:** gridfinity-cadquery's `examples/tube_holders.py`, `tube_holder(77)`: a 77.25
-  hole through a 2×2 gridfinity block with its lip, the hole's bottom edge filleted by 2,
-  then its top edge (a circle of radius 38.625 at z 16.25) by 1. The flat rim round the hole
-  is only 0.279 wide (r 38.625 to 38.904) about the points facing the block's sides, and
-  less than the radius over |y| < 7.6 (and the same about x = 0); beyond it the lip rises
-  at 45°.
-- **Evidence:** the result's area is 0.2% off CadQuery's. A rolling-ball reference (the
-  morphological opening by radius 1 of the solid before that fillet, voxels of 0.04,
-  compared at |y| < 0.5 round (39, 0, 16)) finds CadQuery right everywhere (0 voxels
-  wrong) and kentron short by 0.101 of volume around (38.94, 0, 16.02). There the ball
-  must rest on the cylinder and the lip's slope, its centre at z 15.557. Kentron's torus
-  has it at 15.25. CadQuery builds B-spline faces over those stretches.
-- **Cause, as far as found:** `runover::needed` tells that the ball runs off (rightly).
-  `runover::fillet` then fails: `directly` fails first, then `by_booleans` gives "a
-  run-over fillet whose pieces leave the shell open". The sewn shell, of 512 faces, is
-  open along the rim's outer edge (x = 38.90355 and its turns) and along the lens's
-  contacts and ends (e.g. from (38.625, 0, 15.557) to (38.918, 0, 16.264)) in all four
-  narrow stretches. So the wedge's cut and the trimmed lens do not meet edge to edge where
-  the contact passes from the rim onto the slope. Moving the circle's seam out of the
-  narrow stretch (the solid turned 45°) fails the same way.
-- **Next:** in `by_booleans`, compare the cut's faces with the lens's along the stretch
-  where the contact moves from the rim plane onto the slope (the lens's ends at the
-  switch, and the rim plane's piece the wedge leaves).
-
 ## Offsets and shells
 
 ### Sliver faces in shells found by distance

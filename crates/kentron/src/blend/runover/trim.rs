@@ -202,7 +202,16 @@ pub(super) fn build(model: &mut Model, shape: Shape, edge: Shape, sections: &[Se
         for k in 0..2 {
             let p = secs[stretches[i].0].contacts[k];
             let (before, after) = (support_of((i + count - 1) % count)[k], support_of(i)[k]);
-            let on_edge = if before != after || before.1.is_some() || after.1.is_some() {
+            // (Where the ball rolls over an edge on either side of the switch, on that edge:
+            // the switch, found by secants, may leave the contact a little off it, onto the
+            // face beyond, farther than `near`.)
+            let rolled_over = [after, before].into_iter().find_map(|(f, r)| r.map(|r| (f, r)));
+            let on_edge = if let Some((f, r)) = rolled_over {
+                let face = &sides[k].0[f];
+                let (curve, a, b) = &face.edges[r];
+                let foot = nearest_on_curve(p, curve, *a, *b);
+                (foot.distance <= 1e3 * near).then_some((face.edge_shapes[r], foot.parameter))
+            } else if before != after {
                 sides[k].0.iter().flat_map(|f| f.edges.iter().zip(&f.edge_shapes)).find_map(|((curve, a, b), &e)| {
                     let foot = nearest_on_curve(p, curve, *a, *b);
                     (foot.distance <= near).then_some((e, foot.parameter))

@@ -4230,6 +4230,31 @@ mod tests {
         }
     }
 
+    /// The top of a 77.25 hole through a gridfinity block (a slab of it, z 12 to 20): the flat
+    /// rim round the hole is narrower than the fillet (R 1) about the points facing the
+    /// block's sides (0.279 wide there, at r 38.625 to 38.904), where the ball rolls over the
+    /// rim's edge onto the lip's 45° slope and back. The switches onto and off that edge are
+    /// found by secants, a little off it: the edge split there all the same. OCCT's result
+    /// encloses 11988.3423; a torus all round (the ball held on the rim's plane) about 5.4
+    /// less. Both kentron's and OCCT's agree with a brute-force rolling ball (voxels of 0.03).
+    #[test]
+    fn a_fillet_round_a_hole_rolls_onto_a_slope_where_the_rim_narrows() {
+        use crate::geometry::curve::Curve;
+        let mut model = Model::new();
+        let body = crate::io::brep::read(&mut model, &mut include_str!("tests/narrowing_rim_round_a_hole.brep").as_bytes()).unwrap();
+        let edges: Vec<Shape> = model
+            .unique_subshapes(body, NodeKind::Edge)
+            .into_iter()
+            .filter(|&e| matches!(model.edge_curve(e), Some((Curve::Circle(c), _, _)) if (c.radius() - 38.625).abs() < 1e-6 && (c.frame().origin().z - 16.25).abs() < 1e-6))
+            .collect();
+        assert_eq!(edges.len(), 1);
+        let result = fillet(&mut model, body, &edges, 1.0).unwrap();
+        let report = validity::check(&model, result);
+        assert!(report.is_valid(), "{report:?}");
+        let volume = properties::volume(&model, result).mass;
+        assert!((volume - 11988.3423).abs() < 1e-5 * 11988.3423, "{volume}");
+    }
+
     /// A ring's top rim (a circle, rounded R 1) going on round the end of a tab's top fillet
     /// (R 2.2) into the edge where that fillet meets the ring (a short B-spline), then up the
     /// fillet's end (an ellipse): the edges go on into one another tangent, but the fillets'
