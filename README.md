@@ -17,9 +17,8 @@ eating up 1 GB+ of memory, so I figured why not spin up my own kernel.
 kentron models solids the way Open CASCADE Technology (OCCT) does: as faces bounded by
 edges and vertices, over exact curves and surfaces (analytic and NURBS). It covers
 primitives, extrusions and revolutions, lofts and pipes, booleans, fillets, chamfers,
-drafts, offsets and thick solids, removing features, sewing and healing, meshing, text from
-TrueType and OpenType
-fonts, and BRep, STEP and STL files. All of
+drafts, offsets and thick solids, filling surfaces, removing features, sewing and healing,
+meshing, text from TrueType and OpenType fonts, and BRep, STEP and STL files. All of
 it is kentron's own code: OCCT is the reference to match, not a dependency.
 
 - **[`crates/kentron`](crates/kentron)**: the kernel, [on crates.io](https://crates.io/crates/kentron). Pure
@@ -46,10 +45,9 @@ it is kentron's own code: OCCT is the reference to match, not a dependency.
 - **Currently out of scope:** OCCT's visualization, hidden-line removal, OCAF/XDE documents
   and its internal bookkeeping.
 
-It is pre-1.0. Some OCCT features are still missing, for example sweeps with several
-sections of different shapes, evolved solids, and fillets at saddle corners (three concave
-and three convex edges at one vertex). Some rare pathological
-cases may still run very slowly or fail to converge. The larger known gaps, with what was
+It is pre-1.0. Some OCCT features are still missing, for example evolved solids and fillets
+at saddle corners (three concave and three convex edges at one vertex). Some rare
+pathological cases may still run very slowly or fail to converge. The larger known gaps, with what was
 found and tried, are logged in [`docs/known-gaps.md`](docs/known-gaps.md).
 
 ## How it was made
@@ -92,15 +90,14 @@ conversation's context, read back from the cache).
   it then built alike, it took 231 s in all against CadQuery's 1,099 s, and was faster on 663.
   The scripts, what they found and where they stand:
   [`crates/pykentron/tests/found`](crates/pykentron/tests/found/README.md).
+- **kentron's and pykentron's own tests:** 433 unit tests written during kentron's
+  development, and 58 cases of pykentron's own that it builds as CadQuery does
+  ([`crates/pykentron/tests/test_against_cadquery.py`](crates/pykentron/tests/test_against_cadquery.py)).
 
-About 12,800 tests run (with OCCT's dataset). About 1,500 of them are known gaps, marked as
+About 13,200 tests run (with OCCT's dataset). About 800 of them are known gaps, marked as
 expected failures ([`crates/occt-tests/expected_failures.txt`](crates/occt-tests/expected_failures.txt) for OCCT's scripts): they pass
 while they fail, so `cargo test` is green, and fail once they pass, so a fix is noticed
 as surely as a regression.
-
-kentron also has 411 unit tests of its own, written during its development, and pykentron
-55 cases of its own that it builds as CadQuery does
-([`crates/pykentron/tests/test_against_cadquery.py`](crates/pykentron/tests/test_against_cadquery.py)).
 
 ## Performance
 
@@ -147,11 +144,14 @@ An existing CadQuery script runs unchanged with `pykentron-run script.py`, or af
   older x86-64 CPU, build with an empty `RUSTFLAGS=`.
 - `cargo test` runs everything. Most of OCCT's converted tests read its test dataset, an
   external download: see [`crates/occt-tests/README.md`](crates/occt-tests/README.md). Without it those tests fail.
-- [`tools/run_tests.py`](tools/run_tests.py) runs the same tests with every test binary at once (about 40 s on 16
-  threads, against about 53 s for `cargo test --release`, which runs them one after
-  another; the slowest tests expected to fail take most of it). `--quick` leaves out the
-  tests expected to fail (about 18 s); a fix that makes one pass
-  then goes unnoticed.
+- [`tools/run_tests.py`](tools/run_tests.py) runs the same tests with every test binary at once (about 60 s on 16
+  threads, against about 120 s for `cargo test --release`, which runs them one after
+  another). `--quick` leaves out the tests expected to fail (about 30 s); a fix that makes
+  one pass then goes unnoticed.
+- [`tools/brute.py`](tools/brute.py) computes reference answers by slow, simple means
+  (volumes and areas from fine meshes, boolean results' faces classified against the
+  operands, fillets as rolling balls on a voxel grid), to judge where kentron and OCCT
+  disagree.
 - pykentron from source: `python3 crates/pykentron/build.py` (see
   [`crates/pykentron/README.md`](crates/pykentron/README.md)).
 
