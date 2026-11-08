@@ -1526,6 +1526,46 @@ impl Section {
         })
     }
 
+    /// `points` (a traced section's samples, at `params`) with more of the section's points
+    /// between them about the samples at `turns`, where they turn sharply: 32 to each
+    /// interval next to such a turn, 8 to the next on either side and 2 to the one after
+    /// (other than the first and the last).
+    /// Where two surfaces touch, their section can turn there within a sample (from one of
+    /// the branches crossing there to the other, or back at the tip of a hairpin): fitted
+    /// smoothly through the samples it overshoots the turn or cuts it short, and where it
+    /// ran along a face's edge (two faces a hundred-millionth apart, all but coinciding)
+    /// leaves the face, its pcurve crossing the face's boundary.
+    fn densified_at_turns(&self, points: &[Point], params: &[f64], turns: &[usize], spacing: f64) -> (Vec<Point>, Vec<f64>) {
+        let last = points.len() - 1;
+        // Each interval's share: the most any turn near it asks for.
+        let mut shares = vec![1usize; last];
+        for &i in turns {
+            for (reach, share) in [(1usize, 32usize), (2, 8), (3, 2)] {
+                for interval in [i.checked_sub(reach), (i + reach - 1 < last).then_some(i + reach - 1)].into_iter().flatten() {
+                    shares[interval] = shares[interval].max(share);
+                }
+            }
+        }
+        let (mut out, mut out_params) = (vec![points[0]], vec![params[0]]);
+        for (k, &share) in shares.iter().enumerate() {
+            // (Nor about the end vertices, see `sharp_turns`.)
+            let share = if k == 0 || k + 1 == last { 1 } else { share };
+            for j in 1..share {
+                let t = params[k] + (params[k + 1] - params[k]) * j as f64 / share as f64;
+                let p = self.point(t);
+                // (Only points advancing along the interval, apart from those before.)
+                let way = points[k + 1] - points[k];
+                if (p - *out.last().expect("a point")).dot(way) > 0.0 && out.last().expect("a point").distance(p) > spacing && p.distance(points[k + 1]) > spacing {
+                    out.push(p);
+                    out_params.push(t);
+                }
+            }
+            out.push(points[k + 1]);
+            out_params.push(params[k + 1]);
+        }
+        (out, out_params)
+    }
+
     fn edge_curve(&self, t0: f64, t1: f64, a: Point, b: Point) -> (Curve, f64, f64) {
         match self {
             Section::Open(c, ..) | Section::Closed(c, _) => (c.clone(), t0, t1),
@@ -1577,6 +1617,11 @@ impl Section {
                             }
                         }
                         (kept, kept_params) = (points, ts);
+                    }
+                    // (A traced section's samples turning sharply: more of its points taken
+                    // about each such turn, see `densified_at_turns`.)
+                    if let (Section::Sampled(..), Some(turns)) = (self, sharp_turns(&kept)) {
+                        (kept, kept_params) = self.densified_at_turns(&kept, &kept_params, &turns, spacing);
                     }
                     // (Straight from end to end where nothing else can be: a section all but a
                     // point, its ends maybe one.)
@@ -1647,6 +1692,20 @@ impl Section {
             }
         }
     }
+}
+
+/// The samples among `points` where they turn sharply, by more than 20 degrees from one to
+/// the next (a smooth section's samples, a few dozen at least, turn by a few degrees), if any,
+/// apart from the first two and the last two.
+fn sharp_turns(points: &[Point]) -> Option<Vec<usize>> {
+    let sharp = |i: usize| {
+        let (before, after) = (points[i] - points[i - 1], points[i + 1] - points[i]);
+        before.dot(after) < 20f64.to_radians().cos() * before.length() * after.length()
+    };
+    // (Not next to the ends: the end points are the vertices the section was merged into,
+    // which may lie off it, its last stretch then turning to meet them.)
+    let turns: Vec<usize> = (2..points.len().saturating_sub(2)).filter(|&i| sharp(i)).collect();
+    (!turns.is_empty()).then_some(turns)
 }
 
 /// The curves where two faces' surfaces meet; lines are restricted to the faces' boxes,
@@ -4255,4 +4314,20 @@ fn edge_crossings(e1: &Edge, e2: &Edge, tolerance: f64) -> Vec<(f64, f64)> {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Samples running along a line and turning up from it: the turn found (and none among a
+    /// circle's samples, 48 of them).
+    #[test]
+    fn samples_turning_sharply() {
+        let mut points: Vec<Point> = (0..=40).map(|i| Point::new(0.0125 * i as f64, 0.0, 2e-6)).collect();
+        points.extend((1..=8).map(|k| Point::new(0.5 + 0.001 * k as f64, 0.0, 2e-6 + 0.0125 * k as f64)));
+        assert_eq!(sharp_turns(&points), Some(vec![40]));
+        let circle: Vec<Point> = (0..48).map(|i| Point::new((i as f64 * TAU / 48.0).cos(), (i as f64 * TAU / 48.0).sin(), 0.0)).collect();
+        assert_eq!(sharp_turns(&circle), None);
+    }
 }

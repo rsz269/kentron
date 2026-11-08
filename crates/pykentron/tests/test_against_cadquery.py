@@ -490,6 +490,52 @@ def test_found_script_same_as_cadquery(item):
             assert math.isclose(got, expected, rel_tol=1e-3, abs_tol=1e-6), f"{key}: {got} != {expected}"
 
 
+# (After LatticeQuery's gyroid lattice, lq/topologies/gyroid.py, by its authors, Apache-2.0:
+# a plate of gyroid in the first octant of a cell, thickened both ways, and its copies.)
+GYROID_PLATES = """
+import cadquery as cq
+T, U, h, d = 0.1, 10.0, 5.0, 1e-8
+def plate(thickness):
+    ends = [((0.5, 0.5), (0.25, 0.0), (0.5, -0.5)), ((-0.5, -0.5), (0.0, -0.25), (0.5, -0.5)), ((-0.5, -0.5), (0.0, -0.25), (0.5, -0.5)),
+            ((-0.5, -0.5), (-0.25, 0.0), (-0.5, 0.5)), ((0.5, 0.5), (0.0, 0.25), (-0.5, 0.5)), ((0.5, 0.5), (0.0, 0.25), (-0.5, 0.5))]
+    wire = None
+    for points, plane, offset in zip(ends, ["XZ", "XY", "YZ", "XZ", "YZ", "XY"], [-1, 1, 1, 1, -1, -1]):
+        edge = cq.Workplane(plane).workplane(offset=-offset * h).spline([(x * U, y * U) for x, y in points])
+        wire = edge if wire is None else wire.add(edge)
+    face = cq.Workplane("XY").interpPlate(wire, [(0, 0, 0)], 0).val()
+    both = cq.Workplane("XY").add(face.thicken(0.5 * thickness)).union(cq.Workplane("XY").add(face.thicken(-0.5 * thickness)))
+    return cq.Workplane("XY").add(both.val().translate(cq.Vector(h, h, h)))
+g000 = plate(T)
+g100 = g000.mirror(mirrorPlane="ZY", basePointVector=(U, 0, 0)).mirror(mirrorPlane="XZ", basePointVector=(0, h, 0))
+g110 = plate(-T).mirror(mirrorPlane="XZ", basePointVector=(0, U, 0)).translate((U, 0, 0))
+g010 = g110.mirror(mirrorPlane="YZ", basePointVector=(U, 0, 0)).mirror(mirrorPlane="XZ", basePointVector=(0, 1.5 * U, 0))
+g011 = g100.translate((-(1 + d) * U, (1 + d) * U, (1 + d) * U))
+g111 = g000.translate(((1 + d) * U, (1 + d) * U, (1 + d) * U))
+for a, b in [(g010, g011), (g110, g111)]:
+    u = a.union(b).val()
+    print(u.isValid(), u.Volume(), a.val().Volume() + b.val().Volume())
+"""
+
+
+def test_gyroid_plates_a_hundred_millionth_apart():
+    """Two plates of a gyroid lattice, in cells a hundred-millionth apart: their side faces all
+    but coincide along the cell's face and part where the plates' surfaces touch. Their
+    sections there, fitted smoothly across the turn they take, once left the faces (the faces'
+    boundaries crossing themselves). Measured against the plates' own volumes: CadQuery's union
+    of them loses a ninth of a cubic unit (as its union of the first two plates, which a
+    brute-force count of points in both plates puts at 0.0024 +- 0.0004 in common, not 0.18)."""
+    import subprocess
+
+    here = Path(__file__).resolve().parent
+    run = "import sys; sys.path[:0] = [%r]; import pykentron.shim\n" % str(here.parent / "python") + GYROID_PLATES
+    done = subprocess.run([sys.executable, "-c", run], capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr[-2000:]
+    for line in done.stdout.split("\n")[-3:-1]:
+        valid, union, plates = line.split()
+        assert valid == "True", line
+        assert 0 <= float(plates) - float(union) < 1e-3, line
+
+
 def _gltf_scene(path):
     """A glTF file's nodes (name, translation, rotation), materials' colours, and the volume
     its meshes enclose, placed."""
@@ -732,5 +778,11 @@ if __name__ == "__main__":
         except Exception as e:
             failed += 1
             print(f"FAILED  solved {name}: {type(e).__name__}: {e}")
-    print(f"{len(CASES) + len(FOUND) + 2 + len(SOLVES) - failed} passed, {failed} failed")
+    try:
+        test_gyroid_plates_a_hundred_millionth_apart()
+        print("ok      gyroid_plates_a_hundred_millionth_apart")
+    except Exception as e:
+        failed += 1
+        print(f"FAILED  gyroid_plates_a_hundred_millionth_apart: {type(e).__name__}: {str(e)[:300]}")
+    print(f"{len(CASES) + len(FOUND) + 3 + len(SOLVES) - failed} passed, {failed} failed")
     sys.exit(1 if failed else 0)
