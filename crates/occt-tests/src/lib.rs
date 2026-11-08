@@ -21,3 +21,12 @@ static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
 pub fn skip_expected_failures() -> bool {
     std::env::var("KENTRON_SKIP_EXPECTED_FAILURES").is_ok_and(|v| v != "0")
 }
+
+/// The tests to run, if only some: with `KENTRON_TEST_LIST` naming a file of test names (one a
+/// line), as `tools/run_tests.py --only` gives the custom harnesses (their runner takes a
+/// single filter); the others are left out, as filtered out.
+pub fn test_list() -> Option<std::collections::HashSet<String>> {
+    let file = std::env::var_os("KENTRON_TEST_LIST")?;
+    let text = std::fs::read_to_string(&file).unwrap_or_else(|e| panic!("KENTRON_TEST_LIST {file:?}: {e}"));
+    Some(text.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect())
+}

@@ -69,6 +69,9 @@ fn main() {
         // (A stable sort: cases without a time keep their order, after the timed ones.)
         trials.sort_by(|a, b| seconds.get(b.name()).unwrap_or(&0.0).total_cmp(seconds.get(a.name()).unwrap_or(&0.0)));
     }
+    if let Some(list) = occt_tests::test_list() {
+        trials.retain(|t| list.contains(t.name()));
+    }
     libtest_mimic::run(&args, trials).exit();
 }
 

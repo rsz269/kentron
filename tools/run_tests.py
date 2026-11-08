@@ -4,10 +4,15 @@ and of occt-tests at once, rather than one after another as `cargo test` runs th
 slowest tests would otherwise leave most cores idle), with any other commands given
 alongside.
 
-Usage: tools/run_tests.py [--quick] [--log FILE] [--also COMMAND]... [--before COMMAND]...
+Usage: tools/run_tests.py [--quick] [--only LIST] [--log FILE] [--also COMMAND]... [--before COMMAND]...
 
 - `--quick` leaves out the OCCT tests expected to fail (`KENTRON_SKIP_EXPECTED_FAILURES`):
   about a third of the work, but a test starting to pass goes unnoticed.
+
+- `--only LIST` runs only the tests a file names, one a line, each as `<binary's source>::<test>`
+  (`unittests src/lib.rs::geometry::fit::tests::...`, `tests/cases.rs::occt::...`): a
+  representative subset for routine runs (the fast gate's); binaries with none of them are
+  not run.
 
 - The binaries' outputs are joined into one log (default target/test-run.log) in the order
   and with the `Running <source> (<binary>)` headers that `cargo test` prints.
@@ -34,6 +39,7 @@ TIMES = ROOT / "target" / "case-times.txt"
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--quick", action="store_true", help="leave out the tests expected to fail")
+ap.add_argument("--only", help="a file of the tests to run (<binary's source>::<test> a line)")
 ap.add_argument("--log", default=str(ROOT / "target" / "test-run.log"))
 ap.add_argument("--also", action="append", default=[], help="a shell command run alongside the tests")
 ap.add_argument("--before", action="append", default=[], help="a shell command run after the build, before the tests")
@@ -73,9 +79,32 @@ if args.quick:
     env["KENTRON_SKIP_EXPECTED_FAILURES"] = "1"
 
 
+# (With --only, each binary's tests from the list: the custom harnesses, whose runner takes a
+# single filter, read them from a file named by KENTRON_TEST_LIST; the others take them as
+# exact filters.)
+only = None
+if args.only:
+    only = {}
+    for line in Path(args.only).read_text().splitlines():
+        for source, *_ in binaries:
+            if line.startswith(source + "::"):
+                only.setdefault(source, []).append(line[len(source) + 2:])
+                break
+    binaries = [b for b in binaries if b[0] in only]
+CUSTOM = ("tests/cases.rs", "tests/draw_tcl.rs")
+
+
 def run_binary(entry):
     source, executable, cwd = entry
-    done = subprocess.run([executable], cwd=cwd, env=env, capture_output=True, text=True)
+    command, run_env = [executable], env
+    if only is not None:
+        if source in CUSTOM:
+            listed = ROOT / "target" / f"only-{Path(source).stem}.txt"
+            listed.write_text("".join(n + "\n" for n in only[source]))
+            run_env = dict(env, KENTRON_TEST_LIST=str(listed))
+        else:
+            command += ["--exact", *only[source]]
+    done = subprocess.run(command, cwd=cwd, env=run_env, capture_output=True, text=True)
     return entry, done.returncode, done.stdout + done.stderr
 
 

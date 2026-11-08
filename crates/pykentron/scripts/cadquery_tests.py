@@ -10,7 +10,10 @@ test OCCT's own way of doing things rather than CadQuery's behaviour are left ou
 (`crates/pykentron/tests/cadquery_excluded.txt`, each with its reason).
 
 Usage:
-    python3 crates/pykentron/scripts/cadquery_tests.py [--update-baseline] [pytest arguments...]
+    python3 crates/pykentron/scripts/cadquery_tests.py [--update-baseline] [--only FILE] [pytest arguments...]
+
+`--only FILE` runs only the tests a file names (as JUnit and the baseline name them, one a
+line): a representative subset for routine runs.
 
 Build the extension first (`python3 crates/pykentron/build.py`).
 """
@@ -103,6 +106,7 @@ def main() -> int:
     ap.add_argument("--cache", default=str(ROOT / "target" / "cadquery-tests"), help="where sources and the environment are kept")
     ap.add_argument("--update-baseline", action="store_true", help="record this run's failures as the baseline")
     ap.add_argument("--timeout", type=int, default=120, help="seconds per test")
+    ap.add_argument("--only", help="a file of the tests to run (as JUnit names them, one a line)")
     ap.add_argument("--jobs", type=int, default=max(1, (os.cpu_count() or 2) // 2), help="tests run at once (pytest-xdist workers; 1 runs them in turn)")
     args, pytest_args = ap.parse_known_args()
 
@@ -120,11 +124,15 @@ def main() -> int:
         if (src / f).exists():
             shutil.copy(src / f, suite / f)
 
+    only = [node_id(l.strip()) for l in Path(args.only).read_text().splitlines() if l.strip()] if args.only else []
+    if args.only and args.update_baseline:
+        print("--update-baseline needs every test run, not --only's", file=sys.stderr)
+        return 2
     junit = cache / "junit.xml"
     junit.unlink(missing_ok=True)
     env = dict(os.environ)
     env["PYTHONPATH"] = os.pathsep.join([str(PYKENTRON / "python" / "pykentron" / "cadquery_shim"), str(PYKENTRON / "python")])
-    cmd = [str(python), "-m", "pytest", "tests", "-q", "-p", "no:cacheprovider", "--continue-on-collection-errors", f"--timeout={args.timeout}", f"--junitxml={junit}", "-o", "junit_family=xunit1", *(["-n", str(args.jobs)] if args.jobs > 1 else []), *[f"--deselect={node_id(t)}" for t in excluded()], *pytest_args]
+    cmd = [str(python), "-m", "pytest", *([] if only else ["tests"]), "-q", "-p", "no:cacheprovider", "--continue-on-collection-errors", f"--timeout={args.timeout}", f"--junitxml={junit}", "-o", "junit_family=xunit1", *(["-n", str(args.jobs)] if args.jobs > 1 else []), *[f"--deselect={node_id(t)}" for t in excluded()], *pytest_args, *only]
     print("+", " ".join(cmd), file=sys.stderr)
     subprocess.run(cmd, cwd=suite, env=env)
     if not junit.exists():

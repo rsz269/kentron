@@ -64,6 +64,9 @@ fn main() {
         });
         trials.push(trial.with_ignored_flag(ignored));
     }
+    if let Some(list) = occt_tests::test_list() {
+        trials.retain(|t| list.contains(t.name()));
+    }
     libtest_mimic::run(&args, trials).exit();
 }
 
