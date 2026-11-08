@@ -34,6 +34,8 @@ pub struct Session {
     pub log: Vec<String>,
     /// Directories `source` looks in (after the path as given).
     pub source_dirs: Vec<PathBuf>,
+    /// The file being run (`info script`).
+    pub script: String,
     /// A data file found missing.
     pub missing: Option<String>,
     /// The OCCT TODOs the script declares (`puts "TODO id platforms: message"`) that apply.
@@ -92,6 +94,14 @@ fn execute(name: &str, interp: &mut Interp<Session>, argv: &[Value]) -> MoltResu
             }
         })
         .collect();
+    // (`DT_ApplySeq result shape file sequence` reads its resource file from the directory
+    // `env(CSF_<file>Defaults)` names: the path passed on in place of the file's name.)
+    let mut resolved = resolved;
+    if name == "DT_ApplySeq" && resolved.len() == 4 {
+        if let Ok(dir) = interp.eval(&format!("set env(CSF_{}Defaults)", resolved[2])) {
+            resolved[2] = Path::new(dir.as_str()).join(&resolved[2]).to_string_lossy().to_string();
+        }
+    }
     let args: Vec<&str> = resolved.iter().map(String::as_str).collect();
     let ran = run_draw_command(interp, name, &args);
     // The DRAW variables made are Tcl variables (global) too.
@@ -230,7 +240,8 @@ fn extra(name: &str, interp: &mut Interp<Session>, argv: &[Value]) -> Option<Mol
                 .filter(|f| f.starts_with(sub.as_str()))
                 .collect::<Vec<_>>();
             match full[..] {
-                ["script"] => molt_ok!(),
+                // (The file being run, as Tcl's.)
+                ["script"] => molt_ok!(interp.context_mut().script.clone()),
                 ["hostname"] => molt_ok!("localhost"),
                 ["patchlevel"] => molt_ok!("8.6.13"),
                 ["tclversion"] => molt_ok!("8.6"),
@@ -302,6 +313,27 @@ fn extra(name: &str, interp: &mut Interp<Session>, argv: &[Value]) -> Option<Mol
                             t += &format!("   {} : {} {}\n", i + 1, k, m);
                         }
                         t
+                    }
+                    // (Other surfaces: OCCT's name of their kind first, as it prints them.)
+                    O::Surface(surface) => {
+                        use kentron::geometry::surface::Surface as S;
+                        let name = match surface {
+                            S::Plane(_) => "Plane",
+                            S::Cylinder(_) => "CylindricalSurface",
+                            S::Cone(_) => "ConicalSurface",
+                            S::Sphere(_) => "SphericalSurface",
+                            S::Torus(_) => "ToroidalSurface",
+                            S::Revolution(_) => "SurfaceOfRevolution",
+                            S::Extrusion(_) => "SurfaceOfLinearExtrusion",
+                            S::BSpline(_) => "BSplineSurface",
+                            S::Bezier(_) => "BezierSurface",
+                            S::Trimmed(_) => "RectangularTrimmedSurface",
+                            S::Offset(_) => "OffsetSurface",
+                            #[allow(unreachable_patterns)]
+                            _ => "Surface",
+                        };
+                        // (No braces: scripts read it as a Tcl list.)
+                        format!("{name}\n{}\n", format!("{surface:?}").replace('{', "(").replace('}', ")"))
                     }
                     other => format!("{other:?}\n"),
                 };
@@ -920,6 +952,7 @@ pub fn run_script(tests: &Path, group: &str, grid: &str, case: &str) -> Outcome 
         exited: false,
         explodes: 0,
         selectors: selectors(group, grid, case),
+        script: String::new(),
     };
     let set = CommandSet::new(execute, command_type, &[], &[]);
     let mut interp = InterpBuilder::new(session, set).standard_library(StandardLibrary::Full).environment(true).build();
@@ -948,6 +981,7 @@ pub fn run_script(tests: &Path, group: &str, grid: &str, case: &str) -> Outcome 
     let mut errors = Vec::new();
     for f in files {
         let Ok(text) = std::fs::read_to_string(&f) else { continue };
+        interp.context_mut().script = f.to_string_lossy().to_string();
         if let Err(e) = interp.eval(&text) {
             if e.code() != ResultCode::Return {
                 errors.push(e.value().as_str().to_string());

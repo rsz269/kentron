@@ -5,8 +5,9 @@
 //! all that is wrong: tolerances grow to cover the gaps between edges' curves and their
 //! curves on faces, and between vertices and the curves and surfaces they lie on (within
 //! a limit), and solids turned inside out are turned back. [`convert_to_bspline`],
-//! [`split_closed_faces`] and [`split_by_angle`] reshape faces (as OCCT's ShapeCustom and
-//! ShapeUpgrade).
+//! [`elementary_to_revolution`], [`surfaces_to_bezier`], [`split_closed_faces`] and
+//! [`split_by_angle`] reshape faces (as OCCT's ShapeCustom and ShapeUpgrade);
+//! [`drop_small_solids`] removes or merges solids (as ShapeFix_FixSmallSolid).
 
 use crate::error::Result;
 use crate::geometry::{ParametricCurve, ParametricSurface};
@@ -780,6 +781,374 @@ pub fn split_at_breaks(model: &mut Model, shape: Shape) -> Result<Shape> {
     Ok(shape)
 }
 
+/// Turns the B-spline surfaces of `shape`'s faces into Bézier patches (in place; returns
+/// `shape`, or for a face divided a shell of its pieces): faces are divided along the
+/// iso-lines of their surfaces' interior knots, and each piece takes the Bézier patch of its
+/// knot span, its pcurves mapped to the patch's parameters (`[0, 1]` each way). Exact: the
+/// patches are the spans of the B-splines.
+#[doc(alias = "ShapeUpgrade_ShapeConvertToBezier")]
+#[doc(alias = "DT_ShapeConvert")]
+pub fn surfaces_to_bezier(model: &mut Model, shape: Shape) -> Result<Shape> {
+    use crate::geometry::surface::BezierSurface;
+    use crate::geometry::curve2::Curve2;
+    use crate::geometry::surface::Surface;
+    let mut shape = shape;
+    // The knots strictly inside a face's range.
+    let inside = |knots: &[f64], lo: f64, hi: f64| -> Vec<f64> {
+        let margin = 1e-9 * (hi - lo).abs().max(1e-300);
+        knots.iter().copied().filter(|&k| k > lo + margin && k < hi - margin).collect()
+    };
+    for face in model.unique_subshapes(shape, NodeKind::Face) {
+        let Some(Surface::BSpline(b)) = model.surface(face).cloned() else { continue };
+        let (u0, u1, v0, v1) = model.face_uv_bounds(face);
+        let (us, vs) = (inside(b.u_knots(), u0, u1), inside(b.v_knots(), v0, v1));
+        if us.is_empty() && vs.is_empty() {
+            continue;
+        }
+        let surface = Surface::BSpline(b);
+        let cuts: Vec<crate::divide::Cut> = us
+            .iter()
+            .map(|&u| crate::divide::Cut::iso(&surface, true, u, v0, v1))
+            .chain(vs.iter().map(|&v| crate::divide::Cut::iso(&surface, false, v, u0, u1)))
+            .collect();
+        let pieces = crate::divide::divide_face(model, face, &cuts)?;
+        // (The edges of the pieces cover their pcurves: an edge divided is checked at other
+        // points of its curve, between which its pcurve may stray beyond its tolerance.)
+        for &piece in &pieces {
+            for coedge in model.unique_subshapes(piece, NodeKind::CoEdge) {
+                let coedge = CoEdgeId::try_from(coedge.node).expect("a coedge");
+                let edge = model[coedge].edge;
+                let needed = 1.01 * pcurve_gap(model, coedge, &surface);
+                if model.tolerance(Shape::from(edge)) < needed {
+                    model.set_edge_tolerance(edge, needed)?;
+                    let (a, b) = model.edge_vertices(Shape::from(edge));
+                    for v in [a, b] {
+                        if model.tolerance(v) < needed {
+                            model.set_vertex_tolerance(VertexId::try_from(v.node).expect("a vertex"), needed)?;
+                        }
+                    }
+                }
+            }
+        }
+        // (A face on its own, divided: a shell of its pieces, as OCCT gives.)
+        if shape.kind() == NodeKind::Face && pieces.len() > 1 {
+            let shell = model.new_empty(NodeKind::Shell);
+            for piece in pieces {
+                model.add(shell, piece)?;
+            }
+            shape = shell;
+            break;
+        }
+    }
+    // (The span of `knots` round `x`.)
+    let span = |knots: &[f64], x: f64| -> (f64, f64) {
+        let below = knots.iter().copied().filter(|&k| k <= x).fold(knots[0], f64::max);
+        let above = knots.iter().copied().filter(|&k| k > x).fold(knots[knots.len() - 1], f64::min);
+        (below, above)
+    };
+    for face in model.unique_subshapes(shape, NodeKind::Face) {
+        let Some(Surface::BSpline(b)) = model.surface(face).cloned() else { continue };
+        let (u0, u1, v0, v1) = model.face_uv_bounds(face);
+        let (a, bu) = span(b.u_knots(), 0.5 * (u0 + u1));
+        let (c, d) = span(b.v_knots(), 0.5 * (v0 + v1));
+        if !(bu > a && d > c) {
+            continue;
+        }
+        let mut piece = b.clone();
+        piece.segment(a, bu, c, d);
+        let poles = piece.poles().to_vec();
+        let patch = match piece.weights() {
+            Some(w) => BezierSurface::rational(poles, w.to_vec()),
+            None => BezierSurface::try_new(poles).ok_or_else(|| crate::error::Error::InvalidInput("a Bézier patch of too high a degree".into()))?,
+        };
+        // The pcurves, as B-splines, mapped from the span to [0, 1] each way.
+        let map = |p: crate::math::Point2| crate::math::Point2::new((p.x - a) / (bu - a), (p.y - c) / (d - c));
+        let mut pcurves = Vec::new();
+        for wire in model.children_local(face).collect::<Vec<_>>() {
+            for c in model.children_local(wire).collect::<Vec<_>>() {
+                let id = CoEdgeId::try_from(c.node).expect("a wire holds coedges");
+                let Some((pcurve, first, last)) = model.effective_pcurve(id) else { continue };
+                let trimmed = Curve2::Trimmed(crate::geometry::curve2::TrimmedCurve2::new(pcurve.clone(), first.min(last), first.max(last)));
+                let spline = match &pcurve {
+                    Curve2::BSpline(s) => s.clone(),
+                    _ => crate::geometry::convert::curve2_to_bspline(&trimmed)
+                        .ok_or_else(|| crate::error::Error::InvalidInput("a pcurve that does not convert to a B-spline".into()))?,
+                };
+                // (Its poles mapped, weights and knots kept: periodic ones too.)
+                let mut mapped = spline.clone();
+                for (i, &p) in spline.poles().iter().enumerate() {
+                    mapped.set_pole(i, map(p));
+                }
+                pcurves.push((id, Curve2::BSpline(mapped), first, last));
+            }
+        }
+        let tolerance = model.tolerance(face);
+        model.set_face_surface(face, Surface::Bezier(patch), tolerance)?;
+        for (id, pcurve, first, last) in pcurves {
+            model.set_pcurve_with_range(id, pcurve, first, last)?;
+        }
+    }
+    Ok(shape)
+}
+
+/// The surface of revolution an elementary surface is (a cylinder, cone, sphere or torus
+/// turned about its axis), parametrized as it is, so that pcurves on it stay as they are;
+/// `None` for others (planes).
+fn as_revolution(surface: &crate::geometry::surface::Surface) -> Option<crate::geometry::surface::Surface> {
+    use crate::geometry::curve::{Circle, Curve, Line};
+    use crate::geometry::surface::{RevolutionSurface, Surface};
+    use crate::math::{Axis, Direction, Frame, Vector};
+    let frame = match surface {
+        Surface::Cylinder(c) => *c.frame(),
+        Surface::Cone(c) => *c.frame(),
+        Surface::Sphere(c) => *c.frame(),
+        Surface::Torus(c) => *c.frame(),
+        _ => return None,
+    };
+    let (o, x, y, z) = (frame.origin(), Vector::from(frame.x()), Vector::from(frame.y()), Vector::from(frame.z()));
+    // (Turned about the axis from x towards y: about -z where the frame is indirect.)
+    let about = if x.cross(y).dot(z) > 0.0 { frame.z() } else { Direction::from_vector(-z) };
+    // The meridian at u = 0: in the plane of the axis and x.
+    let meridian = match surface {
+        Surface::Cylinder(c) => Curve::Line(Line::new(o + x * c.radius(), frame.z())),
+        Surface::Cone(c) => {
+            let (sin, cos) = c.semi_angle_sin_cos();
+            Curve::Line(Line::new(o + x * c.radius(), Direction::from_vector(x * sin + z * cos)))
+        }
+        // (A circle in the plane of x and the axis, from x towards the axis: its frame's
+        // normal x × z.)
+        Surface::Sphere(c) => Curve::Circle(Circle::new(Frame::new(o, Direction::from_vector(x.cross(z)), frame.x()), c.radius())),
+        Surface::Torus(c) => Curve::Circle(Circle::new(Frame::new(o + x * c.major_radius(), Direction::from_vector(x.cross(z)), frame.x()), c.minor_radius())),
+        _ => return None,
+    };
+    let revolution = Surface::Revolution(RevolutionSurface::new(meridian, Axis::new(o, about)));
+    // (Checked: the same points at the same parameters.)
+    let size = match surface {
+        Surface::Torus(c) => c.major_radius() + c.minor_radius(),
+        Surface::Cylinder(c) => c.radius(),
+        Surface::Cone(c) => c.radius(),
+        Surface::Sphere(c) => c.radius(),
+        _ => 1.0,
+    }
+    .max(1.0);
+    let same = [(0.3, 0.2), (1.7, -0.6), (4.0, 0.9), (5.5, 1.3)].iter().all(|&(u, v)| surface.point(u, v).distance(revolution.point(u, v)) <= 1e-9 * size);
+    same.then_some(revolution)
+}
+
+/// Turns the cylinders, cones, spheres and tori of `shape`'s faces into surfaces of
+/// revolution (of their meridians about their axes), in place, as OCCT's
+/// `ShapeCustom_ConvertToRevolution`: the same points at the same parameters, the pcurves
+/// kept. Returns how many faces were converted.
+#[doc(alias = "ShapeCustom_ConvertToRevolution")]
+#[doc(alias = "ElementaryToRevolution")]
+pub fn elementary_to_revolution(model: &mut Model, shape: Shape) -> Result<usize> {
+    let mut converted = 0;
+    for face in model.unique_subshapes(shape, NodeKind::Face) {
+        let Some(revolution) = model.surface(face).and_then(as_revolution) else { continue };
+        let tolerance = model.tolerance(face);
+        model.set_face_surface(face, revolution, tolerance)?;
+        converted += 1;
+    }
+    Ok(converted)
+}
+
+/// When [`drop_small_solids`] takes a solid as small: both thresholds met (one not given is
+/// met), as OCCT's `ShapeFix_FixSmallSolid`.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct SmallSolids {
+    /// Small: a volume at most this.
+    pub volume: Option<f64>,
+    /// Small: a volume at most this times half the solid's area (about its width).
+    pub width_factor: Option<f64>,
+    /// Merge small solids into the solids next to them (that share the most area of faces
+    /// with them), rather than remove them.
+    pub merge: bool,
+}
+
+/// `shape` (a compound, compsolid or solid) without its small solids: removed, or merged
+/// into a neighbour (the shell of a solid that is not small sharing the most face area with
+/// one, the faces they share dropped; repeated while any merge), as OCCT's
+/// `ShapeFix_FixSmallSolid`. Solids neither small nor merged into are kept as they are; the
+/// result is `shape` itself where nothing is dropped.
+#[doc(alias = "ShapeFix_FixSmallSolid")]
+#[doc(alias = "DropSmallSolids")]
+pub fn drop_small_solids(model: &mut Model, shape: Shape, small: &SmallSolids) -> Result<Shape> {
+    use crate::topology::NodeId;
+    use std::collections::HashMap;
+    if (small.volume.is_none() && small.width_factor.is_none()) || !matches!(shape.kind(), NodeKind::Compound | NodeKind::CompSolid | NodeKind::Solid) {
+        return Ok(shape);
+    }
+    let is_small = |model: &Model, solid: Shape| {
+        let volume = crate::properties::volume(model, solid).mass;
+        small.volume.is_none_or(|v| volume <= v) && small.width_factor.is_none_or(|w| volume <= w * crate::properties::area(model, solid).mass * 0.5)
+    };
+    let solids = model.unique_subshapes(shape, NodeKind::Solid);
+    let (smalls, larges): (Vec<Shape>, Vec<Shape>) = solids.into_iter().partition(|&s| is_small(model, s));
+    // What replaces each node: nothing (removed), or other nodes (applied again to them).
+    let mut replaced: HashMap<NodeId, Vec<Shape>> = HashMap::new();
+    let shells_of = |model: &Model, solid: Shape| -> Vec<Shape> { model.children_local(solid).filter(|c| c.kind() == NodeKind::Shell).collect() };
+    let faces_of = |model: &Model, shell: Shape| -> Vec<Shape> { model.children_local(shell).filter(|c| c.kind() == NodeKind::Face).collect() };
+    if !small.merge {
+        for solid in smalls {
+            replaced.insert(solid.node, Vec::new());
+        }
+    } else {
+        // Each face of a solid that is not small, to its shell (faces two such shells share
+        // left out).
+        let mut map: HashMap<NodeId, Shape> = HashMap::new();
+        let mut twice = std::collections::HashSet::new();
+        for &solid in &larges {
+            for shell in shells_of(model, solid) {
+                for face in faces_of(model, shell) {
+                    if map.insert(face.node, shell).is_some() || twice.contains(&face.node) {
+                        map.remove(&face.node);
+                        twice.insert(face.node);
+                    }
+                }
+            }
+        }
+        let mut smalls = smalls;
+        while !smalls.is_empty() {
+            // Each small solid to the outer shell sharing the most area with it.
+            let mut to_merge: Vec<(Shape, Vec<Shape>)> = Vec::new();
+            let mut to_add: Vec<(Shape, Vec<Shape>)> = Vec::new();
+            let push = |list: &mut Vec<(Shape, Vec<Shape>)>, key: Shape, items: &[Shape]| match list.iter_mut().find(|(k, _)| k.node == key.node) {
+                Some((_, l)) => l.extend_from_slice(items),
+                None => list.push((key, items.to_vec())),
+            };
+            let mut left = Vec::new();
+            for solid in smalls {
+                let mut shared: Vec<(NodeId, f64)> = Vec::new();
+                let mut best: Option<(f64, Shape, Shape)> = None;
+                let shells = shells_of(model, solid);
+                for &shell in &shells {
+                    for face in faces_of(model, shell) {
+                        let Some(&outer) = map.get(&face.node) else { continue };
+                        let area = crate::properties::area(model, face).mass;
+                        let sum = match shared.iter_mut().find(|(n, _)| *n == outer.node) {
+                            Some((_, a)) => {
+                                *a += area;
+                                *a
+                            }
+                            None => {
+                                shared.push((outer.node, area));
+                                area
+                            }
+                        };
+                        if best.is_none_or(|(b, _, _)| b < sum) {
+                            best = Some((sum, outer, shell));
+                        }
+                    }
+                }
+                let Some((_, outer, adjacent)) = best else {
+                    left.push(solid);
+                    continue;
+                };
+                push(&mut to_merge, outer, &[adjacent]);
+                let others: Vec<Shape> = shells.iter().copied().filter(|s| s.node != adjacent.node).collect();
+                if !others.is_empty() {
+                    push(&mut to_add, outer, &others);
+                }
+                replaced.insert(solid.node, Vec::new());
+            }
+            smalls = left;
+            if to_merge.is_empty() {
+                break;
+            }
+            let mut new_map: HashMap<NodeId, Shape> = HashMap::new();
+            for (base, merging) in to_merge {
+                // The merged shells' faces: those shared with the base shell dropped (from both),
+                // those shared with another outer shell kept, those shared by two of them dropped.
+                let mut removed = std::collections::HashSet::new();
+                let mut kept: Vec<Shape> = Vec::new();
+                let mut free: Vec<Shape> = Vec::new();
+                for shell in merging {
+                    for face in faces_of(model, shell) {
+                        match map.get(&face.node) {
+                            Some(outer) if outer.node == base.node => {
+                                removed.insert(face.node);
+                            }
+                            Some(_) => kept.push(face),
+                            None => match free.iter().position(|f| f.node == face.node) {
+                                Some(i) => {
+                                    free.remove(i);
+                                }
+                                None => free.push(face),
+                            },
+                        }
+                    }
+                }
+                let shell = model.new_empty(NodeKind::Shell);
+                let mut empty = true;
+                for face in kept.iter().chain(&free).copied().chain(faces_of(model, base).into_iter().filter(|f| !removed.contains(&f.node))) {
+                    model.add(shell, face)?;
+                    empty = false;
+                }
+                for face in &free {
+                    new_map.insert(face.node, shell);
+                }
+                let mut replacement = if empty { Vec::new() } else { vec![shell] };
+                if let Some((_, adding)) = to_add.iter().find(|(k, _)| k.node == base.node) {
+                    replacement.extend_from_slice(adding);
+                }
+                replaced.insert(base.node, replacement);
+            }
+            map = new_map;
+        }
+    }
+    if replaced.is_empty() {
+        return Ok(shape);
+    }
+    // The shape rebuilt with the replacements, unchanged parts shared.
+    fn rebuild(model: &mut Model, shape: Shape, replaced: &HashMap<NodeId, Vec<Shape>>) -> Result<Option<Vec<Shape>>> {
+        if let Some(with) = replaced.get(&shape.node) {
+            let mut out = Vec::new();
+            for &w in with {
+                let w = Shape { orientation: shape.orientation.compose(w.orientation), placement: shape.placement * w.placement, ..w };
+                out.extend(rebuild(model, w, replaced)?.unwrap_or_else(|| vec![w]));
+            }
+            return Ok(Some(out));
+        }
+        if !matches!(shape.kind(), NodeKind::Compound | NodeKind::CompSolid | NodeKind::Solid) {
+            return Ok(None);
+        }
+        let children: Vec<Shape> = model.children_local(Shape { orientation: Orientation::Forward, placement: crate::math::Transform::IDENTITY, ..shape }).collect();
+        let mut changed = false;
+        let mut new_children = Vec::new();
+        for child in children {
+            match rebuild(model, child, replaced)? {
+                Some(list) => {
+                    changed = true;
+                    new_children.extend(list);
+                }
+                None => new_children.push(child),
+            }
+        }
+        if !changed {
+            return Ok(None);
+        }
+        let copy = model.new_empty(shape.kind());
+        for c in new_children {
+            model.add(copy, c)?;
+        }
+        Ok(Some(vec![Shape { orientation: shape.orientation, placement: shape.placement, ..copy }]))
+    }
+    let root = Shape { orientation: Orientation::Forward, placement: crate::math::Transform::IDENTITY, ..shape };
+    Ok(match rebuild(model, root, &replaced)? {
+        Some(list) => match list[..] {
+            [one] => Shape { orientation: shape.orientation, placement: shape.placement, ..one },
+            _ => {
+                let compound = model.new_empty(NodeKind::Compound);
+                for s in list {
+                    model.add(compound, s)?;
+                }
+                compound
+            }
+        },
+        None => shape,
+    })
+}
+
 /// A use of an edge in a face's loop, in the loop's direction of travel.
 #[derive(Clone)]
 pub(crate) struct LoopUse {
@@ -1034,6 +1403,85 @@ struct Piece {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn elementary_surfaces_become_revolutions() {
+        use crate::geometry::surface::Surface;
+        use crate::primitives::{Cone, Cylinder, Sphere, Torus};
+        let mut model = Model::new();
+        let solids = [
+            Cylinder::new(2.0, 3.0).build(&mut model).unwrap(),
+            Cone::new(2.0, 1.0, 3.0).build(&mut model).unwrap(),
+            Sphere::new(1.5).build(&mut model).unwrap(),
+            Torus::new(3.0, 1.0).build(&mut model).unwrap(),
+        ];
+        for solid in solids {
+            let (volume, area) = (crate::properties::volume(&model, solid).mass, crate::properties::area(&model, solid).mass);
+            let curved = model.unique_subshapes(solid, NodeKind::Face).iter().filter(|&&f| !matches!(model.surface(f), Some(Surface::Plane(_)))).count();
+            assert_eq!(elementary_to_revolution(&mut model, solid).unwrap(), curved);
+            let report = crate::validity::check(&model, solid);
+            assert!(report.problems.is_empty(), "{report:?}");
+            for face in model.unique_subshapes(solid, NodeKind::Face) {
+                assert!(matches!(model.surface(face), Some(Surface::Plane(_) | Surface::Revolution(_))));
+            }
+            assert!((crate::properties::volume(&model, solid).mass - volume).abs() < 1e-9 * volume);
+            assert!((crate::properties::area(&model, solid).mass - area).abs() < 1e-9 * area);
+        }
+    }
+
+    #[test]
+    fn small_solids_removed_or_merged() {
+        use crate::math::Point;
+        use crate::primitives::Cuboid;
+        // A 10-cube and a 1-cube against its side, split into cells sharing their face.
+        let mut model = Model::new();
+        let big = Cuboid::new(10.0, 10.0, 10.0).build(&mut model).unwrap();
+        let little = Cuboid::from_corners(Point::new(10.0, 0.0, 0.0), Point::new(11.0, 1.0, 1.0)).build(&mut model).unwrap();
+        let cells = crate::boolean::cells(&mut model, &[big, little]).unwrap();
+        let compound = model.new_empty(NodeKind::Compound);
+        for cell in &cells {
+            model.add(compound, cell.shape).unwrap();
+        }
+        assert_eq!(model.unique_subshapes(compound, NodeKind::Solid).len(), 2);
+        let by = |merge| SmallSolids { volume: Some(2.0), width_factor: None, merge };
+        let removed = drop_small_solids(&mut model, compound, &by(false)).unwrap();
+        assert_eq!(model.unique_subshapes(removed, NodeKind::Solid).len(), 1);
+        assert!((crate::properties::volume(&model, removed).mass - 1000.0).abs() < 1e-9);
+        let merged = drop_small_solids(&mut model, compound, &by(true)).unwrap();
+        let report = crate::validity::check(&model, merged);
+        assert!(report.problems.is_empty(), "{report:?}");
+        assert_eq!(model.unique_subshapes(merged, NodeKind::Solid).len(), 1);
+        assert!((crate::properties::volume(&model, merged).mass - 1001.0).abs() < 1e-9);
+        // (The face they shared gone: the cube's 6, its side divided, and the little one's 5.)
+        assert_eq!(model.unique_subshapes(merged, NodeKind::Face).len(), 11);
+        // Nothing small: the shape itself.
+        let kept = drop_small_solids(&mut model, compound, &SmallSolids { volume: Some(0.5), ..by(true) }).unwrap();
+        assert_eq!(kept, compound);
+        // By width: the little cube's volume (1) is at most 0.5 times half its area (3).
+        let thin = drop_small_solids(&mut model, compound, &SmallSolids { volume: None, width_factor: Some(0.5), merge: false }).unwrap();
+        assert!((crate::properties::volume(&model, thin).mass - 1000.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn bspline_faces_become_bezier_patches() {
+        use crate::geometry::surface::Surface;
+        use std::f64::consts::PI;
+        // A cylinder's faces as rational B-splines: the side has interior knots round it.
+        let mut model = Model::new();
+        let cylinder = crate::primitives::Cylinder::new(2.0, 3.0).build(&mut model).unwrap();
+        let nurbs = crate::convert::to_nurbs(&mut model, cylinder).unwrap();
+        let faces_before = model.unique_subshapes(nurbs, NodeKind::Face).len();
+        let bezier = surfaces_to_bezier(&mut model, nurbs).unwrap();
+        let report = crate::validity::check(&model, bezier);
+        assert!(report.problems.is_empty(), "{report:?}");
+        let faces = model.unique_subshapes(bezier, NodeKind::Face);
+        assert!(faces.len() > faces_before, "{} faces", faces.len());
+        for face in faces {
+            assert!(matches!(model.surface(face), Some(Surface::Bezier(_))), "{:?}", model.surface(face));
+        }
+        assert!((crate::properties::volume(&model, bezier).mass - PI * 4.0 * 3.0).abs() < 1e-9);
+        assert!((crate::properties::area(&model, bezier).mass - (2.0 * PI * 4.0 + 2.0 * PI * 2.0 * 3.0)).abs() < 1e-9);
+    }
 
     #[test]
     fn a_wire_tail_is_cut_off() {

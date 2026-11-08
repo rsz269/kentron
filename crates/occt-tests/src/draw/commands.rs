@@ -241,6 +241,71 @@ impl Draw {
         self.set_shape_var(args[0], divided)?;
         Ok("Status: OK\n".into())
     }
+    /// DRAW command `DT_ApplySeq`: the operators of a sequence of OCCT's ShapeProcess,
+    /// those kentron has (`DropSmallSolids`, `ElementaryToRevolution`).
+    ///
+    /// Example: `DT_ApplySeq result a res remove0v`
+    pub fn DT_ApplySeq(&mut self, args: &[&str]) -> DrawResult {
+        // `DT_ApplySeq result shape resource-file sequence`: the file's lines
+        // `<sequence>.exec.op : Op1,Op2,...` and `<sequence>.<Op>.<Parameter> : value`
+        // (`!` starting a comment). (The interpreter passes the file's path, from
+        // `env(CSF_<file>Defaults)`.)
+        need(args, 4, "DT_ApplySeq result shape resource-file sequence")?;
+        let shape = self.shape_var(args[1])?;
+        let text = std::fs::read_to_string(args[2]).map_err(|e| DrawError::Failed(format!("DT_ApplySeq: {}: {e}", args[2])))?;
+        let mut resources = std::collections::HashMap::new();
+        for line in text.lines() {
+            let line = line.split('!').next().unwrap_or("");
+            if let Some((key, value)) = line.split_once(':') {
+                resources.insert(key.trim().to_string(), value.trim().to_string());
+            }
+        }
+        let sequence = args[3];
+        let operators = resources.get(&format!("{sequence}.exec.op")).ok_or_else(|| DrawError::Failed(format!("DT_ApplySeq: no sequence {sequence}")))?.clone();
+        // (Each operator makes new shapes, leaving its input as it is.)
+        let mut result = shape;
+        for op in operators.split(',').map(str::trim).filter(|o| !o.is_empty()) {
+            let parameter = |name: &str| resources.get(&format!("{sequence}.{op}.{name}")).cloned();
+            let real = |name: &str| -> Result<Option<f64>, DrawError> {
+                parameter(name).map(|v| v.parse::<f64>().map_err(|_| DrawError::Failed(format!("DT_ApplySeq: {op}.{name}: {v}")))).transpose()
+            };
+            match op {
+                "DropSmallSolids" => {
+                    // (FixMode 0, both thresholds used, is all the scripts use.)
+                    if parameter("FixMode").is_some_and(|m| m != "0") {
+                        return self.not_implemented("DT_ApplySeq", args);
+                    }
+                    let small = kentron::heal::SmallSolids {
+                        volume: real("VolumeThreshold")?.filter(|v| *v >= 0.0),
+                        width_factor: real("WidthFactorThreshold")?.filter(|v| *v >= 0.0),
+                        merge: parameter("MergeSolids").is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true")),
+                    };
+                    result = kentron::heal::drop_small_solids(&mut self.model, result, &small)?;
+                }
+                "ElementaryToRevolution" => {
+                    // (In place, on a copy.)
+                    result = kentron::modify::copy(&mut self.model, result, false).unwrap_or(result);
+                    kentron::heal::elementary_to_revolution(&mut self.model, result)?;
+                }
+                _ => return self.not_implemented("DT_ApplySeq", args),
+            }
+        }
+        self.set_shape_var(args[0], result)?;
+        Ok(String::new())
+    }
+    /// DRAW command `DT_ShapeConvert`: OCCT's also turns the curves into Bézier pieces;
+    /// kentron's turns the B-spline surfaces into Bézier patches.
+    ///
+    /// Example: `DT_ShapeConvert result a 1 1`
+    pub fn DT_ShapeConvert(&mut self, args: &[&str]) -> DrawResult {
+        // `DT_ShapeConvert result shape convert-2d convert-3d`. The result is a copy.
+        need(args, 4, "DT_ShapeConvert result shape convert-2d convert-3d")?;
+        let shape = self.shape_var(args[1])?;
+        let copy = kentron::modify::copy(&mut self.model, shape, false).unwrap_or(shape);
+        let converted = kentron::heal::surfaces_to_bezier(&mut self.model, copy)?;
+        self.set_shape_var(args[0], converted)?;
+        Ok("Status: DONE1\n".into())
+    }
     /// DRAW command `DT_ShapeConvertRev`: OCCT's turns the surfaces into surfaces of
     /// revolution and the curves and surfaces into Bézier pieces; kentron's converts them all
     /// to B-splines (its NURBS conversion), not cut into Bézier pieces.

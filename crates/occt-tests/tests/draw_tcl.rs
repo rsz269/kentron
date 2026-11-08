@@ -80,7 +80,8 @@ fn scripts(root: &Path) -> Vec<(String, String, String)> {
         v
     };
     for group in dirs(root) {
-        for grid in dirs(&group) {
+        // (A group's `data` directory holds resource files its scripts read, no scripts.)
+        for grid in dirs(&group).into_iter().filter(|g| g.file_name().is_none_or(|n| n != "data")) {
             let mut cases: Vec<PathBuf> = std::fs::read_dir(&grid).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| p.is_file()).collect();
             cases.sort();
             for case in cases {

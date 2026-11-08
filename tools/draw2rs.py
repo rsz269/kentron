@@ -1076,6 +1076,13 @@ def vendor_scripts(occt: Path, skipped: list, deviations: dict, sources: dict) -
         for d in (Path(group), Path(group) / grid):
             for f in ("begin", "end", "parse.rules"):
                 copy(d / f)
+        # (A group's resource files, in its `data` directory: those the scripts find beside
+        # them, `[file dirname [info script]]/../data`.)
+        data = tests / group / "data"
+        if data.is_dir():
+            for f in sorted(data.iterdir()):
+                if f.is_file():
+                    copy(Path(group) / "data" / f.name)
         run.add(f"tests/{path}")
     return run
 
