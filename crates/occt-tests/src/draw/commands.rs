@@ -2791,6 +2791,28 @@ impl Draw {
         let copy = self.model.empty_copy(shape);
         self.set_shape_var(args[0], copy)
     }
+    /// DRAW command `getedgeregularity`: `getedgeregularity edge face1 [face2]`, the
+    /// continuity of the faces across the edge (C0, G1, C1, G2, C2 or CN), as OCCT's
+    /// BRepLib::ContinuityOfFaces finds it for encoderegularity (kentron records none: it
+    /// is found from the geometry each time).
+    pub fn getedgeregularity(&mut self, args: &[&str]) -> DrawResult {
+        need(args, 2, "getedgeregularity edge face1 [face2]")?;
+        let edge = self.shape_var(args[0])?;
+        let f1 = self.shape_var(args[1])?;
+        let f2 = if args.len() > 2 { self.shape_var(args[2])? } else { f1 };
+        Ok(format!("Regularity of edge : {}\n", super::regularity::continuity_of_faces(&self.model, edge, f1, f2, 1.0e-10)))
+    }
+    /// DRAW command `validrange`: `validrange edge`, the edge's range less what lies within its
+    /// vertices' tolerances ("u1 u2"), or "edge has no valid range" (OCCT's
+    /// BRepLib::FindValidRange).
+    pub fn validrange(&mut self, args: &[&str]) -> DrawResult {
+        need(args, 1, "validrange edge [(out) u1 u2]")?;
+        let edge = self.shape_var(args[0])?;
+        Ok(match super::regularity::valid_range(&self.model, edge) {
+            Some((u1, u2)) => format!("{u1} {u2}"),
+            None => "edge has no valid range".to_string(),
+        })
+    }
     /// DRAW command `encoderegularity`: 11 uses in 11 converted scripts.
     ///
     /// Example: `encoderegularity a 1`

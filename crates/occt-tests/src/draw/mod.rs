@@ -14,6 +14,7 @@ use kentron::geometry::surface::Surface;
 use kentron::topology::{Model, Shape};
 
 mod commands;
+mod regularity;
 pub mod dispatch;
 pub mod tcl;
 

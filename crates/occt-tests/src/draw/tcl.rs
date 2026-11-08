@@ -51,7 +51,7 @@ const IGNORED: &[&str] = &[
     "left", "right", "bottom", "back", "xwd", "don", "isos", "protect", "unprotect", "dchrono", "chrono", "dlog", "decho",
     "dtracelevel", "view", "wait", "meminfo", "checkcolor", "trinfo_display", "dversion", "dsetsignal", "set_display",
     "autodisplay", "repaint", "dflush", "dbreak", "datadir", "vinit", "pu", "pd", "pl", "pr", "mu", "md", "mu4", "md4", "2dpu",
-    "2dpd", "2dpl", "2dpr", "2dmu", "2dmd", "2dzoom", "zoom", "wzoom", "vclear", "vdisplay", "vfit", "vtop",
+    "2dpd", "2dpl", "2dpr", "2dmu", "2dmd", "2dzoom", "zoom", "wzoom", "vclear", "vdisplay", "vfit", "vtop", "vhlr",
     "vaxo", "vfront", "vright", "vleft", "vback", "vbottom", "vremove", "verase", "vzoom", "vrotate", "vsetcolor", "vaspects",
     "vcamera", "vviewparams", "vrenderparams", "vlight", "vdrawparray", "vtrihedron", "vzbufftrihedron", "vfps", "vglinfo",
     "vcaps", "vsetmaterial", "vsettransparency", "vshowfaceboundary", "vdefaults", "vclose", "vraytrace", "vupdate", "vredraw",

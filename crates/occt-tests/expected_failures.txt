@@ -469,12 +469,7 @@ tests/bugs/modalg_6/bug27264_4
 tests/bugs/modalg_6/bug27264_5
 tests/bugs/modalg_6/bug27264_6
 tests/bugs/modalg_6/bug27274
-tests/bugs/modalg_6/bug27383_1
-tests/bugs/modalg_6/bug27383_2
-tests/bugs/modalg_6/bug27383_3
 tests/bugs/modalg_6/bug27383_4
-tests/bugs/modalg_6/bug27383_5
-tests/bugs/modalg_6/bug27383_6
 tests/bugs/modalg_6/bug27383_7
 tests/bugs/modalg_6/bug27386_5
 tests/bugs/modalg_6/bug27386_6
@@ -501,9 +496,7 @@ tests/bugs/modalg_6/bug28486_4
 tests/bugs/modalg_6/bug28492_3
 tests/bugs/modalg_6/bug28626_3
 tests/bugs/modalg_6/bug28661_2
-tests/bugs/modalg_6/bug28690
 tests/bugs/modalg_6/bug28690_1
-tests/bugs/modalg_6/bug28690_2
 tests/bugs/modalg_6/bug28795
 tests/bugs/modalg_6/bug31047
 tests/bugs/modalg_6/bug32876
@@ -582,7 +575,6 @@ tests/bugs/modalg_7/bug30090
 tests/bugs/modalg_7/bug30092
 tests/bugs/modalg_7/bug30150
 tests/bugs/modalg_7/bug30154_1
-tests/bugs/modalg_7/bug30154_2
 tests/bugs/modalg_7/bug30204_1
 tests/bugs/modalg_7/bug30206
 tests/bugs/modalg_7/bug30269

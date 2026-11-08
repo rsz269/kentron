@@ -150,7 +150,9 @@ pub(super) fn offset(model: &mut Model, solid: Shape, distance: f64, made: Made)
         .collect();
     for &i in &kept {
         let face = &faces[i];
-        let along = if face.reversed { -distance } else { distance };
+        // (Along the surface's own normal, outward from its axis or centre unless its frame is
+        // left-handed, as a mirrored solid's are: then the radius shrinks moving outward.)
+        let along = if face.reversed { -distance } else { distance } * outward(&face.surface);
         let beside_removed = model.unique_subshapes(face.shape, NodeKind::Edge).iter().any(|e| removed_edges.contains(&e.node));
         let (mut lo, mut hi) = (Point2::new(f64::INFINITY, f64::INFINITY), Point2::new(f64::NEG_INFINITY, f64::NEG_INFINITY));
         for q in face.loops.iter().flatten() {
@@ -460,4 +462,46 @@ fn strips(model: &mut Model, solid: Shape, faces: &mut [Bounded], removed: &[Nod
     }
     let openings = (0..faces.len()).filter(|&i| removed.contains(&faces[i].shape.node) && !angled.contains(&i)).collect();
     Ok((out, all_tangent, openings))
+}
+
+/// +1 where a surface's own normal (∂u × ∂v) points away from its axis or centre (a cylinder,
+/// cone, sphere or torus in a right-handed frame), -1 where it points towards it (a left-handed
+/// frame, as a mirrored solid's): the sign its radius changes by, moved along that normal. For a
+/// plane, whether that normal is its frame's z (along which it is translated). +1 for other
+/// surfaces.
+fn outward(surface: &Surface) -> f64 {
+    let (centre, p, n) = match surface {
+        Surface::Plane(plane) => {
+            let f = plane.frame();
+            return if Vector::from(f.x()).cross(Vector::from(f.y())).dot(Vector::from(f.z())) < 0.0 { -1.0 } else { 1.0 };
+        }
+        Surface::Cylinder(c) => {
+            let (p, du, dv) = surface.d1(0.0, 0.0);
+            let f = c.frame();
+            let z = Vector::from(f.z());
+            let w = p - f.origin();
+            (f.origin() + z * w.dot(z), p, du.cross(dv))
+        }
+        Surface::Cone(c) => {
+            let (p, du, dv) = surface.d1(0.0, 0.0);
+            let f = c.frame();
+            let z = Vector::from(f.z());
+            let w = p - f.origin();
+            (f.origin() + z * w.dot(z), p, du.cross(dv))
+        }
+        Surface::Sphere(sphere) => {
+            let (p, du, dv) = surface.d1(0.0, 0.0);
+            (sphere.frame().origin(), p, du.cross(dv))
+        }
+        Surface::Torus(t) => {
+            let (p, du, dv) = surface.d1(0.0, 0.0);
+            let f = t.frame();
+            let z = Vector::from(f.z());
+            let w = p - f.origin();
+            let flat = w - z * w.dot(z);
+            (f.origin() + flat * (t.major_radius() / flat.length().max(1e-300)), p, du.cross(dv))
+        }
+        _ => return 1.0,
+    };
+    if n.dot(p - centre) < 0.0 { -1.0 } else { 1.0 }
 }
