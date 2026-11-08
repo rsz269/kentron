@@ -82,6 +82,79 @@ def toJSON(assy, color=(1.0, 1.0, 1.0, 1.0), edgecolor=(0.0, 0.0, 0.0, 1.0), tol
     return rv
 
 
+def _loc2vtk(loc) -> Tuple[Tuple[float, float, float], Tuple[float, float, float]]:
+    """A location as VTK places an actor: its translation, and its rotation as the angles
+    about X, Y and Z (degrees) that VTK applies about Z, then X, then Y (intrinsic Z, X, Y
+    angles, as CadQuery's)."""
+    from math import asin, atan2, degrees
+
+    r = loc.rows
+    # R = Rz(a) Rx(b) Ry(c): R[2][1] = sin b, R[0][1] = -sin a cos b, R[1][1] = cos a cos b,
+    # R[2][0] = -cos b sin c, R[2][2] = cos b cos c.
+    b = asin(max(-1.0, min(1.0, r[2][1])))
+    if abs(r[2][1]) < 1.0 - 1e-12:
+        a, c = atan2(-r[0][1], r[1][1]), atan2(-r[2][0], r[2][2])
+    else:
+        a, c = atan2(r[1][0], r[0][0]), 0.0
+    return (r[0][3], r[1][3], r[2][3]), (degrees(b), degrees(c), degrees(a))
+
+
+def _actors(assy, color, tolerance, angularTolerance):
+    """For each part of the assembly, its faces' and its edges' vtkPolyData, its colour and its
+    placement as VTK's."""
+    from .exporters.vtk import extractEdgesFaces
+
+    for shape, _, loc, col in assy:
+        edges, faces = extractEdgesFaces(shape.toVtkPolyData(tolerance, angularTolerance))
+        yield faces, edges, col.toTuple() if col else color, _loc2vtk(loc)
+
+
+def toVTKAssy(assy, color=(1.0, 1.0, 1.0, 1.0), edgecolor=(0.0, 0.0, 0.0, 0.0), edges: bool = True, linewidth: float = 2, tolerance: float = 1e-3, angularTolerance: float = 0.1) -> list:
+    """The assembly's parts as VTK actors: for each, one of its faces (in its colour) and one of
+    its edges (shown if `edges`), as CadQuery's."""
+    from vtkmodules.vtkRenderingCore import vtkActor, vtkPolyDataMapper
+
+    rv = []
+    for faces, lines, col, (trans, rot) in _actors(assy, color, tolerance, angularTolerance):
+        for data, is_edges in ((faces, False), (lines, True)):
+            mapper = vtkPolyDataMapper()
+            mapper.AddInputDataObject(data)
+            actor = vtkActor()
+            actor.SetMapper(mapper)
+            actor.SetPosition(*trans)
+            actor.SetOrientation(*rot)
+            if is_edges:
+                actor.GetProperty().SetLineWidth(linewidth)
+                actor.SetVisibility(edges)
+                actor.GetProperty().SetColor(*edgecolor[:3])
+            else:
+                actor.GetProperty().SetColor(*col[:3])
+                actor.GetProperty().SetOpacity(col[3])
+            rv.append(actor)
+    return rv
+
+
+def toVTK(assy, color=(1.0, 1.0, 1.0, 1.0), tolerance: float = 1e-3, angularTolerance: float = 0.1):
+    """A vtkRenderer with the assembly's parts: for each, an actor of its faces (in its colour)
+    and one of its edges, as CadQuery's."""
+    from vtkmodules.vtkRenderingCore import vtkActor, vtkPolyDataMapper, vtkRenderer
+
+    renderer = vtkRenderer()
+    for faces, lines, col, (trans, rot) in _actors(assy, color, tolerance, angularTolerance):
+        for data, is_edges in ((faces, False), (lines, True)):
+            mapper = vtkPolyDataMapper()
+            mapper.AddInputDataObject(data)
+            actor = vtkActor()
+            actor.SetMapper(mapper)
+            actor.SetPosition(*trans)
+            actor.SetOrientation(*rot)
+            if not is_edges:
+                actor.GetProperty().SetColor(*col[:3])
+                actor.GetProperty().SetOpacity(col[3])
+            renderer.AddActor(actor)
+    return renderer
+
+
 def imprint(assy) -> Tuple[Any, Dict[Any, Tuple[str, ...]]]:
     """The assembly's solids, placed, split where they meet and sharing the faces they touch
     along (OCCT's BOPAlgo_MakeConnected), and for each solid of the result the names of the

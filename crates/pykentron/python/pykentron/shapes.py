@@ -491,6 +491,31 @@ class Shape:
         self._meshed = True
         return vertices, triangles
 
+    def _repr_javascript_(self) -> str:
+        """Jupyter's 3D view of the shape (CadQuery's, through `occ_impl.jupyter_tools`)."""
+        from cadquery.occ_impl.jupyter_tools import display
+
+        return display(self)._repr_javascript_()
+
+    def toNURBS(self) -> "Shape":
+        """The shape with its curves and surfaces as (rational) B-splines, exactly (OCCT's
+        BRepBuilderAPI_NurbsConvert, as CadQuery's)."""
+        return Shape.cast(native.to_nurbs(self.wrapped))
+
+    def toSplines(self, degree: int = 3, tolerance: float = 1e-3, nurbs: bool = False) -> "Shape":
+        """The shape with its edges approximated by B-splines of at most `degree` within
+        `tolerance` (rational ones only with `nurbs`; closed edges by periodic ones), as
+        CadQuery's. Faces: only where their exact B-spline forms already are such."""
+        if self.ShapeType() == "Edge":
+            return _spline_edge(self, degree, tolerance, nurbs)
+        if self.ShapeType() == "Wire":
+            return Wire.assembleEdges([_spline_edge(e, degree, tolerance, nurbs) for e in self.Edges()])
+        exact = self.toNURBS()
+        rational = any((native.face_bspline_data(f.wrapped) or (None, None, None, None, None))[4] is not None for f in exact.Faces())
+        if (rational and not nurbs) or any(native.face_bspline_data(f.wrapped) and native.face_bspline_data(f.wrapped)[0][0] > degree for f in exact.Faces()):
+            raise NotImplementedError("toSplines of faces needing approximation (only edges are approximated)")
+        return exact
+
     def toVtkPolyData(self, tolerance: Optional[float] = None, angularTolerance: Optional[float] = None, normals: bool = False):
         """The shape's faces as triangles and its edges as polylines in a vtkPolyData, as
         CadQuery's (`tolerance` its deviation coefficient: relative to each edge's size,
@@ -920,6 +945,32 @@ class Vertex(Shape):
         return Shape.cast(native.make_vertex((x, y, z)))
 
 
+def _spline_edge(edge: "Edge", degree: int, tolerance: float, nurbs: bool) -> "Edge":
+    """`edge` as a B-spline of at most `degree` within `tolerance`: its exact B-spline form
+    where that is one (rational only with `nurbs`), else approximated (CadQuery's
+    `occ_impl.nurbs` fits, periodic where the edge is closed), the knots doubled until the fit
+    is within the tolerance midway between its samples."""
+    exact = Shape.cast(native.to_nurbs(edge.wrapped))
+    data = native.edge_bspline_data(exact.wrapped)
+    if data is not None and data[0] <= degree and (nurbs or data[4] is None):
+        return exact
+    import numpy as np
+    from cadquery.occ_impl.nurbs import approximate, periodicApproximate
+
+    closed = edge.IsClosed()
+    at = lambda us: np.array([edge.positionAt(float(u), mode="parameter").toTuple() for u in us])
+    knots = 8
+    while True:
+        n = 8 * knots
+        us = np.linspace(0, 1, n, endpoint=not closed)
+        fit = (periodicApproximate if closed else approximate)(at(us), us=us, knots=knots, order=degree)
+        middles = (us[:-1] + us[1:]) / 2 if not closed else (us + 0.5 / n) % 1.0
+        error = np.max(np.linalg.norm(fit(middles) - at(middles), axis=1))
+        if error <= tolerance or knots >= 1024:
+            return fit.edge()
+        knots *= 2
+
+
 class Mixin1D:
     """Edges and wires as curves (CadQuery's `Mixin1D`)."""
 
@@ -1089,6 +1140,26 @@ class Edge(Shape, Mixin1D):
 
     def _geomAdaptor(self) -> "Edge":
         return self
+
+    # (OCCT's curve adaptor's evaluations, into gp_Pnt and gp_Vec arguments.)
+    def Value(self, u: float):
+        from .gp import gp_Pnt
+
+        return gp_Pnt(*self._derivatives([float(u)])[0][0])
+
+    def D0(self, u: float, p) -> None:
+        p.SetCoord(*self._derivatives([float(u)])[0][0])
+
+    def D1(self, u: float, p, v1) -> None:
+        d = self._derivatives([float(u)])[0]
+        p.SetCoord(*d[0])
+        v1.SetCoord(*d[1])
+
+    def D2(self, u: float, p, v1, v2) -> None:
+        d = self._derivatives([float(u)])[0]
+        p.SetCoord(*d[0])
+        v1.SetCoord(*d[1])
+        v2.SetCoord(*d[2])
 
     # (The edge standing in for its curve adaptor, as `_geomAdaptor` gives it, and for that
     # adaptor's curve, `Curve().Curve()`.)

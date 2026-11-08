@@ -302,6 +302,74 @@ pub fn make_bspline(poles: Vec<Xyz>, weights: Option<Vec<f64>>, knots: Vec<f64>,
     .map(handle)
 }
 
+/// (degree, poles, knots, multiplicities, weights if rational, periodic) of an edge's curve
+/// where it is a B-spline itself, as it is (a periodic one periodic, its knots its own: what
+/// CadQuery's `occ_impl.nurbs.Curve.fromEdge` reads); `None` where it is another curve.
+#[pyfunction]
+#[allow(clippy::type_complexity)]
+pub fn edge_bspline_data(edge: Handle) -> PyResult<Option<(usize, Vec<Xyz>, Vec<f64>, Vec<usize>, Option<Vec<f64>>, bool)>> {
+    with_model(|m| {
+        let Some((Curve::BSpline(spline), _, _)) = m.edge_curve(edge.shape) else { return Ok(None) };
+        Ok(Some((
+            spline.degree(),
+            spline.poles().iter().map(|&p| xyz(p)).collect(),
+            spline.knots().to_vec(),
+            spline.multiplicities().to_vec(),
+            spline.weights().map(|w| w.to_vec()),
+            spline.is_periodic(),
+        )))
+    })
+}
+
+/// (u and v degrees, poles (rows along u), u knots and multiplicities, v knots and
+/// multiplicities, weights if rational, u and v periodic) of a face's surface where it is a
+/// B-spline surface itself; `None` where it is another surface.
+#[pyfunction]
+#[allow(clippy::type_complexity)]
+pub fn face_bspline_data(face: Handle) -> PyResult<Option<((usize, usize), Vec<Vec<Xyz>>, (Vec<f64>, Vec<usize>), (Vec<f64>, Vec<usize>), Option<Vec<Vec<f64>>>, (bool, bool))>> {
+    use kentron::geometry::surface::Surface;
+    use kentron::math::Transformable;
+    with_model(|m| {
+        let Some(surface) = m.surface(face.shape) else { return Ok(None) };
+        let Surface::BSpline(b) = surface.transformed(&face.shape.placement) else { return Ok(None) };
+        let (u, v) = (b.u_knot_vector(), b.v_knot_vector());
+        Ok(Some((
+            (b.u_degree(), b.v_degree()),
+            b.poles().iter().map(|row| row.iter().map(|&p| xyz(p)).collect()).collect(),
+            (u.knots.clone(), u.multiplicities.clone()),
+            (v.knots.clone(), v.multiplicities.clone()),
+            b.weights().map(|w| w.to_vec()),
+            (u.periodic, v.periodic),
+        )))
+    })
+}
+
+/// The face over the whole of the B-spline surface with these poles (rows along u, and
+/// `weights`, rational), knots of multiplicities and degrees along u and v, periodic or not.
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+#[pyo3(signature = (poles, weights, uknots, umults, vknots, vmults, udegree, vdegree, uperiodic=false, vperiodic=false))]
+pub fn make_bspline_face(poles: Vec<Vec<Xyz>>, weights: Option<Vec<Vec<f64>>>, uknots: Vec<f64>, umults: Vec<usize>, vknots: Vec<f64>, vmults: Vec<usize>, udegree: usize, vdegree: usize, uperiodic: bool, vperiodic: bool) -> PyResult<Handle> {
+    use kentron::geometry::surface::{BSplineSurface, KnotVector};
+    use kentron::geometry::surface::Surface;
+    use kentron::geometry::ParametricSurface;
+    let poles: Vec<Vec<Point>> = poles.into_iter().map(|row| row.into_iter().map(point).collect()).collect();
+    let knots = |k: Vec<f64>, m: Vec<usize>, d: usize, periodic: bool| if periodic { KnotVector::periodic(k, m, d) } else { KnotVector::new(k, m, d) };
+    with_model(|m| {
+        let mut surface = BSplineSurface::try_new(poles, knots(uknots, umults, udegree, uperiodic), knots(vknots, vmults, vdegree, vperiodic))?;
+        if let Some(w) = weights {
+            if w.len() != surface.u_pole_count() || w.iter().any(|row| row.len() != surface.v_pole_count() || row.iter().any(|&x| !(x > 0.0))) {
+                return Err(kentron::Error::InvalidInput("a B-spline surface needs one positive weight per pole".into()));
+            }
+            surface = surface.with_weights(w);
+        }
+        let surface = Surface::BSpline(surface);
+        let (u0, u1, v0, v1) = surface.bounds();
+        make::face_on_domain(m, surface, u0, u1, v0, v1)
+    })
+    .map(handle)
+}
+
 // --- edges -------------------------------------------------------------------------------
 
 /// The spline edge through `points`, as OCCT interpolates it (GeomAPI_Interpolate): with
@@ -810,6 +878,9 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(edge_conic, m)?)?;
     m.add_function(wrap_pyfunction!(edge_bspline, m)?)?;
     m.add_function(wrap_pyfunction!(make_bspline, m)?)?;
+    m.add_function(wrap_pyfunction!(edge_bspline_data, m)?)?;
+    m.add_function(wrap_pyfunction!(face_bspline_data, m)?)?;
+    m.add_function(wrap_pyfunction!(make_bspline_face, m)?)?;
     let _ = direction;
     m.add_function(wrap_pyfunction!(curve_info, m)?)?;
     m.add_function(wrap_pyfunction!(curve_derivatives, m)?)?;

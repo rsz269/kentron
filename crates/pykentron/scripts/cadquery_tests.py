@@ -42,6 +42,10 @@ PACKAGES = [
     "pytest", "pytest-timeout", "pytest-xdist", "numpy", "scipy", "docutils", "ezdxf", "path",
     # (Those of the CadQuery layers the shim runs.)
     "pyparsing", "multimethod", "runtype", "typing_extensions", "nlopt", "casadi",
+    # (VTK, numba and IPython, as CadQuery has them: its tests of rendering, VTK exports,
+    # NURBS and Jupyter display use them directly. VTK the version cadquery-ocp brings: 9.7
+    # renders nothing without a display.)
+    "vtk==9.6.2", "numba", "ipython",
 ]
 
 

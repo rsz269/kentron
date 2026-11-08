@@ -324,5 +324,32 @@ def exportGLTF(assy, path: str, binary=None, tolerance: float = 1e-3, angularTol
     return True
 
 
+def _vtkRenderWindow(assy, tolerance: float = 1e-3, angularTolerance: float = 0.1):
+    """The assembly in a vtkRenderWindow (for VTK's exporters), on a white background."""
+    from vtkmodules.vtkRenderingCore import vtkRenderWindow
+
+    from ..assembly import toVTK
+
+    renderer = toVTK(assy, tolerance=tolerance, angularTolerance=angularTolerance)
+    window = vtkRenderWindow()
+    window.SetOffScreenRendering(True)
+    window.AddRenderer(renderer)
+    renderer.ResetCamera()
+    renderer.SetBackground(1, 1, 1)
+    return window
+
+
 def exportVTKJS(assy, path: str) -> None:
-    raise NotImplementedError("exporting assemblies to VTK.js files")
+    """The assembly as a zipped VTK.js scene (`path` with ".zip" added), as CadQuery's."""
+    from shutil import make_archive
+    from tempfile import TemporaryDirectory
+
+    from vtkmodules.vtkIOExport import vtkJSONSceneExporter
+
+    window = _vtkRenderWindow(assy)
+    with TemporaryDirectory() as folder:
+        exporter = vtkJSONSceneExporter()
+        exporter.SetFileName(folder)
+        exporter.SetRenderWindow(window)
+        exporter.Write()
+        make_archive(path, "zip", folder)

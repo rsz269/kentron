@@ -40,7 +40,13 @@ VENDORED = [
     "occ_impl/shape_protocols.py",
     "occ_impl/sketch_solver.py",
     "occ_impl/solver.py",
+    "occ_impl/nurbs.py",
+    "occ_impl/jupyter_tools.py",
+    "vis.py",
 ]
+# (Copied under another name: CadQuery's rendering, which needs VTK, behind the shim's own
+# `vis`, which takes it where VTK is installed.)
+VENDORED_AS = {"vis.py": "_vis_vtk.py"}
 
 # Changes to the copies, `(module, CadQuery's text, replacement)`: what the import would
 # otherwise load or build up front, deferred to first use (numpy for hulls and the sketch
@@ -199,6 +205,164 @@ PATCHES = [
 ]
 
 
+# CadQuery's NURBS module (numpy, scipy and numba arithmetic on B-splines) and its rendering
+# (VTK), which reach OCCT only to turn their B-splines into edges and faces and back: those
+# conversions kentron's, through pykentron's native module.
+PATCHES += [
+    (
+        "occ_impl/nurbs.py",
+        "from OCP.Geom import Geom_BSplineCurve, Geom_BSplineSurface\n"
+        "from OCP.TColgp import TColgp_Array1OfPnt, TColgp_Array2OfPnt\n"
+        "from OCP.TColStd import (\n"
+        "    TColStd_Array1OfInteger,\n"
+        "    TColStd_Array1OfReal,\n"
+        ")\n"
+        "from OCP.gp import gp_Pnt\n"
+        "from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge, BRepBuilderAPI_MakeFace\n",
+        "# (pykentron: no OCCT. Its B-splines the OCP shim's, as data; the conversions to\n"
+        "# edges and faces and back kentron's.)\n"
+        "from OCP.Geom import Geom_BSplineCurve, Geom_BSplineSurface\n"
+        "TColgp_Array1OfPnt = TColgp_Array2OfPnt = TColStd_Array1OfInteger = TColStd_Array1OfReal = object\n"
+        "from pykentron import _kentron as _native\n",
+    ),
+    (
+        "occ_impl/nurbs.py",
+        "    def curve(self) -> Geom_BSplineCurve:\n\n"
+        "        if self.periodic:\n",
+        "    def _knots(self):\n"
+        "        # (pykentron: as OCCT's knots and multiplicities, below.)\n"
+        "        if self.periodic:\n"
+        "            return list(self.knots), [1] * len(self.knots)\n"
+        "        unique_knots, mults_arr = np.unique(self.knots, return_counts=True)\n"
+        "        return list(unique_knots), [int(m) for m in mults_arr]\n\n"
+        "    def curve(self) -> Geom_BSplineCurve:\n\n"
+        "        knots, mults = self._knots()\n"
+        "        return Geom_BSplineCurve(self.pts, knots, mults, self.order, self.periodic)\n"
+        "        if self.periodic:\n",
+    ),
+    (
+        "occ_impl/nurbs.py",
+        "        return Edge(BRepBuilderAPI_MakeEdge(self.curve()).Shape())\n",
+        "        knots, mults = self._knots()\n"
+        "        poles = [tuple(map(float, p)) for p in self.pts]\n"
+        "        return Edge(_native.make_bspline(poles, None, knots, mults, self.order, self.periodic))\n",
+    ),
+    (
+        "occ_impl/nurbs.py",
+        "        g = e._geomAdaptor().BSpline()\n\n"
+        "        knots = np.repeat(list(g.Knots()), list(g.Multiplicities()))\n"
+        "        pts = np.array([(p.X(), p.Y(), p.Z()) for p in g.Poles()])\n"
+        "        order = g.Degree()\n"
+        "        periodic = g.IsPeriodic()\n",
+        "        order, poles, knots_, mults, _, periodic = _native.edge_bspline_data(e.wrapped)\n\n"
+        "        knots = np.repeat(knots_, mults)\n"
+        "        pts = np.array(poles)\n",
+    ),
+    (
+        "occ_impl/nurbs.py",
+        "        Convert to a OCCT Surface object.\n"
+        "        \"\"\"\n",
+        "        Convert to a OCCT Surface object.\n"
+        "        \"\"\"\n\n"
+        "        uknots, umults = np.unique(self.uknots, return_counts=True)\n"
+        "        vknots, vmults = np.unique(self.vknots, return_counts=True)\n"
+        "        return Geom_BSplineSurface(self.pts, uknots, vknots, umults, vmults, self.uorder, self.vorder, self.uperiodic, self.vperiodic)\n",
+    ),
+    (
+        "occ_impl/nurbs.py",
+        "        return Face(BRepBuilderAPI_MakeFace(self.surface(), tol).Shape())\n",
+        "        uknots, umults = np.unique(self.uknots, return_counts=True)\n"
+        "        vknots, vmults = np.unique(self.vknots, return_counts=True)\n"
+        "        poles = [[tuple(map(float, p)) for p in row] for row in self.pts]\n"
+        "        return Face(\n"
+        "            _native.make_bspline_face(\n"
+        "                poles, None, list(uknots), [int(m) for m in umults], list(vknots), [int(m) for m in vmults],\n"
+        "                self.uorder, self.vorder, self.uperiodic, self.vperiodic,\n"
+        "            )\n"
+        "        )\n",
+    ),
+    (
+        "occ_impl/nurbs.py",
+        "        g = cast(Geom_BSplineSurface, f._geomAdaptor())\n\n"
+        "        uknots = np.repeat(list(g.UKnots()), list(g.UMultiplicities()))\n"
+        "        vknots = np.repeat(list(g.VKnots()), list(g.VMultiplicities()))\n\n"
+        "        tmp = []\n"
+        "        for i in range(1, g.NbUPoles() + 1):\n"
+        "            tmp.append(\n"
+        "                [\n"
+        "                    [g.Pole(i, j).X(), g.Pole(i, j).Y(), g.Pole(i, j).Z(),]\n"
+        "                    for j in range(1, g.NbVPoles() + 1)\n"
+        "                ]\n"
+        "            )\n\n"
+        "        pts = np.array(tmp)\n\n"
+        "        uorder = g.UDegree()\n"
+        "        vorder = g.VDegree()\n\n"
+        "        uperiodic = g.IsUPeriodic()\n"
+        "        vperiodic = g.IsVPeriodic()\n",
+        "        (uorder, vorder), poles, (uk, um), (vk, vm), _, (uperiodic, vperiodic) = _native.face_bspline_data(f.wrapped)\n\n"
+        "        uknots = np.repeat(uk, um)\n"
+        "        vknots = np.repeat(vk, vm)\n"
+        "        pts = np.array(poles)\n",
+    ),
+    (
+        "vis.py",
+        "from OCP.TopoDS import TopoDS_Shape\n"
+        "from OCP.Geom import Geom_BSplineSurface\n",
+        "# (pykentron: no OCCT shapes besides its own; ctrlPts reads B-splines through nurbs.)\n"
+        "class TopoDS_Shape:\n"
+        "    pass\n",
+    ),
+    (
+        "vis.py",
+        "        if isinstance(s._geomAdaptor(), Geom_BSplineSurface):\n"
+        "            surf = cast(Geom_BSplineSurface, s._geomAdaptor())\n"
+        "        else:\n"
+        "            raise ValueError(\n"
+        "                f\"Only NURBS surfaces are supported, encountered {s._geomAdaptor()}\"\n"
+        "            )\n\n"
+        "        Nu = surf.NbUPoles()\n"
+        "        Nv = surf.NbVPoles()\n\n"
+        "        u_periodic = surf.IsUPeriodic()\n"
+        "        v_periodic = surf.IsVPeriodic()\n\n"
+        "        # add points\n"
+        "        for i in range(Nu):\n"
+        "            for j in range(Nv):\n"
+        "                pt = surf.Pole(i + 1, j + 1)\n"
+        "                points.InsertNextPoint(pt.X(), pt.Y(), pt.Z())\n",
+        "        if s.geomType() != \"BSPLINE\":\n"
+        "            raise ValueError(f\"Only NURBS surfaces are supported, encountered {s.geomType()}\")\n"
+        "        surf = Surface.fromFace(s)\n\n"
+        "        Nu, Nv = surf.pts.shape[:2]\n"
+        "        u_periodic, v_periodic = surf.uperiodic, surf.vperiodic\n\n"
+        "        # add points\n"
+        "        for i in range(Nu):\n"
+        "            for j in range(Nv):\n"
+        "                points.InsertNextPoint(*map(float, surf.pts[i, j]))\n",
+    ),
+    (
+        "vis.py",
+        "        if s.geomType() == \"BSPLINE\":\n"
+        "            curve = s._geomAdaptor().BSpline()\n",
+        "        if s.geomType() == \"BSPLINE\":\n"
+        "            curve = Curve.fromEdge(s)\n",
+    ),
+    (
+        "vis.py",
+        "        for pt in curve.Poles():\n"
+        "            points.InsertNextPoint(pt.X(), pt.Y(), pt.Z())\n\n"
+        "        N = curve.NbPoles()\n",
+        "        for pt in curve.pts:\n"
+        "            points.InsertNextPoint(*map(float, pt))\n\n"
+        "        N = len(curve.pts)\n",
+    ),
+    (
+        "vis.py",
+        "        if curve.IsPeriodic():\n",
+        "        if curve.periodic:\n",
+    ),
+]
+
+
 def patch(path: Path, old: str, new: str) -> None:
     text = path.read_text()
     if text.count(old) != 1:
@@ -222,11 +386,11 @@ def main() -> int:
         if not (src / "cadquery").is_dir():
             subprocess.run(["git", "clone", "--quiet", "--depth", "1", "--branch", RELEASE, REPOSITORY, str(src)], check=True)
     for rel in VENDORED:
-        target = SHIM / rel
+        target = SHIM / VENDORED_AS.get(rel, rel)
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(src / "cadquery" / rel, target)
     for rel, old, new in PATCHES:
-        patch(SHIM / rel, old, new)
+        patch(SHIM / VENDORED_AS.get(rel, rel), old, new)
     for rel in VENDORED_EXPORTERS:
         shutil.copyfile(src / "cadquery" / "occ_impl" / "exporters" / rel, EXPORTERS / rel)
     for target, files, prefix in ((SHIM, VENDORED, ""), (EXPORTERS, VENDORED_EXPORTERS, "occ_impl/exporters/")):
@@ -234,8 +398,8 @@ def main() -> int:
         patched = sorted({rel for rel, _, _ in PATCHES}) if target == SHIM else []
         (target / "VENDORED.txt").write_text(
             f"Copied unchanged from CadQuery {RELEASE} ({REPOSITORY}), Apache License 2.0 "
-            "(LICENSE.CadQuery), by crates/pykentron/scripts/vendor_cadquery.py:\n" + "".join(f"  {prefix}{r}\n" for r in files)
-            + (f"Patched there (imports deferred to first use; the constraint solvers kentron's): {', '.join(patched)}.\n" if patched else "")
+            "(LICENSE.CadQuery), by crates/pykentron/scripts/vendor_cadquery.py:\n" + "".join(f"  {prefix}{r}" + (f" (as {VENDORED_AS[r]})" if r in VENDORED_AS and target == SHIM else "") + "\n" for r in files)
+            + (f"Patched there (imports deferred to first use; the constraint solvers kentron's; B-splines made and read by kentron, not OCCT): {', '.join(patched)}.\n" if patched else "")
         )
     print(f"copied {len(VENDORED) + len(VENDORED_EXPORTERS)} modules from CadQuery {RELEASE}")
     return 0

@@ -60,3 +60,24 @@ def toString(shape: Shape, tolerance: float = 1e-3, angularTolerance: float = 0.
     if shape.Faces():
         face_points, triangles = native.triangulate(shape.wrapped, tolerance, angularTolerance)
     return _polydata(edge_points, lines, []), _polydata(face_points, [], [list(t) for t in triangles])
+
+
+def extractEdgesFaces(data):
+    """A vtkPolyData's edges (lines and vertices, without normals) and faces (triangles), as
+    two vtkPolyData (CadQuery's, Apache-2.0)."""
+    from vtkmodules.vtkCommonDataModel import VTK_LINE, VTK_POLY_LINE, VTK_TRIANGLE, VTK_VERTEX
+    from vtkmodules.vtkFiltersExtraction import vtkExtractCellsByType
+
+    extract = vtkExtractCellsByType()
+    extract.SetInputDataObject(data)
+    for kind in (VTK_LINE, VTK_POLY_LINE, VTK_VERTEX):
+        extract.AddCellType(kind)
+    extract.Update()
+    edges = extract.GetOutput()
+    extract = vtkExtractCellsByType()
+    extract.SetInputDataObject(data)
+    extract.AddCellType(VTK_TRIANGLE)
+    extract.Update()
+    faces = extract.GetOutput()
+    edges.GetPointData().RemoveArray("Normals")
+    return edges, faces

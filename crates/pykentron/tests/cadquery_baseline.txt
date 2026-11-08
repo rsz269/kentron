@@ -1,11 +1,2 @@
 # CadQuery v2.8.0 tests that fail on pykentron (cadquery_tests.py --update-baseline)
-::tests.test_nurbs
-::tests.test_vis
-tests.test_assembly::test_export_vtkjs
-tests.test_assembly::test_save_vtkjs
-tests.test_assembly::test_vtkjs_export
-tests.test_cadquery.TestCadQuery::test_toVtk
-tests.test_exporters::test_toVTK
 tests.test_free_functions::test_solid
-tests.test_jupyter.TestJupyter::test_display_error
-tests.test_jupyter.TestJupyter::test_repr_javascript

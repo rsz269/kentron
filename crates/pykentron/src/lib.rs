@@ -1190,10 +1190,12 @@ fn face_uv_center_point(face: Handle) -> PyResult<Xyz> {
 /// The parameters of the point of `s` nearest `p`: closed-form where the surface has them,
 /// refined by Gauss-Newton steps.
 fn nearest_parameters(s: &Surface, p: Point) -> (f64, f64) {
+    // (Where the surface has no closed-form inverse, from its nearest point found over the
+    // whole of it: Newton steps from the middle of a free-form surface can end on another
+    // fold of it, or a period or more off.)
     let (mut u, mut v) = s.parameters(p).unwrap_or_else(|| {
-        let (u0, u1, v0, v1) = s.bounds();
-        let clamp = |a: f64, b: f64| if a.is_finite() && b.is_finite() { 0.5 * (a + b) } else { 0.0 };
-        (clamp(u0, u1), clamp(v0, v1))
+        let (u, v, _) = kentron::geometry::extrema::nearest_on_surface(p, s, None);
+        (u, v)
     });
     for _ in 0..30 {
         let (q, du, dv) = s.d1(u, v);
@@ -1210,6 +1212,14 @@ fn nearest_parameters(s: &Surface, p: Point) -> (f64, f64) {
         if x.abs() + y.abs() <= 1e-14 {
             break;
         }
+    }
+    // (Periodic parameters in the surface's own period.)
+    let (u0, _, v0, _) = s.bounds();
+    if let (Some(period), true) = (s.u_period(), u0.is_finite()) {
+        u = u0 + (u - u0).rem_euclid(period);
+    }
+    if let (Some(period), true) = (s.v_period(), v0.is_finite()) {
+        v = v0 + (v - v0).rem_euclid(period);
     }
     (u, v)
 }
