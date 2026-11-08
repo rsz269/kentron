@@ -2,7 +2,8 @@
 
 * `|X`: straight edges along the axis, planar faces facing along it (either way).
 * `#X`: straight edges across the axis, planar faces facing across it.
-* `+X`, `-X`: straight edges and planar faces running or facing along the axis, or against it.
+* `+X`, `-X`: straight edges and planar faces running or facing along the axis, or against it
+  (`X` alone is `+X`).
 * `>X`, `<X`: the shapes farthest along the axis, or farthest against it (by centre).
 * `%TYPE`: shapes of a geometry type (`%LINE`, `%CIRCLE`, `%PLANE`, `%CYLINDER`, ...).
 
@@ -47,7 +48,8 @@ def select(shapes: list, selector) -> list:
     if s.startswith("%"):
         kind = s[1:].strip().upper()
         return [shape for shape in shapes if shape.geomType() == kind]
-    op, axis = s[0], _axis(s[1:])
+    # (A bare axis, `Z`, is `+Z`, as in CadQuery.)
+    op, axis = (s[0], _axis(s[1:])) if s[:1] in "<>|#+-" and s else ("+", _axis(s))
     if op in "<>":
         if not shapes:
             return []

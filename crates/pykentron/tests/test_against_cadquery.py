@@ -398,6 +398,21 @@ def sketch_faces_merged_after_a_rounding(cq):
     return cq.Solid.extrudeLinear(faces[0], V(0, 0, 1))
 
 
+def inset_outline_of_a_chamfered_notch(cq):
+    # (A plate notched at both lower corners by a box chamfered by just under the notch's
+    # depth, its face's edges joined into a wire and offset inward, as cqterrain's
+    # HeavyDoor's inset does. The cut merges the 1e-6 step the chamfer leaves, and the
+    # edges' curves end off the vertex they share there: joined into one wire all the same.)
+    body = cq.Solid.makeBox(35, 60, 3.5, cq.Vector(-17.5, -30, 0))
+    notch = cq.Solid.makeBox(5, 20, 3.5, cq.Vector(-17.5, -30, 0))
+    notch = notch.chamfer(5 - 1e-6, None, [e for e in notch.Edges() if e.geomType() == "LINE" and abs(e.Center().x + 12.5) < 1e-9 and abs(e.Center().y + 10) < 1e-9])
+    body = body.cut(notch).cut(notch.rotate(cq.Vector(0, 0, 0), cq.Vector(0, 0, 1), 180))
+    top = [f for f in body.Faces() if f.Center().z > 3.4][0]
+    wires = cq.Wire.combine(top.Edges())
+    assert len(wires) == 1, f"{len(wires)} wires, not one"
+    return cq.Face.makeFromWires(wires[0].offset2D(-1.5)[0])
+
+
 CASES = [
     wire_corner_rounded_between_an_arc_and_a_line, sketch_faces_merged_after_a_rounding,
     box, cylinder_along_y, cone, workplane_box, fused_boxes, cut_bores, intersected,
@@ -412,6 +427,7 @@ CASES = [
     loft_through_three_unevenly_spaced_circles, vertices_of_a_face_placed_twice,
     text_in_fonts_not_installed_and_cff_ones, reeded_prisms_under_their_lids,
     cut_of_overlapping_solids, hollowed_turned_box, corners_of_a_placed_cutter_rounded,
+    inset_outline_of_a_chamfered_notch,
 ]
 
 

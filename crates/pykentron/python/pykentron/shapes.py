@@ -1498,21 +1498,34 @@ def _edges_to_wires(edges: List[Edge], tol: float) -> List[Wire]:
     remaining = list(edges)
     wires = []
     tol = max(tol, 1e-7)
+
+    # (Ends meet where they lie within `tol`, or where they are one vertex: edges of a face
+    # whose curves end off their shared vertex, within its tolerance, as where a boolean
+    # merged a sliver edge away, are joined as OCCT's, which end on it, are.)
+    def ends(e: Edge):
+        vs = e.Vertices()
+        p, q = e.startPoint(), e.endPoint()
+        nearest = lambda x: min(vs, key=lambda v: (Vector(v.toTuple()) - x).Length) if vs else None
+        return (p, nearest(p)), (q, nearest(q))
+
+    def meet(a, b) -> bool:
+        return (a[0] - b[0]).Length <= tol or (a[1] is not None and b[1] is not None and a[1].isSame(b[1]))
+
     while remaining:
         chain = [remaining.pop(0)]
         grown = True
         while grown:
             grown = False
-            head, tail = chain[0].startPoint(), chain[-1].endPoint()
+            head, tail = ends(chain[0])[0], ends(chain[-1])[1]
             for k, e in enumerate(remaining):
-                s, t = e.startPoint(), e.endPoint()
-                if (s - tail).Length <= tol:
+                s, t = ends(e)
+                if meet(s, tail):
                     chain.append(remaining.pop(k))
-                elif (t - tail).Length <= tol:
+                elif meet(t, tail):
                     chain.append(remaining.pop(k).reverse())
-                elif (t - head).Length <= tol:
+                elif meet(t, head):
                     chain.insert(0, remaining.pop(k))
-                elif (s - head).Length <= tol:
+                elif meet(s, head):
                     chain.insert(0, remaining.pop(k).reverse())
                 else:
                     continue
