@@ -81,7 +81,7 @@ the face (the face itself, as trimmed), up to it, and leaves the others alone.
 
 ### Removing all the fillets of a rounded box
 
-*Found 2026-11-06 (usd-brep's `TestSmRemoveFilletNurbsPlanes`, the `expect: not_done` case
+*Found 2026-11-07 (usd-brep's `TestSmRemoveFilletNurbsPlanes`, the `expect: not_done` case
 `usd_brep::cpp_fillets::remove_fillets_of_a_nurbs_box`).*
 
 `defeature::remove_faces` of every fillet of a box rounded on all its edges leaves no faces,
