@@ -184,20 +184,33 @@ pub(crate) fn face_on_loop(model: &mut Model, runs: &[(crate::topology::EdgeId, 
     }
     let margin = 0.02 * (hi.x - lo.x).max(hi.y - lo.y);
     let (lo, hi) = (Point2::new(lo.x - margin, lo.y - margin), Point2::new(hi.x + margin, hi.y + margin));
-    let us: Vec<f64> = (0..GRID).map(|i| lo.x + (hi.x - lo.x) * i as f64 / (GRID - 1) as f64).collect();
-    let vs: Vec<f64> = (0..GRID).map(|j| lo.y + (hi.y - lo.y) * j as f64 / (GRID - 1) as f64).collect();
-    // Points interpolated along u on each grid line, then the poles along v.
-    let rows: Vec<crate::geometry::curve::BSplineCurve> = vs
-        .iter()
-        .map(|&v| fit::interpolate_with_parameters(&us.iter().map(|&u| at(Point2::new(u, v))).collect::<Vec<_>>(), &us))
-        .collect::<Result<_>>()?;
-    let nu = rows[0].poles().len();
-    let columns: Vec<crate::geometry::curve::BSplineCurve> = (0..nu)
-        .map(|i| fit::interpolate_with_parameters(&rows.iter().map(|r| r.poles()[i]).collect::<Vec<_>>(), &vs))
-        .collect::<Result<_>>()?;
-    let poles: Vec<Vec<Point>> = columns.iter().map(|c| c.poles().to_vec()).collect();
-    let knots = |c: &crate::geometry::curve::BSplineCurve| KnotVector::new(c.knots().to_vec(), c.multiplicities().to_vec(), c.degree());
-    let surface = Surface::BSpline(BSplineSurface::try_new(poles, knots(&rows[0]), knots(&columns[0]))?);
+    let fitted = |grid: usize| -> Result<Surface> {
+        let us: Vec<f64> = (0..grid).map(|i| lo.x + (hi.x - lo.x) * i as f64 / (grid - 1) as f64).collect();
+        let vs: Vec<f64> = (0..grid).map(|j| lo.y + (hi.y - lo.y) * j as f64 / (grid - 1) as f64).collect();
+        // Points interpolated along u on each grid line, then the poles along v.
+        let rows: Vec<crate::geometry::curve::BSplineCurve> = vs
+            .iter()
+            .map(|&v| fit::interpolate_with_parameters(&us.iter().map(|&u| at(Point2::new(u, v))).collect::<Vec<_>>(), &us))
+            .collect::<Result<_>>()?;
+        let nu = rows[0].poles().len();
+        let columns: Vec<crate::geometry::curve::BSplineCurve> = (0..nu)
+            .map(|i| fit::interpolate_with_parameters(&rows.iter().map(|r| r.poles()[i]).collect::<Vec<_>>(), &vs))
+            .collect::<Result<_>>()?;
+        let poles: Vec<Vec<Point>> = columns.iter().map(|c| c.poles().to_vec()).collect();
+        let knots = |c: &crate::geometry::curve::BSplineCurve| KnotVector::new(c.knots().to_vec(), c.multiplicities().to_vec(), c.degree());
+        Ok(Surface::BSpline(BSplineSurface::try_new(poles, knots(&rows[0]), knots(&columns[0]))?))
+    };
+    // (A finer grid where the coarse one strays from the plate at its sites by more than
+    // 5e-4 of the loop's size: a plate turning sharply between them, as a star's through
+    // points dipping between its tips (1.6e-3 on the coarse grid). Lattice cells' plates fit
+    // within about 1.2e-4 and are left as they are.)
+    let strays = |surface: &Surface| sites.iter().map(|(q, h)| surface.point(q.x, q.y).distance(center + e1 * q.x + e2 * q.y + normal * *h)).fold(0.0, f64::max);
+    let mut grid = GRID;
+    let mut surface = fitted(grid)?;
+    while grid < 4 * GRID && strays(&surface) > 5e-4 * size {
+        grid = 2 * grid - 1;
+        surface = fitted(grid)?;
+    }
     // The face: each edge's curve on the surface its projection onto the plane; the loop
     // counter-clockwise about the normal (else reversed), and its edges' tolerances raised to
     // how far they stray from the surface.

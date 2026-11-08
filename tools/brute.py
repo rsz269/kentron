@@ -17,6 +17,7 @@ Library (import tools/brute.py, or run it):
   where classifying each takes hours).
 - `opening(mask, r, h)`, `closing(mask, r, h)`: the union of balls of radius `r` inside the
   solid (rounding its convex edges, as a fillet does) and its complement's (concave ones).
+- `mesh_volume(shape, deflection)`: the volume and area of a fine mesh (thin solids too).
 - `monte_carlo_volume(shape, n)`: the volume by random points in the box, with its error.
 - `boundary_area(a, b, state, deflection)`: the area of a's boundary lying `state` ('I' or
   'O') with respect to b, from a's mesh (triangles classified at their centroids). The
@@ -33,6 +34,7 @@ Library (import tools/brute.py, or run it):
 CLI:
 
     brute.py volume SHAPE.brep [N]                 Monte Carlo volume
+    brute.py meshed SHAPE.brep [DEFLECTION]        meshed volume and area, finer and finer
     brute.py area union|common|cut A.brep B.brep   boolean's area from the operands' meshes
     brute.py faces union|common|cut R.brep A.brep B.brep   misplaced faces of a result
         (in a union, faces inside an operand or off both; and so on)
@@ -76,6 +78,7 @@ def triangles(shape, deflection=1e-3, angular=0.1):
     """The shape's mesh as an (n, 3, 3) array of triangles, faces' placements applied."""
     from OCP.BRep import BRep_Tool
     from OCP.BRepMesh import BRepMesh_IncrementalMesh
+    from OCP.TopAbs import TopAbs_REVERSED
     from OCP.TopLoc import TopLoc_Location
 
     BRepMesh_IncrementalMesh(shape, deflection, False, angular, True)
@@ -89,6 +92,10 @@ def triangles(shape, deflection=1e-3, angular=0.1):
         nodes = [tri.Node(i).Transformed(t) for i in range(1, tri.NbNodes() + 1)]
         p = np.array([[q.X(), q.Y(), q.Z()] for q in nodes])
         idx = np.array([tri.Triangle(k).Get() for k in range(1, tri.NbTriangles() + 1)]) - 1
+        # (Wound as the face is used: a reversed face's triangles turned, so that they all
+        # face out of a solid.)
+        if f.Orientation() == TopAbs_REVERSED:
+            idx = idx[:, ::-1]
         out.append(p[idx])
     return np.concatenate(out) if out else np.zeros((0, 3, 3))
 
@@ -169,6 +176,16 @@ def opening(mask, r, h):
 def closing(mask, r, h):
     """The complement of the union of balls of radius r outside it: concave edges rounded."""
     return ~opening(~mask, r, h)
+
+
+def mesh_volume(shape, deflection=1e-4):
+    """The volume a fine mesh of the shape encloses (signed tetrahedra from the origin), and
+    its area; good for thin solids, where random points would hardly ever land inside. The
+    mesh lies within `deflection` of the faces: the error is about that times the area."""
+    t = triangles(shape, deflection)
+    volume = float(np.einsum("ij,ij->i", t[:, 0], np.cross(t[:, 1], t[:, 2])).sum() / 6.0)
+    area = float(0.5 * np.linalg.norm(np.cross(t[:, 1] - t[:, 0], t[:, 2] - t[:, 0]), axis=1).sum())
+    return volume, area
 
 
 def monte_carlo_volume(shape, n=200_000, seed=1):
@@ -331,7 +348,11 @@ def main(argv):
         print(__doc__)
         return
     cmd, rest = argv[0], argv[1:]
-    if cmd == "volume":
+    if cmd == "meshed":
+        for d in (1e-3, 1e-4, float(rest[1]) if len(rest) > 1 else 2e-5):
+            v, a = mesh_volume(load(rest[0]), d)
+            print(f"deflection {d:g}: volume {v:.6g} area {a:.6g}")
+    elif cmd == "volume":
         v, e = monte_carlo_volume(load(rest[0]), int(rest[1]) if len(rest) > 1 else 200_000)
         print(f"volume {v:.6g} ± {e:.2g}")
     elif cmd == "area":
