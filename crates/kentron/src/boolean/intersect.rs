@@ -1133,17 +1133,23 @@ impl Traced {
     /// between them by more than a hundredth of their length and than `floor` (the
     /// tracing's grid may be coarse for the curve).
     fn densified(&self, closed: bool, floor: f64) -> Vec<(f64, f64)> {
+        self.densified_to(closed, floor, 1e-2, 6)
+    }
+
+    /// [`Self::densified`], where the curve strays by more than `fraction` of the chords,
+    /// halving them at most `depth_limit` times.
+    fn densified_to(&self, closed: bool, floor: f64, fraction: f64, depth_limit: usize) -> Vec<(f64, f64)> {
         use crate::geometry::ParametricSurface;
         let at = |(u, v): (f64, f64)| self.base.point(u, v);
-        fn split(traced: &Traced, at: &dyn Fn((f64, f64)) -> Point, a: (f64, f64), b: (f64, f64), depth: usize, floor: f64, out: &mut Vec<(f64, f64)>) {
+        fn split(traced: &Traced, at: &dyn Fn((f64, f64)) -> Point, a: (f64, f64), b: (f64, f64), depth: usize, floor: f64, fraction: f64, depth_limit: usize, out: &mut Vec<(f64, f64)>) {
             let (pa, pb) = (at(a), at(b));
             let m = traced.uv_at(traced.between(a, b, 0.5));
             let pm = at(m);
             let chord = pa.distance(pb);
-            if depth < 6 && pm.distance(pa + (pb - pa) * 0.5) > (1e-2 * chord).max(floor) + on_tol() && pm.distance(pa) < chord && pm.distance(pb) < chord {
-                split(traced, at, a, m, depth + 1, floor, out);
+            if depth < depth_limit && pm.distance(pa + (pb - pa) * 0.5) > (fraction * chord).max(floor) + on_tol() && pm.distance(pa) < chord && pm.distance(pb) < chord {
+                split(traced, at, a, m, depth + 1, floor, fraction, depth_limit, out);
                 out.push(m);
-                split(traced, at, m, b, depth + 1, floor, out);
+                split(traced, at, m, b, depth + 1, floor, fraction, depth_limit, out);
             }
         }
         let n = self.uv.len();
@@ -1151,7 +1157,7 @@ impl Traced {
         let mut out = Vec::with_capacity(n);
         for k in 0..segments {
             out.push(self.uv[k]);
-            split(self, &at, self.uv[k], self.uv[(k + 1) % n], 0, floor, &mut out);
+            split(self, &at, self.uv[k], self.uv[(k + 1) % n], 0, floor, fraction, depth_limit, &mut out);
         }
         if !closed {
             out.push(self.uv[n - 1]);
@@ -2427,10 +2433,15 @@ fn sliced(base: &Face, other: &Face, crossings: &[Point]) -> Vec<Section> {
             // the other face. The factor is tuned on the tests: finer, a section running along
             // an edge two faces share moves across it, where telling which face it lies in
             // is ill-conditioned.)
-            // (On a free-form base, whose grid follows its poles and may be coarse, or a torus's
-            // made coarser.)
-            if geom::freeform(s) || coarse {
+            // (On a free-form base, whose grid follows its poles and may be coarse.)
+            if geom::freeform(s) {
                 traced.uv = traced.densified(closed, 3e-4 * other.extent.0.distance(other.extent.1));
+            } else if coarse {
+                // (On a torus's grid made coarser: where it strays by more than three
+                // thousandths of the chords, with no floor. A hundredth, as above, left a beer mat
+                // holder's sections a few ten-thousandths short, its fillets 2% too big; a
+                // thousandth, a fillet of OCCT's blend G9 unsound.)
+                traced.uv = traced.densified_to(closed, 0.0, 3e-3, 6);
             }
             let points: Vec<Point> = traced.uv.iter().map(|&(u, v)| s.point(u, v)).collect();
             out.push(Section::Sampled(points, closed, Box::new(traced)));

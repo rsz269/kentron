@@ -444,6 +444,52 @@ def test_same_as_cadquery(case):
             assert math.isclose(got, expected, rel_tol=1e-4, abs_tol=1e-6), f"{key}: {got} != {expected}"
 
 
+# Corpus scripts (in tests/found) that once came out wrong, run as they are: on pykentron in a
+# process of its own, through the CadQuery shim (which cannot share one with CadQuery), and on
+# CadQuery here. Each: the script, its function building the part, and that function's
+# arguments as the script calls it.
+FOUND = [
+    # (Its fillets meet tori's sections with cylinders and planes, which a too coarse search
+    # once left short: the result 2% too big.)
+    ("cadquery-scripts/projects/beermat/beermat.py", "make_beermat", (108, 2.5, 0.25, 8)),
+]
+
+
+def _found_part(path, function, args):
+    code = path.read_text()
+    g = {"__name__": path.stem}
+    exec(compile(code, str(path), "exec"), g)
+    return g[function](*args)
+
+
+@parametrize("item", FOUND, ids=[f[0].rsplit("/", 1)[-1] for f in FOUND])
+def test_found_script_same_as_cadquery(item):
+    import json
+    import subprocess
+
+    script, function, args = item
+    path = Path(__file__).resolve().parent / "found" / script
+    here = Path(__file__).resolve().parent
+    run = (
+        "import sys, json; sys.path[:0] = [%r, %r]; import pykentron.shim; import test_against_cadquery as t\n"
+        "from pathlib import Path\n"
+        "print(json.dumps(t.measures(t._found_part(Path(%r), %r, %r))))\n"
+    ) % (str(here.parent / "python"), str(here), str(path), function, tuple(args))
+    done = subprocess.run([sys.executable, "-c", run], capture_output=True, text=True, cwd=path.parent)
+    assert done.returncode == 0, done.stderr[-2000:]
+    ours = {k: tuple(v) if isinstance(v, list) else v for k, v in json.loads(done.stdout.strip().splitlines()[-1]).items()}
+    theirs = measures(_found_part(path, function, args))
+    # (As the corpus compares them: volumes and areas within 1e-3, boxes within a thousandth of
+    # their size. Its kernels' integrals differ by more than the cases above allow.)
+    size = max(theirs["bbox"][i + 3] - theirs["bbox"][i] for i in range(3))
+    for key, expected in theirs.items():
+        got = ours[key]
+        if isinstance(expected, tuple):
+            assert all(abs(a - b) <= 1e-3 * size for a, b in zip(got, expected)), f"{key}: {got} != {expected}"
+        else:
+            assert math.isclose(got, expected, rel_tol=1e-3, abs_tol=1e-6), f"{key}: {got} != {expected}"
+
+
 def _gltf_scene(path):
     """A glTF file's nodes (name, translation, rotation), materials' colours, and the volume
     its meshes enclose, placed."""
@@ -662,6 +708,13 @@ if __name__ == "__main__":
         except Exception as e:
             failed += 1
             print(f"FAILED  {case.__name__}: {type(e).__name__}: {e}")
+    for item in FOUND:
+        try:
+            test_found_script_same_as_cadquery(item)
+            print(f"ok      {item[0]}")
+        except Exception as e:
+            failed += 1
+            print(f"FAILED  {item[0]}: {type(e).__name__}: {str(e)[:300]}")
     import tempfile
 
     for suffix in (".gltf", ".glb"):
@@ -679,5 +732,5 @@ if __name__ == "__main__":
         except Exception as e:
             failed += 1
             print(f"FAILED  solved {name}: {type(e).__name__}: {e}")
-    print(f"{len(CASES) + 2 + len(SOLVES) - failed} passed, {failed} failed")
+    print(f"{len(CASES) + len(FOUND) + 2 + len(SOLVES) - failed} passed, {failed} failed")
     sys.exit(1 if failed else 0)
