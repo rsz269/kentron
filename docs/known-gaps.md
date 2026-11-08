@@ -94,6 +94,27 @@ two faces, it bounds 4").
   the other face all within 1e-6). It catches only some pairs, and accepting 1e-4 would be
   unsafe. Reverted.
 
+### Twisted prisms passing through each other with the same section
+
+*Found 2026-11-08 (`mryndzionek_cadquery_plaground/screw_cap_container.py`).*
+
+A knurl tool is the union of two sets of 12 triangular prisms extruded with a twist of +40°
+and −40° (`placeSketch(...).twistExtrude`). A prism of one set and one of the other, whose
+twists bring them to the same angle at some height, have identical sections there and pass
+through each other in a small lens around it. kentron's booleans of such a pair are wrong:
+their intersection comes out −6.78 (0.0022 from the same BREPs in Rust), and the union of
+the two sets is invalid with 224.4 of volume, against 103.9 for the two sets apart. So the
+knurled cap is cut to 252 of volume, invalid, against CadQuery's 4804.
+
+- **Repro:** `knurl()` in the script's `util.py` with height 10, radius 26.75, cut angle
+  120, depth 0.5, twist 40 and 12 prisms. The smallest case is two prisms: the one starting
+  at −60° and the one at 0°, which coincide at z = 7.5.
+- **Evidence:** their section is a closed network of 9 edges about 1 long round the
+  coinciding section. CadQuery calls the pair touching (common volume 0, distance 1e-15),
+  but its own union of the two sets is empty, so it is no reference either.
+- **Needed:** handling of faces that coincide only along a section (a curve of tangency
+  sweeping through), on B-spline ruled surfaces.
+
 ### Section edges under-report their tolerance
 
 *Found 2026-10-23.*
