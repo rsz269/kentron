@@ -612,6 +612,12 @@ fn plane_across_extrusion(plane: &Surface, extrusion: &Surface) -> Option<Sectio
             c.transformed(&crate::math::Transform::translation(-(n * h)))
         }
     };
+    // (A whole circle or ellipse as the closed section it is, which runs on round its seam:
+    // as an open one, from its parameter's start to its end, an arc across the seam (a board
+    // across an elliptic wall where the ellipse's parameter starts) was found only in part.)
+    if matches!(curve, Curve::Circle(_) | Curve::Ellipse(_)) && (last - first - TAU).abs() <= 1e-12 {
+        return Some(Section::Closed(curve, Default::default()));
+    }
     Some(Section::Open(curve, first, last))
 }
 
