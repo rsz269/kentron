@@ -2533,5 +2533,40 @@
       "to": "Number of shapes in result\n VERTEX    : 6\n EDGE      : 7\n WIRE      : 2\n FACE      : 2\n SHELL     : 1\n SOLID     : 0\n COMPSOLID : 0\n COMPOUND  : 0\n SHAPE     : 18",
       "reason": "OCCT's two faces (OCCT 7.9, OCP) meet at the mitre along an ellipse edge and, beside it, an ellipse edge 1.2e-5 long between two vertices as far apart: a sliver where the ends of the mitre meet. kentron's meet along the one edge, of the same area and tolerances: 6 vertices and 7 edges (OCCT 7 and 8)."
     }
+  ],
+  "tests/bugs/modalg_7/bug28828_10": [
+    {
+      "from": "checknbshapes result -solid 1 -shell 1 -face 9 -wire 9 -edge 17 -vertex 9 -shape 47",
+      "to": "checknbshapes result -solid 1 -shell 1 -face 9 -wire 9 -edge 21 -vertex 14 -shape 56",
+      "reason": "OCCT's prism makes its top cap a placed copy of the bottom's vertices, edges and face, which checknbshapes counts once; kentron's prism makes the top cap anew. Counted once for each placement (DRAW's nbshapes -t, OCCT 8.1), OCCT's chamfered prism has kentron's 14 vertices and 21 edges (counted shared, 9 and 17); OCCT 7.9 (OCP, BRepFilletAPI_MakeChamfer) gives the same counts and the same volume as kentron."
+    }
+  ],
+  "tests/bugs/modalg_7/bug28828_11": [
+    {
+      "from": "checknbshapes result -solid 1 -shell 1 -face 9 -wire 9 -edge 17 -vertex 9 -shape 47",
+      "to": "checknbshapes result -solid 1 -shell 1 -face 9 -wire 9 -edge 21 -vertex 14 -shape 56",
+      "reason": "OCCT's prism makes its top cap a placed copy of the bottom's vertices, edges and face, which checknbshapes counts once; kentron's prism makes the top cap anew. Counted once for each placement (DRAW's nbshapes -t, OCCT 8.1), OCCT's chamfered prism has kentron's 14 vertices and 21 edges (counted shared, 9 and 17); OCCT 7.9 (OCP, BRepFilletAPI_MakeChamfer) gives the same counts and the same volume as kentron."
+    }
+  ],
+  "tests/bugs/modalg_7/bug28828_12": [
+    {
+      "from": "checknbshapes result -solid 1 -shell 1 -face 8 -wire 8 -edge 15 -vertex 8 -shape 42",
+      "to": "checknbshapes result -solid 1 -shell 1 -face 8 -wire 8 -edge 18 -vertex 12 -shape 49",
+      "reason": "OCCT's prism makes its top cap a placed copy of the bottom's vertices, edges and face, which checknbshapes counts once; kentron's prism makes the top cap anew. Counted once for each placement (DRAW's nbshapes -t, OCCT 8.1), OCCT's chamfered prism has kentron's 12 vertices and 18 edges (counted shared, 8 and 15); OCCT 7.9 (OCP, BRepFilletAPI_MakeChamfer) gives the same counts and the same volume as kentron."
+    }
+  ],
+  "tests/bugs/modalg_7/bug28828_13": [
+    {
+      "from": "checknbshapes result -solid 1 -shell 1 -face 8 -wire 8 -edge 15 -vertex 8 -shape 42",
+      "to": "checknbshapes result -solid 1 -shell 1 -face 8 -wire 8 -edge 18 -vertex 12 -shape 49",
+      "reason": "OCCT's prism makes its top cap a placed copy of the bottom's vertices, edges and face, which checknbshapes counts once; kentron's prism makes the top cap anew. Counted once for each placement (DRAW's nbshapes -t, OCCT 8.1), OCCT's chamfered prism has kentron's 12 vertices and 18 edges (counted shared, 8 and 15); OCCT 7.9 (OCP, BRepFilletAPI_MakeChamfer) gives the same counts and the same volume as kentron."
+    }
+  ],
+  "tests/bugs/modalg_7/bug28828_14": [
+    {
+      "from": "checknbshapes result -solid 1 -shell 1 -face 9 -wire 9 -edge 17 -vertex 9 -shape 47",
+      "to": "checknbshapes result -solid 1 -shell 1 -face 9 -wire 9 -edge 21 -vertex 14 -shape 56",
+      "reason": "OCCT's prism makes its top cap a placed copy of the bottom's vertices, edges and face, which checknbshapes counts once; kentron's prism makes the top cap anew. Counted once for each placement (DRAW's nbshapes -t, OCCT 8.1), OCCT's chamfered prism has kentron's 14 vertices and 21 edges (counted shared, 9 and 17); OCCT 7.9 (OCP, BRepFilletAPI_MakeChamfer) gives the same counts and the same volume as kentron."
+    }
   ]
 }

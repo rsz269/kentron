@@ -38,6 +38,33 @@ every mixed corner of that solid.
 - **Not affected:** planar L-shapes and other convex/concave corners without a saddle
   vertex match CadQuery exactly.
 
+### Chamfers of constant throat where the faces' angle varies along the edge
+
+*Found 2026-11-09.*
+
+OCCT's throat chamfers (`chamf_throat`, and `chamf_throat_with_penetration`, whose section
+is a right-angled triangle with its apex `offset` inside a face) keep the throat constant
+along the edge, so where the faces' angle changes along it, the distances along the faces
+change too. kentron has no such chamfer: the DRAW commands turn the throat into two
+constant distances, from the section at the edge's middle. That is exact where the angle is
+the same all along (planes; a cylinder or a cone on a plane square to its axis: OCCT's
+`bug28828_1`, `_8`–`_14`, `_17`–`_20` pass) and wrong elsewhere.
+
+- **Repro:** OCCT's `tests/bugs/modalg_7/bug28828_2`, `_7` (a cylinder fused to a box
+  tilted by 20°: the section is an ellipse), `_4` (two crossing cylinders), `_15`, `_16`
+  (a box cutting through a cylinder: the edges end on the box's side).
+- **Evidence:** volumes 73867.1 (OCCT 73885.9), 73772.4 (73900.4), 46677.8 (46724.8),
+  50761.7 (50822.7); `_16` needs `explode` of a compound in OCCT's order of the
+  generated edges.
+- **Needed:** a chamfer whose distances along the faces are solved at every section from
+  the throat (OCCT's BlendFunc_ConstThroat and BlendFunc_ConstThroatWithPenetration), not
+  given; kentron's chamfers are built from distances. About a day's work.
+- **Also:** on NURBS faces, kentron's chamfer of constant distances is not exact: `_6` (a
+  NURBS-converted cylinder on a plane) gives 73604.55, where Pappus gives 73604.344 for the
+  triangle revolved, and kentron gets 73604.344 on the same faces unconverted. (OCCT's
+  test expects 73604.1, and OCCT 8.1's DRAW gives 73670.6.) `_21` (a NURBS cone) is off
+  by 4.4 in 446 298.
+
 ## Offsets and shells
 
 ### Sliver faces in shells found by distance

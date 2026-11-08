@@ -176,7 +176,19 @@ impl Copier {
             NodeKind::Vertex => Ok(self.vertex(model, shape).into()),
             NodeKind::Edge => Ok(self.edge(model, shape)?.into()),
             NodeKind::Face => self.face(model, shape),
-            NodeKind::Wire => Err(Error::InvalidInput("converting a wire outside a face is not supported".into())),
+            NodeKind::Wire => {
+                // (A wire outside a face: its edges converted, in their order and senses.)
+                let mut ids = Vec::new();
+                let coedges: Vec<Shape> = model.children_local(shape).collect();
+                for c in coedges {
+                    let id = CoEdgeId::try_from(c.node).expect("a wire holds coedges");
+                    let (edge, orientation) = (model[id].edge, model[id].orientation);
+                    let placed = Shape { placement: shape.placement * c.placement, ..Shape::from(edge) };
+                    let new_edge = self.edge(model, placed)?;
+                    ids.push(model.add_coedge(new_edge, orientation)?);
+                }
+                Ok(model.add_wire(&ids)?.into())
+            }
             NodeKind::Shell | NodeKind::Solid | NodeKind::CompSolid | NodeKind::Compound => {
                 let copy = model.new_empty(shape.kind());
                 let children: Vec<Shape> = model.children_local(shape).collect();
@@ -324,6 +336,30 @@ mod tests {
         let report = validity::check(&model, fused);
         assert!(report.problems.is_empty(), "{report:?}");
         assert!((properties::volume(&model, fused).mass - (6.0 + 6.0 - 1.0)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn nurbs_wire_outside_a_face() {
+        use crate::primitives::Cylinder;
+        use std::f64::consts::PI;
+        let mut model = Model::new();
+        let cylinder = Cylinder::new(2.0, 3.0).build(&mut model).unwrap();
+        // (The wires of the cylinder's faces: its two circles and the side's loop.)
+        let shift = Transform::translation(Vector::new(0.0, 0.0, 5.0));
+        for wire in model.explore(cylinder, NodeKind::Wire).collect::<Vec<_>>() {
+            let length = properties::length(&model, wire).mass;
+            let lowest = |model: &Model, w: Shape| model.unique_subshapes(w, NodeKind::Vertex).iter().map(|&v| model.point(v).z).fold(f64::INFINITY, f64::min);
+            let low = lowest(&model, wire);
+            let nurbs = to_nurbs(&mut model, wire.moved(&shift)).unwrap();
+            assert_eq!(nurbs.kind(), NodeKind::Wire);
+            assert_eq!(model.children_local(nurbs).count(), model.children_local(wire).count());
+            for edge in model.explore(nurbs, NodeKind::Edge) {
+                assert!(model.edge_curve(edge).is_none_or(|(c, _, _)| matches!(c, Curve::BSpline(_))));
+            }
+            assert!((properties::length(&model, nurbs).mass - length).abs() < 1e-9 * length.max(1.0));
+            assert!((lowest(&model, nurbs) - (low + 5.0)).abs() < 1e-12);
+            assert!(length > 4.0 * PI - 1e-9);
+        }
     }
 
     #[test]

@@ -130,6 +130,7 @@ pub fn dispatch(d: &mut Draw, name: &str, args: &[&str]) -> Option<DrawResult> {
         "buildsweep" => d.buildsweep(args),
         "chamf" => d.chamf(args),
         "chamf_throat" => d.chamf_throat(args),
+        "chamf_throat_with_penetration" => d.chamf_throat_with_penetration(args),
         "chamfer2d" => d.chamfer2d(args),
         "checkcurveonsurf" => d.checkcurveonsurf(args),
         "checkdump" => d.checkdump(args),

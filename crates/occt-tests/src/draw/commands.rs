@@ -918,14 +918,23 @@ impl Draw {
             return Err(DrawError::Failed("bbop: no arguments".into()));
         }
         let (objects, tools) = (self.fuse_objects.clone(), self.fuse_tools.clone());
+        let arguments: Vec<Shape> = objects.iter().chain(&tools).copied().collect();
+        let result = self.with_boolean_history(&arguments, |model| boolean::combine(model, &objects, &tools, combination))?;
+        self.set_shape_var(args[0], result)
+    }
+    /// `operation` on `arguments`, its history kept for `savehistory`: each argument's face
+    /// or edge modified into those of the result made from it, deleted where none is; each
+    /// face generating the result's new edges (sections) it bounds, as OCCT's booleans'.
+    fn with_boolean_history(&mut self, arguments: &[Shape], operation: impl FnOnce(&mut kentron::topology::Model) -> kentron::Result<Shape>) -> Result<Shape, DrawError> {
+        use kentron::topology::NodeId;
         boolean::record_begin(&self.model);
-        let result = boolean::combine(&mut self.model, &objects, &tools, combination);
-        let made = boolean::record_end(&self.model, *result.as_ref().unwrap_or(&objects[0]));
+        let result = operation(&mut self.model);
+        let made = boolean::record_end(&self.model, *result.as_ref().unwrap_or(&arguments[0]));
         let result = result?;
-        // (Its history, for `savehistory`: each argument's face or edge modified into those
-        // of the result made from it, deleted where none is.)
-        let mut images: std::collections::HashMap<kentron::topology::NodeId, Vec<Shape>> = std::collections::HashMap::new();
-        for (source, out) in made {
+        let mut images: std::collections::HashMap<NodeId, Vec<Shape>> = std::collections::HashMap::new();
+        let mut sources: std::collections::HashMap<NodeId, Vec<NodeId>> = std::collections::HashMap::new();
+        for &(source, out) in &made {
+            sources.entry(out).or_default().push(source);
             if out != source {
                 images.entry(source).or_default().push(Shape::from(out));
             } else {
@@ -934,9 +943,13 @@ impl Draw {
         }
         let mut modified = Vec::new();
         let mut deleted = Vec::new();
-        for &argument in objects.iter().chain(&tools) {
+        let mut old_edges = std::collections::HashSet::new();
+        for &argument in arguments {
             for kind in [NodeKind::Face, NodeKind::Edge] {
                 for s in self.model.unique_subshapes(argument, kind) {
+                    if kind == NodeKind::Edge {
+                        old_edges.insert(s.node);
+                    }
                     match images.get(&s.node) {
                         None => deleted.push(s.node),
                         Some(list) if !list.is_empty() => modified.push((s.node, list.clone())),
@@ -945,8 +958,26 @@ impl Draw {
                 }
             }
         }
-        self.last_history = DrawHistory { modified, deleted, ..Default::default() };
-        self.set_shape_var(args[0], result)
+        // (A new edge: made from no edge of the arguments. Each face it bounds generated it
+        // from the argument faces that face came from.)
+        let mut generated: Vec<(NodeId, Vec<Shape>)> = Vec::new();
+        for face in self.model.unique_subshapes(result, NodeKind::Face) {
+            let Some(from) = sources.get(&face.node) else { continue };
+            for edge in self.model.unique_subshapes(face, NodeKind::Edge) {
+                if old_edges.contains(&edge.node) || sources.get(&edge.node).is_some_and(|l| l.iter().any(|n| old_edges.contains(n))) {
+                    continue;
+                }
+                for &source in from {
+                    match generated.iter_mut().find(|(n, _)| *n == source) {
+                        Some((_, list)) if list.iter().any(|e| e.node == edge.node) => {}
+                        Some((_, list)) => list.push(Shape::from(edge.node)),
+                        None => generated.push((source, vec![Shape::from(edge.node)])),
+                    }
+                }
+            }
+        }
+        self.last_history = DrawHistory { modified, generated, deleted };
+        Ok(result)
     }
     /// DRAW command `bbuild`: 110 uses in 104 converted scripts.
     ///
@@ -1072,7 +1103,7 @@ impl Draw {
             return self.not_implemented("bcommon", args);
         }
         let (object, tool) = (self.shape_var(args[1])?, self.shape_var(args[2])?);
-        let result = boolean::intersection(&mut self.model, object, tool)?;
+        let result = self.with_boolean_history(&[object, tool], |model| boolean::intersection(model, object, tool))?;
         self.set_shape_var(args[0], result)
     }
     /// DRAW command `bcremove`: 14 uses in 10 converted scripts.
@@ -1114,7 +1145,7 @@ impl Draw {
             return self.not_implemented("bcut", args);
         }
         let (object, tool) = (self.shape_var(args[1])?, self.shape_var(args[2])?);
-        let result = boolean::difference(&mut self.model, object, tool)?;
+        let result = self.with_boolean_history(&[object, tool], |model| boolean::difference(model, object, tool))?;
         self.set_shape_var(args[0], result)
     }
     /// DRAW command `bcutblend`: 1 uses in 1 converted scripts.
@@ -1200,7 +1231,7 @@ impl Draw {
             return self.not_implemented("bfuse", args);
         }
         let (object, tool) = (self.shape_var(args[1])?, self.shape_var(args[2])?);
-        let result = boolean::union(&mut self.model, object, tool)?;
+        let result = self.with_boolean_history(&[object, tool], |model| boolean::union(model, object, tool))?;
         self.set_shape_var(args[0], result)
     }
     /// DRAW command `bfuseblend`: 18 uses in 18 converted scripts.
@@ -1948,6 +1979,72 @@ impl Draw {
             let inside = std::f64::consts::PI - a.angle(b);
             let distance = throat / (0.5 * inside).cos();
             edges.push(ChamferedEdge { edge, size: ChamferSize::Distances(distance, distance), face: None });
+        }
+        let result = kentron::blend::chamfer_edges(&mut self.model, shape, &edges)?;
+        self.set_shape_var(args[0], result)
+    }
+    /// DRAW command `chamf_throat_with_penetration`.
+    ///
+    /// Example: `chamf_throat_with_penetration result b b_4_1 b_4 1. 2.`
+    pub fn chamf_throat_with_penetration(&mut self, args: &[&str]) -> DrawResult {
+        // `chamf_throat_with_penetration result shape edge face offset throat [...]`: the
+        // section across the edge is a right-angled triangle (OCCT's
+        // BlendFunc_ConstThroatWithPenetration). Its apex lies on the other face, `offset`
+        // from `face` on the solid's side; its top, where the right angle is, lies on
+        // `face`, `throat` from the apex; the chamfer runs from the top to the other face.
+        // As two distances along the faces, from the section at the edge's middle (exact
+        // where the faces' sections across the edge are straight and meet at the same
+        // angle all along it: planes, cylinders and cones along their circles).
+        use kentron::blend::{ChamferSize, ChamferedEdge};
+        use kentron::boolean::{classify_point, PointLocation};
+        use kentron::geometry::ParametricCurve;
+        use kentron::topology::{EdgeId, FaceId};
+        const USAGE: &str = "chamf_throat_with_penetration result shape edge face offset throat [edge face offset throat ...]";
+        need(args, 6, USAGE)?;
+        let shape = self.shape_var(args[1])?;
+        let faces: Vec<Shape> = self.model.explore(shape, NodeKind::Face).collect();
+        let mut edges = Vec::new();
+        for group in args[2..].chunks(4) {
+            let [edge, face, offset, throat] = group else { return Err(DrawError::Failed(format!("usage: {USAGE}"))) };
+            let (edge, face, offset, throat) = (self.shape_var(edge)?, self.shape_var(face)?, self.number(offset)?, self.number(throat)?);
+            let edge_id = EdgeId::try_from(edge.node).map_err(|_| DrawError::Failed("chamf_throat_with_penetration: not an edge".into()))?;
+            // The outward normals along the edge at its middle: `face`'s first.
+            let mut normals = Vec::new();
+            for &f in &faces {
+                let Ok(face_id) = FaceId::try_from(f.node) else { continue };
+                let Some(coedge) = self.model.find_coedge(edge_id, face_id) else { continue };
+                let (Some((pcurve, first, last)), Some(surface)) = (self.model.effective_pcurve(coedge), self.model.surface(f)) else { continue };
+                let uv = pcurve.point(0.5 * (first + last));
+                let Some(n) = kentron::geometry::props::surface_normal(surface, uv.x, uv.y, 1e-12) else { continue };
+                let n = Vector::from(n.direction());
+                let n = if f.orientation == Orientation::Reversed { -n } else { n };
+                if f.node == face.node { normals.insert(0, n) } else { normals.push(n) }
+            }
+            let [n1, n2] = normals[..] else {
+                return Err(DrawError::Failed("chamf_throat_with_penetration: the edge must bound two faces".into()));
+            };
+            // Convex where a point off the edge square to the normals' bisector lies
+            // outside the solid (within the solid's angle inside a concave edge).
+            let Some((curve, first, last)) = self.model.edge_curve(edge) else {
+                return Err(DrawError::Failed("chamf_throat_with_penetration: an edge without a curve".into()));
+            };
+            let middle = curve.point(0.5 * (first + last));
+            let beside = middle + (n1 - n2).normalized() * (1e-3 * throat);
+            let convex = classify_point(&self.model, shape, beside)? == PointLocation::Outside;
+            // In the section: the faces leave the edge at the angle `alpha` (the solid's
+            // inside a convex edge, outside a concave one); the apex lies `a` along the
+            // other face, the top `t` along `face` and the chamfer's end `r` along the other.
+            let alpha = std::f64::consts::PI - n1.angle(n2);
+            let a = if convex { 1.0 } else { -1.0 } * offset / alpha.sin();
+            if throat <= offset {
+                return Err(DrawError::Failed("chamf_throat_with_penetration: the throat must exceed the offset".into()));
+            }
+            let t = a * alpha.cos() + (throat * throat - offset * offset).sqrt();
+            let r = t * (t - a * alpha.cos()) / (t * alpha.cos() - a);
+            if !(t > 0.0 && r > 0.0 && r.is_finite()) {
+                return Err(DrawError::Failed("chamf_throat_with_penetration: no such chamfer at this edge".into()));
+            }
+            edges.push(ChamferedEdge { edge, size: ChamferSize::Distances(t, r), face: Some(face) });
         }
         let result = kentron::blend::chamfer_edges(&mut self.model, shape, &edges)?;
         self.set_shape_var(args[0], result)
@@ -3239,6 +3336,10 @@ impl Draw {
         let shapes: Vec<Shape> = generated.iter().filter(|(node, _)| *node == input.node).flat_map(|(_, s)| s.clone()).collect();
         if shapes.is_empty() {
             return Ok("No shapes were generated from the shape\n".into());
+        }
+        // (One alone, else a compound of them, as OCCT's.)
+        if let [one] = shapes[..] {
+            return self.set_shape_var(args[0], one);
         }
         let compound = self.compound_of(&shapes)?;
         self.set_shape_var(args[0], compound)

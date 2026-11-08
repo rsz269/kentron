@@ -570,7 +570,6 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/bugs/modalg_6/bug28326
-expect: not_done
 build:
   - w: {polyline: {points: [[0, 0, 0], [10, 0, 0], [10, 5, 0], [0, 0, 0]]}}
   - wn: {to_nurbs: {shape: w}}

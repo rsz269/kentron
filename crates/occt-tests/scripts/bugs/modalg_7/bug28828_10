@@ -14,7 +14,8 @@ chamf_throat result b b_8 2.
 
 checkshape result
 
-checknbshapes result -solid 1 -shell 1 -face 9 -wire 9 -edge 17 -vertex 9 -shape 47
+# kentron deviation (draw_deviations.json): OCCT's prism makes its top cap a placed copy of the bottom's vertices, edges and face, which checknbshapes counts once; kentron's prism makes the top cap anew. Counted once for each placement (DRAW's nbshapes -t, OCCT 8.1), OCCT's chamfered prism has kentron's 14 vertices and 21 edges (counted shared, 9 and 17); OCCT 7.9 (OCP, BRepFilletAPI_MakeChamfer) gives the same counts and the same volume as kentron.
+checknbshapes result -solid 1 -shell 1 -face 9 -wire 9 -edge 21 -vertex 14 -shape 56
 
 set tolres [checkmaxtol result]
 
