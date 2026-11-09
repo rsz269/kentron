@@ -59,13 +59,13 @@ and no change may make a passing test fail.
 
 <!-- effort -->
 So far (2026-09-25 to 2026-11-09): about 354 hours of the agent's active work, 24.8 million
-tokens written by it, and 13.4 billion tokens processed in all (nearly all of them its
+tokens written by it, and 13.5 billion tokens processed in all (nearly all of them its
 conversation's context, read back from the cache).
 <!-- /effort -->
 
 ## Tested against
 
-- **OCCT's DRAW test scripts:** 10,796 run, and 9,547 of them (88%) pass: of the 16,322
+- **OCCT's DRAW test scripts:** 10,796 run, and 9,581 of them (89%) pass: of the 16,322
   scripts in its modelling groups (the other groups exercise viewers and documents), and of
   its data-exchange tests (STEP and IGES files read, written and read again, both readings
   checked against OCCT's statistics) the 258 whose files OCCT publishes. The 5,305 modelling
@@ -99,7 +99,7 @@ conversation's context, read back from the cache).
   development, and 58 cases of pykentron's own that it builds as CadQuery does
   ([`crates/pykentron/tests/test_against_cadquery.py`](crates/pykentron/tests/test_against_cadquery.py)).
 
-About 13,430 tests run (scripts without their data not counted). About 1,250 of them are
+About 13,430 tests run (scripts without their data not counted). About 1,220 of them are
 known gaps, marked as expected failures ([`crates/occt-tests/expected_failures.txt`](crates/occt-tests/expected_failures.txt) for OCCT's scripts): they pass
 while they fail, so `cargo test` is green, and fail once they pass, so a fix is noticed
 as surely as a regression.
