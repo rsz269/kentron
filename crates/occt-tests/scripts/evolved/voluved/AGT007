@@ -19,7 +19,8 @@ if {[regexp "Faulties" [bopargcheck result]]} {
 checkmaxtol result -ref 1.5e-7
 
 regexp {Tolerance MAX=([-0-9.+eE]+)} [tolerance result] full toler
-checkreal MAXTOL $toler 3.0e-007 0.0 0.1
+# kentron deviation (draw_deviations.json): OCCT's evolved solid carries a maximal tolerance of 3e-7 (OCCT 7.9 via OCP: 3.00001e-7), above the script's own checkmaxtol reference of 1.5e-7; kentron's is the default 1e-7. Checked against OCCT's own result (BRepOffsetAPI_MakeEvolved, volume mode): the same solid, area 361.0874296 and volume 312.848418 in both (and the profile's offsets bounding 312.8486, brute force). Expected value is kentron's: 1e-7.
+checkreal MAXTOL $toler 1.0e-007 0.0 0.1
 
 smallview
 don result sw tw

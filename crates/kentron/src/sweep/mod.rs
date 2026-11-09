@@ -453,6 +453,14 @@ pub fn revolve(model: &mut Model, profile: Shape, axis: Axis, angle: f64) -> Res
         let sweep = revolve(model, Shape { placement: Transform::IDENTITY, ..profile }, local, angle)?;
         return Ok(sweep.moved(&profile.placement));
     }
+    // A wire crossing the axis: each part on either side sweeps a cone of its own, the two
+    // meeting at the apex (as one face, the cone's two nappes through its apex, it would
+    // not be a valid face).
+    if profile.kind() == NodeKind::Wire {
+        if let Some(split) = split_at_axis(model, profile, axis)? {
+            return revolve(model, split, axis, angle);
+        }
+    }
     let mut r = Revolver {
         model,
         axis,
@@ -532,6 +540,50 @@ pub fn revolve(model: &mut Model, profile: Shape, axis: Axis, angle: f64) -> Res
     let generated = std::mem::take(&mut r.generated);
     let (ends, copies) = (std::mem::take(&mut r.ends), std::mem::take(&mut r.copies));
     Ok(Sweep { shape, generated, ends, copies })
+}
+
+/// `wire` with its straight edges crossing `axis` between their ends split there (copied,
+/// its other edges too), or `None` where none does.
+fn split_at_axis(model: &mut Model, wire: Shape, axis: Axis) -> Result<Option<Shape>> {
+    let z = Vector::from(axis.direction);
+    let radial = |v: Vector| v - z * v.dot(z);
+    let edges: Vec<Shape> = model.explore(wire, NodeKind::Edge).collect();
+    // Where each edge crosses the axis (its parameter there), if it does.
+    let mut crossings = Vec::with_capacity(edges.len());
+    for &e in &edges {
+        let crossing = match model.edge_curve(e) {
+            Some((curve @ Curve::Line(_), a, b)) => {
+                let (pa, pb) = (curve.point(a), curve.point(b));
+                let (r0, rd) = (radial(pa - axis.origin), radial(pb - pa));
+                let length = (pb - pa).length();
+                (rd.dot(rd) > 1e-18 * length * length)
+                    .then(|| -r0.dot(rd) / rd.dot(rd))
+                    .filter(|&s| (r0 + rd * s).length() <= tolerance::LINEAR && s * length > 10.0 * tolerance::LINEAR && (1.0 - s) * length > 10.0 * tolerance::LINEAR)
+                    .map(|s| (curve, a, b, a + (b - a) * s))
+            }
+            _ => None,
+        };
+        crossings.push(crossing);
+    }
+    if crossings.iter().all(Option::is_none) {
+        return Ok(None);
+    }
+    let mut parts = Vec::with_capacity(edges.len() + 1);
+    for (&e, crossing) in edges.iter().zip(crossings) {
+        match crossing {
+            Some((curve, a, b, t)) => {
+                let first = crate::make::edge_from_curve_range(model, curve.clone(), a, t)?;
+                let second = crate::make::edge_from_curve_range(model, curve, t, b)?;
+                if e.orientation == Orientation::Reversed {
+                    parts.extend([second.reversed(), first.reversed()]);
+                } else {
+                    parts.extend([first, second]);
+                }
+            }
+            None => parts.push(crate::modify::copy(model, e, false)?),
+        }
+    }
+    crate::make::wire(model, &parts).map(Some)
 }
 
 /// The state of one revolution: what each profile vertex and edge has swept, and their

@@ -6,10 +6,10 @@
 //! along the spine from where it stands (its nearest point on the spine), the sweep turned
 //! about the spine's corners (a rounded transition); the sweep's free edges level with the
 //! spine bound planar lids; the space the sweep and the lids enclose, split where they
-//! cross, is the solid (each closed piece of it, joined).
+//! cross, is the solid (the closed pieces of it the sweep winds round, joined where they
+//! share faces: a compound of solids where some share none).
 
 use crate::error::{Error, Result};
-use crate::geometry::extrema::nearest_on_curve;
 use crate::geometry::ParametricCurve;
 use crate::math::{Point, Point2, Vector};
 use crate::topology::{Model, NodeId, NodeKind, Orientation, Shape};
@@ -39,7 +39,6 @@ pub fn evolved(model: &mut Model, spine: Shape, profile: Shape, options: Evolved
     }
     let plane = crate::make::plane_of_wire(model, spine)?;
     let normal = Vector::from(plane.normal());
-    let spine = starting_by(model, spine, profile)?;
     let swept = super::pipe_cornered(model, profile, spine, &PipeOptions::default(), Corner::Rounded)?;
     // The lids: faces the sweep's free edges level with the spine bound.
     let size = crate::properties::bounding_box(model, swept).size().length().max(1e-9);
@@ -131,90 +130,72 @@ pub fn evolved(model: &mut Model, spine: Shape, profile: Shape, options: Evolved
     Ok(shell)
 }
 
-/// `spine` starting where `profile` stands on it (its point nearest the profile), where it is
-/// closed: the sweep runs on round from there. An open spine as it is.
-fn starting_by(model: &mut Model, spine: Shape, profile: Shape) -> Result<Shape> {
-    let edges = model.ordered_edges(spine);
-    let (first_vertex, _) = model.edge_vertices(edges[0]);
-    let (_, last_vertex) = model.edge_vertices(edges[edges.len() - 1]);
-    let closed = first_vertex.node == last_vertex.node || model.point(first_vertex).distance(model.point(last_vertex)) <= model.tolerance(first_vertex).max(model.tolerance(last_vertex));
-    if !closed {
-        return Ok(spine);
-    }
-    // Each spine edge's curve, as the spine runs (`from` to `to`).
-    let mut runs = Vec::with_capacity(edges.len());
-    for &e in &edges {
-        let (curve, a, b) = model.edge_curve(e).ok_or_else(|| Error::InvalidInput("an evolved shape's spine edge has no curve".into()))?;
-        runs.push(if e.orientation == Orientation::Reversed { (curve, b, a) } else { (curve, a, b) });
-    }
-    // The profile's points (its edges sampled), and the spine's point nearest them.
-    let mut points = Vec::new();
-    for e in model.unique_subshapes(profile, NodeKind::Edge) {
-        if let Some((curve, a, b)) = model.edge_curve(e) {
-            points.extend((0..=32).map(|k| curve.point(a + (b - a) * k as f64 / 32.0)));
+/// The cells joined: the faces two of them share are inside; faces left in pieces on one
+/// surface merged. Cells sharing no faces (in a chain) stay apart, as OCCT's: a compound of
+/// a solid for each group.
+fn joined(model: &mut Model, cells: &[Shape]) -> Result<Shape> {
+    // The groups of cells sharing faces.
+    let mut group: Vec<usize> = (0..cells.len()).collect();
+    fn root(group: &mut [usize], mut i: usize) -> usize {
+        while group[i] != i {
+            group[i] = group[group[i]];
+            i = group[i];
         }
+        i
     }
-    let mut best = (f64::INFINITY, 0, 0.0);
-    for (k, (curve, from, to)) in runs.iter().enumerate() {
-        for &p in &points {
-            let near = nearest_on_curve(p, curve, from.min(*to), from.max(*to));
-            if near.distance < best.0 {
-                best = (near.distance, k, near.parameter);
+    let mut owner: std::collections::HashMap<NodeId, usize> = std::collections::HashMap::new();
+    for (i, &cell) in cells.iter().enumerate() {
+        for face in model.unique_subshapes(cell, NodeKind::Face) {
+            if let Some(&j) = owner.get(&face.node) {
+                let (a, b) = (root(&mut group, i), root(&mut group, j));
+                group[a] = b;
+            } else {
+                owner.insert(face.node, i);
             }
         }
     }
-    let (_, k, t) = best;
-    let scale = crate::properties::bounding_box(model, spine).size().length().max(1e-9);
-    let close = |a: f64, b: f64, (curve, _, _): &(crate::geometry::curve::Curve, f64, f64)| curve.point(a).distance(curve.point(b)) <= 1e-9 * scale;
-    // The edges from there round: the rest of edge k, the others, edge k up to there.
-    let mut order: Vec<(usize, f64, f64)> = Vec::new();
-    let (from, to) = (runs[k].1, runs[k].2);
-    if !close(t, to, &runs[k]) {
-        order.push((k, t, to));
+    let mut groups: Vec<Vec<Shape>> = Vec::new();
+    let mut index: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+    for (i, &cell) in cells.iter().enumerate() {
+        let r = root(&mut group, i);
+        let g = *index.entry(r).or_insert_with(|| {
+            groups.push(Vec::new());
+            groups.len() - 1
+        });
+        groups[g].push(cell);
     }
-    for i in 1..runs.len() {
-        let j = (k + i) % runs.len();
-        order.push((j, runs[j].1, runs[j].2));
-    }
-    if !close(from, t, &runs[k]) {
-        order.push((k, from, t));
-    }
-    if order.len() == edges.len() && order[0].0 == 0 {
-        return Ok(spine);
-    }
-    let mut made = Vec::with_capacity(order.len());
-    for (j, a, b) in order {
-        let curve = runs[j].0.clone();
-        let edge = crate::make::edge_from_curve_range(model, curve, a.min(b), a.max(b))?;
-        made.push(if a > b { edge.reversed() } else { edge });
-    }
-    crate::make::wire(model, &made)
-}
-
-/// The cells joined: the faces two of them share are inside; faces left in pieces on one
-/// surface merged.
-fn joined(model: &mut Model, cells: &[Shape]) -> Result<Shape> {
-    let mut uses: std::collections::HashMap<NodeId, (Shape, usize)> = std::collections::HashMap::new();
-    let mut order = Vec::new();
-    for &cell in cells {
-        for face in model.explore(cell, NodeKind::Face).collect::<Vec<_>>() {
-            let entry = uses.entry(face.node).or_insert_with(|| {
-                order.push(face.node);
-                (face, 0)
-            });
-            entry.1 += 1;
+    let mut solids = Vec::with_capacity(groups.len());
+    for cells in groups {
+        let mut uses: std::collections::HashMap<NodeId, (Shape, usize)> = std::collections::HashMap::new();
+        let mut order = Vec::new();
+        for &cell in &cells {
+            for face in model.explore(cell, NodeKind::Face).collect::<Vec<_>>() {
+                let entry = uses.entry(face.node).or_insert_with(|| {
+                    order.push(face.node);
+                    (face, 0)
+                });
+                entry.1 += 1;
+            }
         }
-    }
-    let shell = model.new_empty(NodeKind::Shell);
-    for node in order {
-        let (face, count) = uses[&node];
-        if count == 1 {
-            model.add(shell, face)?;
+        let shell = model.new_empty(NodeKind::Shell);
+        for node in order {
+            let (face, count) = uses[&node];
+            if count == 1 {
+                model.add(shell, face)?;
+            }
         }
+        let solid = model.new_empty(NodeKind::Solid);
+        model.add(solid, shell)?;
+        solids.push(crate::unify::unify_same_domain_with(model, solid, crate::unify::UnifyOptions { same_surface_only: true, ..Default::default() })?);
     }
-    let solid = model.new_empty(NodeKind::Solid);
-    model.add(solid, shell)?;
-    crate::unify::unify_same_domain_with(model, solid, crate::unify::UnifyOptions { same_surface_only: true, ..Default::default() })
+    if let [solid] = solids[..] {
+        return Ok(solid);
+    }
+    let compound = model.new_empty(NodeKind::Compound);
+    for solid in solids {
+        model.add(compound, solid)?;
+    }
+    Ok(compound)
 }
 
 /// How many times the polylines (closed loops, cut anywhere into runs) wind round `q`.
@@ -283,5 +264,24 @@ mod tests {
         let area = crate::properties::area(&model, solid).mass;
         assert!((volume - 1023.79).abs() < 1e-2, "{volume}");
         assert!((area - 1649.58).abs() < 1e-2, "{area}");
+    }
+
+    /// A profile from outside the spine to inside it, round corners between a line and an
+    /// arc (a D): the sweeps trimmed where they cross inside each corner, filled outside.
+    /// Its volume as OCCT's (403.98635), as the offsets of the D at each height bound.
+    #[test]
+    fn a_profile_crossing_the_spine_swept_round_a_d() {
+        use crate::geometry::curve::{Circle, Curve};
+        use crate::math::{Direction, Frame};
+        let mut model = Model::new();
+        let line = crate::make::edge_between(&mut model, Point::new(0.0, 0.0, 0.0), Point::new(10.0, 0.0, 0.0)).unwrap();
+        let circle = Circle::new(Frame::new(Point::new(5.0, 0.0, 0.0), Direction::Z, Direction::X), 5.0);
+        let arc = crate::make::edge_from_curve_range(&mut model, Curve::Circle(circle), 0.0, std::f64::consts::PI).unwrap();
+        let spine = crate::make::wire(&mut model, &[line, arc]).unwrap();
+        let profile = polyline(&mut model, &[[5.0, -1.0, 0.0], [5.0, 1.0, 10.0]]);
+        let solid = evolved(&mut model, spine, profile, EvolvedOptions { solid: true }).unwrap();
+        assert!(crate::validity::check(&model, solid).is_valid());
+        let volume = crate::properties::volume(&model, solid).mass;
+        assert!((volume - 403.98635).abs() < 1e-3, "{volume}");
     }
 }

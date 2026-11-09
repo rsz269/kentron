@@ -4,19 +4,16 @@ use occt_tests::draw::*;
 
 /// `tests/evolved/voluved/AGT004`
 #[test]
-#[should_panic]
-fn agt004() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.profile(&["p", "X", "10", "Y", "2", "X", "-10", "W"])?;
-        d.polyline(&["t", "-1", "1", "0", "1", "1", "10"])?;
-        d.evolved(&["result", "-s", "p", "-p", "t", "-a", "-solid", "-v"])?;
-        d.checkprops(&["result", "-s", "287.517", "-v", "211.903"])?;
-        d.checkshape(&["result"])?;
-        d.checknbshapes(&["result", "-solid", "1", "-shell", "1"])?;
-        d.checkmaxtol(&["result", "-ref", "1.5e-007"])?;
-        Ok(())
-    })
+fn agt004() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.profile(&["p", "X", "10", "Y", "2", "X", "-10", "W"])?;
+    d.polyline(&["t", "-1", "1", "0", "1", "1", "10"])?;
+    d.evolved(&["result", "-s", "p", "-p", "t", "-a", "-solid", "-v"])?;
+    d.checkprops(&["result", "-s", "287.517", "-v", "211.903"])?;
+    d.checkshape(&["result"])?;
+    d.checknbshapes(&["result", "-solid", "1", "-shell", "1"])?;
+    d.checkmaxtol(&["result", "-ref", "1.5e-007"])?;
+    Ok(())
 }
 
 /// `tests/evolved/voluved/bug26470_1`

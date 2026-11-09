@@ -136,30 +136,32 @@ their faces can come out split into thin slivers near the corners of the cavity.
 
 ## Evolved solids
 
-### Profiles collapsing or crossing the spine at its corners
+### Profiles leaning along the spine at its corners
 
-*Found 2026-11-09.*
+*Found 2026-11-09; corner trimming landed 2026-11-09.*
 
 kentron's evolved solids (`sweep::evolved`) follow OCCT's volume mode: the profile swept
-along the spine with rounded corners, closed by lids from the sweep's free edges, the cells
-it winds round joined. They match OCCT where the sweep round the spine's corners closes:
-`tests/evolved/voluved/AGT002`, `AGT006`, `AGT008` (areas and volumes to OCCT's digits).
-Elsewhere the corner sweep leaves gaps or extra pieces:
+along the spine with rounded corners (the part outside a corner turned round it, the
+sweeps trimmed where they cross inside it, as BRepFill_TrimShellCorner), closed by lids
+from the sweep's free edges, the cells it winds round joined. They match OCCT for profiles
+standing square to the spine: `tests/evolved/voluved/AGT002`, `AGT004` to `AGT009`, and a
+D-shaped spine with curved corners (unit test, 403.98635 as OCCT's and as the offsets'
+brute force). Profiles leaning along the spine where they stand do not:
 
-- **Repro:** `voluved/AGT001` (the profile's top 1 inside the spine at an arc of radius 1:
-  the arc's sweep collapses to its centre, and the mitre at the arc's end into the next
-  line leaves free edges: "enclosing nothing"); `AGT005`, `AGT007` (a profile from outside
-  the spine to inside it: rounded corners, the sweep's cells not closing); `AGT003`
-  (area 1633.7 for 1573.58); `AGT004`; `AGT009` (two solids expected, joined into one);
-  `bug26470_1`, `_2` in `evolved` and `voluved` ("pieces do not sew", "enclosing
-  nothing"); `bug30781` (its data is in OCCT's binary format, `binrestore`, not read).
-- **Evidence:** AGT001's main cell, built with the profile placed where it stands and the
-  corners rounded, is 245.265 (OCCT's volume); the extra cells come from the profile
-  turned round convex corners it lies inside of (OCCT trims the sweeps against each other
-  there and fills only where they part).
-- **Needed:** OCCT's corner transition faithfully: the two sweeps trimmed where they meet
-  (BRepFill_TrimShellCorner), the round fill only over the part of the profile outside the
-  corner; and sweeps along arcs whose offset collapses.
+- **Repro:** `voluved/AGT003` (profile in the plane x + y = 1, at 45° to the spine: area
+  1539.57 for 1573.58, volume 530.229 for 532.942); `AGT001` (profile leaning forward
+  along the spine by 0.5 over its height of 5, at an arc meeting a line: "pieces do not
+  sew"); `bug26470_1`, `_2` in `evolved` and `voluved`; `bug30781` (its data is in OCCT's
+  binary format, `binrestore`, not read).
+- **Evidence:** a section square to the spine turned at a corner is its own mirror image
+  across the plane bisecting it, and the pieces' sweeps cross where the section crosses
+  the corner's axis, so the turned part outside meets the trimmed sweeps exactly. Leaning
+  along the spine, a point's tangential offset moves where its line crosses the bisecting
+  plane differently on the two pieces: what is left of the two sections after trimming
+  differs, and OCCT's result (OCP) has corner faces kentron's lacks (a plane of 3.125 and a
+  trimmed surface of 3.509 at each corner of AGT003).
+- **Needed:** OCCT's fill between unequal leftovers (BRepFill_Sweep::PerformCorner:
+  KeepEdge, then Filling between the pieces' remaining section edges).
 
 ## Features
 

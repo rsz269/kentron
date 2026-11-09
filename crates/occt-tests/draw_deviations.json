@@ -2646,5 +2646,12 @@
       "to": "checknbshapes result -solid 1 -shell 1 -face 9 -wire 9 -edge 21 -vertex 14 -shape 56",
       "reason": "OCCT's prism makes its top cap a placed copy of the bottom's vertices, edges and face, which checknbshapes counts once; kentron's prism makes the top cap anew. Counted once for each placement (DRAW's nbshapes -t, OCCT 8.1), OCCT's chamfered prism has kentron's 14 vertices and 21 edges (counted shared, 9 and 17); OCCT 7.9 (OCP, BRepFilletAPI_MakeChamfer) gives the same counts and the same volume as kentron."
     }
+  ],
+  "tests/evolved/voluved/AGT007": [
+    {
+      "from": "checkreal MAXTOL $toler 3.0e-007 0.0 0.1",
+      "to": "checkreal MAXTOL $toler 1.0e-007 0.0 0.1",
+      "reason": "OCCT's evolved solid carries a maximal tolerance of 3e-7 (OCCT 7.9 via OCP: 3.00001e-7), above the script's own checkmaxtol reference of 1.5e-7; kentron's is the default 1e-7. Checked against OCCT's own result (BRepOffsetAPI_MakeEvolved, volume mode): the same solid, area 361.0874296 and volume 312.848418 in both (and the profile's offsets bounding 312.8486, brute force). Expected value is kentron's: 1e-7."
+    }
   ]
 }

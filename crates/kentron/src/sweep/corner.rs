@@ -12,8 +12,11 @@
 //! its own mirror image across it).
 //!
 //! A closed profile is swept as the face it bounds; a shell wanted is the boundary of the
-//! solid swept, less its ends. At a round corner ([`Corner::Rounded`]) the profile is turned
-//! about the axis through the corner square to both tangents, joining the pieces' sweeps.
+//! solid swept, less its ends. At a round corner ([`Corner::Rounded`]) the part of the
+//! profile outside the corner is turned about the axis through the corner square to both
+//! tangents, filling where the pieces' sweeps part; inside it the sweeps cross, and are
+//! trimmed where they cross (OCCT's BRepFill_TrimShellCorner), not turned (which would
+//! fold back on itself).
 
 use crate::error::{Error, Result};
 use crate::geometry::curve::Curve;
@@ -93,7 +96,11 @@ pub(super) fn pipe_cornered(model: &mut Model, profile: Shape, pieces: &[SpinePi
             let (p, t1, t2) = (ends[k].2, ends[k].3, ends[(k + 1) % n].1);
             carried(&pieces[k], 0.0, 1.0).is_ok_and(|t| section_beyond(model, face, &(t * starts[k]), p, t1, t2) <= 0.0)
         });
-    if (corner == Corner::Rounded && !all_inside) || turns_back {
+    // (An open profile: trimmed where the pieces cross, as round corners trim the part
+    // inside, the corners all inside or not; there a piece
+    // shorter than the section reaches inside its corners winds back, as offsets do.)
+    let open_trimmed = face.kind() == NodeKind::Wire && (corner == Corner::Rounded || all_inside);
+    if (corner == Corner::Rounded && !all_inside) || turns_back || open_trimmed {
         return rounded(model, face, pieces, &ends, &starts, &corners, closed, wanted_shell);
     }
     for &k in &corners {
@@ -396,18 +403,181 @@ fn rounded(
     let [wire] = wires[..] else {
         return Err(Error::InvalidInput("round corners of pipes with profiles with holes are not supported yet".into()));
     };
-    let mut faces: Vec<Shape> = Vec::new();
+    // As OCCT's (BRepFill_Sweep::PerformCorner, BRepFill_TrimShellCorner): at each corner
+    // the part of the section outside it (past the axis through it square to both tangents)
+    // is turned round the axis, filling where the pieces' sweeps part; the part inside is
+    // not (turned, it would fold back on itself), the pieces' sweeps crossing there trimmed
+    // where they cross instead, meeting the part turned on the axis (the section turned at
+    // the corner crosses the section before it there). Between straight pieces they cross
+    // in the plane bisecting the corner (the section turned at the corner is its own mirror
+    // image across it); elsewhere each is split by the other.
+    let straight = |p: &SpinePiece| matches!(p.curve, Curve::Line(_));
+    let size = {
+        let spine_length: f64 = pieces.iter().map(|p| p.curve.point(p.first).distance(p.curve.point(p.last))).sum();
+        let b = properties::bounding_box(model, wire.moved(&starts[0]));
+        4.0 * ((b.max - b.min).length() + spine_length).max(1e-9)
+    };
+    // Each corner: whether the section reaches inside it (and is trimmed there), and whether
+    // in the plane bisecting it.
+    let mut trimmed = vec![false; n];
+    let mut in_plane = vec![false; n];
+    for &k in corners {
+        let (p, t1, t2) = (ends[k].2, ends[k].3, ends[(k + 1) % n].1);
+        let at_end = carried(&pieces[k], 0.0, 1.0)? * starts[k];
+        trimmed[k] = section_reach(model, wire, &at_end, p, -outside_of(t1, t2)) > 0.0;
+        in_plane[k] = straight(&pieces[k]) && straight(&pieces[(k + 1) % n]);
+    }
+    // A half-space bounded by the plane through `p` square to `normal`, on the side it points to.
+    let half = |model: &mut Model, p: Point, normal: Vector| -> Result<Shape> {
+        let plane = crate::geometry::surface::Plane::new(p, Direction::from_vector(normal));
+        let (u, v) = plane.parameters(p);
+        let bound = make::face_on_domain(model, crate::geometry::surface::Surface::Plane(plane), u - size, u + size, v - size, v + size)?;
+        crate::primitives::half_space(model, bound, p + normal * (1e-3 * size))
+    };
+    let bisector = |k: usize| {
+        let normal = ends[k].3 + ends[(k + 1) % n].1;
+        (ends[k].2, normal * (1.0 / normal.length()))
+    };
+    let mut swept = Vec::with_capacity(n);
     for (k, piece) in pieces.iter().enumerate() {
         let spine = carried_on_edge(model, piece, 0.0, 0.0)?;
-        let swept = super::pipe(model, wire.moved(&starts[k]), spine)?.shape;
-        faces.extend(model.unique_subshapes(swept, NodeKind::Face));
+        swept.push(super::pipe(model, wire.moved(&starts[k]), spine)?.shape);
+    }
+    // Whether face `f` has an edge on the section at `p` (square to `t`) on the side `inside`
+    // points to: a piece of a sweep carried past where the next one crosses it.
+    // (Near `p`: as far from it as the section reaches (the profile from where it stands),
+    // not on another section in its plane.)
+    let reach = {
+        let points: Vec<Point> = model
+            .unique_subshapes(wire, NodeKind::Edge)
+            .into_iter()
+            .filter_map(|e| model.edge_curve(e))
+            .flat_map(|(c, a, b)| (0..=16).map(move |i| c.point(a + (b - a) * i as f64 / 16.0)).collect::<Vec<_>>())
+            .collect();
+        let (k0, s0) = super::pipe::section_placement(model, wire, pieces)?;
+        let spine_point = pieces[k0].curve.point(pieces[k0].first + (pieces[k0].last - pieces[k0].first) * s0);
+        points.iter().map(|q| q.distance(spine_point)).fold(0.0, f64::max)
+    };
+    let past_crossing = |model: &Model, f: Shape, p: Point, t: Vector, inside: Vector| {
+        model.unique_subshapes(f, NodeKind::Edge).into_iter().any(|e| {
+            let Some((curve, a, b)) = model.edge_curve(e) else { return false };
+            let ends = [curve.point(a), curve.point(0.5 * (a + b)), curve.point(b)];
+            ends.iter().all(|&q| (q - p).dot(t).abs() <= 1e-9 * size && q.distance(p) <= 1.01 * reach + 1e-9 * size) && (ends[1] - p).dot(inside) > 1e-9 * size
+        })
+    };
+    // (At a corner the pieces split each other at, where the curve they cross along does not
+    // cut one of them in two, so that a whole face of it would go, the trimming fails: as
+    // OCCT's (BRepFill_TrimShellCorner not done), the pieces are left whole there and the
+    // whole section turned round the corner.)
+    for &k in corners {
+        let next = (k + 1) % n;
+        if !trimmed[k] || in_plane[k] {
+            continue;
+        }
+        let whole: Vec<Vec<f64>> = [swept[k], swept[next]].iter().map(|&s| model.unique_subshapes(s, NodeKind::Face).into_iter().map(|f| properties::area(model, f).mass.abs()).collect()).collect();
+        let start_inside = {
+            let (p, t1, t2) = (ends[k].2, ends[k].3, ends[next].1);
+            ((p - outside_of(t1, t2)).transformed(&turn(p, t1, t2)) - p, ends[next].0, ends[next].1)
+        };
+        let end_inside = (-outside_of(ends[k].3, ends[next].1), ends[k].2, ends[k].3);
+        let mut failed = false;
+        for cell in boolean::cells(model, &[swept[k], swept[next]])? {
+            let Some(side) = (0..2).find(|&i| cell.inside[i] && !cell.inside[1 - i]) else { continue };
+            for f in model.unique_subshapes(cell.shape, NodeKind::Face) {
+                let (inside, p, t) = if side == 0 { end_inside } else { start_inside };
+                if past_crossing(model, f, p, t, inside) {
+                    let area = properties::area(model, f).mass.abs();
+                    failed |= whole[side].iter().any(|&a| (a - area).abs() <= 1e-7 * a.max(1e-300));
+                }
+            }
+        }
+        if failed {
+            trimmed[k] = false;
+        }
+    }
+    let mut faces: Vec<Shape> = Vec::new();
+    for (k, piece) in pieces.iter().enumerate() {
+        let previous = (k + n - 1) % n;
+        let next = (k + 1) % n;
+        let trimmed_before = (k > 0 || closed) && corners.contains(&previous) && trimmed[previous];
+        let trimmed_after = corners.contains(&k) && trimmed[k];
+        // What is kept: from where the piece before crosses this one to where the one after
+        // does. Where the two cross (the piece shorter than the section reaches inside its
+        // corners, its offset turned round), between them the other way: the sweep winds
+        // back on itself there, as offsets past where they collapse (the cells it closes
+        // wound round no times).
+        let kept = if (!trimmed_before || in_plane[previous]) && (!trimmed_after || in_plane[k]) {
+            match (trimmed_before, trimmed_after) {
+                (false, false) => vec![swept[k]],
+                (true, false) => {
+                    let (p, normal) = bisector(previous);
+                    let before = half(model, p, -normal)?;
+                    vec![boolean::difference(model, swept[k], before)?]
+                }
+                (false, true) => {
+                    let (p, normal) = bisector(k);
+                    let past = half(model, p, normal)?;
+                    vec![boolean::difference(model, swept[k], past)?]
+                }
+                (true, true) => {
+                    let (pa, na) = bisector(previous);
+                    let (pb, nb) = bisector(k);
+                    let after = half(model, pa, na)?;
+                    let after_start = boolean::intersection(model, swept[k], after)?;
+                    let before_start = boolean::difference(model, swept[k], after)?;
+                    let past = half(model, pb, nb)?;
+                    vec![boolean::difference(model, after_start, past)?, boolean::intersection(model, before_start, past)?]
+                }
+            }
+        } else {
+            // Split by the pieces either side, less the pieces carried past where they cross
+            // it: those ending on its section at the corner, inside it.
+            let mut shapes = vec![swept[k]];
+            if trimmed_before {
+                shapes.push(swept[previous]);
+            }
+            if trimmed_after {
+                shapes.push(swept[next]);
+            }
+            let start_inside = {
+                let (p, t1, t2) = (ends[previous].2, ends[previous].3, ends[k].1);
+                ((p - outside_of(t1, t2)).transformed(&turn(p, t1, t2)) - p, ends[k].0, ends[k].1)
+            };
+            let end_inside = (-outside_of(ends[k].3, ends[next].1), ends[k].2, ends[k].3);
+            let mut kept = Vec::new();
+            for cell in boolean::cells(model, &shapes)? {
+                if !cell.inside[0] || cell.inside[1..].iter().any(|&i| i) {
+                    continue;
+                }
+                for f in model.unique_subshapes(cell.shape, NodeKind::Face) {
+                    let past_start = trimmed_before && past_crossing(model, f, start_inside.1, start_inside.2, start_inside.0);
+                    let past_end = trimmed_after && past_crossing(model, f, end_inside.1, end_inside.2, end_inside.0);
+                    if !past_start && !past_end {
+                        kept.push(f);
+                    }
+                }
+            }
+            kept
+        };
+        for part in kept {
+            faces.extend(model.unique_subshapes(part, NodeKind::Face));
+        }
         if corners.contains(&k) {
             let (p, t1, t2) = (ends[k].2, ends[k].3, ends[(k + 1) % n].1);
             let axis = t1.cross(t2);
             let angle = axis.length().atan2(t1.dot(t2));
             let at_end = carried(piece, 0.0, 1.0)? * starts[k];
-            let knee = super::revolve(model, wire.moved(&at_end), Axis::new(p, Direction::from_vector(axis)), angle)?.shape;
-            faces.extend(model.unique_subshapes(knee, NodeKind::Face));
+            let mut section = wire.moved(&at_end);
+            if trimmed[k] {
+                let inside = half(model, p, -outside_of(t1, t2))?;
+                section = boolean::difference(model, section, inside)?;
+            }
+            // (The section whole as a wire: where it crosses the axis, a cone either side.)
+            let parts = if trimmed[k] { model.unique_subshapes(section, NodeKind::Edge) } else { vec![section] };
+            for part in parts {
+                let knee = super::revolve(model, part, Axis::new(p, Direction::from_vector(axis)), angle)?.shape;
+                faces.extend(model.unique_subshapes(knee, NodeKind::Face));
+            }
         }
     }
     if !closed && !wanted_shell && face.kind() == NodeKind::Face {
@@ -438,8 +608,19 @@ fn rounded(
 /// tangent `t1` to `t2`), past the axis through it square to both (beyond the tolerance:
 /// zero or less where it lies all inside, up to the axis at most).
 fn section_beyond(model: &Model, face: Shape, at_end: &Transform, p: Point, t1: Vector, t2: Vector) -> f64 {
+    section_reach(model, face, at_end, p, outside_of(t1, t2))
+}
+
+/// The unit direction out of the corner from the tangent `t1` to `t2`: square to `t1`, away
+/// from `t2`.
+fn outside_of(t1: Vector, t2: Vector) -> Vector {
     let away = t1 * t1.dot(t2) - t2;
-    let outside = away * (1.0 / away.length().max(1e-300));
+    away * (1.0 / away.length().max(1e-300))
+}
+
+/// How far the profile `face` placed by `at_end` reaches from `p` along the unit `outside`
+/// (beyond the tolerance).
+fn section_reach(model: &Model, face: Shape, at_end: &Transform, p: Point, outside: Vector) -> f64 {
     let points: Vec<Point> = model
         .unique_subshapes(face, NodeKind::Edge)
         .into_iter()
@@ -584,6 +765,42 @@ mod tests {
         let vertices: Vec<Shape> = points.iter().map(|&p| make::vertex(model, p)).collect();
         let edges: Vec<Shape> = vertices.windows(2).map(|w| make::edge(model, w[0], w[1]).unwrap()).collect();
         make::wire(model, &edges).unwrap()
+    }
+
+    #[test]
+    fn a_segment_crossing_the_spine_round_corners() {
+        // A segment from 2 outside the spine to 2 inside it, round the two right-angled
+        // corners of a U: inside each corner the pieces' sweeps trimmed where they cross,
+        // outside the part of the segment there turned round the corner. Its area as OCCT's
+        // (BRepOffsetAPI_MakePipeShell, round transition): 132.245.
+        let mut model = Model::new();
+        let spine = polyline(&mut model, &[Point::new(0.0, 0.0, 0.0), Point::new(10.0, 0.0, 0.0), Point::new(10.0, 10.0, 0.0), Point::new(0.0, 10.0, 0.0)]);
+        let profile = polyline(&mut model, &[Point::new(0.0, -2.0, -1.0), Point::new(0.0, 2.0, 1.0)]);
+        let shell = pipe_cornered(&mut model, profile, spine, &PipeOptions::default(), Corner::Rounded).unwrap();
+        assert!(crate::validity::check(&model, shell).is_valid());
+        let area = properties::area(&model, shell).mass;
+        assert!((area - 132.245).abs() < 1e-3, "{area}");
+    }
+
+    #[test]
+    fn a_segment_crossing_the_spine_round_a_corner_into_an_arc() {
+        // A line into a quarter circle of radius 5 at a right angle, a segment from 1 outside
+        // the spine to 3 inside it: the pieces' sweeps cross, but along a curve leaving the
+        // arc's sweep through its end, cutting the line's sweep in two nowhere. There OCCT's
+        // trimming fails: the sweeps left whole and the whole segment turned round the
+        // corner (OCCT's three faces, of areas 44.7214, 28.0993 and, the turned segment
+        // crossing the corner's axis, 5 √5 π / 4 = 8.7810).
+        let mut model = Model::new();
+        let line = make::edge_between(&mut model, Point::new(0.0, 0.0, 0.0), Point::new(10.0, 0.0, 0.0)).unwrap();
+        let circle = Circle::new(Frame::new(Point::new(5.0, 0.0, 0.0), Direction::Z, Direction::X), 5.0);
+        let arc = make::edge_from_curve_range(&mut model, Curve::Circle(circle), 0.0, std::f64::consts::FRAC_PI_2).unwrap();
+        let spine = make::wire(&mut model, &[line, arc]).unwrap();
+        let profile = polyline(&mut model, &[Point::new(2.0, -1.0, 0.0), Point::new(2.0, 3.0, 2.0)]);
+        let shell = pipe_cornered(&mut model, profile, spine, &PipeOptions::default(), Corner::Rounded).unwrap();
+        assert!(crate::validity::check(&model, shell).is_valid());
+        let area = properties::area(&model, shell).mass;
+        let expected = 44.72136 + 28.09926 + 5.0 * 5f64.sqrt() * std::f64::consts::PI / 4.0;
+        assert!((area - expected).abs() < 1e-3, "{area}");
     }
 
     #[test]
