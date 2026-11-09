@@ -79,6 +79,11 @@ struct Writer<'a> {
     lines: Vec<String>,
     /// The marks of the product being written's faces and edges, by node.
     marks: HashMap<NodeId, Mark>,
+    /// The marks of its solids, shells and compounds of their own (styled as wholes).
+    body_marks: HashMap<NodeId, Mark>,
+    /// Products written (their definitions and representations), by the definition they
+    /// were read from: each written once, however often it occurs.
+    products: HashMap<usize, (usize, usize)>,
     /// Styles of the product being written's faces.
     face_styles: Vec<usize>,
     /// Layers and the items on each, in the order met.
@@ -107,6 +112,8 @@ impl<'a> Writer<'a> {
             model,
             lines: Vec::new(),
             marks: HashMap::default(),
+            body_marks: HashMap::default(),
+            products: HashMap::default(),
             face_styles: Vec::new(),
             layers: Vec::new(),
             vertices: HashMap::default(),
@@ -193,6 +200,9 @@ impl<'a> Writer<'a> {
     /// A product for `node` and its children; its product definition and representation.
     fn product(&mut self, node: &Node, application: &usize, (product_context, definition_context): (usize, usize)) -> Result<(usize, usize)> {
         let _ = application;
+        if let Some(written) = node.definition.and_then(|d| self.products.get(&d)) {
+            return Ok(*written);
+        }
         let name = self.escape(&node.name);
         let product = self.add(format!("PRODUCT('{name}','{name}','',(#{product_context}))"));
         self.add(format!("PRODUCT_RELATED_PRODUCT_CATEGORY('part',$,(#{product}))"));
@@ -207,7 +217,17 @@ impl<'a> Writer<'a> {
         // The faces' and edges' own names, colours and layers (a wire's are its edges', a
         // solid's or shell's its faces').
         self.marks.clear();
+        self.body_marks.clear();
         for sub in &node.subshapes {
+            // (A solid's, shell's or compound's as a whole: on its item; a wire's on its
+            // edges.)
+            if matches!(sub.shape.kind(), NodeKind::Solid | NodeKind::Shell | NodeKind::Compound) {
+                let mark = self.body_marks.entry(sub.shape.node).or_default();
+                mark.name = sub.name.clone().or(mark.name.take());
+                mark.color = sub.color.or(mark.color);
+                mark.layer = sub.layer.clone().or(mark.layer.take());
+                continue;
+            }
             let targets: Vec<NodeId> = match sub.shape.kind() {
                 NodeKind::Face | NodeKind::Edge => vec![sub.shape.node],
                 NodeKind::Wire => self.model.unique_subshapes(sub.shape, NodeKind::Edge).iter().map(|e| e.node).collect(),
@@ -230,6 +250,9 @@ impl<'a> Writer<'a> {
                 has_shells |= shell;
                 if let Some(c) = node.color {
                     styled.push(self.style(item, c, node.alpha));
+                }
+                if let Some(layer) = &node.layer {
+                    self.layer(layer, item);
                 }
             }
         }
@@ -260,6 +283,9 @@ impl<'a> Writer<'a> {
             let usage = self.add(format!("NEXT_ASSEMBLY_USAGE_OCCURRENCE('{}','{child_name}','',#{definition},#{child_definition},$)", k + 1));
             let placement = self.add(format!("PRODUCT_DEFINITION_SHAPE('Placement','Placement of an item',#{usage})"));
             self.add(format!("CONTEXT_DEPENDENT_SHAPE_REPRESENTATION(#{relationship},#{placement})"));
+        }
+        if let Some(d) = node.definition {
+            self.products.insert(d, (definition, representation));
         }
         Ok((definition, representation))
     }
@@ -349,6 +375,7 @@ impl<'a> Writer<'a> {
                 let list = voids.iter().map(|v| format!("#{v}")).collect::<Vec<_>>().join(",");
                 self.add(format!("BREP_WITH_VOIDS('',#{outer},({list}))"))
             };
+            self.mark_whole(solid.node, item);
             out.push((item, false));
         }
         let free: Vec<Shape> = model.explore(shape, NodeKind::Shell).filter(|s| !in_solids.contains(&(s.node, key(&s.placement)))).collect();
@@ -376,6 +403,7 @@ impl<'a> Writer<'a> {
             // points, as well as parameters), named as the edges are (the set as the first).
             let mut ids = Vec::new();
             let mut set_name = String::new();
+            let compound = shape.node;
             for e in model.unique_subshapes(shape, NodeKind::Edge) {
                 let Some((curve, first, last)) = model.edge_curve(Shape { orientation: Orientation::Forward, ..e }) else { continue };
                 let basis = self.curve(&curve, first, last)?;
@@ -403,7 +431,9 @@ impl<'a> Writer<'a> {
             }
             if !ids.is_empty() {
                 let list = ids.iter().map(|v| format!("#{v}")).collect::<Vec<_>>().join(",");
-                out.push((self.add(format!("GEOMETRIC_CURVE_SET('{set_name}',({list}))")), true));
+                let set = self.add(format!("GEOMETRIC_CURVE_SET('{set_name}',({list}))"));
+                self.mark_whole(compound, set);
+                out.push((set, true));
             }
         }
         Ok(out)
@@ -417,7 +447,22 @@ impl<'a> Writer<'a> {
         }
         let list = ids.iter().map(|v| format!("#{v}")).collect::<Vec<_>>().join(",");
         let kind = if closed { "CLOSED_SHELL" } else { "OPEN_SHELL" };
-        Ok(self.add(format!("{kind}('',({list}))")))
+        let id = self.add(format!("{kind}('',({list}))"));
+        self.mark_whole(shell.node, id);
+        Ok(id)
+    }
+
+    /// The colour and layer of a solid, shell or compound of its own (`node`) on the item
+    /// written for it.
+    fn mark_whole(&mut self, node: NodeId, item: usize) {
+        let Some(mark) = self.body_marks.get(&node).cloned() else { return };
+        if let Some([r, g, b, a]) = mark.color {
+            let styled = self.style(item, [r, g, b], Some(a));
+            self.face_styles.push(styled);
+        }
+        if let Some(layer) = &mark.layer {
+            self.layer(layer, item);
+        }
     }
 
     /// A face (placed, used as `face.orientation` says).
@@ -492,6 +537,10 @@ impl<'a> Writer<'a> {
         let name = mark.name.as_deref().map(|n| self.escape(n)).unwrap_or_default();
         self.name_geometry(curve, &name);
         let e = self.add(format!("EDGE_CURVE('{name}',#{va},#{vb},#{curve},.T.)"));
+        if let Some([r, g, b, a]) = mark.color {
+            let styled = self.style(e, [r, g, b], Some(a));
+            self.face_styles.push(styled);
+        }
         if let Some(layer) = &mark.layer {
             self.layer(layer, e);
         }

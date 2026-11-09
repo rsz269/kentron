@@ -48,11 +48,13 @@ pub struct Node {
     /// Where the product sits in its parent.
     pub placement: Transform,
     pub children: Vec<Node>,
-    /// Faces and edges of the shape with names, colours or layers of their own (a wire's
-    /// layer is its edges').
+    /// Parts of the shape with names, colours or layers of their own: faces and edges, and
+    /// the shells and solids of a shape of several (a wire's layer is its edges').
     pub subshapes: Vec<Subshape>,
     /// What the product is made of.
     pub material: Option<Material>,
+    /// The layer the product's shape is on as a whole, if any.
+    pub layer: Option<String>,
     /// The file's product definition this node is an occurrence of (its entity number): the
     /// same for every occurrence of one product. `None` for shapes read without products, and
     /// for nodes made otherwise than by reading.
@@ -247,6 +249,7 @@ struct Reader<'a> {
     /// The file's instance of each face and edge read (for their names, colours and layers).
     face_instances: HashMap<crate::topology::NodeId, usize>,
     edge_instances: HashMap<crate::topology::NodeId, usize>,
+    shell_instances: HashMap<crate::topology::NodeId, usize>,
     /// Tolerances needed to cover the gaps between the file's curves, pcurves and points.
     gaps: Gaps,
 }
@@ -269,6 +272,7 @@ impl<'a> Reader<'a> {
             materials: HashMap::default(),
             face_instances: HashMap::default(),
             edge_instances: HashMap::default(),
+            shell_instances: HashMap::default(),
             gaps: Gaps::default(),
         };
         reader.colors = colors(x);
@@ -889,6 +893,7 @@ impl<'a> Reader<'a> {
             let face = self.face(Self::reference(f)?)?;
             self.model.add(shell, face)?;
         }
+        self.shell_instances.insert(shell.node, id);
         Ok(shell)
     }
 
@@ -898,18 +903,33 @@ impl<'a> Reader<'a> {
             return Ok(Some(s));
         }
         let inst = self.get(id)?;
-        let made = if let Some(p) = inst.record("MANIFOLD_SOLID_BREP").or(inst.record("FACETED_BREP")) {
+        let made = if let Some(p) = inst.record("MANIFOLD_SOLID_BREP").or(inst.record("FACETED_BREP")).or(inst.record("BREP_WITH_VOIDS").filter(|_| !inst.is_complex())) {
             let p = p.to_vec();
             let solid = self.model.new_empty(NodeKind::Solid);
             let outer = self.shell(Self::reference(&p[1])?)?;
             self.model.add(solid, outer)?;
-            if let Some(voids) = inst.record("BREP_WITH_VOIDS") {
-                for v in self.list(&voids[0])?.to_vec() {
+            // (Its voids: the third parameter of a simple BREP_WITH_VOIDS, the only one of the
+            // complex entity's part.)
+            let voids = if inst.is_complex() { inst.record("BREP_WITH_VOIDS").and_then(|v| v.first().cloned()) } else { p.get(2).cloned() };
+            if let Some(voids) = voids {
+                for v in self.list(&voids)?.to_vec() {
                     let void = self.shell(Self::reference(&v)?)?;
                     self.model.add(solid, void)?;
                 }
             }
             solid
+        } else if let Some(p) = inst.record("EDGE_BASED_WIREFRAME_MODEL") {
+            // Its connected edge sets' edges, as a compound.
+            let c = self.model.new_empty(NodeKind::Compound);
+            for set in self.list(&p[1])?.to_vec() {
+                let set = self.get(Self::reference(&set)?)?;
+                let Some(edges) = set.record("CONNECTED_EDGE_SET").map(|e| e.to_vec()) else { continue };
+                for e in self.list(&edges[1])?.to_vec() {
+                    let made = self.edge(Self::reference(&e)?)?;
+                    self.model.add(c, Shape::from(made.id))?;
+                }
+            }
+            c
         } else if let Some(p) = inst.record("SHELL_BASED_SURFACE_MODEL") {
             let shells = self.list(&p[1])?.to_vec();
             if shells.len() == 1 {
@@ -1063,50 +1083,104 @@ impl<'a> Reader<'a> {
             }
             i += 1;
         }
-        let mut bodies = Vec::new();
-        let mut colors = Vec::new();
+        // Each representation's bodies (each body once), with the items they are made of.
+        let mut groups: Vec<(usize, Vec<(usize, Shape)>)> = Vec::new();
+        let mut seen: crate::hashing::FastSet<crate::topology::NodeId> = Default::default();
         for rep in reps {
             let inst = self.get(rep)?;
             let Some(items) = inst.records().find(|(_, v)| v.len() >= 2 && self.x.list(&v[1]).is_some()).map(|(_, v)| v[1].clone()) else { continue };
+            let mut group = Vec::new();
             for item in self.list(&items)? {
                 let item = Self::reference(item)?;
                 if let Some(body) = self.body(item)? {
-                    if !bodies.iter().any(|b: &Shape| b.node == body.node) {
-                        bodies.push(body);
-                        colors.push(self.colors.get(&item).copied());
+                    if seen.insert(body.node) {
+                        group.push((item, body));
                     }
                 }
             }
-        }
-        let shared = match colors.first() {
-            Some(&Some(c)) if colors.iter().all(|&k| k == Some(c)) => Some(c),
-            _ => None,
-        };
-        let (color, alpha) = (shared.map(|[r, g, b, _]| [r, g, b]), shared.map(|c| c[3]).filter(|&a| a < 1.0));
-        // The faces and edges with names, colours or layers of their own.
-        let mut subshapes = Vec::new();
-        for &body in &bodies {
-            for (kind, instances) in [(NodeKind::Face, &self.face_instances), (NodeKind::Edge, &self.edge_instances)] {
-                for s in self.model.unique_subshapes(body, kind) {
-                    let Some(&inst) = instances.get(&s.node) else { continue };
-                    let name = self.x.get(inst).ok().and_then(|i| i.params().first().and_then(Value::as_str).map(str::to_string)).filter(|n| !n.is_empty() && n != "NONE");
-                    let color = if kind == NodeKind::Face { self.colors.get(&inst).copied() } else { None };
-                    let layer = self.layers.get(&inst).cloned();
-                    if name.is_some() || color.is_some() || layer.is_some() {
-                        subshapes.push(Subshape { shape: Shape { orientation: crate::topology::Orientation::Forward, ..s }, name, color, layer });
-                    }
-                }
+            if !group.is_empty() {
+                groups.push((rep, group));
             }
         }
         let material = self.materials.get(&definition).cloned();
-        let shape = self.compound_of(bodies)?;
         let mut kids = Vec::new();
+        // A shape spread over several representations linked to the product's (as a surface
+        // model and a wireframe): an assembly of them, as OCCT reads it, each a part of its
+        // own (named as the representation is, else as the product).
+        let (shape, color, alpha, layer, subshapes) = if groups.len() > 1 && !children.contains_key(&definition) {
+            for (rep, group) in &groups {
+                let (shape, color, alpha, layer, subshapes) = self.attributes(group)?;
+                let rep_name = self.get(*rep)?.records().find_map(|(_, v)| v.first().and_then(Value::as_str).map(str::to_string)).filter(|n| !n.is_empty());
+                kids.push(Node { name: rep_name.unwrap_or_else(|| name.clone()), shape, color, alpha, placement: Transform::IDENTITY, children: Vec::new(), subshapes, material: None, layer, definition: None });
+            }
+            (None, None, None, None, Vec::new())
+        } else {
+            let all: Vec<(usize, Shape)> = groups.into_iter().flat_map(|(_, g)| g).collect();
+            self.attributes(&all)?
+        };
         for (child, occurrence, occurrence_name) in children.get(&definition).cloned().unwrap_or_default() {
             let child_name = if occurrence_name.is_empty() { self.product_name(child)? } else { occurrence_name };
             let at = placement_of.get(&occurrence).copied().unwrap_or(Transform::IDENTITY);
             kids.push(self.node(child, child_name, at, reps_of, linked, children, placement_of, depth + 1)?);
         }
-        Ok(Node { name, shape, color, alpha, placement, children: kids, subshapes, material, definition: Some(definition) })
+        Ok(Node { name, shape, color, alpha, placement, children: kids, subshapes, material, layer, definition: Some(definition) })
+    }
+
+    /// The shape of `bodies` (each with the item it is made of: a compound of several) and
+    /// what the file gives them: the colour they share (and its opacity), the layer of the
+    /// shape as a whole, and the parts with names, colours or layers of their own (each body
+    /// of several, the shells of bodies (a surface model's), faces and edges).
+    #[allow(clippy::type_complexity)]
+    fn attributes(&mut self, bodies: &[(usize, Shape)]) -> Result<(Option<Shape>, Option<[f64; 3]>, Option<f64>, Option<String>, Vec<Subshape>)> {
+        let colors: Vec<Option<[f64; 4]>> = bodies.iter().map(|(item, _)| self.colors.get(item).copied()).collect();
+        let shared = match colors.first() {
+            Some(&Some(c)) if colors.iter().all(|&k| k == Some(c)) => Some(c),
+            _ => None,
+        };
+        let (color, alpha) = (shared.map(|[r, g, b, _]| [r, g, b]), shared.map(|c| c[3]).filter(|&a| a < 1.0));
+        let layer = match bodies {
+            [(item, _)] => self.layers.get(item).cloned(),
+            _ => None,
+        };
+        let forward = |s: Shape| Shape { orientation: crate::topology::Orientation::Forward, ..s };
+        let mut subshapes = Vec::new();
+        if bodies.len() > 1 {
+            for &(item, body) in bodies {
+                let color = self.colors.get(&item).copied();
+                let layer = self.layers.get(&item).cloned();
+                if color.is_some() || layer.is_some() {
+                    subshapes.push(Subshape { shape: forward(body), name: None, color, layer });
+                }
+            }
+        }
+        for &(_, body) in bodies {
+            for s in self.model.unique_subshapes(body, NodeKind::Shell) {
+                if bodies.iter().any(|(_, b)| b.node == s.node) {
+                    continue;
+                }
+                let Some(&inst) = self.shell_instances.get(&s.node) else { continue };
+                let color = self.colors.get(&inst).copied();
+                let layer = self.layers.get(&inst).cloned();
+                if color.is_some() || layer.is_some() {
+                    subshapes.push(Subshape { shape: forward(s), name: None, color, layer });
+                }
+            }
+        }
+        for &(_, body) in bodies {
+            for (kind, instances) in [(NodeKind::Face, &self.face_instances), (NodeKind::Edge, &self.edge_instances)] {
+                for s in self.model.unique_subshapes(body, kind) {
+                    let Some(&inst) = instances.get(&s.node) else { continue };
+                    let name = self.x.get(inst).ok().and_then(|i| i.params().first().and_then(Value::as_str).map(str::to_string)).filter(|n| !n.is_empty() && n != "NONE");
+                    let color = self.colors.get(&inst).copied();
+                    let layer = self.layers.get(&inst).cloned();
+                    if name.is_some() || color.is_some() || layer.is_some() {
+                        subshapes.push(Subshape { shape: forward(s), name, color, layer });
+                    }
+                }
+            }
+        }
+        let shape = self.compound_of(bodies.iter().map(|&(_, b)| b).collect())?;
+        Ok((shape, color, alpha, layer, subshapes))
     }
 
     fn compound_of(&mut self, shapes: Vec<Shape>) -> Result<Option<Shape>> {
@@ -1198,8 +1272,9 @@ fn unit_factor(x: &Exchange, u: &Instance, is_length: bool) -> f64 {
 /// The colours of styled items: item instance -> RGB.
 fn colors(x: &Exchange) -> HashMap<usize, [f64; 4]> {
     let mut out = HashMap::default();
-    for (_, inst) in x.of_type("STYLED_ITEM") {
-        let p = inst.record("STYLED_ITEM").expect("record");
+    // (Over-riding styled items too: the same, with the style they override after.)
+    for (_, inst) in x.of_type("STYLED_ITEM").chain(x.of_type("OVER_RIDING_STYLED_ITEM")) {
+        let Some(p) = inst.record("STYLED_ITEM").or(inst.record("OVER_RIDING_STYLED_ITEM")) else { continue };
         let Some(item) = p.get(2).and_then(Value::as_reference) else { continue };
         let mut stack: Vec<&Value> = vec![&p[1]];
         let mut depth = 0;

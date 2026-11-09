@@ -46,7 +46,7 @@ fn main() {
                 let outcome = outcome.and_then(|o| o);
                 if listed && std::env::var_os("KENTRON_EXPECTED_REASONS").is_some() {
                     if let Err(e) = &outcome {
-                        eprintln!("expected failure {timed}: {}", e.lines().next().unwrap_or(""));
+                        eprintln!("expected failure {timed}: {}", e.lines().collect::<Vec<_>>().join(" | "));
                     }
                 }
                 match (outcome, listed) {

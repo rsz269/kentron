@@ -163,12 +163,12 @@ pub fn stats(d: &mut Draw, reading: &Reading) -> Stats {
         };
         s.faulty[slot] += 1;
     }
-    document(&reading.nodes, &mut s);
+    document(&d.model, &reading.nodes, &mut s);
     s
 }
 
 /// The document statistics: OCCT's labels of the file's products, as XStat counts them.
-fn document(nodes: &[Node], s: &mut Stats) {
+fn document(model: &Model, nodes: &[Node], s: &mut Stats) {
     // Each product once (its first occurrence), in the order met.
     let mut products: Vec<&Node> = Vec::new();
     let mut seen = std::collections::HashSet::new();
@@ -196,12 +196,27 @@ fn document(nodes: &[Node], s: &mut Stats) {
             colors.push(c);
         }
     };
+    let mut add_layer = |l: &String| {
+        if !layers.contains(l) {
+            layers.push(l.clone());
+        }
+    };
     for product in &products {
         levels[0] += 1;
         named += !product.name.is_empty() as usize;
-        if let Some(c) = product.color {
+        // (A shape of several bodies, coloured each: its colour on theirs, not its own.)
+        let bodies: Vec<kentron::topology::NodeId> = match product.shape {
+            Some(shape) if shape.kind() == NodeKind::Compound => model.children(shape).map(|c| c.node).collect(),
+            _ => Vec::new(),
+        };
+        let coloured_bodies = product.subshapes.iter().any(|sub| sub.color.is_some() && bodies.contains(&sub.shape.node));
+        if let Some(c) = product.color.filter(|_| !coloured_bodies) {
             coloured += 1;
             add_color(c);
+        }
+        if let Some(l) = &product.layer {
+            layered += 1;
+            add_layer(l);
         }
         if !product.children.is_empty() {
             for child in &product.children {
@@ -209,18 +224,17 @@ fn document(nodes: &[Node], s: &mut Stats) {
                 named += !child.name.is_empty() as usize;
             }
         } else {
-            for sub in &product.subshapes {
+            // (OCCT labels the parts with colours or layers; a name alone makes none.)
+            // (Unnamed: OCCT reads no names of a STEP file's faces, edges, shells or solids.)
+            for sub in product.subshapes.iter().filter(|s| s.color.is_some() || s.layer.is_some()) {
                 levels[1] += 1;
-                named += sub.name.is_some() as usize;
                 if let Some(c) = sub.color {
                     coloured += 1;
                     add_color([c[0], c[1], c[2]]);
                 }
                 if let Some(l) = &sub.layer {
                     layered += 1;
-                    if !layers.contains(l) {
-                        layers.push(l.clone());
-                    }
+                    add_layer(l);
                 }
             }
         }
