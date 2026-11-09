@@ -55,10 +55,23 @@ pub struct Node {
     pub material: Option<Material>,
     /// The layer the product's shape is on as a whole, if any.
     pub layer: Option<String>,
+    /// The validation properties the file gives the product.
+    pub validation: Validation,
+    /// Those it gives this occurrence of it (in its parent).
+    pub occurrence_validation: Validation,
     /// The file's product definition this node is an occurrence of (its entity number): the
     /// same for every occurrence of one product. `None` for shapes read without products, and
     /// for nodes made otherwise than by reading.
     pub definition: Option<usize>,
+}
+
+/// Properties a file gives to check its reading by (geometric validation properties): the
+/// centroid, volume and area of a product's shape, or of an occurrence of one.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct Validation {
+    pub centroid: Option<Point>,
+    pub volume: Option<f64>,
+    pub area: Option<f64>,
 }
 
 /// A face or edge of a product's shape with a name, colour or layer of its own.
@@ -246,6 +259,8 @@ struct Reader<'a> {
     colors: HashMap<usize, [f64; 4]>,
     layers: HashMap<usize, String>,
     materials: HashMap<usize, Material>,
+    /// Validation properties by the product definition or occurrence they are given to.
+    validations: HashMap<usize, Validation>,
     /// The file's instance of each face and edge read (for their names, colours and layers).
     face_instances: HashMap<crate::topology::NodeId, usize>,
     edge_instances: HashMap<crate::topology::NodeId, usize>,
@@ -270,6 +285,7 @@ impl<'a> Reader<'a> {
             colors: HashMap::default(),
             layers: HashMap::default(),
             materials: HashMap::default(),
+            validations: HashMap::default(),
             face_instances: HashMap::default(),
             edge_instances: HashMap::default(),
             shell_instances: HashMap::default(),
@@ -278,6 +294,7 @@ impl<'a> Reader<'a> {
         reader.colors = colors(x);
         reader.layers = layers(x);
         reader.materials = materials(x);
+        reader.validations = validations(x, length);
         Ok(reader)
     }
 
@@ -1111,7 +1128,7 @@ impl<'a> Reader<'a> {
             for (rep, group) in &groups {
                 let (shape, color, alpha, layer, subshapes) = self.attributes(group)?;
                 let rep_name = self.get(*rep)?.records().find_map(|(_, v)| v.first().and_then(Value::as_str).map(str::to_string)).filter(|n| !n.is_empty());
-                kids.push(Node { name: rep_name.unwrap_or_else(|| name.clone()), shape, color, alpha, placement: Transform::IDENTITY, children: Vec::new(), subshapes, material: None, layer, definition: None });
+                kids.push(Node { name: rep_name.unwrap_or_else(|| name.clone()), shape, color, alpha, placement: Transform::IDENTITY, children: Vec::new(), subshapes, material: None, layer, definition: None, ..Default::default() });
             }
             (None, None, None, None, Vec::new())
         } else {
@@ -1121,9 +1138,12 @@ impl<'a> Reader<'a> {
         for (child, occurrence, occurrence_name) in children.get(&definition).cloned().unwrap_or_default() {
             let child_name = if occurrence_name.is_empty() { self.product_name(child)? } else { occurrence_name };
             let at = placement_of.get(&occurrence).copied().unwrap_or(Transform::IDENTITY);
-            kids.push(self.node(child, child_name, at, reps_of, linked, children, placement_of, depth + 1)?);
+            let mut kid = self.node(child, child_name, at, reps_of, linked, children, placement_of, depth + 1)?;
+            kid.occurrence_validation = self.validations.get(&occurrence).copied().unwrap_or_default();
+            kids.push(kid);
         }
-        Ok(Node { name, shape, color, alpha, placement, children: kids, subshapes, material, layer, definition: Some(definition) })
+        let validation = self.validations.get(&definition).copied().unwrap_or_default();
+        Ok(Node { name, shape, color, alpha, placement, children: kids, subshapes, material, layer, validation, occurrence_validation: Validation::default(), definition: Some(definition) })
     }
 
     /// The shape of `bodies` (each with the item it is made of: a compound of several) and
@@ -1338,6 +1358,55 @@ fn layers(x: &Exchange) -> HashMap<usize, String> {
 
 /// The products' materials: product definition -> material (its designation's name; its
 /// description, density and density's unit where a property gives them).
+/// The geometric validation properties: by the product definition (or occurrence) they are
+/// given to (directly, or through a shape aspect of its shape), with lengths in millimetres
+/// (`length` per unit).
+fn validations(x: &Exchange, length: f64) -> HashMap<usize, Validation> {
+    let mut out: HashMap<usize, Validation> = HashMap::default();
+    // (The definition or occurrence a product definition shape, or a shape aspect of one, is
+    // of.)
+    let target = |id: usize| -> Option<usize> {
+        let i = x.get(id).ok()?;
+        let pds = match i.record("SHAPE_ASPECT") {
+            Some(a) => x.get(a.get(2)?.as_reference()?).ok()?,
+            None => i,
+        };
+        pds.record("PRODUCT_DEFINITION_SHAPE")?.get(2)?.as_reference()
+    };
+    for (_, inst) in x.of_type("PROPERTY_DEFINITION_REPRESENTATION") {
+        let p = inst.params();
+        let (Some(prop), Some(rep)) = (p.first().and_then(Value::as_reference), p.get(1).and_then(Value::as_reference)) else { continue };
+        let Ok(prop) = x.get(prop) else { continue };
+        let Some(pp) = prop.record("PROPERTY_DEFINITION") else { continue };
+        let name = pp.first().and_then(Value::as_str).unwrap_or("").to_ascii_lowercase().replace('_', " ");
+        if !name.contains("validation") {
+            continue;
+        }
+        let Some(of) = pp.get(2).and_then(Value::as_reference).and_then(target) else { continue };
+        let Ok(rep) = x.get(rep) else { continue };
+        let Some(items) = rep.records().find(|(_, v)| v.len() >= 2 && x.list(&v[1]).is_some()).and_then(|(_, v)| x.list(&v[1])) else { continue };
+        let v = out.entry(of).or_default();
+        for item in items.iter().filter_map(Value::as_reference) {
+            let Ok(i) = x.get(item) else { continue };
+            if let Some(c) = i.record("CARTESIAN_POINT") {
+                let coords: Vec<f64> = c.get(1).and_then(|l| x.list(l)).unwrap_or(&[]).iter().filter_map(|v| x.real(v)).collect();
+                if coords.len() == 3 {
+                    v.centroid = Some(Point::new(coords[0] * length, coords[1] * length, coords[2] * length));
+                }
+            } else if let Some(m) = i.record("MEASURE_REPRESENTATION_ITEM") {
+                let Some((kind, values)) = m.get(1).and_then(|t| x.typed(t)) else { continue };
+                let Some(value) = values.first().and_then(|v| x.real(v)) else { continue };
+                match kind {
+                    "VOLUME_MEASURE" => v.volume = Some(value * length.powi(3)),
+                    "AREA_MEASURE" => v.area = Some(value * length.powi(2)),
+                    _ => {}
+                }
+            }
+        }
+    }
+    out
+}
+
 fn materials(x: &Exchange) -> HashMap<usize, Material> {
     let definition_of = |pds: usize| x.get(pds).ok().and_then(|i| i.record("PRODUCT_DEFINITION_SHAPE").and_then(|d| d.get(2)?.as_reference()));
     let mut out: HashMap<usize, Material> = HashMap::default();

@@ -1412,6 +1412,7 @@ fn write_step_assembly(path: &str, roots: Vec<Bound<'_, PyAny>>, unit: &str) -> 
             material,
             layer: None,
             definition: None,
+            ..Default::default()
         })
     }
     let roots = roots.iter().map(convert).collect::<PyResult<Vec<_>>>()?;

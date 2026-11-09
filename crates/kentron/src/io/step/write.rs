@@ -212,6 +212,7 @@ impl<'a> Writer<'a> {
         if let Some(material) = &node.material {
             self.material(material, definition_shape);
         }
+        self.validation(&node.validation, definition_shape);
         let context = self.geometric_context();
         let origin = self.axis(&Frame::WORLD);
         // The faces' and edges' own names, colours and layers (a wire's are its edges', a
@@ -283,6 +284,7 @@ impl<'a> Writer<'a> {
             let usage = self.add(format!("NEXT_ASSEMBLY_USAGE_OCCURRENCE('{}','{child_name}','',#{definition},#{child_definition},$)", k + 1));
             let placement = self.add(format!("PRODUCT_DEFINITION_SHAPE('Placement','Placement of an item',#{usage})"));
             self.add(format!("CONTEXT_DEPENDENT_SHAPE_REPRESENTATION(#{relationship},#{placement})"));
+            self.validation(&child.occurrence_validation, placement);
         }
         if let Some(d) = node.definition {
             self.products.insert(d, (definition, representation));
@@ -346,6 +348,37 @@ impl<'a> Writer<'a> {
         let context = self.geometric_context();
         let representation = self.add(format!("REPRESENTATION('material property',({list}),#{context})"));
         self.add(format!("PROPERTY_DEFINITION_REPRESENTATION(#{property},#{representation})"));
+    }
+
+    /// Geometric validation properties of the product definition shape `of` (each in a
+    /// property of its own, as OCCT writes them; lengths in the file's unit, as written).
+    fn validation(&mut self, v: &super::Validation, of: usize) {
+        if v == &super::Validation::default() {
+            return;
+        }
+        let context = self.geometric_context();
+        // (Units of area and volume: the length unit squared and cubed.)
+        let length = self.lines.iter().position(|l| l.contains("LENGTH_UNIT()")).map_or(0, |i| i + 1);
+        let mut items: Vec<(&str, String)> = Vec::new();
+        if let Some(c) = v.centroid {
+            items.push(("centroid", format!("CARTESIAN_POINT('centre point',({},{},{}))", real(c.x), real(c.y), real(c.z))));
+        }
+        if let Some(volume) = v.volume {
+            let element = self.add(format!("DERIVED_UNIT_ELEMENT(#{length},3.)"));
+            let unit = self.add(format!("( DERIVED_UNIT((#{element})) VOLUME_UNIT() )"));
+            items.push(("volume", format!("MEASURE_REPRESENTATION_ITEM('volume measure',VOLUME_MEASURE({}),#{unit})", real(volume))));
+        }
+        if let Some(area) = v.area {
+            let element = self.add(format!("DERIVED_UNIT_ELEMENT(#{length},2.)"));
+            let unit = self.add(format!("( AREA_UNIT() DERIVED_UNIT((#{element})) )"));
+            items.push(("area", format!("MEASURE_REPRESENTATION_ITEM('surface area measure',AREA_MEASURE({}),#{unit})", real(area))));
+        }
+        for (what, item) in items {
+            let item = self.add(item);
+            let property = self.add(format!("PROPERTY_DEFINITION('geometric validation property','{what}',#{of})"));
+            let representation = self.add(format!("REPRESENTATION('{what}',(#{item}),#{context})"));
+            self.add(format!("PROPERTY_DEFINITION_REPRESENTATION(#{property},#{representation})"));
+        }
     }
 
     /// Puts `item` on the layer `name`.

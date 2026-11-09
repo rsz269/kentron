@@ -6,9 +6,13 @@
 //! statistic, the second reading's value first and the first reading's in parentheses. The
 //! lines are made here as the script makes them, from kentron's readings, and compared by
 //! its rules: CHECKSHAPE (faulty wires, faces, shells and solids) no more than OCCT's;
-//! TOLERANCE (largest and mean) no more than OCCT's by 1% (and 1e-4); every other line equal.
-//! DATA and TPSTAT, the numbers of warnings and failures OCCT's translators report, are
-//! OCCT's own and not compared.
+//! TOLERANCE (largest and mean) no more than OCCT's by 1% (and 1e-4); every other line equal,
+//! value by value, but for one difference: a second reading's value may equal OCCT's first
+//! reading's instead of its second's. Where OCCT's own writing loses what its reading of the
+//! file had (validation properties of occurrences, layers), kentron's round trip keeping it
+//! is not a failure: OCCT's first reading is the evidence of what the file holds. DATA and
+//! TPSTAT, the numbers of warnings and failures OCCT's translators report, are OCCT's own and
+//! not compared.
 //!
 //! The document statistics (LABELS, PROPS, COLORS, LAYERS) are those of OCCT's document of
 //! the file (its XCAF labels, as XStat counts them), worked out from kentron's assembly
@@ -189,6 +193,13 @@ fn document(model: &Model, nodes: &[Node], s: &mut Stats) {
     }
     let mut levels = [0usize; 3];
     let (mut named, mut coloured, mut layered) = (0, 0, 0);
+    // (Validation properties: a product's on its label, an occurrence's on its component's.)
+    let mut props = [0usize; 3];
+    let mut count_props = |v: &kentron::io::step::Validation| {
+        props[0] += v.centroid.is_some() as usize;
+        props[1] += v.volume.is_some() as usize;
+        props[2] += v.area.is_some() as usize;
+    };
     let mut colors: Vec<[f64; 3]> = Vec::new();
     let mut layers: Vec<String> = Vec::new();
     let mut add_color = |c: [f64; 3]| {
@@ -204,6 +215,7 @@ fn document(model: &Model, nodes: &[Node], s: &mut Stats) {
     for product in &products {
         levels[0] += 1;
         named += !product.name.is_empty() as usize;
+        count_props(&product.validation);
         // (A shape of several bodies, coloured each: its colour on theirs, not its own.)
         let bodies: Vec<kentron::topology::NodeId> = match product.shape {
             Some(shape) if shape.kind() == NodeKind::Compound => model.children(shape).map(|c| c.node).collect(),
@@ -222,6 +234,7 @@ fn document(model: &Model, nodes: &[Node], s: &mut Stats) {
             for child in &product.children {
                 levels[1] += 1;
                 named += !child.name.is_empty() as usize;
+                count_props(&child.occurrence_validation);
             }
         } else {
             // (OCCT labels the parts with colours or layers; a name alone makes none.)
@@ -241,6 +254,7 @@ fn document(model: &Model, nodes: &[Node], s: &mut Stats) {
     }
     let total = levels.iter().sum();
     s.labels = [levels[0], levels[1], levels[2], total, named, coloured, layered];
+    s.props = props;
     let mut names: Vec<String> = colors.iter().map(|&c| color_name(c).to_string()).collect();
     names.sort();
     s.colors = names;
@@ -313,8 +327,18 @@ pub fn meets(reference: &str, current: &str) -> bool {
     if reference.starts_with("TOLERANCE") {
         return r.len() == c.len() && c.iter().zip(&r).all(|(c, r)| !(c - r > 1e-4 && c - r > 0.01 * r));
     }
-    // (Lines compared as strings; whitespace at their ends aside.)
-    reference.trim_end() == current.trim_end()
+    // The others value by value: the first reading's equal to OCCT's first; the second's
+    // equal to OCCT's second, or to its first where OCCT's own writing loses something its
+    // reading of the file had (validation properties, layers): kentron's round trip keeps
+    // the file's content, as OCCT's first reading of it shows it.
+    let pairs = |line: &str| -> Vec<(String, String)> {
+        regex::Regex::new(r"=\s*(.*?)\s*\(\s*(.*?)\s*\)").expect("a pattern").captures_iter(line).map(|c| (c[1].trim().to_string(), c[2].trim().to_string())).collect()
+    };
+    let (r, c) = (pairs(reference), pairs(current));
+    if r.is_empty() || r.len() != c.len() {
+        return reference.trim_end() == current.trim_end();
+    }
+    r.iter().zip(&c).all(|((r2, r1), (c2, c1))| c1 == r1 && (c2 == r2 || c2 == r1))
 }
 
 /// Runs a case: the file read, written and read again; the differences from the reference
