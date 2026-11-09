@@ -1082,7 +1082,6 @@ tests/de/step_1/S3
 tests/de/step_1/S6
 tests/de/step_1/T2
 tests/de/step_1/T3
-tests/de/step_1/T4
 tests/de/step_1/T5
 tests/de/step_1/T6
 tests/de/step_1/T7
@@ -1129,7 +1128,6 @@ tests/de/step_1/Y4
 tests/de/step_1/Y5
 tests/de/step_1/Y6
 tests/de/step_1/Y7
-tests/de/step_1/Y8
 tests/de/step_1/Y9
 tests/de/step_1/Z3
 tests/de/step_1/Z4

@@ -212,6 +212,11 @@ pub(crate) fn follows(pcurve: &Curve2, edge: &CurveSpan, surface: &Surface) -> b
 /// back on).
 pub(crate) fn project(edge: &CurveSpan, surface: &Surface, has_pcurve: bool) -> Result<Curve2> {
     use crate::geometry::project as pr;
+    // (An edge running its curve backwards: the pcurve over the range the other way round, at
+    // the same parameters.)
+    if edge.first > edge.last {
+        return project(&CurveSpan { curve: edge.curve, first: edge.last, last: edge.first }, surface, has_pcurve);
+    }
     if let Some(pc) = pr::analytic_pcurve(edge.curve, surface) {
         return Ok(pc);
     }
@@ -253,12 +258,54 @@ pub(crate) fn project(edge: &CurveSpan, surface: &Surface, has_pcurve: bool) -> 
             surface.parameters(p).is_some_and(|(u, v)| surface.point(u, v).distance(p) > 1e-3)
         })
     };
+    // Last, for an edge off its face by more than the fits allow (files accurate to a
+    // hundredth or so, which OCCT reads with tolerances to match): fitted at the gap measured,
+    // the edge's tolerance then covering it. (Not for one off by a tenth of its length: no
+    // edge of the face.)
+    let at_gap = || {
+        if has_pcurve {
+            return None;
+        }
+        let gap = gap_to(edge, surface, first_foot)?;
+        let length = (0..16)
+            .map(|i| {
+                let t = |k: f64| edge.first + (edge.last - edge.first) * k / 16.0;
+                edge.curve.point(t(i as f64)).distance(edge.curve.point(t(i as f64 + 1.0)))
+            })
+            .sum::<f64>();
+        if gap > 0.1 * length {
+            return None;
+        }
+        let tolerance = 1.5 * gap + 1e-7;
+        pr::pcurve_on_range_from(edge.curve, surface, edge.first, edge.last, &[tolerance], first_foot)
+            .or_else(|| pr::polyline_pcurve_on_range(edge.curve, surface, edge.first, edge.last, tolerance))
+    };
     pr::pcurve_on_range_from(edge.curve, surface, edge.first, edge.last, tiers, first_foot)
         .or_else(|| if freeform || (has_pcurve && off_surface()) { None } else { pr::polyline_pcurve_on_range(edge.curve, surface, edge.first, edge.last, 1e-6) })
+        .or_else(at_gap)
         .map(Curve2::BSpline)
         .ok_or_else(|| invalid("an edge that does not project onto its face".into()))
 }
 
+
+/// How far the edge strays from the surface: the largest distance of its points (64, each
+/// foot found from the one before) from their feet; `None` where a foot is not found.
+fn gap_to(edge: &CurveSpan, surface: &Surface, start: Option<(f64, f64)>) -> Option<f64> {
+    use crate::geometry::extrema::nearest_on_surface;
+    use crate::geometry::ParametricSurface;
+    let mut previous = start;
+    let mut gap: f64 = 0.0;
+    for i in 0..=64 {
+        let p = edge.curve.point(edge.first + (edge.last - edge.first) * i as f64 / 64.0);
+        let (u, v, d) = nearest_on_surface(p, surface, previous);
+        if !d.is_finite() {
+            return None;
+        }
+        previous = Some((u, v));
+        gap = gap.max(surface.point(u, v).distance(p));
+    }
+    Some(gap)
+}
 
 /// Pcurves moved by whole periods of a periodic surface so that each starts where the one
 /// before it ends (the file's and projected pcurves may lie in different periods; a seam's
@@ -273,7 +320,8 @@ pub(crate) fn align_periods(coedges: &mut [(EdgeId, bool, Curve2, f64, f64)], su
         if c.1 { (a, b) } else { (b, a) }
     };
     let steps = |p: Option<f64>| -> Vec<f64> { p.map_or(vec![0.0], |p| (-3..=3).map(|k| k as f64 * p).collect()) };
-    for i in 1..coedges.len() {
+    // (Coedge i moved by whole periods to start where the one before it ends.)
+    let follow = |coedges: &mut [(EdgeId, bool, Curve2, f64, f64)], i: usize| {
         let (_, previous_end) = ends(&coedges[i - 1]);
         let (start, _) = ends(&coedges[i]);
         let mut best = (0.0, 0.0, start.distance(previous_end));
@@ -290,18 +338,19 @@ pub(crate) fn align_periods(coedges: &mut [(EdgeId, bool, Curve2, f64, f64)], su
             use crate::math::Transformable2;
             coedges[i].2 = coedges[i].2.transformed(&t);
         }
+    };
+    for i in 1..coedges.len() {
+        follow(coedges, i);
     }
     // A seam's two uses on its two sides: where the loop leaves out the edge collapsed at a
     // pole between them (a meridian's end on the axis), the second joined the first across
     // the pole, on the same side; moved a period over, whichever way meets its neighbours
     // better (the pole's edge then added across the gap).
+    // (Or two edges along one meridian, where a file models the seam so.)
     let n = coedges.len();
+    let middle = |c: &(EdgeId, bool, Curve2, f64, f64)| c.2.point(0.5 * (c.3 + c.4));
     for i in 0..n {
-        let Some(j) = (0..i).find(|&j| coedges[j].0 == coedges[i].0) else { continue };
-        let middle = |c: &(EdgeId, bool, Curve2, f64, f64)| c.2.point(0.5 * (c.3 + c.4));
-        if middle(&coedges[i]).distance(middle(&coedges[j])) > 1e-9 {
-            continue;
-        }
+        let Some(_) = (0..i).find(|&j| middle(&coedges[i]).distance(middle(&coedges[j])) <= 1e-9) else { continue };
         let (start, end) = ends(&coedges[i]);
         let (previous, next) = (ends(&coedges[(i + n - 1) % n]).1, ends(&coedges[(i + 1) % n]).0);
         let shifts: Vec<crate::math::Vector2> = [pu.map(|p| crate::math::Vector2::new(p, 0.0)), pv.map(|p| crate::math::Vector2::new(0.0, p))]
@@ -313,6 +362,10 @@ pub(crate) fn align_periods(coedges: &mut [(EdgeId, bool, Curve2, f64, f64)], su
         if let Some(d) = shifts.into_iter().min_by(|a, b| gap(*a).total_cmp(&gap(*b))) {
             use crate::math::Transformable2;
             coedges[i].2 = coedges[i].2.transformed(&crate::math::Transform2::translation(d));
+            // (Those after it following it there.)
+            for k in i + 1..n {
+                follow(coedges, k);
+            }
         }
     }
 }

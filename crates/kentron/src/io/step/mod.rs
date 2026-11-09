@@ -410,7 +410,7 @@ impl<'a> Reader<'a> {
             let frame = self.frame(Self::reference(&p[1])?)?;
             return Ok((Curve::Parabola(Parabola::new(frame, self.real(&p[2])? * s)), 1.0));
         }
-        if inst.has("B_SPLINE_CURVE_WITH_KNOTS") || inst.has("B_SPLINE_CURVE") {
+        if is_bspline_curve(&inst) {
             return Ok((Curve::BSpline(self.bspline(&inst, false)?.0), 1.0));
         }
         if let Some((curve, _)) = self.surface_curve(&inst) {
@@ -432,6 +432,11 @@ impl<'a> Reader<'a> {
         let (degree, poles, knots_record) = if !inst.is_complex() && inst.has("B_SPLINE_CURVE_WITH_KNOTS") {
             let p = inst.params();
             (&p[1], &p[2], Some(&p[6..]))
+        } else if !inst.is_complex() {
+            // (A simple uniform, quasi-uniform or Bézier curve, or a B-spline one without knots:
+            // name, degree, poles, form, closed, self_intersect; its knots implicit.)
+            let p = inst.params();
+            (&p[1], &p[2], None)
         } else {
             let b = inst.record("B_SPLINE_CURVE").ok_or_else(|| invalid("a B-spline curve without its record".into()))?;
             (&b[0], &b[1], inst.record("B_SPLINE_CURVE_WITH_KNOTS"))
@@ -474,9 +479,14 @@ impl<'a> Reader<'a> {
         let inst = self.get(id)?;
         if let Some(p) = inst.record("PCURVE") {
             let rep = self.get(Self::reference(&p[2])?)?;
-            let items = rep.record("DEFINITIONAL_REPRESENTATION").ok_or_else(|| invalid("a pcurve without its representation".into()))?;
-            let curve = Self::reference(&self.list(&items[1])?[0])?;
-            return self.curve2(curve, scale, first, last);
+            // (Simple, or complex with its items in the REPRESENTATION part.)
+            let items = rep
+                .record("DEFINITIONAL_REPRESENTATION")
+                .filter(|p| p.len() >= 2)
+                .or(rep.record("REPRESENTATION"))
+                .ok_or_else(|| invalid("a pcurve without its representation".into()))?;
+            let curve = items.get(1).map(|i| self.list(i)).transpose()?.and_then(|l| l.first()).ok_or_else(|| invalid("a pcurve's representation without a curve".into()))?;
+            return self.curve2(Self::reference(curve)?, scale, first, last);
         }
         if let Some(p) = inst.record("LINE") {
             let origin = self.point2(Self::reference(&p[1])?)?;
@@ -491,7 +501,7 @@ impl<'a> Reader<'a> {
             return Ok(Curve2::BSpline(BSplineCurve2::new(vec![at(first), at(last)], vec![first, last], vec![2, 2], 1)));
         }
         if (scale - 1.0).abs() > 1e-12 {
-            if inst.has("B_SPLINE_CURVE_WITH_KNOTS") || inst.has("B_SPLINE_CURVE") {
+            if is_bspline_curve(&inst) {
                 let (poles, weights, knots, mults, degree) = self.bspline_data(&inst, true)?;
                 let poles = poles.into_iter().map(|c| Point2::new(c[0], c[1])).collect();
                 let knots = knots.iter().map(|k| k * scale).collect();
@@ -515,7 +525,7 @@ impl<'a> Reader<'a> {
         if let Some(p) = inst.record("PARABOLA") {
             return Ok(Curve2::Parabola(Parabola2::new(self.frame2(Self::reference(&p[1])?)?, self.real(&p[2])?)));
         }
-        if inst.has("B_SPLINE_CURVE_WITH_KNOTS") || inst.has("B_SPLINE_CURVE") {
+        if is_bspline_curve(&inst) {
             let (poles, weights, knots, mults, degree) = self.bspline_data(&inst, true)?;
             let poles = poles.into_iter().map(|c| Point2::new(c[0], c[1])).collect();
             let c = BSplineCurve2::try_new(poles, knots, mults, degree)?;
@@ -577,20 +587,23 @@ impl<'a> Reader<'a> {
             let basis = self.surface(Self::reference(&p[1])?)?;
             return Ok(Surface::Offset(OffsetSurface::new(basis, self.real(&p[2])? * l)));
         }
-        if inst.has("B_SPLINE_SURFACE_WITH_KNOTS") || inst.has("B_SPLINE_SURFACE") {
+        if ["B_SPLINE_SURFACE_WITH_KNOTS", "B_SPLINE_SURFACE", "UNIFORM_SURFACE", "QUASI_UNIFORM_SURFACE", "BEZIER_SURFACE"].iter().any(|t| inst.has(t)) {
             return self.bspline_surface(&inst);
         }
         Err(invalid(format!("#{id}: surfaces of type {} are not read yet", inst.name())))
     }
 
     fn bspline_surface(&self, inst: &Instance) -> Result<Surface> {
+        // (Simple: name, u degree, v degree, poles, form, u closed, v closed, self_intersect
+        // and, with knots, their multiplicities and values in u and v, and their spec; complex:
+        // B_SPLINE_SURFACE(u degree, v degree, poles, ...) and B_SPLINE_SURFACE_WITH_KNOTS(...).
+        // Uniform, quasi-uniform and Bézier surfaces leave their knots implicit.)
         let (ud, vd, grid, knots) = if !inst.is_complex() {
             let p = inst.params();
-            (&p[1], &p[2], &p[3], &p[8..])
+            (&p[1], &p[2], &p[3], inst.has("B_SPLINE_SURFACE_WITH_KNOTS").then(|| &p[8..]))
         } else {
             let b = inst.record("B_SPLINE_SURFACE").ok_or_else(|| invalid("a B-spline surface without its record".into()))?;
-            let k = inst.record("B_SPLINE_SURFACE_WITH_KNOTS").ok_or_else(|| invalid("B-spline surfaces without knots are not read yet".into()))?;
-            (&b[0], &b[1], &b[2], k)
+            (&b[0], &b[1], &b[2], inst.record("B_SPLINE_SURFACE_WITH_KNOTS"))
         };
         let int = |v: &Value| v.as_integer().map(|i| i as usize).ok_or_else(|| invalid("an integer".into()));
         let (ud, vd) = (int(ud)?, int(vd)?);
@@ -600,8 +613,17 @@ impl<'a> Reader<'a> {
             .collect::<Result<_>>()?;
         let ints = |v: &Value| -> Result<Vec<usize>> { self.list(v)?.iter().map(int).collect() };
         let reals = |v: &Value| -> Result<Vec<f64>> { self.list(v)?.iter().map(|v| self.real(v)).collect() };
-        let u = KnotVector::new(reals(&knots[2])?, ints(&knots[0])?, ud);
-        let v = KnotVector::new(reals(&knots[3])?, ints(&knots[1])?, vd);
+        let (u, v) = match knots {
+            Some(knots) => (KnotVector::new(reals(&knots[2])?, ints(&knots[0])?, ud), KnotVector::new(reals(&knots[3])?, ints(&knots[1])?, vd)),
+            None => {
+                let quasi = !inst.has("UNIFORM_SURFACE") || inst.has("QUASI_UNIFORM_SURFACE");
+                let rows = poles.len();
+                let columns = poles.first().map_or(0, Vec::len);
+                let (um, uk) = implicit_knots(quasi, rows, ud);
+                let (vm, vk) = implicit_knots(quasi, columns, vd);
+                (KnotVector::new(uk, um, ud), KnotVector::new(vk, vm, vd))
+            }
+        };
         let surface = BSplineSurface::try_new(poles, u, v)?;
         Ok(Surface::BSpline(match inst.record("RATIONAL_B_SPLINE_SURFACE") {
             Some(w) => surface.with_weights(self.list(&w[0])?.iter().map(reals).collect::<Result<_>>()?),
@@ -1102,10 +1124,23 @@ impl<'a> Reader<'a> {
     }
 }
 
-/// Knots of the uniform and quasi-uniform B-spline types (which leave them implicit).
+/// Whether `inst` is a B-spline curve: with knots, or of one of the types leaving them
+/// implicit (uniform, quasi-uniform, Bézier).
+fn is_bspline_curve(inst: &Instance) -> bool {
+    ["B_SPLINE_CURVE_WITH_KNOTS", "B_SPLINE_CURVE", "UNIFORM_CURVE", "QUASI_UNIFORM_CURVE", "BEZIER_CURVE"].iter().any(|t| inst.has(t))
+}
+
+/// Knots of the uniform and quasi-uniform B-spline types (which leave them implicit; a
+/// Bézier curve's are a quasi-uniform one's).
 fn uniform_knots(inst: &Instance, poles: usize, degree: usize) -> (Vec<usize>, Vec<f64>) {
-    if inst.has("QUASI_UNIFORM_CURVE") {
-        let spans = poles - degree;
+    implicit_knots(!inst.has("UNIFORM_CURVE") || inst.has("QUASI_UNIFORM_CURVE"), poles, degree)
+}
+
+/// The multiplicities and knots of a quasi-uniform B-spline (`quasi`: clamped at both ends,
+/// uniform between) or a uniform one, of `poles` poles and degree `degree`.
+fn implicit_knots(quasi: bool, poles: usize, degree: usize) -> (Vec<usize>, Vec<f64>) {
+    if quasi {
+        let spans = poles.saturating_sub(degree).max(1);
         let mut mults = vec![1; spans + 1];
         mults[0] = degree + 1;
         mults[spans] = degree + 1;
@@ -1375,6 +1410,23 @@ fn range(curve: &Curve, start: Point, end: Point, closed: bool) -> (f64, f64) {
         }
         while last - first > t + 1e-12 {
             last -= t;
+        }
+    }
+    // A closed curve (not periodic) run through its closing point: a vertex there is at the
+    // end of the curve's range where the edge ends, at its start where the edge starts.
+    if period.is_none() && last < first {
+        let (lo, hi) = (curve.first_parameter(), curve.last_parameter());
+        if lo.is_finite() && hi.is_finite() {
+            let (a, b) = (curve.point(lo), curve.point(hi));
+            let size = 1.0 + a.x.abs().max(a.y.abs()).max(a.z.abs());
+            let span = (hi - lo).abs().max(1e-300);
+            if a.distance(b) <= 1e-9 * size {
+                if (last - lo).abs() <= 1e-9 * span {
+                    last = hi;
+                } else if (first - hi).abs() <= 1e-9 * span {
+                    first = lo;
+                }
+            }
         }
     }
     (first, last)

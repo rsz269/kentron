@@ -472,7 +472,12 @@ impl Checker<'_> {
                 self.error(
                     face,
                     ProblemKind::DisconnectedWire,
-                    format!("the pcurves of {:?} and {:?} do not meet on {face:?}", coedges[i], coedges[(i + 1) % ends.len()]),
+                    format!(
+                        "the pcurves of {:?} and {:?} do not meet on {face:?} ({})",
+                        coedges[i],
+                        coedges[(i + 1) % ends.len()],
+                        if across_seam { "a period apart".to_string() } else { format!("{gap} apart") }
+                    ),
                 );
             }
         }
