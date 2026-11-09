@@ -1277,7 +1277,8 @@ def main() -> int:
     (target / "draw_skipped.txt").write_text("".join(f"{p}\t{r}\n" for p, r in skipped_all))
     converted |= vendor_scripts(occt, skipped_all, deviations, {c.rel[len("tests/"):]: c.path for c in cases})
 
-    stale = sorted(expected - converted)
+    # (The data-exchange tests run by their own harness, crates/occt-tests/tests/draw_de.rs.)
+    stale = sorted(e for e in expected - converted if not e.startswith("tests/de/"))
     if stale:
         sys.exit(f"{EXPECTED_FAILURES.name}: not converted any more (remove them): {', '.join(stale)}")
 

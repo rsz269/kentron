@@ -123,7 +123,35 @@ impl Draw {
     ///
     /// Example: `2dextrema c2d e2d`
     pub fn _2dextrema(&mut self, args: &[&str]) -> DrawResult {
-        self.not_implemented("2dextrema", args)
+        // `2dextrema curve1 curve2`: the extrema between two curves in the plane, each a
+        // point `ext_i` where they meet, else the segment between the extremal points.
+        need(args, 2, "2dextrema curve1 curve2")?;
+        let curve = |d: &Self, name: &str| match d.get(name) {
+            Some(DrawObject::Curve2(c)) => Ok(c.clone()),
+            _ => Err(DrawError::Failed(format!("Syntax error: '{name}' is NULL"))),
+        };
+        let (a, b) = (curve(self, args[0])?, curve(self, args[1])?);
+        let extrema = kentron::geometry::extrema::curve_curve2(&a, &b);
+        if let kentron::geometry::extrema::CurveCurveExtrema::Parallel { distance } = extrema {
+            return Ok(format!("Infinite number of extremas, distance = {distance}\n"));
+        }
+        let found = extrema.isolated().to_vec();
+        if found.is_empty() {
+            return Ok("No solutions!\n".into());
+        }
+        let mut out = String::new();
+        for (i, e) in found.iter().enumerate() {
+            let name = format!("ext_{}", i + 1);
+            out += &format!("dist {}: {}  {name}\n", i + 1, e.distance);
+            match Direction2::try_new(e.p2.x - e.p1.x, e.p2.y - e.p1.y) {
+                Some(d) if e.distance > 1e-9 => {
+                    let line = Curve2::Line(Line2::new(e.p1, d));
+                    self.set(&name, DrawObject::Curve2(Curve2::Trimmed(TrimmedCurve2::new(line, 0.0, e.distance))));
+                }
+                _ => self.set(&name, DrawObject::Point2(e.p1)),
+            }
+        }
+        Ok(out)
     }
     /// DRAW command `2dinterpole`: 1 uses in 1 converted scripts.
     ///
@@ -135,7 +163,39 @@ impl Draw {
     ///
     /// Example: `2dintersect l1 c1`
     pub fn _2dintersect(&mut self, args: &[&str]) -> DrawResult {
-        self.not_implemented("2dintersect", args)
+        // `2dintersect curve1 curve2 [-tol tolerance] [-state]`: the points where two
+        // curves in the plane meet (a curve's self-intersections are not supported).
+        let mut tolerance = 1e-3;
+        let mut state = false;
+        let mut curves = Vec::new();
+        let mut i = 0;
+        while i < args.len() {
+            match args[i] {
+                "-tol" => {
+                    i += 1;
+                    tolerance = self.numbers(&args[i..=i.min(args.len() - 1)])?[0];
+                }
+                "-state" => state = true,
+                name => match self.get(name) {
+                    Some(DrawObject::Curve2(c)) => curves.push(c.clone()),
+                    _ => return Err(DrawError::Failed(format!("Syntax error: curve '{name}' is null"))),
+                },
+            }
+            i += 1;
+        }
+        let [a, b] = &curves[..] else { return self.not_implemented("2dintersect", args) };
+        let mut out = String::new();
+        for (k, x) in kentron::geometry::intersect::curves2(a, b, tolerance).iter().enumerate() {
+            out += &format!("Intersection point {} : {} {}\n", k + 1, x.point.x, x.point.y);
+            out += &format!("parameter on the fist: {} parameter on the second: {}\n", x.t1, x.t2);
+            if state {
+                // (Touching where the tangents are parallel.)
+                let (da, db) = (a.d1(x.t1).1, b.d1(x.t2).1);
+                let touch = (da.x * db.y - da.y * db.x).abs() <= 1e-9 * da.length() * db.length();
+                out += &format!("Intersection type: {}\n", if touch { "TOUCH" } else { "INTERSECTION" });
+            }
+        }
+        Ok(out)
     }
     /// DRAW command `2dlmirror`: 7 uses in 7 converted scripts.
     ///
@@ -515,6 +575,7 @@ impl Draw {
             (bspline_surfaces, "\tbspsur : BSplineSurface"),
             (c0_curves, "\tc0curv : Curve Only C0"),
             (c0_surfaces, "\tc0surf : Surface Only C0"),
+            (faces.iter().filter(|&&f| m.surface(f).is_some_and(kentron::heal::is_indirect)).count(), "\tindsur : Indirect Surface"),
             (offset_curves, "\tofcur  : Offset Curve(s)"),
             (offset_surfaces, "\tofsur  : Offset Surface"),
             (trimmed2, "\ttrc2d  : Trimmed Curve2d"),
@@ -528,6 +589,22 @@ impl Draw {
             }
         }
         Ok(out)
+    }
+    /// DRAW command `directfaces`.
+    ///
+    /// Example: `directfaces result a`
+    pub fn directfaces(&mut self, args: &[&str]) -> DrawResult {
+        // `directfaces result shape`: the faces on indirect (left-handed) elementary surfaces
+        // put on direct ones (`result` not set where there are none, as OCCT's).
+        need(args, 2, "directfaces result shape")?;
+        let shape = self.shape_var(args[1])?;
+        let any = self.model.unique_subshapes(shape, NodeKind::Face).into_iter().any(|f| self.model.surface(f).is_some_and(kentron::heal::is_indirect));
+        if !any {
+            return Ok("No modif\n".into());
+        }
+        let result = kentron::heal::direct_faces(&mut self.model, shape)?;
+        self.set_shape_var(args[0], result)?;
+        Ok(format!("DirectFaces -> Result : {}\n", args[0]))
     }
     /// DRAW command `DT_SplitAngle`: 1 uses in 1 converted scripts.
     ///
@@ -1104,6 +1181,140 @@ impl Draw {
         self.cells_taken = (0..count).map(|i| (i, 0)).collect();
         self.cells_merged.clear();
         self.set_cells_result(args[0])
+    }
+    /// DRAW command `BRepIntCS`.
+    ///
+    /// Example: `BRepIntCS l r1`
+    #[allow(non_snake_case)]
+    pub fn BRepIntCS(&mut self, args: &[&str]) -> DrawResult {
+        // `BRepIntCS curve... shape [tolerance]`: the points where the curves meet the shape's
+        // faces, as `brics_1`, `brics_2`, ... (along each curve, those closer than the
+        // tolerance as one).
+        need(args, 2, "BRepIntCS curve1 [curve2 ...] shape [tolerance]")?;
+        let at = args.iter().position(|a| matches!(self.get(a), Some(DrawObject::Shape(_)))).ok_or_else(|| DrawError::Failed("Invalid input shape".into()))?;
+        let shape = self.shape_var(args[at])?;
+        let tolerance = args.get(at + 1).and_then(|t| t.parse::<f64>().ok()).filter(|&t| t >= 1e-7).unwrap_or(1e-6);
+        let faces = self.model.unique_subshapes(shape, NodeKind::Face);
+        let mut out = String::new();
+        let mut count = 0;
+        for name in &args[..at] {
+            let Some(DrawObject::Curve(curve)) = self.get(name).cloned() else { continue };
+            let mut found: Vec<(f64, Point)> = Vec::new();
+            for &face in &faces {
+                let Some(surface) = self.model.surface(face).cloned() else { continue };
+                let surface = surface.transformed(&face.placement);
+                for x in kentron::geometry::intersect::curve_surface(&curve, &surface, tolerance).points {
+                    if self.classify_in_face(face, Point2::new(x.u, x.v), tolerance)? != "OUT of shape" && found.iter().all(|(_, q)| q.distance(x.point) > tolerance) {
+                        found.push((x.t, x.point));
+                    }
+                }
+            }
+            found.sort_by(|a, b| a.0.total_cmp(&b.0));
+            for (_, p) in found {
+                count += 1;
+                out += &format!("Point {count} : {} {} {}\n", p.x, p.y, p.z);
+                self.set(&format!("brics_{count}"), DrawObject::Point(p));
+            }
+        }
+        Ok(out)
+    }
+    /// DRAW command `b2dclassify`.
+    ///
+    /// Example: `b2dclassify face p1 0.1`
+    pub fn b2dclassify(&mut self, args: &[&str]) -> DrawResult {
+        // `b2dclassify face point2d [tolerance] [use-box] [gap-check]`: where a point in the
+        // face's parameters lies (ON within the tolerance of its boundary, in space; by
+        // default the face's).
+        need(args, 2, "b2dclassify face point2d [tolerance]")?;
+        let face = self.shape_var(args[0])?;
+        let Some(DrawObject::Point2(p)) = self.get(args[1]).cloned() else {
+            return Err(DrawError::Failed(format!("{} is not a 2D point", args[1])));
+        };
+        let tolerance = match args.get(2) {
+            Some(t) => self.numbers(&[t])?[0],
+            None => self.model.tolerance(face),
+        };
+        let state = self.classify_in_face(face, p, tolerance)?;
+        Ok(format!("The point is {state}\n"))
+    }
+    /// DRAW command `b2dclassifx`.
+    ///
+    /// Example: `b2dclassifx face p`
+    pub fn b2dclassifx(&mut self, args: &[&str]) -> DrawResult {
+        // `b2dclassifx face point2d [tolerance]`: as `b2dclassify`.
+        self.b2dclassify(&args[..args.len().min(3)])
+    }
+    /// Where `p` (in the face's parameters, moved by whole periods into the face's range)
+    /// lies: "ON shape" within `tolerance` of the boundary in space, else "IN shape" or "OUT
+    /// of shape" by the boundary's winding round it in the parameters.
+    fn classify_in_face(&self, face: Shape, p: Point2, tolerance: f64) -> std::result::Result<&'static str, DrawError> {
+        use kentron::geometry::ParametricSurface;
+        let surface = self.model.surface(face).cloned().ok_or_else(|| DrawError::Failed("a face without a surface".into()))?;
+        let forward = Shape { orientation: Orientation::Forward, ..face };
+        let mut polygons: Vec<Vec<Point2>> = Vec::new();
+        for w in self.model.children(forward).collect::<Vec<_>>() {
+            let mut polygon = Vec::new();
+            for c in self.model.children(w).collect::<Vec<_>>() {
+                let Ok(id) = kentron::topology::CoEdgeId::try_from(c.node) else { continue };
+                let Some((pc, a, b)) = self.model.effective_pcurve(id) else { continue };
+                let reversed = self.model[id].orientation == Orientation::Reversed;
+                for k in 0..64 {
+                    let s = k as f64 / 64.0;
+                    polygon.push(pc.point(if reversed { b - (b - a) * s } else { a + (b - a) * s }));
+                }
+            }
+            if !polygon.is_empty() {
+                polygons.push(polygon);
+            }
+        }
+        let (mut lo, mut hi) = (Point2::new(f64::INFINITY, f64::INFINITY), Point2::new(f64::NEG_INFINITY, f64::NEG_INFINITY));
+        for q in polygons.iter().flatten() {
+            lo = Point2::new(lo.x.min(q.x), lo.y.min(q.y));
+            hi = Point2::new(hi.x.max(q.x), hi.y.max(q.y));
+        }
+        let into = |x: f64, lo: f64, hi: f64, period: Option<f64>| match period {
+            Some(t) if x < lo || x > hi => x + ((0.5 * (lo + hi) - x) / t).round() * t,
+            _ => x,
+        };
+        let p = Point2::new(into(p.x, lo.x, hi.x, surface.u_period()), into(p.y, lo.y, hi.y, surface.v_period()));
+        // On the boundary: near its curves in space (each the nearest of samples, refined).
+        let image = surface.point(p.x, p.y);
+        let mut near = false;
+        for w in self.model.children(forward).collect::<Vec<_>>() {
+            for c in self.model.children(w).collect::<Vec<_>>() {
+                let Ok(id) = kentron::topology::CoEdgeId::try_from(c.node) else { continue };
+                let Some((pc, a, b)) = self.model.effective_pcurve(id) else { continue };
+                let tolerance = tolerance.max(self.model.tolerance(Shape::from(self.model[id].edge)));
+                let distance = |t: f64| {
+                    let q = pc.point(t);
+                    surface.point(q.x, q.y).distance(image)
+                };
+                let n = 256;
+                let k = (0..=n).min_by(|&i, &j| distance(a + (b - a) * i as f64 / n as f64).total_cmp(&distance(a + (b - a) * j as f64 / n as f64))).unwrap_or(0);
+                let (mut lo, mut hi) = (a + (b - a) * (k.max(1) - 1) as f64 / n as f64, a + (b - a) * (k + 1).min(n) as f64 / n as f64);
+                for _ in 0..100 {
+                    let (m1, m2) = (lo + (hi - lo) / 3.0, hi - (hi - lo) / 3.0);
+                    if distance(m1) < distance(m2) { hi = m2 } else { lo = m1 }
+                }
+                if distance(0.5 * (lo + hi)) <= tolerance {
+                    near = true;
+                }
+            }
+        }
+        if near {
+            return Ok("ON shape");
+        }
+        // Crossings of a ray along +u.
+        let mut crossings = 0;
+        for polygon in &polygons {
+            for k in 0..polygon.len() {
+                let (a, b) = (polygon[k], polygon[(k + 1) % polygon.len()]);
+                if (a.y > p.y) != (b.y > p.y) && p.x < a.x + (p.y - a.y) / (b.y - a.y) * (b.x - a.x) {
+                    crossings += 1;
+                }
+            }
+        }
+        Ok(if crossings % 2 == 1 { "IN shape" } else { "OUT of shape" })
     }
     /// DRAW command `bclassify`: 2 uses in 2 converted scripts.
     ///
@@ -1925,6 +2136,54 @@ impl Draw {
         let (x, y) = (properties::bounding_box(&self.model, a), properties::bounding_box(&self.model, b));
         let apart = x.max.x < y.min.x || y.max.x < x.min.x || x.max.y < y.min.y || y.max.y < x.min.y || x.max.z < y.min.z || y.max.z < x.min.z;
         Ok(if apart { "The shapes are NOT interfered by AABB.\n" } else { "The shapes are interfered by AABB.\n" }.into())
+    }
+    /// DRAW command `getsurfcontinuity`.
+    ///
+    /// Example: `getsurfcontinuity se`
+    pub fn getsurfcontinuity(&mut self, args: &[&str]) -> DrawResult {
+        // `getsurfcontinuity surface`: the surface's continuity (C0, G1, C1, G2, C2, C3 or CN).
+        need(args, 1, "getsurfcontinuity surface")?;
+        let Some(DrawObject::Surface(s)) = self.get(args[0]) else {
+            return Err(DrawError::Failed("Argument is not a surface!".into()));
+        };
+        let continuity = kentron::geometry::ParametricSurface::continuity(s);
+        Ok(format!("{} has {continuity:?} continuity.\n", args[0]))
+    }
+    /// DRAW command `cmovepoint`.
+    ///
+    /// Example: `cmovepoint bscurv 0 0. 0.05 0.0`
+    pub fn cmovepoint(&mut self, args: &[&str]) -> DrawResult {
+        // `cmovepoint name u dx dy [dz] [index1 index2]`: the B-spline's point at `u` moved by
+        // (dx, dy, dz), moving poles `index1..=index2` (1-based; by default all but the ends).
+        need(args, 4, "cmovepoint name u dx dy [dz index1 index2]")?;
+        let v = self.numbers(&args[1..])?;
+        let (u, dx, dy) = (v[0], v[1], v[2]);
+        let dz = if args.len() >= 5 && args.len() != 6 { v[3] } else { 0.0 };
+        let indices = match args.len() {
+            6 => Some((v[3], v[4])),
+            7 => Some((v[4], v[5])),
+            _ => None,
+        };
+        let range = |n: usize| match indices {
+            Some((a, b)) if a >= 1.0 && b >= 1.0 => (a as usize - 1, b as usize - 1),
+            _ => (1, n.saturating_sub(2)),
+        };
+        match self.get(args[0]).cloned() {
+            Some(DrawObject::Curve(Curve::BSpline(mut b))) => {
+                let (first, last) = range(b.poles().len());
+                let target = b.point(u) + Vector::new(dx, dy, dz);
+                b.move_point(u, target, first, last);
+                self.set(args[0], DrawObject::Curve(Curve::BSpline(b)));
+            }
+            Some(DrawObject::Curve2(Curve2::BSpline(mut b))) => {
+                let (first, last) = range(b.poles().len());
+                let target = b.point(u) + Vector2::new(dx, dy);
+                b.move_point(u, target, first, last);
+                self.set(args[0], DrawObject::Curve2(Curve2::BSpline(b)));
+            }
+            _ => {}
+        }
+        Ok(String::new())
     }
     /// DRAW command `cmovetangent`.
     ///
@@ -2938,6 +3197,26 @@ impl Draw {
         self.set_shape_var(args[0], shape)
     }
     /// An IGES file (found as `locate_data_file` finds it) read into the model.
+    /// DRAW command `stepread`.
+    ///
+    /// Example: `stepread file.stp a *`
+    pub fn stepread(&mut self, args: &[&str]) -> DrawResult {
+        // `stepread file name [roots]`: the file's shape as `name_1` (its roots in one shape;
+        // kept for `tpcompound`).
+        need(args, 2, "stepread file name [*]")?;
+        let path = super::find_data_file(args[0]).unwrap_or_else(|| args[0].to_string());
+        let mut f = std::fs::File::open(&path).map_err(|e| DrawError::Failed(format!("{path}: {e}")))?;
+        let shape = kentron::io::step::read(&mut self.model, &mut f)?;
+        self.last_transfer = Some(shape);
+        self.set_shape_var(&format!("{}_1", args[1]), shape)
+    }
+    /// DRAW command `tpstat`.
+    ///
+    /// Example: `tpstat c`
+    pub fn tpstat(&mut self, _args: &[&str]) -> DrawResult {
+        // `tpstat [mode]`: the last transfer's statistics (here only whether there was one).
+        Ok(if self.last_transfer.is_some() { "Transfer: 1 root\n".to_string() } else { "No transfer\n".to_string() })
+    }
     fn read_iges(&mut self, file: &str) -> std::result::Result<kentron::topology::Shape, DrawError> {
         let path = super::find_data_file(file).unwrap_or_else(|| file.to_string());
         let mut f = std::fs::File::open(&path).map_err(|e| DrawError::Failed(format!("{path}: {e}")))?;
@@ -4653,7 +4932,58 @@ impl Draw {
     ///
     /// Example: `pcurve ff`
     pub fn pcurve(&mut self, args: &[&str]) -> DrawResult {
-        self.not_implemented("pcurve", args)
+        // `pcurve [name edge] face [-mute]`: the curves of a face's edges in its parameters,
+        // as `face_1`, `face_2`, ... (each use of an edge, in the order of the face's wires;
+        // a seam twice) or of one edge as `name`, each trimmed to the edge's range.
+        let args: Vec<&str> = args.iter().copied().filter(|a| !a.eq_ignore_ascii_case("-mute")).collect();
+        let trimmed = |c: Curve2, first: f64, last: f64| {
+            let (lo, hi) = (c.first_parameter(), c.last_parameter());
+            if !c.is_periodic() && (lo - first > 1e-9 || last - hi > 1e-9) { c } else { Curve2::Trimmed(TrimmedCurve2::new(c, first, last)) }
+        };
+        let uses = |d: &Self, face: Shape| -> Vec<(kentron::topology::CoEdgeId, Orientation)> {
+            let face = Shape { orientation: Orientation::Forward, ..face };
+            let mut out = Vec::new();
+            for w in d.model.children(face).collect::<Vec<_>>() {
+                for c in d.model.children(w).collect::<Vec<_>>() {
+                    if let Ok(id) = kentron::topology::CoEdgeId::try_from(c.node) {
+                        out.push((id, c.orientation));
+                    }
+                }
+            }
+            out
+        };
+        match args[..] {
+            [face_name] => {
+                let face = self.shape_var(face_name)?;
+                let mut missing = Vec::new();
+                for (i, (id, _)) in uses(self, face).into_iter().enumerate() {
+                    match self.model.effective_pcurve(id) {
+                        Some((c, first, last)) => {
+                            let c = trimmed(c.clone(), first, last);
+                            self.set(&format!("{face_name}_{}", i + 1), DrawObject::Curve2(c));
+                        }
+                        None => missing.push(format!("Error: Edge {} does not have pcurve", i + 1)),
+                    }
+                }
+                Ok(missing.join("\n"))
+            }
+            [name, edge, face, ..] => {
+                let (edge, face) = (self.shape_var(edge)?, self.shape_var(face)?);
+                let candidates: Vec<_> = uses(self, face).into_iter().filter(|(id, _)| Shape::from(self.model[*id].edge).node == edge.node).collect();
+                // (A seam's two: the one used the way the edge is given.)
+                let id = candidates
+                    .iter()
+                    .find(|(id, _)| self.model[*id].orientation == edge.orientation)
+                    .or(candidates.first())
+                    .map(|(id, _)| *id)
+                    .ok_or_else(|| DrawError::Failed("pcurve: the edge is not on the face".into()))?;
+                let (c, first, last) = self.model.effective_pcurve(id).ok_or_else(|| DrawError::Failed("pcurve: the edge has no pcurve on the face".into()))?;
+                let c = trimmed(c.clone(), first, last);
+                self.set(name, DrawObject::Curve2(c));
+                Ok(String::new())
+            }
+            _ => self.not_implemented("pcurve", &args),
+        }
     }
     /// DRAW command `pcylinder`: 1140 uses in 931 converted scripts.
     ///

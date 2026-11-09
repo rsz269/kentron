@@ -4,28 +4,22 @@ use occt_tests::draw::*;
 
 /// `tests/lowalgos/2dinter/bug4426_1`
 #[test]
-#[should_panic]
-fn bug4426_1() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.circle(&["c1", "2", "2", "1"])?;
-        d.line(&["l1", "3", "0", "0", "1"])?;
-        d._2dintersect(&["l1", "c1"])?;
-        Ok(())
-    })
+fn bug4426_1() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.circle(&["c1", "2", "2", "1"])?;
+    d.line(&["l1", "3", "0", "0", "1"])?;
+    d._2dintersect(&["l1", "c1"])?;
+    Ok(())
 }
 
 /// `tests/lowalgos/2dinter/bug4426_2`
 #[test]
-#[should_panic]
-fn bug4426_2() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.line(&["ll1", "0", "0", "0.3", "0.7"])?;
-        d.line(&["ll2", "0", "0", "0.37", "0.63"])?;
-        d.trim(&["tll1", "ll1", "-0.00001", "0.00001"])?;
-        d.trim(&["tll2", "ll2", "-0.00001", "0.00001"])?;
-        d._2dintersect(&["tll1", "tll2"])?;
-        Ok(())
-    })
+fn bug4426_2() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.line(&["ll1", "0", "0", "0.3", "0.7"])?;
+    d.line(&["ll2", "0", "0", "0.37", "0.63"])?;
+    d.trim(&["tll1", "ll1", "-0.00001", "0.00001"])?;
+    d.trim(&["tll2", "ll2", "-0.00001", "0.00001"])?;
+    d._2dintersect(&["tll1", "tll2"])?;
+    Ok(())
 }

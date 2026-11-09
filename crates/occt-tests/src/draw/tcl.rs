@@ -45,6 +45,9 @@ pub struct Session {
     /// by position (`tcl_selectors.json`): (explode, name, kind, x, y, z, measure).
     pub explodes: usize,
     pub selectors: Vec<(usize, String, String, [f64; 4])>,
+    /// The files `open` has open, by channel name: the path, whether written, and the text
+    /// (read whole on opening to read; written on closing).
+    pub channels: std::collections::HashMap<String, (PathBuf, bool, String)>,
 }
 
 /// Commands that only show or time things (DRAW's viewers and the like): they do nothing.
@@ -222,6 +225,16 @@ fn extra(name: &str, interp: &mut Interp<Session>, argv: &[Value]) -> Option<Mol
             // `puts ?-nonewline? ?channel? string`: a TODO declares a known failure.
             let text = args.last().cloned().unwrap_or_default();
             let session = interp.context_mut();
+            let words: Vec<&String> = args.iter().filter(|a| *a != "-nonewline").collect();
+            if let [channel, _] = words[..] {
+                if let Some((_, true, buffer)) = session.channels.get_mut(channel.as_str()) {
+                    buffer.push_str(&text);
+                    if !args.iter().any(|a| a == "-nonewline") {
+                        buffer.push('\n');
+                    }
+                    return Some(molt_ok!());
+                }
+            }
             if let Some(rest) = text.trim_start().strip_prefix("TODO ") {
                 let platforms = rest.split(':').next().unwrap_or("").split_whitespace().skip(1).collect::<Vec<_>>();
                 if platforms.iter().any(|p| ["ALL", "All", "Linux", "Debian", "Ubuntu"].contains(&p.trim_matches(','))) {
@@ -398,6 +411,66 @@ fn extra(name: &str, interp: &mut Interp<Session>, argv: &[Value]) -> Option<Mol
         "lsort" => lsort(&args),
         "format" => format(&args),
         "file" => file(&args),
+        "open" => {
+            // `open path ?access?`: a channel to read the file whole, or to write it (on
+            // `close`).
+            let Some(path) = args.first() else { return Some(molt_err!("wrong # args: should be \"open fileName ?access? ?permissions?\"")) };
+            let write = args.get(1).is_some_and(|m| m.contains('w') || m.contains('a'));
+            let text = if write {
+                String::new()
+            } else {
+                match std::fs::read_to_string(path) {
+                    Ok(t) => t,
+                    Err(e) => return Some(molt_err!(format!("couldn't open \"{path}\": {e}"))),
+                }
+            };
+            let session = interp.context_mut();
+            let name = format!("file{}", session.channels.len() + 10);
+            session.channels.insert(name.clone(), (PathBuf::from(path), write, text));
+            molt_ok!(Value::from(name))
+        }
+        "read" => {
+            // `read ?-nonewline? channel`: the rest of the file.
+            let Some(channel) = args.iter().find(|a| *a != "-nonewline") else { return None };
+            let Some((_, false, text)) = interp.context_mut().channels.get_mut(channel.as_str()) else {
+                return Some(molt_err!(format!("can not find channel named \"{channel}\"")));
+            };
+            let mut rest = std::mem::take(text);
+            if args.iter().any(|a| a == "-nonewline") && rest.ends_with('\n') {
+                rest.pop();
+            }
+            molt_ok!(Value::from(rest))
+        }
+        "gets" => {
+            // `gets channel ?var?`: the next line.
+            let Some(channel) = args.first() else { return None };
+            let Some((_, false, text)) = interp.context_mut().channels.get_mut(channel.as_str()) else {
+                return Some(molt_err!(format!("can not find channel named \"{channel}\"")));
+            };
+            let end = text.find('\n').map_or(text.len(), |i| i + 1);
+            let at_end = text.is_empty();
+            let line: String = text.drain(..end).collect::<String>().trim_end_matches('\n').to_string();
+            match args.get(1) {
+                Some(var) => {
+                    if let Err(e) = interp.set_var(&Value::from(var.as_str()), Value::from(line.as_str())) {
+                        return Some(Err(e));
+                    }
+                    molt_ok!(Value::from(if at_end { -1 } else { line.len() as MoltInt }))
+                }
+                None => molt_ok!(Value::from(line)),
+            }
+        }
+        "close" => {
+            let Some(channel) = args.first() else { return None };
+            match interp.context_mut().channels.remove(channel.as_str()) {
+                Some((path, true, text)) => match std::fs::write(&path, text) {
+                    Ok(()) => molt_ok!(),
+                    Err(e) => molt_err!(format!("error writing \"{}\": {e}", path.display())),
+                },
+                Some(_) => molt_ok!(),
+                None => molt_err!(format!("can not find channel named \"{channel}\"")),
+            }
+        }
         "checkplatform" => molt_ok!(Value::from(if args.iter().any(|a| a == "-linux") { 1 } else { 0 })),
         _ => return None,
     })
@@ -953,6 +1026,7 @@ pub fn run_script(tests: &Path, group: &str, grid: &str, case: &str) -> Outcome 
         explodes: 0,
         selectors: selectors(group, grid, case),
         script: String::new(),
+        channels: Default::default(),
     };
     let set = CommandSet::new(execute, command_type, &[], &[]);
     let mut interp = InterpBuilder::new(session, set).standard_library(StandardLibrary::Full).environment(true).build();

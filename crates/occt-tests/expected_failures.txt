@@ -179,7 +179,6 @@ tests/bugs/mesh/bug26532
 tests/bugs/mesh/bug27239
 tests/bugs/mesh/bug27845
 tests/bugs/mesh/bug29641
-tests/bugs/mesh/bug29715
 tests/bugs/mesh/bug29751
 tests/bugs/mesh/bug29962
 tests/bugs/mesh/bug30008_2
@@ -324,9 +323,6 @@ tests/bugs/modalg_4/bug906
 tests/bugs/modalg_5/bug23706_10
 tests/bugs/modalg_5/bug23706_11
 tests/bugs/modalg_5/bug23706_12
-tests/bugs/modalg_5/bug23706_13
-tests/bugs/modalg_5/bug23706_14
-tests/bugs/modalg_5/bug23706_15
 tests/bugs/modalg_5/bug23706_19
 tests/bugs/modalg_5/bug23706_2
 tests/bugs/modalg_5/bug23706_26
@@ -376,10 +372,6 @@ tests/bugs/modalg_5/bug25028
 tests/bugs/modalg_5/bug25124_1
 tests/bugs/modalg_5/bug25124_2
 tests/bugs/modalg_5/bug25124_3
-tests/bugs/modalg_5/bug25124_4
-tests/bugs/modalg_5/bug25124_5
-tests/bugs/modalg_5/bug25124_6
-tests/bugs/modalg_5/bug25124_7
 tests/bugs/modalg_5/bug25163
 tests/bugs/modalg_5/bug25232_1
 tests/bugs/modalg_5/bug25232_2
@@ -497,8 +489,6 @@ tests/bugs/modalg_6/bug28626_3
 tests/bugs/modalg_6/bug28661_2
 tests/bugs/modalg_6/bug28690_1
 tests/bugs/modalg_6/bug28795
-tests/bugs/modalg_6/bug31047
-tests/bugs/modalg_6/bug32876
 tests/bugs/modalg_6/bug6768
 tests/bugs/modalg_6/bug8040
 tests/bugs/modalg_7/bug21264
@@ -654,7 +644,6 @@ tests/bugs/moddata_1/bug203
 tests/bugs/moddata_1/bug20404
 tests/bugs/moddata_1/bug20627
 tests/bugs/moddata_1/bug22303
-tests/bugs/moddata_1/bug22459
 tests/bugs/moddata_1/bug22554_1
 tests/bugs/moddata_1/bug22554_2
 tests/bugs/moddata_1/bug22554_3
@@ -688,8 +677,6 @@ tests/bugs/moddata_2/bug372
 tests/bugs/moddata_2/bug41
 tests/bugs/moddata_2/bug454
 tests/bugs/moddata_2/bug466
-tests/bugs/moddata_2/bug515
-tests/bugs/moddata_2/bug542
 tests/bugs/moddata_2/bug569
 tests/bugs/moddata_2/bug6278
 tests/bugs/moddata_2/bug6412
@@ -800,12 +787,8 @@ tests/feat/featprism/R4
 tests/feat/featrevol/I6
 tests/feat/featrevol/J7
 tests/geometry/2dbeziecurve/B1
-tests/geometry/2dbsplinecurve/A6
-tests/geometry/2dbsplinecurve/A7
 tests/geometry/2dbsplinecurve/B7
 tests/geometry/2dpolygon/A1
-tests/geometry/bsplinecurve/A1
-tests/geometry/bsplinecurve/A2
 tests/geometry/circ2d3Tan/CircleCircleLin_11
 tests/geometry/circ2d3Tan/CircleCirclePoint_13
 tests/geometry/circ2d3Tan/CircleLinPoint_11
@@ -822,12 +805,6 @@ tests/geometry/preview/vertex
 tests/geometry/project/A9
 tests/heal/checkshape/bug27814_1
 tests/heal/checkshape/bug32448_1
-tests/heal/direct_faces/A2
-tests/heal/direct_faces/A6
-tests/heal/direct_faces/A7
-tests/heal/direct_faces/B1
-tests/heal/direct_faces/B7
-tests/heal/direct_faces/B8
 tests/heal/drop_small_edges/A5
 tests/heal/fix_face_size/A1
 tests/heal/fix_face_size/A4
@@ -888,14 +865,6 @@ tests/lowalgos/2dgcc/bug23866
 tests/lowalgos/2dgcc/doc001
 tests/lowalgos/2dinter/A1
 tests/lowalgos/2dinter/A2
-tests/lowalgos/2dinter/bug25593
-tests/lowalgos/2dinter/bug26099
-tests/lowalgos/2dinter/bug4426_1
-tests/lowalgos/2dinter/bug4426_2
-tests/lowalgos/classifier/buc60609
-tests/lowalgos/classifier/bug23849_2
-tests/lowalgos/classifier/bug30354_1
-tests/lowalgos/classifier/bug30354_2
 tests/lowalgos/classifier/bug377
 tests/lowalgos/extcc/bug29712_34
 tests/lowalgos/extcc/bug29712_35
@@ -960,9 +929,6 @@ tests/lowalgos/intss/bug31552
 tests/lowalgos/intss/bug32849
 tests/lowalgos/intss/bug333
 tests/lowalgos/intss/bug565
-tests/mesh/advanced_incmesh/A8
-tests/mesh/advanced_incmesh_parallel/A8
-tests/mesh/advanced_shading/A8
 tests/mesh/standard_incmesh/A5
 tests/mesh/standard_incmesh/J8
 tests/mesh/standard_incmesh/L2
