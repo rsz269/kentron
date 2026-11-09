@@ -65,11 +65,13 @@ conversation's context, read back from the cache).
 
 ## Tested against
 
-- **OCCT's DRAW test scripts:** 16,311 of its 16,420 scripts in the modelling groups (the
-  rest exercise viewers and data exchange). 10,245 are converted by [`tools/draw2rs.py`](tools/draw2rs.py) into
-  Rust tests and YAML cases; the 6,066 that use Tcl (conditions, loops, procedures) run as
-  they are, on a Tcl interpreter. Many need OCCT's external test dataset (not in this
-  repo).
+- **OCCT's DRAW test scripts:** 10,538 of the 16,322 scripts in its modelling groups run
+  (the other groups exercise viewers and data exchange), and 9,501 of them (90%) pass. The
+  5,305 that read models OCCT keeps private (it publishes only part of its test data) and
+  the 479 OCCT itself marks as failing on Linux never run, and are not counted.
+  [`tools/draw2rs.py`](tools/draw2rs.py) converts most scripts into Rust tests and YAML cases;
+  those using Tcl (conditions, loops, procedures) run as they are, on a Tcl interpreter.
+  [`tools/occt_stats.py`](tools/occt_stats.py) gives the figures, group by group.
 - **OCCT's GTests:** the computational-geometry and topology toolkits, translated by hand.
 - **BRL-CAD:** NIST's MBE PMI test parts and other STEP files from its source tree, with
   OCCT's reading of them as the reference, plus its `libbg` geometry tests.
@@ -94,8 +96,8 @@ conversation's context, read back from the cache).
   development, and 58 cases of pykentron's own that it builds as CadQuery does
   ([`crates/pykentron/tests/test_against_cadquery.py`](crates/pykentron/tests/test_against_cadquery.py)).
 
-About 13,200 tests run (with OCCT's dataset). About 800 of them are known gaps, marked as
-expected failures ([`crates/occt-tests/expected_failures.txt`](crates/occt-tests/expected_failures.txt) for OCCT's scripts): they pass
+About 13,170 tests run (scripts without their data not counted). About 1,040 of them are
+known gaps, marked as expected failures ([`crates/occt-tests/expected_failures.txt`](crates/occt-tests/expected_failures.txt) for OCCT's scripts): they pass
 while they fail, so `cargo test` is green, and fail once they pass, so a fix is noticed
 as surely as a regression.
 
