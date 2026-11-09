@@ -56,7 +56,7 @@ impl Iterator for Children<'_> {
 
 impl Model {
     /// The coedges of all wires of `face`, in order.
-    pub(super) fn face_coedges(&self, face: FaceId) -> Vec<CoEdgeId> {
+    pub(crate) fn face_coedges(&self, face: FaceId) -> Vec<CoEdgeId> {
         let Some(face) = self.get(face) else { return Vec::new() };
         face.wires
             .iter()
