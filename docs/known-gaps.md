@@ -67,40 +67,32 @@ the same all along (planes; a cylinder or a cone on a plane square to its axis: 
 
 ## Offsets and shells
 
-### Offsets and thick solids where a side plane moves off a pole or apex
+### A revolved profile's offset cut along its seam plane
 
 *Found 2026-11-09.*
 
-A partial solid of revolution (a sphere, a cone, a revolved profile reaching the axis,
-cut to 90° or 270°) hollowed with one of its side planes removed: the other side plane
-moves the thickness off the axis, so the pole or apex where the side planes and the
-curved face meet is no longer on the inner wall (the moved plane cuts the inner surface
-short of it). kentron's offsets keep the solid's topology (each face moved, its edges and
-vertices found again), which cannot drop the pole's degenerate edge or split the curved
-face's boundary there: the inner wall comes out wrong or the regularizing step finds no
-solid ("an offset leaving nothing"). Where the side planes stay on the axis (both
-removed), or the profile does not touch it (a torus), the walls are exact. Plain offsets
-outwards of such solids (the side planes moving apart, off the axis) fail the same way.
+Partial solids of revolution whose side planes move off a pole or apex on the axis are
+offset as the whole solid of revolution's offset cut by the side planes' moved
+half-spaces (offset/revolved.rs): moving the faces one by one, keeping the topology,
+cannot drop the pole. One case still fails: OCCT's `tests/offset/faces_type_i/F3`, an
+ellipse-and-polyline profile revolved 270° and hollowed by 1 inwards, open at the side
+where the revolution starts. The boolean cutting the offset revolution by the moved wedge
+misses: swept from the open side (its seam on the plane cut along) it leaves the solid
+whole; swept from the other, it leaves 11497.9 and an unsound solid, where the exact inner
+solid is 9585.3. The thick solid then fails ("an offset leaving nothing").
 
-- **Repro:** OCCT's `tests/offset/faces_type_i/B4` (a 270° cone), `C2`, `D1` (270°
-  spheres), `E8` (an ellipse-and-polyline profile revolved 90°), `F3` (the same, 270°).
-- **Evidence:** OCCT builds no wall in any of them (its result is the source solid, in
-  OCCT 8.1 too), so the scripts' values are no reference. The exact walls (Pappus'
-  theorem on the profile and its offset, the moved plane integrated over the angle): B4
-  168.393 (kentron 172.69), C2 2270.441, D1 2289.70, E8 1364.271 (kentron 1337.44), F3
-  3570.082 (C2, D1 and F3 fail). `tests/offset/shape_type_i/A5`, `A9`, `B4` (a 90° cone,
-  spherical cap and sphere offset 1 outwards; OCCT's offset fails, its volumes 1e14 and
-  more): exact 284.998, 5052.956, 5124.480, kentron's invalid (252.38, 5052.11, 5178.64).
-  D1's inner solid, built with the topology kept, is
-  invalid (pcurves not meeting at the pole) and 8287 against the exact 8313.18.
-- **Tried:** the walls as the solid less its moved copy (a boolean) where the removed
-  face's moved version reaches past it: the moved copy itself is the invalid part.
-- **Needed:** the moved copy built without keeping the topology at poles: for a partial
-  revolution, the full solid of revolution offset (its poles stay on the axis) and cut by
-  the side planes' moved half-spaces; or a general face-by-face offset that trims the
-  moved faces by one another (as OCCT's complete intersection mode does).
-- **Also:** B5 (a 270° cone, both side planes removed, outwards) is 3.4e-5 off the exact
-  282.0365: the moved cone face's area is 5e-5 too large.
+- **Repro:** `tests/offset/faces_type_i/F3`; the same profile revolved 90° (`E8`) and
+  cut by planes on the far side of the seam works.
+- **Evidence:** the exact wall is 3570.082 (Pappus' theorem on the profile and its offset,
+  the moved side plane integrated over the angle); OCCT builds no wall (its result is the
+  source, in OCCT 8.1 too).
+- **Tried:** sweeping the revolution from a profile turned into the middle of the turn
+  the solid leaves out (seam away from both planes): the booleans then miss in other cases
+  too (E8, shape_type_i A5).
+- **Needed:** the boolean of the offset revolution (an offset surface of a surface of
+  revolution) and a plane through its axis made reliable.
+- **Also:** `faces_type_i/B5` (a 270° cone, both side planes removed, outwards) is 3.4e-5
+  off the exact 282.0365: the moved cone face's area is 5e-5 too large.
 
 ### Sliver faces in shells found by distance
 

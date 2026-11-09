@@ -36,6 +36,13 @@ pub fn shape(model: &mut Model, shape: Shape, distance: f64, join: Join) -> Resu
 #[doc(alias = "offsetonface")]
 pub fn shape_with_faces(model: &mut Model, shape: Shape, distance: f64, faces: &[(Shape, f64)], join: Join) -> Result<Shape> {
     let own: Vec<(NodeId, f64)> = faces.iter().map(|(f, d)| (f.node, *d)).collect();
+    // (A partial solid of revolution whose side planes move off a pole or apex on its axis.)
+    if join == Join::Intersection {
+        let distance_of = |n: NodeId| own.iter().find(|(m, _)| *m == n).map_or(distance, |&(_, d)| d);
+        if let Some(found) = super::revolved::offset(model, shape, &distance_of)? {
+            return Ok(found);
+        }
+    }
     if let Some(stepped) = stepped(model, shape, distance, &own, join)? {
         return Ok(stepped);
     }
@@ -278,6 +285,19 @@ pub fn thick_solid(model: &mut Model, shape: Shape, removed: &[Shape], thickness
         return thick_solid(model, baked, &removed, thickness, join);
     }
     let kept: Vec<NodeId> = removed.iter().map(|f| f.node).collect();
+    // (A partial solid of revolution whose side planes move off a pole or apex on its axis:
+    // the walls between it and its offset, found by a boolean.)
+    if join == Join::Intersection {
+        let distance_of = |n: NodeId| if kept.contains(&n) { 0.0 } else { thickness };
+        if let Some(moved) = super::revolved::offset(model, shape, &distance_of)? {
+            let walls = if thickness > 0.0 { crate::boolean::difference(model, moved, shape) } else { crate::boolean::difference(model, shape, moved) };
+            if let Ok(walls) = walls {
+                if crate::validity::check(model, walls).is_valid() {
+                    return Ok(walls);
+                }
+            }
+        }
+    }
     let rounded = hollowed(model, shape, &kept, thickness, join);
     or_fallbacks(model, rounded, shape, thickness, Made::Thick { removed: &kept }, join)
 }

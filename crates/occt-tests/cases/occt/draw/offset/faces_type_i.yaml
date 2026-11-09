@@ -183,14 +183,13 @@ ported_from:
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/offset/faces_type_i/B4
 notes:
-  - "kentron deviation: OCCT's offset builds no wall here: its result is the source solid itself (volume 235.619), as OCCT 8.1's. The exact wall (Pappus' theorem on the profile and its offset, the moved side plane integrated over the angle) is 168.393; kentron's measures 172.69: the side plane moved off the axis leaves the pole or apex off the inner wall, which kentron's offset, keeping the topology, cannot (docs/known-gaps.md)."
-expect: not_done
+  - "kentron deviation: OCCT's offset builds no wall here: its result is the source solid itself (volume 235.619), as OCCT 8.1's. Checked against the exact wall from Pappus' theorem on the profile and its offset, the moved side plane integrated over the angle: 168.393. Expected value is kentron's: 168.393."
 build:
   - s: {cone: {r1: 5, r2: 0, height: 12, angle: 270}}
   - s_4: {select: {of: s, face: [-3.70074e-16, -1.66667, 4.0], area: 30.0}}
   - result: {thick_solid: {shape: s, faces: [s_4], thickness: -1, join: "intersection"}}
 checks:
-  - {volume: result, eq: 235.619, rel: 0.01}
+  - {volume: result, eq: 168.393, rel: 0.01}
 ---
 case: B5
 ported_from:
@@ -302,14 +301,13 @@ ported_from:
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/offset/faces_type_i/C2
 notes:
-  - "kentron deviation: OCCT's offset builds no wall here: its result is the source solid itself (volume 10466.5), as OCCT 8.1's. The exact wall (Pappus' theorem on the profile and its offset, the moved side plane integrated over the angle) is 2270.441; kentron's fails: the side plane moved off the axis leaves the pole or apex off the inner wall, which kentron's offset, keeping the topology, cannot (docs/known-gaps.md)."
-expect: not_done
+  - "kentron deviation: OCCT's offset builds no wall here: its result is the source solid itself (volume 10466.5), as OCCT 8.1's. Checked against the exact wall from Pappus' theorem on the profile and its offset, the moved side plane integrated over the angle: 2270.441. Expected value is kentron's: 2270.44."
 build:
   - s: {sphere: {radius: 15, latitudes: [-90, 60], angle: 270}}
   - s_4: {select: {of: s, face: [-1.43683e-15, -6.47091, -0.409701], area: 343.238}}
   - result: {thick_solid: {shape: s, faces: [s_4], thickness: -1, join: "intersection"}}
 checks:
-  - {volume: result, eq: 10466.5, rel: 0.01}
+  - {volume: result, eq: 2270.44, rel: 0.01}
 ---
 case: C3
 ported_from:
@@ -429,14 +427,13 @@ ported_from:
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/offset/faces_type_i/D1
 notes:
-  - "kentron deviation: OCCT's offset builds no wall here: its result is the source solid itself (volume 10602.9), as OCCT 8.1's. The exact wall (Pappus' theorem on the profile and its offset, the moved side plane integrated over the angle) is 2289.70; kentron's fails: the side plane moved off the axis leaves the pole or apex off the inner wall, which kentron's offset, keeping the topology, cannot (docs/known-gaps.md)."
-expect: not_done
+  - "kentron deviation: OCCT's offset builds no wall here: its result is the source solid itself (volume 10602.9), as OCCT 8.1's. Checked against the exact wall from Pappus' theorem on the profile and its offset, the moved side plane integrated over the angle: 2289.70. Expected value is kentron's: 2289.7."
 build:
   - s: {sphere: {radius: 15, angle: 270}}
   - s_2: {select: {of: s, face: [6.3662, -1.97215e-31, -1.89478e-16], area: 353.429}}
   - result: {thick_solid: {shape: s, faces: [s_2], thickness: -1, join: "intersection"}}
 checks:
-  - {volume: result, eq: 10602.9, rel: 0.01}
+  - {volume: result, eq: 2289.7, rel: 0.01}
 ---
 case: D2
 ported_from:
@@ -680,8 +677,7 @@ ported_from:
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/offset/faces_type_i/E8
 notes:
-  - "kentron deviation: OCCT's offset builds no wall here: its result is the source solid itself (volume 4385.14), as OCCT 8.1's. The exact wall (Pappus' theorem on the profile and its offset, the moved side plane integrated over the angle) is 1364.271; kentron's measures 1337.44: the side plane moved off the axis leaves the pole or apex off the inner wall, which kentron's offset, keeping the topology, cannot (docs/known-gaps.md)."
-expect: not_done
+  - "kentron deviation: OCCT's offset builds no wall here: its result is the source solid itself (volume 4385.14), as OCCT 8.1's. Checked against the exact wall from Pappus' theorem on the profile and its offset, the moved side plane integrated over the angle: 1364.271. Expected value is kentron's: 1364.27."
 build:
   - w1: {ellipse: {center: [0, 0, 0], major: 15, minor: 10}}
   - w1: {edge: {curve: w1, range: [0, "pi/2"]}}
@@ -693,7 +689,7 @@ build:
   - s_4: {select: {of: s, face: [8.78408, 1.8275e-16, -1.83548], area: 317.81}}
   - result: {thick_solid: {shape: s, faces: [s_4], thickness: -1, join: "intersection"}}
 checks:
-  - {volume: result, eq: 4385.14, rel: 0.01}
+  - {volume: result, eq: 1364.27, rel: 0.01}
 ---
 case: E9
 ported_from:
@@ -769,7 +765,7 @@ ported_from:
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/offset/faces_type_i/F3
 notes:
-  - "kentron deviation: OCCT's offset builds no wall here: its result is the source solid itself (volume 13155.4), as OCCT 8.1's. The exact wall (Pappus' theorem on the profile and its offset, the moved side plane integrated over the angle) is 3570.082; kentron's fails: the side plane moved off the axis leaves the pole or apex off the inner wall, which kentron's offset, keeping the topology, cannot (docs/known-gaps.md)."
+  - "kentron deviation: OCCT's offset builds no wall here: its result is the source solid itself (volume 13155.4), as OCCT 8.1's. The exact wall (Pappus' theorem on the profile and its offset, the moved side plane integrated over the angle) is 3570.082; kentron fails: the boolean cutting the offset revolution along its seam plane misses (docs/known-gaps.md)."
 expect: not_done
 build:
   - w1: {ellipse: {center: [0, 0, 0], major: 15, minor: 10}}

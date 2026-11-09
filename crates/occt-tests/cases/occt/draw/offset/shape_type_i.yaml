@@ -54,14 +54,13 @@ ported_from:
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/offset/shape_type_i/A5
 notes:
-  - "kentron deviation: OCCT's reference volume (3.57246e+19) is not a volume of this shape (the source's is 78.5398): OCCT's offset fails; kentron's result measures 255.989."
-expect: not_done
+  - "kentron deviation: OCCT's reference volume (3.57246e+19) is not a volume of this shape (the source's is 78.5398): OCCT's offset fails. Checked against the exact offset (the full solid of revolution offset, cut by the 90\u00b0 wedge's side planes moved out, integrated over the angle): 284.998. Expected value is kentron's: 284.998."
 build:
   - s: {cone: {r1: 5, r2: 0, height: 12, angle: 90}}
   - s: {rotate: {shape: s, axis: {origin: [0, 0, 0], direction: [0, 0, 1]}, angle: 90}}
   - result: {offset_shape: {shape: s, distance: 1, join: "intersection"}}
 checks:
-  - {volume: result, eq: 3.57246e+19, rel: 0.01}
+  - {volume: result, eq: 284.998, rel: 0.01}
 ---
 case: A6
 ported_from:
@@ -112,14 +111,13 @@ ported_from:
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/offset/shape_type_i/A9
 notes:
-  - "kentron deviation: OCCT's reference volume (2.96865e+14) is not a volume of this shape (the source's is 3488.84): OCCT's offset fails; kentron's result measures 5052.29."
-expect: not_done
+  - "kentron deviation: OCCT's reference volume (2.96865e+14) is not a volume of this shape (the source's is 3488.84): OCCT's offset fails. Checked against the exact offset (the full solid of revolution offset, cut by the 90\u00b0 wedge's side planes moved out, integrated over the angle): 5052.96. Expected value is kentron's: 5052.96."
 build:
   - s: {sphere: {radius: 15, latitudes: [-90, 60], angle: 90}}
   - s: {rotate: {shape: s, axis: {origin: [0, 0, 0], direction: [0, 0, 1]}, angle: 90}}
   - result: {offset_shape: {shape: s, distance: 1, join: "intersection"}}
 checks:
-  - {volume: result, eq: 296865000000000.0, rel: 0.01}
+  - {volume: result, eq: 5052.96, rel: 0.01}
 ---
 case: B1
 ported_from:
@@ -175,14 +173,13 @@ ported_from:
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/offset/shape_type_i/B4
 notes:
-  - "kentron deviation: OCCT's reference volume (1.77778e+14) is not a volume of this shape (the source's is 3534.29): OCCT's offset fails; kentron's result measures 5109.83."
-expect: not_done
+  - "kentron deviation: OCCT's reference volume (1.77778e+14) is not a volume of this shape (the source's is 3534.29): OCCT's offset fails. Checked against the exact offset (the full solid of revolution offset, cut by the 90\u00b0 wedge's side planes moved out, integrated over the angle): 5124.48. Expected value is kentron's: 5124.48."
 build:
   - s: {sphere: {radius: 15, angle: 90}}
   - s: {rotate: {shape: s, axis: {origin: [0, 0, 0], direction: [0, 0, 1]}, angle: 90}}
   - result: {offset_shape: {shape: s, distance: 1, join: "intersection"}}
 checks:
-  - {volume: result, eq: 177778000000000.0, rel: 0.01}
+  - {volume: result, eq: 5124.48, rel: 0.01}
 ---
 case: B5
 ported_from:

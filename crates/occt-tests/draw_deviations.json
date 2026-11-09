@@ -1554,7 +1554,9 @@
   ],
   "tests/offset/faces_type_i/B4": [
     {
-      "note": "OCCT's offset builds no wall here: its result is the source solid itself (volume 235.619), as OCCT 8.1's. The exact wall (Pappus' theorem on the profile and its offset, the moved side plane integrated over the angle) is 168.393; kentron's measures 172.69: the side plane moved off the axis leaves the pole or apex off the inner wall, which kentron's offset, keeping the topology, cannot (docs/known-gaps.md)."
+      "from": "d.checkprops(&[\"result\", \"-v\", \"235.619\"])?;",
+      "to": "d.checkprops(&[\"result\", \"-v\", \"168.393\"])?;",
+      "reason": "OCCT's offset builds no wall here: its result is the source solid itself (volume 235.619), as OCCT 8.1's. Checked against the exact wall from Pappus' theorem on the profile and its offset, the moved side plane integrated over the angle: 168.393. Expected value is kentron's: 168.393."
     }
   ],
   "tests/offset/faces_type_i/B5": [
@@ -1566,17 +1568,23 @@
   ],
   "tests/offset/faces_type_i/C2": [
     {
-      "note": "OCCT's offset builds no wall here: its result is the source solid itself (volume 10466.5), as OCCT 8.1's. The exact wall (Pappus' theorem on the profile and its offset, the moved side plane integrated over the angle) is 2270.441; kentron's fails: the side plane moved off the axis leaves the pole or apex off the inner wall, which kentron's offset, keeping the topology, cannot (docs/known-gaps.md)."
+      "from": "d.checkprops(&[\"result\", \"-v\", \"10466.5\"])?;",
+      "to": "d.checkprops(&[\"result\", \"-v\", \"2270.44\"])?;",
+      "reason": "OCCT's offset builds no wall here: its result is the source solid itself (volume 10466.5), as OCCT 8.1's. Checked against the exact wall from Pappus' theorem on the profile and its offset, the moved side plane integrated over the angle: 2270.441. Expected value is kentron's: 2270.44."
     }
   ],
   "tests/offset/faces_type_i/D1": [
     {
-      "note": "OCCT's offset builds no wall here: its result is the source solid itself (volume 10602.9), as OCCT 8.1's. The exact wall (Pappus' theorem on the profile and its offset, the moved side plane integrated over the angle) is 2289.70; kentron's fails: the side plane moved off the axis leaves the pole or apex off the inner wall, which kentron's offset, keeping the topology, cannot (docs/known-gaps.md)."
+      "from": "d.checkprops(&[\"result\", \"-v\", \"10602.9\"])?;",
+      "to": "d.checkprops(&[\"result\", \"-v\", \"2289.7\"])?;",
+      "reason": "OCCT's offset builds no wall here: its result is the source solid itself (volume 10602.9), as OCCT 8.1's. Checked against the exact wall from Pappus' theorem on the profile and its offset, the moved side plane integrated over the angle: 2289.70. Expected value is kentron's: 2289.7."
     }
   ],
   "tests/offset/faces_type_i/E8": [
     {
-      "note": "OCCT's offset builds no wall here: its result is the source solid itself (volume 4385.14), as OCCT 8.1's. The exact wall (Pappus' theorem on the profile and its offset, the moved side plane integrated over the angle) is 1364.271; kentron's measures 1337.44: the side plane moved off the axis leaves the pole or apex off the inner wall, which kentron's offset, keeping the topology, cannot (docs/known-gaps.md)."
+      "from": "d.checkprops(&[\"result\", \"-v\", \"4385.14\"])?;",
+      "to": "d.checkprops(&[\"result\", \"-v\", \"1364.27\"])?;",
+      "reason": "OCCT's offset builds no wall here: its result is the source solid itself (volume 4385.14), as OCCT 8.1's. Checked against the exact wall from Pappus' theorem on the profile and its offset, the moved side plane integrated over the angle: 1364.271. Expected value is kentron's: 1364.27."
     }
   ],
   "tests/offset/faces_type_i/E9": [
@@ -1595,7 +1603,7 @@
   ],
   "tests/offset/faces_type_i/F3": [
     {
-      "note": "OCCT's offset builds no wall here: its result is the source solid itself (volume 13155.4), as OCCT 8.1's. The exact wall (Pappus' theorem on the profile and its offset, the moved side plane integrated over the angle) is 3570.082; kentron's fails: the side plane moved off the axis leaves the pole or apex off the inner wall, which kentron's offset, keeping the topology, cannot (docs/known-gaps.md)."
+      "note": "OCCT's offset builds no wall here: its result is the source solid itself (volume 13155.4), as OCCT 8.1's. The exact wall (Pappus' theorem on the profile and its offset, the moved side plane integrated over the angle) is 3570.082; kentron fails: the boolean cutting the offset revolution along its seam plane misses (docs/known-gaps.md)."
     }
   ],
   "tests/offset/faces_type_i/F4": [
@@ -1704,7 +1712,9 @@
   ],
   "tests/offset/shape_type_i/A5": [
     {
-      "note": "OCCT's reference volume (3.57246e+19) is not a volume of this shape (the source's is 78.5398): OCCT's offset fails. The exact offset (the full solid of revolution offset, cut by the 90° wedge's side planes moved out) is 284.998; kentron's is invalid and measures 252.38: the side planes moved off the axis leave the pole or apex off the offset, which kentron's offset, keeping the topology, cannot (docs/known-gaps.md)."
+      "from": "d.checkprops(&[\"result\", \"-v\", \"3.57246e+019\"])?;",
+      "to": "d.checkprops(&[\"result\", \"-v\", \"284.998\"])?;",
+      "reason": "OCCT's reference volume (3.57246e+19) is not a volume of this shape (the source's is 78.5398): OCCT's offset fails. Checked against the exact offset (the full solid of revolution offset, cut by the 90° wedge's side planes moved out, integrated over the angle): 284.998. Expected value is kentron's: 284.998."
     }
   ],
   "tests/offset/shape_type_i/A8": [
@@ -1714,12 +1724,16 @@
   ],
   "tests/offset/shape_type_i/A9": [
     {
-      "note": "OCCT's reference volume (2.96865e+14) is not a volume of this shape (the source's is 3488.84): OCCT's offset fails. The exact offset (the full solid of revolution offset, cut by the 90° wedge's side planes moved out) is 5052.956; kentron's is invalid and measures 5052.11: the side planes moved off the axis leave the pole or apex off the offset, which kentron's offset, keeping the topology, cannot (docs/known-gaps.md)."
+      "from": "d.checkprops(&[\"result\", \"-v\", \"2.96865e+014\"])?;",
+      "to": "d.checkprops(&[\"result\", \"-v\", \"5052.96\"])?;",
+      "reason": "OCCT's reference volume (2.96865e+14) is not a volume of this shape (the source's is 3488.84): OCCT's offset fails. Checked against the exact offset (the full solid of revolution offset, cut by the 90° wedge's side planes moved out, integrated over the angle): 5052.96. Expected value is kentron's: 5052.96."
     }
   ],
   "tests/offset/shape_type_i/B4": [
     {
-      "note": "OCCT's reference volume (1.77778e+14) is not a volume of this shape (the source's is 3534.29): OCCT's offset fails. The exact offset (the full solid of revolution offset, cut by the 90° wedge's side planes moved out) is 5124.480; kentron's is invalid and measures 5178.64: the side planes moved off the axis leave the pole or apex off the offset, which kentron's offset, keeping the topology, cannot (docs/known-gaps.md)."
+      "from": "d.checkprops(&[\"result\", \"-v\", \"1.77778e+014\"])?;",
+      "to": "d.checkprops(&[\"result\", \"-v\", \"5124.48\"])?;",
+      "reason": "OCCT's reference volume (1.77778e+14) is not a volume of this shape (the source's is 3534.29): OCCT's offset fails. Checked against the exact offset (the full solid of revolution offset, cut by the 90° wedge's side planes moved out, integrated over the angle): 5124.48. Expected value is kentron's: 5124.48."
     }
   ],
   "tests/offset/shape_type_i/C9": [

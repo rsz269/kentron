@@ -9,6 +9,7 @@
 mod cells;
 mod prism;
 mod regularize;
+mod revolved;
 pub(crate) mod shape;
 mod thick;
 mod wire;
