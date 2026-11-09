@@ -52,6 +52,8 @@ pub fn planar_wire(model: &mut Model, wire: Shape, distance: f64, join: Join) ->
     }
     let raw = raw_contour(&path, side_distance, tolerance, join);
     let loops = trim(&raw, &path, side_distance.abs(), tolerance);
+    let near = 100.0 * tolerance.max(1e-7 * side_distance.abs());
+    let loops: Vec<Vec<Piece>> = loops.into_iter().map(|l| without_spurs(l, near)).collect();
     // (Not the loops enclosing nothing: where the offset's pieces touch along a stretch, as an
     // outline's notch offset inwards just to the opposite side, the stretch between them, run
     // there and back.)
@@ -869,6 +871,10 @@ fn trim(raw: &[Piece], path: &[Piece], d: f64, tolerance: f64) -> Vec<Vec<Piece>
     let index = PathIndex::new(path);
     // Pieces at the full distance from the path (else they pass where the offset is not).
     let mut kept: Vec<Piece> = Vec::new();
+    // (Parts a little short of the distance: where tiny edges turn sharply, as at a wire's
+    // ragged end, their offsets fan out, and the contour's parts there may pass a hair
+    // inside the round of a neighbouring vertex.)
+    let mut near_misses: Vec<Piece> = Vec::new();
     for (piece, cuts) in raw.iter().zip(cuts) {
         let mut ts = cuts;
         let piece_length = (0..8).map(|k| piece.at(k as f64 / 8.0).distance(piece.at((k + 1) as f64 / 8.0))).sum::<f64>();
@@ -888,19 +894,83 @@ fn trim(raw: &[Piece], path: &[Piece], d: f64, tolerance: f64) -> Vec<Vec<Piece>
             let probes = [0.25, 0.5, 0.75].map(|s| index.distance(part.at(s)));
             if probes.iter().all(|&dist| dist >= d * (1.0 - 1e-4) - tolerance) {
                 kept.push(part);
+            } else if probes.iter().all(|&dist| dist >= d * (1.0 - 1e-3) - tolerance) {
+                near_misses.push(part);
             }
         }
     }
     let ends: Vec<f64> = raw.iter().map(|p| p.last).collect();
-    chain_loops(kept, &ends, 100.0 * tolerance.max(1e-7 * d), 1e-3 * d)
+    let (near, gap) = (100.0 * tolerance.max(1e-7 * d), 1e-3 * d);
+    let (loops, open) = chain_loops(kept.clone(), &ends, near, gap);
+    // Where the kept parts leave the contour open, the near misses closing it.
+    if open > 0 && !near_misses.is_empty() {
+        kept.extend(near_misses);
+        let (more, still_open) = chain_loops(kept, &ends, near, gap);
+        if still_open < open {
+            return more;
+        }
+    }
+    loops
+}
+
+/// A loop without its spurs: a piece running back along the end of the one before (as the
+/// offset of a tiny corner of the wire, sharper than the distance, does: a reversed arc
+/// whose ends only touch its neighbours, so no crossing cuts it), the piece before then cut
+/// back to where it ends.
+fn without_spurs(mut pieces: Vec<Piece>, near: f64) -> Vec<Piece> {
+    let mut i = 0;
+    while pieces.len() > 2 && i < pieces.len() {
+        let j = (i + 1) % pieces.len();
+        let (a, b) = (&pieces[i], &pieces[j]);
+        let back = a.tangent(a.last).dot(b.tangent(b.first)) < -0.9;
+        let samples = sample(a);
+        let target = b.end();
+        let on_a = back.then(|| {
+            // (Where on `a` the spur ends: the nearest point of its polyline, refined.)
+            let (mut t, mut best) = (a.first, f64::INFINITY);
+            for w in samples.windows(2) {
+                let (p, q) = (w[0].1, w[1].1);
+                let pq = q - p;
+                let s = if pq.length_squared() > 0.0 { ((target - p).dot(pq) / pq.length_squared()).clamp(0.0, 1.0) } else { 0.0 };
+                let d = (p + pq * s).distance(target);
+                if d < best {
+                    best = d;
+                    t = w[0].0 + (w[1].0 - w[0].0) * s;
+                }
+            }
+            let (lo, hi) = (a.first.min(a.last), a.first.max(a.last));
+            for _ in 0..20 {
+                let (c, d1, d2) = a.curve.d2(t);
+                let df = d1.dot(d1) + (c - target).dot(d2);
+                if df.abs() <= 1e-300 {
+                    break;
+                }
+                t = (t - (c - target).dot(d1) / df).clamp(lo, hi);
+            }
+            t
+        });
+        match on_a {
+            // (Unless the spur takes all of the piece before.)
+            Some(t) if a.curve.point(t).distance(target) <= near && t != a.first => {
+                pieces[i].last = t;
+                pieces.remove(j);
+                if j < i {
+                    i = i.saturating_sub(1);
+                }
+            }
+            _ => i += 1,
+        }
+    }
+    pieces
 }
 
 /// Kept pieces chained end to start into closed loops; consecutive parts of one raw piece
 /// are joined back.
 /// `ends[k]`: where raw piece `k` ends (elsewhere its parts end at crossings); ends within
-/// `near` meet.
-fn chain_loops(mut pieces: Vec<Piece>, ends: &[f64], near: f64, gap: f64) -> Vec<Vec<Piece>> {
+/// `near` meet. Also how many chains were left open.
+fn chain_loops(mut pieces: Vec<Piece>, ends: &[f64], near: f64, gap: f64) -> (Vec<Vec<Piece>>, usize) {
     let mut loops = Vec::new();
+    let mut open = 0;
     // Across wider gaps (where nearly tangent edges of the wire do not quite meet) only when
     // nothing is nearer.
     let far = near.max(gap);
@@ -942,6 +1012,7 @@ fn chain_loops(mut pieces: Vec<Piece>, ends: &[f64], near: f64, gap: f64) -> Vec
             }
         };
         if !closed {
+            open += 1;
             continue; // an open remnant: not part of a closed offset
         }
         // Slivers closing on themselves where curves cross nearly tangentially.
@@ -966,7 +1037,7 @@ fn chain_loops(mut pieces: Vec<Piece>, ends: &[f64], near: f64, gap: f64) -> Vec
         }
         loops.push(merged);
     }
-    loops
+    (loops, open)
 }
 
 /// Wires of the loops' pieces placed back in 3D.

@@ -94,6 +94,28 @@ solid is 9585.3. The thick solid then fails ("an offset leaving nothing").
 - **Also:** `faces_type_i/B5` (a 270° cone, both side planes removed, outwards) is 3.4e-5
   off the exact 282.0365: the moved cone face's area is 5e-5 too large.
 
+### Wire offsets around a ragged end of tiny sharp turns
+
+*Found 2026-11-09.*
+
+An open wire (one B-spline) ending in a cluster of tiny, sharply turning stretches (cut
+at curvature extrema into pieces 0.02 long, curved tighter than the offset distance): their
+offsets fan out into swallowtails crossing nearly tangentially, and the contour is not cut
+where they cross. The parts closing the contour there pass a hair (3e-4 of the distance)
+inside the round of a neighbouring point, so they were dropped and the offset was empty;
+they are now taken where nothing else closes the contour, and the result is close but not
+exact.
+
+- **Repro:** OCCT's `tests/offset/wire_unclosed_outside_0_005/B6`, `_0_025/B6`,
+  `_0_075/B6` (`offset_wire_058.brep` offset by 0.5%, 2.5%, 7.5% of its length).
+- **Evidence:** the points within the distance (`tools/brute.py wire`, the wire sampled
+  200 000 times) bound one loop of length 3316.33, 2582.695, 3127.914 (OCCT 3316.27,
+  2582.56, 3127.75); kentron's 3316.78, 2586.91, 3142.06, its contour straying from that
+  boundary at the ragged end (up to 0.69 at 2.5%) and lying on it elsewhere.
+- **Needed:** the crossings of the swallowtails resolved there (where the raw contour's
+  pieces cross nearly tangentially), or the envelope found as the boundary of the union of
+  discs (as OCCT's medial-axis construction does).
+
 ### Sliver faces in shells found by distance
 
 *Found 2026-11-08.*

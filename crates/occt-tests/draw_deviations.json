@@ -820,7 +820,14 @@
   ],
   "tests/offset/wire_closed_inside_0_005/H6": [
     {
-      "note": "OCCT gives no offset of this wire (its edges are all used internally, without a direction along the wire) and expects an empty result; kentron offsets it."
+      "from": "d.checkprops(&[\"result\", \"-l\", \"0\"])?;",
+      "to": "d.checkprops(&[\"result\", \"-l\", \"261.53\"])?;",
+      "reason": "OCCT gives no offset of this wire (its edges are all INTERNAL, which OCCT takes as bounding no face) and expects an empty result; kentron offsets the loop. Checked against OCCT's own offset of the same wire with its edges FORWARD (DRAW mkoffset, OCCT 8.1): length 261.53, one wire, as kentron's. Expected values are kentron's: length 261.53, one wire."
+    },
+    {
+      "from": "d.offset_counts(&[\"result\", \"0\", \"0\", \"0\"])?;",
+      "to": "d.checknbshapes(&[\"result\", \"-wire\", \"1\"])?;",
+      "reason": "The wire count of the offset above: one wire, as OCCT's of the wire with its edges FORWARD."
     }
   ],
   "tests/offset/wire_closed_inside_0_005/G4": [
@@ -895,7 +902,14 @@
   ],
   "tests/offset/wire_closed_inside_0_025/H6": [
     {
-      "note": "OCCT gives no offset of this wire (its edges are all used internally, without a direction along the wire) and expects an empty result; kentron offsets it."
+      "from": "d.checkprops(&[\"result\", \"-l\", \"0\"])?;",
+      "to": "d.checkprops(&[\"result\", \"-l\", \"45.4614\"])?;",
+      "reason": "OCCT gives no offset of this wire (its edges are all INTERNAL, which OCCT takes as bounding no face) and expects an empty result; kentron offsets the loop. Checked against OCCT's own offset of the same wire with its edges FORWARD (DRAW mkoffset, OCCT 8.1): length 45.4614, one wire, as kentron's. Expected values are kentron's: length 45.4614, one wire."
+    },
+    {
+      "from": "d.offset_counts(&[\"result\", \"0\", \"0\", \"0\"])?;",
+      "to": "d.checknbshapes(&[\"result\", \"-wire\", \"1\"])?;",
+      "reason": "The wire count of the offset above: one wire, as OCCT's of the wire with its edges FORWARD."
     }
   ],
   "tests/offset/wire_closed_inside_0_025/G1": [
@@ -1117,7 +1131,14 @@
   ],
   "tests/offset/wire_closed_outside_0_005/H6": [
     {
-      "note": "OCCT gives no offset of this wire (its edges are all used internally, without a direction along the wire) and expects an empty result; kentron offsets it."
+      "from": "d.checkprops(&[\"result\", \"-l\", \"0\"])?;",
+      "to": "d.checkprops(&[\"result\", \"-l\", \"284.805\"])?;",
+      "reason": "OCCT gives no offset of this wire (its edges are all INTERNAL, which OCCT takes as bounding no face) and expects an empty result; kentron offsets the loop. Checked against OCCT's own offset of the same wire with its edges FORWARD (DRAW mkoffset, OCCT 8.1): length 284.805, one wire, as kentron's. Expected values are kentron's: length 284.805, one wire."
+    },
+    {
+      "from": "d.offset_counts(&[\"result\", \"0\", \"0\", \"0\"])?;",
+      "to": "d.checknbshapes(&[\"result\", \"-wire\", \"1\"])?;",
+      "reason": "The wire count of the offset above: one wire, as OCCT's of the wire with its edges FORWARD."
     }
   ],
   "tests/offset/wire_closed_outside_0_005/H3": [
@@ -1220,12 +1241,21 @@
   ],
   "tests/offset/wire_closed_outside_0_025/H6": [
     {
-      "note": "OCCT gives no offset of this wire (its edges are all used internally, without a direction along the wire) and expects an empty result; kentron offsets it."
+      "from": "d.checkprops(&[\"result\", \"-l\", \"0\"])?;",
+      "to": "d.checkprops(&[\"result\", \"-l\", \"195.672\"])?;",
+      "reason": "OCCT gives no offset of this wire (its edges are all INTERNAL, which OCCT takes as bounding no face) and expects an empty result; kentron offsets the loop. Checked against OCCT's own offset of the same wire with its edges FORWARD (DRAW mkoffset, OCCT 8.1): length 195.672, one wire, as kentron's. Expected values are kentron's: length 195.672, one wire."
+    },
+    {
+      "from": "d.offset_counts(&[\"result\", \"0\", \"0\", \"0\"])?;",
+      "to": "d.checknbshapes(&[\"result\", \"-wire\", \"1\"])?;",
+      "reason": "The wire count of the offset above: one wire, as OCCT's of the wire with its edges FORWARD."
     }
   ],
   "tests/offset/wire_closed_outside_0_025/H3": [
     {
-      "note": "kentron's result has 5 wires where OCCT's has 1 (its length matches): where offsets nearly touch, kentron's trimming separates loops that OCCT's medial-axis construction keeps joined (or the other way round), and the edge counts differ too."
+      "from": "d.offset_counts(&[\"result\", \"25\", \"25\", \"1\"])?;",
+      "to": "d.checknbshapes(&[\"result\", \"-wire\", \"1\"])?;",
+      "reason": "OCCT cuts offset edges where its medial-axis construction (MAT2d) divides the wire, so its edge count (25) is particular to it; kentron's result has 13. Checked against the points within the distance of the wire (tools/brute.py wire: shapely's buffer, round joins): its boundary is one loop of length 1072.938, as OCCT's (1072.94); kentron's curve lies on it and covers it (to 0.002), its length 1072.909 short by the wire's own gaps at its four corners (0.001 and 0.007 each). The sub-shape check keeps the wire count only."
     }
   ],
   "tests/offset/wire_closed_inside_0_075/C7": [
@@ -1328,7 +1358,14 @@
   ],
   "tests/offset/wire_closed_outside_0_075/H6": [
     {
-      "note": "OCCT gives no offset of this wire (its edges are all used internally, without a direction along the wire) and expects an empty result; kentron offsets it."
+      "from": "d.checkprops(&[\"result\", \"-l\", \"0\"])?;",
+      "to": "d.checkprops(&[\"result\", \"-l\", \"280.941\"])?;",
+      "reason": "OCCT gives no offset of this wire (its edges are all INTERNAL, which OCCT takes as bounding no face) and expects an empty result; kentron offsets the loop. Checked against OCCT's own offset of the same wire with its edges FORWARD (DRAW mkoffset, OCCT 8.1): length 280.941, one wire, as kentron's. Expected values are kentron's: length 280.941, one wire."
+    },
+    {
+      "from": "d.offset_counts(&[\"result\", \"0\", \"0\", \"0\"])?;",
+      "to": "d.checknbshapes(&[\"result\", \"-wire\", \"1\"])?;",
+      "reason": "The wire count of the offset above: one wire, as OCCT's of the wire with its edges FORWARD."
     }
   ],
   "tests/offset/wire_closed_outside_0_075/G1": [
@@ -1368,7 +1405,7 @@
   ],
   "tests/offset/wire_unclosed_outside_0_025/B6": [
     {
-      "note": "kentron's offset of this open wire is empty: the contour around it does not close into a loop after trimming."
+      "note": "Kentron's offset of this open wire (one B-spline with a ragged end of tiny sharp turns) is close but not exact: length 2586.91, where the points within the distance of the wire (tools/brute.py wire) bound one loop of length 2582.695 (OCCT's matches). At the ragged end kentron's contour strays from that boundary (up to 0.69 at 0.025): the offsets of the tiny pieces there are not cut where they cross (docs/known-gaps.md)."
     }
   ],
   "tests/offset/wire_unclosed_outside_0_025/C4": [
@@ -1436,7 +1473,7 @@
   ],
   "tests/offset/wire_unclosed_outside_0_075/B6": [
     {
-      "note": "kentron's offset of this open wire is empty: the contour around it does not close into a loop after trimming."
+      "note": "Kentron's offset of this open wire (one B-spline with a ragged end of tiny sharp turns) is close but not exact: length 3142.06, where the points within the distance of the wire (tools/brute.py wire) bound one loop of length 3127.914 (OCCT's matches). At the ragged end kentron's contour strays from that boundary (up to 0.69 at 0.025): the offsets of the tiny pieces there are not cut where they cross (docs/known-gaps.md)."
     }
   ],
   "tests/offset/wire_unclosed_outside_0_075/C4": [
@@ -1455,7 +1492,14 @@
   ],
   "tests/offset/wire_unclosed_outside_0_025/B3": [
     {
-      "note": "kentron's offset of this open wire splits into several wires and is longer than OCCT's: pieces OCCT trims away are kept."
+      "from": "d.checkprops(&[\"result\", \"-l\", \"738.873\"])?;",
+      "to": "d.checkprops(&[\"result\", \"-l\", \"737.899\"])?;",
+      "reason": "OCCT's offset of this open wire misses a loop: 5 wires, length 738.873. Checked against the points within the distance of the wire (tools/brute.py wire: shapely's buffer of the wire sampled 20000 times, round joins and ends): its boundary is 6 loops, length 737.895; kentron's curve lies on it and covers it (to 0.002). Expected values are kentron's: length 737.899, 6 wires."
+    },
+    {
+      "from": "d.offset_counts(&[\"result\", \"306\", \"306\", \"5\"])?;",
+      "to": "d.checknbshapes(&[\"result\", \"-wire\", \"6\"])?;",
+      "reason": "The wire count of the offset above: 6 loops, as the points within the distance bound; OCCT cuts its edges where its medial-axis construction divides the wire (306), kentron's are its own."
     }
   ],
   "tests/offset/wire_unclosed_outside_0_025/A3": [
@@ -1502,7 +1546,7 @@
   ],
   "tests/offset/wire_unclosed_outside_0_005/B6": [
     {
-      "note": "kentron's result has 2 wires where OCCT's has 1 (its length matches): where offsets nearly touch, kentron's trimming separates loops that OCCT's medial-axis construction keeps joined (or the other way round), and the edge counts differ too."
+      "note": "Kentron's offset of this open wire (one B-spline with a ragged end of tiny sharp turns) is close but not exact: length 3316.78, where the points within the distance of the wire (tools/brute.py wire) bound one loop of length 3316.33 (OCCT's matches). At the ragged end kentron's contour strays from that boundary (up to 0.69 at 0.025): the offsets of the tiny pieces there are not cut where they cross (docs/known-gaps.md)."
     }
   ],
   "tests/offset/wire_unclosed_outside_0_005/A3": [

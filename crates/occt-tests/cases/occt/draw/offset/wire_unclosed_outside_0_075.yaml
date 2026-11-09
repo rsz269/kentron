@@ -238,7 +238,7 @@ ported_from:
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/offset/wire_unclosed_outside_0_075/B6
 notes:
-  - "kentron deviation: kentron's offset of this open wire is empty: the contour around it does not close into a loop after trimming."
+  - "kentron deviation: Kentron's offset of this open wire (one B-spline with a ragged end of tiny sharp turns) is close but not exact: length 3142.06, where the points within the distance of the wire (tools/brute.py wire) bound one loop of length 3127.914 (OCCT's matches). At the ragged end kentron's contour strays from that boundary (up to 0.69 at 0.025): the offsets of the tiny pieces there are not cut where they cross (docs/known-gaps.md)."
 expect: not_done
 build:
   - s: {load: {brep: "offset_wire_058.brep"}}

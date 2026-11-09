@@ -1007,14 +1007,13 @@ ported_from:
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/offset/wire_closed_outside_0_025/H3
 notes:
-  - "kentron deviation: kentron's result has 5 wires where OCCT's has 1 (its length matches): where offsets nearly touch, kentron's trimming separates loops that OCCT's medial-axis construction keeps joined (or the other way round), and the edge counts differ too."
-expect: not_done
+  - "kentron deviation: OCCT cuts offset edges where its medial-axis construction (MAT2d) divides the wire, so its edge count (25) is particular to it; kentron's result has 13. Checked against the points within the distance of the wire (tools/brute.py wire: shapely's buffer, round joins): its boundary is one loop of length 1072.938, as OCCT's (1072.94); kentron's curve lies on it and covers it (to 0.002), its length 1072.909 short by the wire's own gaps at its four corners (0.001 and 0.007 each). The sub-shape check keeps the wire count only."
 build:
   - s: {load: {brep: "offset_wire_089.brep"}}
   - result: {offset_wire: {shape: s, length_fraction: 0.025}}
 checks:
   - {length: result, eq: 1072.94, rel: 0.01}
-  - {count: result, eq: {vertices: 25, edges: 25, wires: 1}}
+  - {count: result, eq: {wires: 1}}
   - {valid: result}
 ---
 case: H4
@@ -1052,14 +1051,14 @@ ported_from:
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/offset/wire_closed_outside_0_025/H6
 notes:
-  - "kentron deviation: OCCT gives no offset of this wire (its edges are all used internally, without a direction along the wire) and expects an empty result; kentron offsets it."
-expect: not_done
+  - "kentron deviation: OCCT gives no offset of this wire (its edges are all INTERNAL, which OCCT takes as bounding no face) and expects an empty result; kentron offsets the loop. Checked against OCCT's own offset of the same wire with its edges FORWARD (DRAW mkoffset, OCCT 8.1): length 195.672, one wire, as kentron's. Expected values are kentron's: length 195.672, one wire."
+  - "kentron deviation: The wire count of the offset above: one wire, as OCCT's of the wire with its edges FORWARD."
 build:
   - s: {load: {brep: "offset_wire_092.brep"}}
   - result: {offset_wire: {shape: s, length_fraction: 0.025}}
 checks:
-  - {length: result, eq: 0}
-  - {count: result, eq: {vertices: 0, edges: 0, wires: 0}}
+  - {length: result, eq: 195.672, rel: 0.01}
+  - {count: result, eq: {wires: 1}}
   - {valid: result}
 ---
 case: H7

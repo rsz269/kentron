@@ -30,6 +30,10 @@ Library (import tools/brute.py, or run it):
 - `inside_both(a, b, centre, radius, n)`: points near `centre` inside both solids (do
   shapes said to touch overlap?).
 - `polytope_volume(halfspaces)`: the exact volume of {x : A x + b <= 0}.
+- `wire_offset(wire, distance, n)`: a planar wire's offset with round joins (and ends), as
+  the boundary of its points within `distance` (shapely's buffer of the wire sampled `n`
+  times an edge): around an open wire, outwards (inwards for a negative distance) from the
+  region a closed one bounds. Its length and the number of loops.
 
 CLI:
 
@@ -38,6 +42,8 @@ CLI:
     brute.py area union|common|cut A.brep B.brep   boolean's area from the operands' meshes
     brute.py faces union|common|cut R.brep A.brep B.brep   misplaced faces of a result
         (in a union, faces inside an operand or off both; and so on)
+    brute.py wire WIRE.brep FRACTION              a wire's offset (round joins) by FRACTION of
+        its length (as OCCT's offset tests take it), both ways for a closed wire: length, loops
     brute.py round open|close PRE.brep R.brep... --box=x0,y0,z0,x1,y1,z1 --r=R [--h=H] [--compare=BOX]
         a fillet's rolling-ball reference: the voxels where each result differs from the
         opening (convex edges) or closing (concave) of PRE, the solid before the fillet.
@@ -313,6 +319,52 @@ def polytope_volume(halfspaces):
     return ConvexHull(HalfspaceIntersection(hs, res.x[:3]).intersections).volume
 
 
+def wire_points(wire, n=2000):
+    """The wire's points in order, `n` along each edge, as 2D coordinates in the plane that
+    fits them best; whether it is closed; and the plane (a point and two axes: a 3D point p
+    is at (p - point) @ axes.T)."""
+    from OCP.BRepAdaptor import BRepAdaptor_Curve
+    from OCP.BRepTools import BRepTools_WireExplorer
+    from OCP.TopAbs import TopAbs_REVERSED, TopAbs_WIRE
+    from OCP.TopExp import TopExp_Explorer
+    from OCP.TopoDS import TopoDS
+
+    e = TopExp_Explorer(wire, TopAbs_WIRE)
+    w = TopoDS.Wire_s(e.Current())
+    pts = []
+    it = BRepTools_WireExplorer(w)
+    while it.More():
+        edge = it.Current()
+        c = BRepAdaptor_Curve(edge)
+        ts = np.linspace(c.FirstParameter(), c.LastParameter(), n)
+        if edge.Orientation() == TopAbs_REVERSED:
+            ts = ts[::-1]
+        q = [c.Value(t) for t in ts]
+        pts.extend([(p.X(), p.Y(), p.Z()) for p in q][0 if not pts else 1:])
+        it.Next()
+    pts = np.array(pts)
+    closed = np.linalg.norm(pts[0] - pts[-1]) < 1e-6 * np.ptp(pts, axis=0).max()
+    # The plane: the points' best fit.
+    c = pts.mean(axis=0)
+    _, _, vt = np.linalg.svd(pts - c, full_matrices=False)
+    uv = (pts - c) @ vt[:2].T
+    return uv, closed, (c, vt[:2])
+
+
+def wire_offset(wire, distance, n=2000):
+    """The length and number of loops of a planar wire's offset with round joins."""
+    from shapely.geometry import LineString, Polygon
+
+    uv, closed, _ = wire_points(wire, n)
+    base = Polygon(uv) if closed else LineString(uv)
+    if not closed:
+        distance = abs(distance)
+    region = base.buffer(distance, quad_segs=512)
+    polys = list(region.geoms) if hasattr(region, "geoms") else ([region] if not region.is_empty else [])
+    loops = [r for p in polys for r in [p.exterior, *p.interiors]]
+    return sum(r.length for r in loops), len(loops)
+
+
 def _round(argv):
     kind, pre, results = argv[0], argv[1], [a for a in argv[2:] if not a.startswith("--")]
     opts = dict(a[2:].split("=", 1) for a in argv if a.startswith("--") and "=" in a)
@@ -366,6 +418,17 @@ def main(argv):
         print(f"{sum(b for *_, b in rows)} of {len(rows)} faces misplaced, area {sum(a for a, _, b in rows if b):.5g}")
     elif cmd == "round":
         _round(rest)
+    elif cmd == "wire":
+        from OCP.GProp import GProp_GProps
+        from OCP.BRepGProp import BRepGProp
+
+        w = load(rest[0])
+        props = GProp_GProps()
+        BRepGProp.LinearProperties_s(w, props)
+        d = props.Mass() * float(rest[1])
+        for sign in ((1, -1) if wire_points(w, 2)[1] else (1,)):
+            length, loops = wire_offset(w, sign * d)
+            print(f"distance {sign * d:.6g}: length {length:.6g}, {loops} loop(s)")
     else:
         raise SystemExit(f"unknown command {cmd}")
 

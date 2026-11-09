@@ -1054,14 +1054,14 @@ ported_from:
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/offset/wire_closed_inside_0_025/H6
 notes:
-  - "kentron deviation: OCCT gives no offset of this wire (its edges are all used internally, without a direction along the wire) and expects an empty result; kentron offsets it."
-expect: not_done
+  - "kentron deviation: OCCT gives no offset of this wire (its edges are all INTERNAL, which OCCT takes as bounding no face) and expects an empty result; kentron offsets the loop. Checked against OCCT's own offset of the same wire with its edges FORWARD (DRAW mkoffset, OCCT 8.1): length 45.4614, one wire, as kentron's. Expected values are kentron's: length 45.4614, one wire."
+  - "kentron deviation: The wire count of the offset above: one wire, as OCCT's of the wire with its edges FORWARD."
 build:
   - s: {load: {brep: "offset_wire_092.brep"}}
   - result: {offset_wire: {shape: s, length_fraction: -0.025}}
 checks:
-  - {length: result, eq: 0}
-  - {count: result, eq: {vertices: 0, edges: 0, wires: 0}}
+  - {length: result, eq: 45.4614, rel: 0.01}
+  - {count: result, eq: {wires: 1}}
   - {valid: result}
 ---
 case: H7

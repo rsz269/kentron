@@ -1038,14 +1038,7 @@ tests/offset/shape_type_i_c_multi/B6
 tests/offset/shape_type_i_c_multi/C2
 tests/offset/shape_type_i_c_multi/C4
 tests/offset/shape_type_i_c_multi/C5
-tests/offset/wire_closed_inside_0_005/H6
-tests/offset/wire_closed_inside_0_025/H6
-tests/offset/wire_closed_outside_0_005/H6
-tests/offset/wire_closed_outside_0_025/H3
-tests/offset/wire_closed_outside_0_025/H6
-tests/offset/wire_closed_outside_0_075/H6
 tests/offset/wire_unclosed_outside_0_005/B6
-tests/offset/wire_unclosed_outside_0_025/B3
 tests/offset/wire_unclosed_outside_0_025/B6
 tests/offset/wire_unclosed_outside_0_075/B6
 tests/pipe/specific/K2
