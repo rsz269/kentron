@@ -58,20 +58,23 @@ it honest. Every change is checked against the test sources below before it is c
 and no change may make a passing test fail.
 
 <!-- effort -->
-So far (2026-09-25 to 2026-11-09): about 352 hours of the agent's active work, 24.6 million
-tokens written by it, and 13.3 billion tokens processed in all (nearly all of them its
+So far (2026-09-25 to 2026-11-09): about 353 hours of the agent's active work, 24.7 million
+tokens written by it, and 13.4 billion tokens processed in all (nearly all of them its
 conversation's context, read back from the cache).
 <!-- /effort -->
 
 ## Tested against
 
-- **OCCT's DRAW test scripts:** 10,538 of the 16,322 scripts in its modelling groups run
-  (the other groups exercise viewers and data exchange), and 9,501 of them (90%) pass. The
-  5,305 that read models OCCT keeps private (it publishes only part of its test data) and
-  the 479 OCCT itself marks as failing on Linux never run, and are not counted.
-  [`tools/draw2rs.py`](tools/draw2rs.py) converts most scripts into Rust tests and YAML cases;
-  those using Tcl (conditions, loops, procedures) run as they are, on a Tcl interpreter.
-  [`tools/occt_stats.py`](tools/occt_stats.py) gives the figures, group by group.
+- **OCCT's DRAW test scripts:** 10,796 run, and 9,512 of them (88%) pass: of the 16,322
+  scripts in its modelling groups (the other groups exercise viewers and documents), and of
+  its data-exchange tests (STEP and IGES files read, written and read again, both readings
+  checked against OCCT's statistics) the 258 whose files OCCT publishes. The 5,305 modelling
+  scripts and 826 data-exchange tests that read models OCCT keeps private (it publishes only
+  part of its test data), and the 479 OCCT itself marks as failing on Linux, never run, and
+  are not counted. [`tools/draw2rs.py`](tools/draw2rs.py) converts most scripts into Rust
+  tests and YAML cases; those using Tcl (conditions, loops, procedures) run as they are, on a
+  Tcl interpreter. [`tools/occt_stats.py`](tools/occt_stats.py) gives the figures, group by
+  group.
 - **OCCT's GTests:** the computational-geometry and topology toolkits, translated by hand.
 - **BRL-CAD:** NIST's MBE PMI test parts and other STEP files from its source tree, with
   OCCT's reading of them as the reference, plus its `libbg` geometry tests.
@@ -96,7 +99,7 @@ conversation's context, read back from the cache).
   development, and 58 cases of pykentron's own that it builds as CadQuery does
   ([`crates/pykentron/tests/test_against_cadquery.py`](crates/pykentron/tests/test_against_cadquery.py)).
 
-About 13,170 tests run (scripts without their data not counted). About 1,040 of them are
+About 13,430 tests run (scripts without their data not counted). About 1,290 of them are
 known gaps, marked as expected failures ([`crates/occt-tests/expected_failures.txt`](crates/occt-tests/expected_failures.txt) for OCCT's scripts): they pass
 while they fail, so `cargo test` is green, and fail once they pass, so a fix is noticed
 as surely as a regression.

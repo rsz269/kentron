@@ -53,6 +53,10 @@ pub struct Node {
     pub subshapes: Vec<Subshape>,
     /// What the product is made of.
     pub material: Option<Material>,
+    /// The file's product definition this node is an occurrence of (its entity number): the
+    /// same for every occurrence of one product. `None` for shapes read without products, and
+    /// for nodes made otherwise than by reading.
+    pub definition: Option<usize>,
 }
 
 /// A face or edge of a product's shape with a name, colour or layer of its own.
@@ -1080,7 +1084,7 @@ impl<'a> Reader<'a> {
             let at = placement_of.get(&occurrence).copied().unwrap_or(Transform::IDENTITY);
             kids.push(self.node(child, child_name, at, reps_of, linked, children, placement_of, depth + 1)?);
         }
-        Ok(Node { name, shape, color, alpha, placement, children: kids, subshapes, material })
+        Ok(Node { name, shape, color, alpha, placement, children: kids, subshapes, material, definition: Some(definition) })
     }
 
     fn compound_of(&mut self, shapes: Vec<Shape>) -> Result<Option<Shape>> {

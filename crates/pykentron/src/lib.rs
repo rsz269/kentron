@@ -1410,6 +1410,7 @@ fn write_step_assembly(path: &str, roots: Vec<Bound<'_, PyAny>>, unit: &str) -> 
             children: children.iter().map(convert).collect::<PyResult<Vec<_>>>()?,
             subshapes,
             material,
+            definition: None,
         })
     }
     let roots = roots.iter().map(convert).collect::<PyResult<Vec<_>>>()?;

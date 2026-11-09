@@ -13,6 +13,9 @@ case converted by draw2rs, or the script itself on the Tcl interpreter), as one 
   `expect: not_done`): a known gap;
 - passing: it runs and passes.
 
+OCCT's data-exchange tests (tests/de) are counted from crates/occt-tests/de/, where only the
+cases with their data are copied (crates/occt-tests/de/excluded.txt lists the 826 others).
+
 The data files are looked for as the harness does (crates/occt-tests/src/draw/mod.rs,
 find_data_file): by exact name under $OCCT_TEST_DATA, ~/occt-data, $OCCT_ROOT/data,
 ~/OCCT/data and BRL-CAD's source tree. Run with the public dataset unpacked in ~/occt-data
@@ -121,6 +124,13 @@ def main():
                 status[name] = "expected failure"
             else:
                 status[name] = "passing"
+
+    # The data-exchange tests (de/, copied by tools/de_import.py: only those with their data;
+    # de/excluded.txt lists the others, left out for good).
+    for path in glob.glob(os.path.join(ROOT, "de", "*", "*")):
+        group, grid, case = path.split(os.sep)[-3:]
+        name = f"tests/{group}/{grid}/{case}"
+        status[name] = "expected failure" if name in expected else "passing"
 
     counts = {}
     for s in status.values():

@@ -36,3 +36,8 @@ harness = false
 [[test]]
 name = "draw_tcl"
 harness = false
+
+# OCCT's data-exchange tests (de/): STEP and IGES files read, written and read again.
+[[test]]
+name = "draw_de"
+harness = false

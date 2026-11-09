@@ -4,8 +4,11 @@
 //!   (`tests/draw_*`, produced by `tools/draw2rs.py`).
 //! * [`gtest`]: assertion macros for the hand-translated GTests (`tests/gtest_*`).
 //! * [`cases`]: the runner of test cases written in YAML (`cases/`, see `docs/test-cases.md`).
+//! * [`de`]: OCCT's data-exchange tests (`de/`): STEP and IGES files read, written and read
+//!   again.
 
 pub mod cases;
+pub mod de;
 pub mod draw;
 pub mod gtest;
 pub mod limit;
