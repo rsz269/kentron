@@ -41,12 +41,21 @@ pub(super) fn regularized(model: &mut Model, solid: Shape) -> Result<Shape> {
     }
     let mut pieces: Vec<(Shape, i32)> = Vec::new();
     let mut split = false;
-    for f in found {
-        split |= f.len() != 1 || f[0].1 != 1;
+    for (f, &face) in found.into_iter().zip(&faces) {
+        // (A face cut into pieces, or into one piece other than itself: its loops touching,
+        // as a rim's outline and the hole cut out of it do where they run along one another.)
+        split |= f.len() != 1 || f[0].1 != 1 || f[0].0.node != face.node;
         pieces.extend(f);
     }
     if !split {
         return Ok(solid);
+    }
+    // (Faces only reshaped, each one piece covering its surface once, as rims whose outline
+    // and hole run along one another: the pieces sewn, where they make one sound solid.)
+    if pieces.len() == faces.len() && pieces.iter().all(|&(_, t)| t == 1) {
+        if let Some(sewn) = sewn_solid(model, solid, &pieces)? {
+            return Ok(sewn);
+        }
     }
     // The cells the pieces bound.
     let cell_faces: Vec<Shape> = pieces.iter().map(|&(f, _)| f).collect();
@@ -243,4 +252,29 @@ fn interior_point(model: &Model, face: Shape) -> Option<Point2> {
         }
     }
     None
+}
+
+/// The solid the `pieces` (faces of `solid` reshaped, one each) bound, sewn into as many
+/// shells as `solid` has: the outermost facing out, the others in; `None` if they do not
+/// sew so, or the solid is not sound.
+fn sewn_solid(model: &mut Model, solid: Shape, pieces: &[(Shape, i32)]) -> Result<Option<Shape>> {
+    let faces: Vec<Shape> = pieces.iter().map(|&(f, _)| f).collect();
+    let size = crate::properties::bounding_box(model, solid).size().length().max(1.0);
+    let Ok(sewn) = crate::sew::sew(model, &faces, &crate::sew::SewOptions { tolerance: 1e-7 * size, ..Default::default() }) else { return Ok(None) };
+    let shells = model.unique_subshapes(sewn, NodeKind::Shell);
+    if shells.len() != model.unique_subshapes(solid, NodeKind::Shell).len() || !shells.iter().all(|&s| crate::boolean::closed_shells(model, s)) {
+        return Ok(None);
+    }
+    let mut volumes = Vec::with_capacity(shells.len());
+    for &s in &shells {
+        let one = model.new_empty(NodeKind::Solid);
+        model.add(one, s)?;
+        volumes.push(crate::properties::volume(model, one).mass);
+    }
+    let outer = (0..shells.len()).max_by(|&a, &b| volumes[a].abs().total_cmp(&volumes[b].abs())).expect("a shell");
+    let out = model.new_empty(NodeKind::Solid);
+    for (i, &s) in shells.iter().enumerate() {
+        model.add(out, if (volumes[i] > 0.0) == (i == outer) { s } else { s.reversed() })?;
+    }
+    Ok(crate::validity::check(model, out).is_valid().then_some(out))
 }

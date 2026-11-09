@@ -67,6 +67,41 @@ the same all along (planes; a cylinder or a cone on a plane square to its axis: 
 
 ## Offsets and shells
 
+### Offsets and thick solids where a side plane moves off a pole or apex
+
+*Found 2026-11-09.*
+
+A partial solid of revolution (a sphere, a cone, a revolved profile reaching the axis,
+cut to 90° or 270°) hollowed with one of its side planes removed: the other side plane
+moves the thickness off the axis, so the pole or apex where the side planes and the
+curved face meet is no longer on the inner wall (the moved plane cuts the inner surface
+short of it). kentron's offsets keep the solid's topology (each face moved, its edges and
+vertices found again), which cannot drop the pole's degenerate edge or split the curved
+face's boundary there: the inner wall comes out wrong or the regularizing step finds no
+solid ("an offset leaving nothing"). Where the side planes stay on the axis (both
+removed), or the profile does not touch it (a torus), the walls are exact. Plain offsets
+outwards of such solids (the side planes moving apart, off the axis) fail the same way.
+
+- **Repro:** OCCT's `tests/offset/faces_type_i/B4` (a 270° cone), `C2`, `D1` (270°
+  spheres), `E8` (an ellipse-and-polyline profile revolved 90°), `F3` (the same, 270°).
+- **Evidence:** OCCT builds no wall in any of them (its result is the source solid, in
+  OCCT 8.1 too), so the scripts' values are no reference. The exact walls (Pappus'
+  theorem on the profile and its offset, the moved plane integrated over the angle): B4
+  168.393 (kentron 172.69), C2 2270.441, D1 2289.70, E8 1364.271 (kentron 1337.44), F3
+  3570.082 (C2, D1 and F3 fail). `tests/offset/shape_type_i/A5`, `A9`, `B4` (a 90° cone,
+  spherical cap and sphere offset 1 outwards; OCCT's offset fails, its volumes 1e14 and
+  more): exact 284.998, 5052.956, 5124.480, kentron's invalid (252.38, 5052.11, 5178.64).
+  D1's inner solid, built with the topology kept, is
+  invalid (pcurves not meeting at the pole) and 8287 against the exact 8313.18.
+- **Tried:** the walls as the solid less its moved copy (a boolean) where the removed
+  face's moved version reaches past it: the moved copy itself is the invalid part.
+- **Needed:** the moved copy built without keeping the topology at poles: for a partial
+  revolution, the full solid of revolution offset (its poles stay on the axis) and cut by
+  the side planes' moved half-spaces; or a general face-by-face offset that trims the
+  moved faces by one another (as OCCT's complete intersection mode does).
+- **Also:** B5 (a 270° cone, both side planes removed, outwards) is 3.4e-5 off the exact
+  282.0365: the moved cone face's area is 5e-5 too large.
+
 ### Sliver faces in shells found by distance
 
 *Found 2026-11-08.*
