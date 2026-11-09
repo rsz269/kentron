@@ -6,7 +6,8 @@
 //! curves on faces, and between vertices and the curves and surfaces they lie on (within
 //! a limit), and solids turned inside out are turned back. [`convert_to_bspline`],
 //! [`elementary_to_revolution`], [`surfaces_to_bezier`], [`split_closed_faces`] and
-//! [`split_by_angle`] reshape faces (as OCCT's ShapeCustom and ShapeUpgrade);
+//! [`split_by_angle`] reshape faces (as OCCT's ShapeCustom and ShapeUpgrade), and
+//! [`direct_faces`] puts faces on left-handed elementary surfaces on right-handed ones;
 //! [`drop_small_solids`] removes or merges solids (as ShapeFix_FixSmallSolid).
 
 use crate::error::Result;
@@ -26,6 +27,93 @@ impl Default for FixOptions {
     fn default() -> Self {
         Self { precision: crate::tolerance::LINEAR, max_tolerance: 1.0 }
     }
+}
+
+/// True if `surface` is a plane, cylinder, cone, sphere or torus whose frame is
+/// left-handed (an "indirect" surface: its normal, ∂u × ∂v, against the frame's Z).
+pub fn is_indirect(surface: &crate::geometry::surface::Surface) -> bool {
+    use crate::geometry::surface::Surface;
+    match surface {
+        Surface::Plane(s) => !s.frame().is_right_handed(),
+        Surface::Cylinder(s) => !s.frame().is_right_handed(),
+        Surface::Cone(s) => !s.frame().is_right_handed(),
+        Surface::Sphere(s) => !s.frame().is_right_handed(),
+        Surface::Torus(s) => !s.frame().is_right_handed(),
+        _ => false,
+    }
+}
+
+/// A copy of `shape` with each face on an indirect surface ([`is_indirect`]) put on the
+/// same surface with a right-handed frame, as OCCT's `ShapeCustom::DirectFaces`: a plane's X
+/// axis reversed (u becomes -u), the others' Y axis (u becomes 2π - u); the face's curves
+/// mirrored to match, its loops reversed and the face turned, so that its material side is
+/// kept. Returns the copy (turned, if it is such a face itself).
+#[doc(alias = "ShapeCustom::DirectFaces")]
+pub fn direct_faces(model: &mut Model, shape: Shape) -> Result<Shape> {
+    use crate::geometry::surface::{Cone, Cylinder, Plane, Sphere, Surface, Torus};
+    use crate::math::{Axis2, Direction2, Point2, Transform, Transform2, Transformable2};
+    let result = crate::modify::copy(model, shape, false)?;
+    let mut turned = false;
+    for face in model.unique_subshapes(result, NodeKind::Face) {
+        let local = Shape { placement: Transform::IDENTITY, orientation: Orientation::Forward, ..face };
+        let Some(surface) = model.surface(local).cloned() else { continue };
+        if !is_indirect(&surface) {
+            continue;
+        }
+        let (direct, mirror_at) = match &surface {
+            Surface::Plane(s) => {
+                let mut f = *s.frame();
+                f.flip_x();
+                (Surface::Plane(Plane::from_frame(f)), 0.0)
+            }
+            Surface::Cylinder(s) => {
+                let mut f = *s.frame();
+                f.flip_y();
+                (Surface::Cylinder(Cylinder::new(f, s.radius())), std::f64::consts::PI)
+            }
+            Surface::Cone(s) => {
+                let mut f = *s.frame();
+                f.flip_y();
+                (Surface::Cone(Cone::new(f, s.semi_angle(), s.radius())), std::f64::consts::PI)
+            }
+            Surface::Sphere(s) => {
+                let mut f = *s.frame();
+                f.flip_y();
+                (Surface::Sphere(Sphere::new(f, s.radius())), std::f64::consts::PI)
+            }
+            Surface::Torus(s) => {
+                let mut f = *s.frame();
+                f.flip_y();
+                (Surface::Torus(Torus::new(f, s.major_radius(), s.minor_radius())), std::f64::consts::PI)
+            }
+            _ => continue,
+        };
+        // The curves on the face first (those of a plane may be computed from its surface).
+        let mirror = Transform2::mirror_axis(Axis2::new(Point2::new(mirror_at, 0.0), Direction2::new(0.0, 1.0)));
+        let coedges: Vec<CoEdgeId> = model.explore(local, NodeKind::CoEdge).filter_map(|c| CoEdgeId::try_from(c.node).ok()).collect();
+        let curves: Vec<_> = coedges.iter().map(|&c| model.effective_pcurve(c)).collect();
+        let tolerance = model.tolerance(local);
+        model.set_face_surface(local, direct, tolerance)?;
+        for (&c, curve) in coedges.iter().zip(curves) {
+            if let Some((pcurve, first, last)) = curve {
+                model.set_pcurve_with_range(c, pcurve.transformed(&mirror), first, last)?;
+            }
+        }
+        // The mirror turns the loops clockwise: reversed, and the face turned with them.
+        for w in model.children_local(local).collect::<Vec<_>>() {
+            model.replace_child(local, w, w.reversed())?;
+        }
+        if face.node == result.node {
+            turned = !turned;
+        }
+        for parent in model.parents(face.node) {
+            let parent = Shape { node: parent, orientation: Orientation::Forward, placement: Transform::IDENTITY };
+            for use_ in model.children_local(parent).filter(|c| c.node == face.node).collect::<Vec<_>>() {
+                model.replace_child(parent, use_, use_.reversed())?;
+            }
+        }
+    }
+    Ok(if turned { result.reversed() } else { result })
 }
 
 /// Gives the edges of `shape`'s planar faces the pcurves they lack (their curves projected
@@ -1592,6 +1680,22 @@ mod tests {
         assert_eq!(model.unique_subshapes(split, NodeKind::Face).len(), 4);
         assert!((volume(&model, split).mass - before).abs() < 1e-9 * before);
         assert!(problems(&model, split).is_empty(), "{:?}", problems(&model, split));
+    }
+
+    #[test]
+    fn faces_on_mirrored_surfaces_are_put_on_direct_ones() {
+        // A cylinder mirrored: its faces on left-handed frames; put back on right-handed
+        // ones, the solid the same and sound.
+        let mut model = Model::new();
+        let c = crate::primitives::Cylinder::new(1.0, 2.0).build(&mut model).unwrap();
+        let mirror = crate::math::Transform::mirror_plane(crate::math::Point::ORIGIN, crate::math::Direction::X);
+        let m = crate::modify::transform(&mut model, c, &mirror, Default::default()).unwrap();
+        let indirect = |model: &Model, s: Shape| model.unique_subshapes(s, NodeKind::Face).into_iter().filter(|&f| model.surface(f).is_some_and(is_indirect)).count();
+        assert!(indirect(&model, m) > 0);
+        let direct = direct_faces(&mut model, m).unwrap();
+        assert_eq!(indirect(&model, direct), 0);
+        assert!((volume(&model, direct).mass - volume(&model, m).mass).abs() < 1e-9);
+        assert!(problems(&model, direct).is_empty(), "{:?}", problems(&model, direct));
     }
 
     #[test]

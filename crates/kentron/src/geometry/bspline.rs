@@ -85,6 +85,51 @@ pub(crate) fn periodic_flatten(knots: &[f64], multiplicities: &[usize], degree: 
 }
 
 impl<P: ControlPoint> BSplineCurve<P> {
+    /// True if the curve is tangent-continuous (G1) over `first..last`: at each knot inside
+    /// where it is only C0 (of multiplicity equal to the degree, the curve through a pole),
+    /// the poles either side in line with it, within `angular` radians. False at a knot of
+    /// higher multiplicity.
+    #[doc(alias = "Geom_BSplineCurve::IsG1")]
+    pub fn is_g1(&self, first: f64, last: f64, angular: f64) -> bool {
+        let n = self.poles.len();
+        let scale = self.poles.iter().map(|p| p.coords().iter().fold(0.0f64, |m, x| m.max(x.abs()))).fold(1.0f64, f64::max);
+        for (i, (&k, &m)) in self.knots.iter().zip(&self.multiplicities).enumerate() {
+            let inner = self.periodic || (i > 0 && i + 1 < self.knots.len());
+            if !inner || k <= first || k >= last || m < self.degree {
+                continue;
+            }
+            if m > self.degree {
+                return false;
+            }
+            // The pole the curve passes through there, and those either side.
+            let at = <Self as ParametricCurve>::point(self, k).coords();
+            let distance = |j: usize| {
+                let c = self.poles[j].coords();
+                ((c[0] - at[0]).powi(2) + (c[1] - at[1]).powi(2) + (c[2] - at[2]).powi(2)).sqrt()
+            };
+            let Some(j) = (0..n).min_by(|&x, &y| distance(x).total_cmp(&distance(y))) else { return false };
+            if distance(j) > 1e-9 * scale {
+                return false;
+            }
+            let (before, after) = match (j.checked_sub(1), (j + 1 < n).then_some(j + 1)) {
+                (Some(b), Some(a)) => (b, a),
+                (None, Some(a)) if self.periodic => (n - 1, a),
+                (Some(b), None) if self.periodic => (b, 0),
+                _ => return false,
+            };
+            let (a, b, c) = (self.poles[before].coords(), self.poles[j].coords(), self.poles[after].coords());
+            let (u, v) = ([b[0] - a[0], b[1] - a[1], b[2] - a[2]], [c[0] - b[0], c[1] - b[1], c[2] - b[2]]);
+            let dot = u[0] * v[0] + u[1] * v[1] + u[2] * v[2];
+            let cross = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+            let sine = (cross[0] * cross[0] + cross[1] * cross[1] + cross[2] * cross[2]).sqrt();
+            if dot <= 0.0 || sine.atan2(dot) > angular {
+                return false;
+            }
+        }
+        true
+    }
+
+
     /// The largest supported degree.
     pub const MAX_DEGREE: usize = 25;
 
@@ -2611,6 +2656,17 @@ impl AffineTransformable for BSplineSurface {
 mod fast_evaluation_tests {
     use super::*;
     use crate::geometry::{ParametricCurve, ParametricSurface};
+
+    #[test]
+    fn is_g1_where_the_pieces_meet_in_line() {
+        // A polyline (degree 1, C0 at every inner knot): G1 where its legs are in line.
+        let straight = BSplineCurve::new(vec![Point::new(0.0, 0.0, 0.0), Point::new(1.0, 0.0, 0.0), Point::new(3.0, 0.0, 0.0)], vec![0.0, 1.0, 2.0], vec![2, 1, 2], 1);
+        assert!(straight.is_g1(0.0, 2.0, 1e-12));
+        let bent = BSplineCurve::new(vec![Point::new(0.0, 0.0, 0.0), Point::new(1.0, 0.0, 0.0), Point::new(2.0, 1.0, 0.0)], vec![0.0, 1.0, 2.0], vec![2, 1, 2], 1);
+        assert!(!bent.is_g1(0.0, 2.0, 1e-12));
+        // (The corner outside the range checked.)
+        assert!(bent.is_g1(0.0, 0.5, 1e-12));
+    }
 
     #[test]
     fn moving_a_point_and_its_tangent() {

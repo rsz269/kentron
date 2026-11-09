@@ -1639,11 +1639,15 @@ open_conic!(
 
 // --- offset curves -----------------------------------------------------------------------------
 
+/// The angle within which a C0 B-spline's pieces meet tangentially, for an offset curve's
+/// continuity (OCCT's `Precision::Angular`).
+const G1_ANGLE: f64 = 1e-12;
+
 /// `ParametricCurve` for an offset curve `B(t) + offset·N/|N|`, with `N` a linear function
 /// of the basis tangent (`normal`); derivatives of order 2 and up by central differences of
 /// the first. `rebuild` makes the reversed curve from the reversed basis.
 macro_rules! offset_curve {
-    ($ty:ty, $point:ty, $vector:ty, $normal:expr, $rebuild:expr) => {
+    ($ty:ty, $point:ty, $vector:ty, $normal:expr, $rebuild:expr, $g1:expr) => {
         impl ParametricCurve for $ty {
             type Point = $point;
             type Vector = $vector;
@@ -1663,10 +1667,15 @@ macro_rules! offset_curve {
                 self.basis().period()
             }
             fn continuity(&self) -> Continuity {
+                // As OCCT's Geom_OffsetCurve: one order less than the basis, its tangent
+                // continuity kept; a C0 B-spline basis tangent-continuous counted as G1.
                 match self.basis().continuity() {
                     Continuity::CN => Continuity::CN,
                     Continuity::C3 => Continuity::C2,
                     Continuity::C2 => Continuity::C1,
+                    Continuity::G2 => Continuity::G2,
+                    Continuity::G1 => Continuity::G1,
+                    Continuity::C0 if ($g1)(self.basis()) => Continuity::G1,
                     _ => Continuity::C0,
                 }
             }
@@ -1726,14 +1735,24 @@ offset_curve!(
     Point,
     Vector,
     |c: &OffsetCurve, d: Vector| d.cross(Vector::from(c.direction())),
-    |c: &OffsetCurve, basis: Curve| OffsetCurve::new(basis, -c.offset(), c.direction())
+    |c: &OffsetCurve, basis: Curve| OffsetCurve::new(basis, -c.offset(), c.direction()),
+    |b: &Curve| match b {
+        Curve::BSpline(b) => b.is_g1(b.first_parameter(), b.last_parameter(), G1_ANGLE),
+        Curve::Trimmed(t) => matches!(t.basis(), Curve::BSpline(b) if b.is_g1(t.first_parameter(), t.last_parameter(), G1_ANGLE)),
+        _ => false,
+    }
 );
 offset_curve!(
     OffsetCurve2,
     Point2,
     Vector2,
     |_c: &OffsetCurve2, d: Vector2| Vector2::new(d.y, -d.x),
-    |c: &OffsetCurve2, basis: Curve2| OffsetCurve2::new(basis, -c.offset())
+    |c: &OffsetCurve2, basis: Curve2| OffsetCurve2::new(basis, -c.offset()),
+    |b: &Curve2| match b {
+        Curve2::BSpline(b) => b.is_g1(b.first_parameter(), b.last_parameter(), G1_ANGLE),
+        Curve2::Trimmed(t) => matches!(t.basis(), Curve2::BSpline(b) if b.is_g1(t.first_parameter(), t.last_parameter(), G1_ANGLE)),
+        _ => false,
+    }
 );
 
 #[cfg(test)]
