@@ -368,6 +368,61 @@ pub(crate) fn align_periods(coedges: &mut [(EdgeId, bool, Curve2, f64, f64)], su
             }
         }
     }
+    // A loop still ending a whole period from where it starts, round an edge along a pole
+    // (where every u is one point, so that a pcurve there may run either way): that edge's
+    // pcurve run on by the period, those after it moved over by it.
+    if n > 1 {
+        let (start, _) = ends(&coedges[0]);
+        let (_, end) = ends(&coedges[n - 1]);
+        let gap = start - end;
+        let whole = |d: f64, period: Option<f64>| period.is_some_and(|p| ((d / p).round() * p - d).abs() <= 1e-9 * p.max(1.0) && (d / p).round() != 0.0);
+        let along_pole = |c: &(EdgeId, bool, Curve2, f64, f64)| {
+            use crate::geometry::ParametricSurface;
+            let (a, b) = (c.2.point(c.3), c.2.point(c.4));
+            let m = c.2.point(0.5 * (c.3 + c.4));
+            let (pa, pb, pm) = (surface.point(a.x, a.y), surface.point(b.x, b.y), surface.point(m.x, m.y));
+            let size = 1.0 + pa.x.abs().max(pa.y.abs()).max(pa.z.abs());
+            a.distance(b) > 1e-9 && pa.distance(pb) <= 1e-9 * size && pa.distance(pm) <= 1e-9 * size
+        };
+        let shifted = (whole(gap.x, pu) && gap.y.abs() <= 1e-9) || (whole(gap.y, pv) && gap.x.abs() <= 1e-9);
+        // (Or two consecutive edges meeting at a pole, the edge along it left out: those after
+        // the pole moved over, the pole's edge added across the gap then running round.)
+        let at_pole = |i: usize| {
+            use crate::geometry::ParametricSurface;
+            let (_, end) = ends(&coedges[i]);
+            let p = surface.point(end.x, end.y);
+            let size = 1.0 + p.x.abs().max(p.y.abs()).max(p.z.abs());
+            let step = |d: f64, period: Option<f64>| period.map_or(d, |p| 0.25 * p);
+            surface.point(end.x + step(1.0, pu), end.y).distance(p) <= 1e-9 * size
+        };
+        if shifted && !(0..n).any(|i| along_pole(&coedges[i])) {
+            if let Some(i) = (0..n - 1).find(|&i| at_pole(i)) {
+                use crate::math::Transformable2;
+                let t = crate::math::Transform2::translation(gap);
+                for k in i + 1..n {
+                    coedges[k].2 = coedges[k].2.transformed(&t);
+                }
+            }
+        } else if shifted {
+            if let Some(i) = (0..n).find(|&i| along_pole(&coedges[i])) {
+                use crate::math::Transformable2;
+                let (c, first, last) = (&coedges[i].2, coedges[i].3, coedges[i].4);
+                let (mut a, mut b) = (c.point(first), c.point(last));
+                // (Its end where the loop leaves it: the curve's last point run forward, its
+                // first run backward.)
+                if coedges[i].1 {
+                    b = b + gap;
+                } else {
+                    a = a + gap;
+                }
+                coedges[i].2 = Curve2::BSpline(crate::geometry::curve2::BSplineCurve2::new(vec![a, b], vec![first, last], vec![2, 2], 1));
+                let t = crate::math::Transform2::translation(gap);
+                for k in i + 1..n {
+                    coedges[k].2 = coedges[k].2.transformed(&t);
+                }
+            }
+        }
+    }
 }
 
 
