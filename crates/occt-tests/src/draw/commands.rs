@@ -2990,7 +2990,28 @@ impl Draw {
     ///
     /// Example: `evolved res -s a -p b -a`
     pub fn evolved(&mut self, args: &[&str]) -> DrawResult {
-        self.not_implemented("evolved", args)
+        // `evolved result -s spine -p profile [-solid] [-a] [-v] [-y] [-t tolerance]`: the
+        // profile swept along the planar spine, keeping its place beside it, turned about its
+        // corners, self-intersections removed (kentron's evolved shapes are OCCT's volume
+        // mode's whatever the options: `-a`, `-y` and `-t` have no effect).
+        need(args, 5, "evolved result -s spine -p profile [-solid] [-a] [-v] [-y] [-t tolerance]")?;
+        let (mut spine, mut profile, mut solid) = (None, None, false);
+        let mut i = 1;
+        while i < args.len() {
+            match args[i] {
+                "-s" => { spine = args.get(i + 1).copied(); i += 1; }
+                "-p" => { profile = args.get(i + 1).copied(); i += 1; }
+                "-solid" => solid = true,
+                "-t" => i += 1,
+                "-a" | "-v" | "-y" => {}
+                other => return Err(DrawError::Failed(format!("evolved: unknown option {other}"))),
+            }
+            i += 1;
+        }
+        let (Some(spine), Some(profile)) = (spine, profile) else { return Err(DrawError::Failed("evolved: a spine (-s) and a profile (-p) are needed".into())) };
+        let (spine, profile) = (self.shape_var(spine)?, self.shape_var(profile)?);
+        let result = kentron::sweep::evolved(&mut self.model, spine, profile, kentron::sweep::EvolvedOptions { solid })?;
+        self.set_shape_var(args[0], result)
     }
     /// DRAW command `exchuv`: 1 uses in 1 converted scripts.
     ///

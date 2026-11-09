@@ -134,6 +134,33 @@ their faces can come out split into thin slivers near the corners of the cavity.
   planar sheet past its face. Neither changed anything.
 - **Matters because:** selectors such as `faces(">Z")` on the result can pick up slivers.
 
+## Evolved solids
+
+### Profiles collapsing or crossing the spine at its corners
+
+*Found 2026-11-09.*
+
+kentron's evolved solids (`sweep::evolved`) follow OCCT's volume mode: the profile swept
+along the spine with rounded corners, closed by lids from the sweep's free edges, the cells
+it winds round joined. They match OCCT where the sweep round the spine's corners closes:
+`tests/evolved/voluved/AGT002`, `AGT006`, `AGT008` (areas and volumes to OCCT's digits).
+Elsewhere the corner sweep leaves gaps or extra pieces:
+
+- **Repro:** `voluved/AGT001` (the profile's top 1 inside the spine at an arc of radius 1:
+  the arc's sweep collapses to its centre, and the mitre at the arc's end into the next
+  line leaves free edges: "enclosing nothing"); `AGT005`, `AGT007` (a profile from outside
+  the spine to inside it: rounded corners, the sweep's cells not closing); `AGT003`
+  (area 1633.7 for 1573.58); `AGT004`; `AGT009` (two solids expected, joined into one);
+  `bug26470_1`, `_2` in `evolved` and `voluved` ("pieces do not sew", "enclosing
+  nothing"); `bug30781` (its data is in OCCT's binary format, `binrestore`, not read).
+- **Evidence:** AGT001's main cell, built with the profile placed where it stands and the
+  corners rounded, is 245.265 (OCCT's volume); the extra cells come from the profile
+  turned round convex corners it lies inside of (OCCT trims the sweeps against each other
+  there and fills only where they part).
+- **Needed:** OCCT's corner transition faithfully: the two sweeps trimmed where they meet
+  (BRepFill_TrimShellCorner), the round fill only over the part of the profile outside the
+  corner; and sweeps along arcs whose offset collapses.
+
 ## Features
 
 ### Extruding up to a curved face that not every ray meets

@@ -782,13 +782,10 @@ tests/draft/angle/M4
 tests/evolved/evolved/bug26470_1
 tests/evolved/evolved/bug26470_2
 tests/evolved/voluved/AGT001
-tests/evolved/voluved/AGT002
 tests/evolved/voluved/AGT003
 tests/evolved/voluved/AGT004
 tests/evolved/voluved/AGT005
-tests/evolved/voluved/AGT006
 tests/evolved/voluved/AGT007
-tests/evolved/voluved/AGT008
 tests/evolved/voluved/AGT009
 tests/evolved/voluved/bug26470_1
 tests/evolved/voluved/bug26470_2

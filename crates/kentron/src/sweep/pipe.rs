@@ -781,18 +781,51 @@ pub(super) fn section_placement(model: &Model, profile: Shape, pieces: &[SpinePi
     let axis = axis.map(|n| (center, n));
     const STEPS: usize = 512;
     let Some((origin, normal)) = axis else {
-        // The spine's point nearest the profile.
+        // No plane (a straight profile, or a point): as OCCT, the spine's start or end where
+        // the profile passes through it, else the spine's point nearest the profile (its
+        // centre, for a profile with no edges).
+        let curves: Vec<(crate::geometry::curve::Curve, f64, f64)> = model.explore(profile, NodeKind::Edge).filter_map(|e| model.edge_curve(e)).collect();
+        let distance = |p: Point| {
+            if curves.is_empty() {
+                return p.distance(center);
+            }
+            curves.iter().map(|(c, a, b)| crate::geometry::extrema::nearest_on_curve(p, c, a.min(*b), a.max(*b)).distance).fold(f64::INFINITY, f64::min)
+        };
+        let last = pieces.len() - 1;
+        let tolerance = crate::tolerance::LINEAR;
+        if distance(pieces[0].curve.point(pieces[0].at(0.0))) <= tolerance {
+            return Ok((0, 0.0));
+        }
+        if distance(pieces[last].curve.point(pieces[last].at(1.0))) <= tolerance {
+            return Ok((last, 1.0));
+        }
         let mut best = (f64::INFINITY, (0, 0.0));
         for (k, piece) in pieces.iter().enumerate() {
             for i in 0..=STEPS {
                 let s = i as f64 / STEPS as f64;
-                let d = piece.curve.point(piece.at(s)).distance(center);
+                let d = distance(piece.curve.point(piece.at(s)));
                 if d < best.0 {
                     best = (d, (k, s));
                 }
             }
         }
-        return Ok(best.1);
+        // (Refined between the samples either side, for a profile with edges; a point's, and
+        // one at a piece's end, as found.)
+        let (k, s) = best.1;
+        if curves.is_empty() || s == 0.0 || s == 1.0 {
+            return Ok(best.1);
+        }
+        let (mut lo, mut hi) = ((s - 1.0 / STEPS as f64).max(0.0), (s + 1.0 / STEPS as f64).min(1.0));
+        let piece = &pieces[k];
+        for _ in 0..60 {
+            let (m1, m2) = (lo + (hi - lo) / 3.0, hi - (hi - lo) / 3.0);
+            if distance(piece.curve.point(piece.at(m1))) <= distance(piece.curve.point(piece.at(m2))) {
+                hi = m2;
+            } else {
+                lo = m1;
+            }
+        }
+        return Ok((k, 0.5 * (lo + hi)));
     };
     let side = |p: Point| (p - origin).dot(normal);
     let last = pieces.len() - 1;

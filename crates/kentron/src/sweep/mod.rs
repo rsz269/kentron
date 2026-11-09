@@ -4,6 +4,8 @@
 
 mod corner;
 mod draft;
+mod evolved;
+pub use evolved::{evolved, EvolvedOptions};
 pub use draft::extrude_drafted;
 mod middle;
 mod pipe;

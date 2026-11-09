@@ -85,8 +85,9 @@ pub(super) fn pipe_cornered(model: &mut Model, profile: Shape, pieces: &[SpinePi
     });
     // Round corners the profile lies all inside of (up to the axis at most) have no knee:
     // OCCT trims the pieces against each other there, as at a mitre. Where all are so, the
-    // pipe is mitred.
-    let all_inside = face.kind() == NodeKind::Face
+    // pipe is mitred (an open profile's too: one leaning in from the spine, as an evolved
+    // solid's).
+    let all_inside = matches!(face.kind(), NodeKind::Face | NodeKind::Wire)
         && !corners.is_empty()
         && corners.iter().all(|&k| {
             let (p, t1, t2) = (ends[k].2, ends[k].3, ends[(k + 1) % n].1);
