@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 298" width="860" height="298" role="img" aria-label="A solid with two voids made from one small box placed twice: OCCT's solid holds the placed faces themselves, kentron's holds copies of them, which the operation's history does not list.">
+<style>.card{fill:#fcfcfb;stroke:#e3e2dd}.panel{fill:#f3f2ee}text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans",Helvetica,Arial,sans-serif;font-size:13px;fill:#0b0b0b}.title{font-size:14px;font-weight:600}.note{fill:#52514e}.small{font-size:12px}.body{fill:#8f8e86}.lit{fill:#fff;fill-opacity:.13}.tint{fill-opacity:.6}.wrong{fill:#d03b3b}.first{fill:#2a78d6}.second{fill:#eb6834}.third{fill:#1baf7a}.fourth{fill:#eda100}.sharp,.smooth,.outline,.leader,.rule,.mark,.frame,.glyph,.ink,.thin,.dash,.sketch,.ghost,.one,.two{fill:none;stroke-linecap:round;stroke-linejoin:round}.sharp{stroke:#1d1d1b;stroke-width:1}.smooth{stroke:#1d1d1b;stroke-width:.6;stroke-opacity:.38}.outline{stroke:#1d1d1b;stroke-width:1.7}.leader{stroke:#52514e;stroke-width:.9}.rule{stroke:#e3e2dd}.mark{stroke:#d03b3b;stroke-width:1.8}.frame{stroke:#0b0b0b;stroke-width:1.2}.ink{stroke:#1d1d1b;stroke-width:1.5}.thin{stroke:#52514e;stroke-width:.9}.dash{stroke:#52514e;stroke-width:.9;stroke-dasharray:4 3}.sketch,.one{stroke:#2a78d6;stroke-width:1.6}.two{stroke:#eb6834;stroke-width:1.6}.wash{fill-opacity:.22}.cut{fill:#8f8e86;fill-opacity:.4}.node{fill:#fcfcfb;stroke:#52514e}.group{fill:#e9e8e2;stroke:#52514e}.off{stroke:#d03b3b;stroke-width:1.8}.halo{paint-order:stroke;stroke:#f3f2ee;stroke-opacity:.85;stroke-width:3.5px;stroke-linejoin:round}.ghost{stroke:#8f8e86;stroke-width:1.1;stroke-dasharray:5 4}.dot{fill:#52514e}.bad{fill:#d03b3b}.good{fill:#0c8f0c}.glyph{stroke:#fff;stroke-width:1.7}@media (prefers-color-scheme:dark){.card{fill:#1a1a19;stroke:#383835}.panel{fill:#232321}text{fill:#f0efec}.note{fill:#c3c2b7}.body{fill:#4b4a45}.lit{fill-opacity:.07}.tint{fill-opacity:.55}.wrong{fill:#e04a4a}.first{fill:#3987e5}.second{fill:#d95926}.third{fill:#199e70}.fourth{fill:#c98500}.sharp,.smooth,.outline,.ink{stroke:#f0efec}.leader,.thin,.dash{stroke:#c3c2b7}.rule{stroke:#383835}.mark{stroke:#ff6b6b}.frame{stroke:#f0efec}.sketch,.one{stroke:#3987e5}.two{stroke:#d95926}.halo{stroke:#232321}.cut{fill:#4b4a45;fill-opacity:.9}.node{fill:#1a1a19;stroke:#c3c2b7}.group{fill:#2e2e2b;stroke:#c3c2b7}.off{stroke:#ff6b6b}.ghost{stroke:#77766f}.dot{fill:#c3c2b7}.bad{fill:#e04a4a}.good{fill:#22a722}.glyph{stroke:#1a1a19}}</style>
+<rect class="card" x=".5" y=".5" width="859" height="297" rx="10"/>
+<clipPath id="c1"><rect x="18" y="58" width="405" height="200" rx="6"/></clipPath>
+<rect class="panel" x="18" y="58" width="405" height="200" rx="6"/>
+<g clip-path="url(#c1)"><g transform="translate(18 58)">
+</g></g>
+<text x="20" y="31" class="title">OCCT: the solid holds the placed faces</text>
+<text x="20" y="49" class="note small">solid(faces, inner_faces, history=…)</text>
+<g transform="translate(27 273.5)"><circle class="good" r="7"/><path class="glyph" d="M-3.2 .2L-1 2.5L3.2 -2.4"/></g>
+<text x="40" y="278" class="small">every face of the solid is among the history's images</text>
+<rect class="node" x="32" y="132" width="92" height="52" rx="5"/>
+<text x="78" y="154" class="small" text-anchor="middle">a small box:</text>
+<text x="78" y="170" class="small" text-anchor="middle">6 faces</text>
+<rect class="group" x="194" y="72" width="215" height="172" rx="5"/>
+<text x="301.5" y="162" class="small" text-anchor="middle"></text>
+<text x="301.5" y="92" class="small" text-anchor="middle">the solid</text>
+<rect class="node" x="208" y="106" width="187" height="50" rx="5"/>
+<text x="301.5" y="127" class="small" text-anchor="middle">its faces, placed at A:</text>
+<text x="301.5" y="143" class="small" text-anchor="middle">given, and in the history</text>
+<path class="thin" d="M124 158L202.3 132.8"/><path class="dot" d="M208 131L199.4 130.4L201.4 136.5Z"/>
+<rect class="node" x="208" y="176" width="187" height="50" rx="5"/>
+<text x="301.5" y="197" class="small" text-anchor="middle">its faces, placed at B:</text>
+<text x="301.5" y="213" class="small" text-anchor="middle">given, and in the history</text>
+<path class="thin" d="M124 158L202.7 198.3"/><path class="dot" d="M208 201L202.3 194.5L199.4 200.2Z"/>
+<clipPath id="c2"><rect x="437" y="58" width="405" height="200" rx="6"/></clipPath>
+<rect class="panel" x="437" y="58" width="405" height="200" rx="6"/>
+<g clip-path="url(#c2)"><g transform="translate(437 58)">
+</g></g>
+<text x="439" y="31" class="title">kentron: the solid holds copies</text>
+<text x="439" y="49" class="note small">make_solid copies a placed shell</text>
+<g transform="translate(446 273.5)"><circle class="bad" r="7"/><path class="glyph" d="M-2.7 -2.7L2.7 2.7M2.7 -2.7L-2.7 2.7"/></g>
+<text x="459" y="278" class="small">the solid's 12 inner faces are not among the history's images</text>
+<rect class="node" x="451" y="132" width="92" height="52" rx="5"/>
+<text x="497" y="154" class="small" text-anchor="middle">a small box:</text>
+<text x="497" y="170" class="small" text-anchor="middle">6 faces</text>
+<rect class="group" x="721" y="72" width="107" height="172" rx="5"/>
+<text x="774.5" y="162" class="small" text-anchor="middle"></text>
+<text x="774.5" y="92" class="small" text-anchor="middle">the solid</text>
+<rect class="node" x="577" y="106" width="112" height="50" rx="5"/>
+<text x="633" y="127" class="small" text-anchor="middle">placed at A:</text>
+<text x="633" y="143" class="small" text-anchor="middle">in the history</text>
+<path class="thin" d="M543 158L572.3 134.7"/><path class="dot" d="M577 131L568.7 133.5L572.7 138.5Z"/>
+<rect class="node off" x="731" y="106" width="87" height="50" rx="5"/>
+<text x="774.5" y="127" class="small" text-anchor="middle">a copy:</text>
+<text x="774.5" y="143" class="small" text-anchor="middle">6 new faces</text>
+<path class="dash" d="M689 131L725 131"/><path class="dot" d="M731 131L723 127.8L723 134.2Z"/>
+<rect class="node" x="577" y="176" width="112" height="50" rx="5"/>
+<text x="633" y="197" class="small" text-anchor="middle">placed at B:</text>
+<text x="633" y="213" class="small" text-anchor="middle">in the history</text>
+<path class="thin" d="M543 158L573.3 196.3"/><path class="dot" d="M577 201L574.5 192.7L569.5 196.7Z"/>
+<rect class="node off" x="731" y="176" width="87" height="50" rx="5"/>
+<text x="774.5" y="197" class="small" text-anchor="middle">a copy:</text>
+<text x="774.5" y="213" class="small" text-anchor="middle">6 new faces</text>
+<path class="dash" d="M689 201L725 201"/><path class="dot" d="M731 201L723 197.8L723 204.2Z"/>
+</svg>

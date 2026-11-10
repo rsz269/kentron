@@ -351,8 +351,9 @@ def wire_points(wire, n=2000):
     return uv, closed, (c, vt[:2])
 
 
-def wire_offset(wire, distance, n=2000):
-    """The length and number of loops of a planar wire's offset with round joins."""
+def wire_offset_loops(wire, distance, n=2000):
+    """The loops bounding a planar wire's offset with round joins: each an array of points,
+    as 2D coordinates in the plane wire_points gives."""
     from shapely.geometry import LineString, Polygon
 
     uv, closed, _ = wire_points(wire, n)
@@ -361,8 +362,13 @@ def wire_offset(wire, distance, n=2000):
         distance = abs(distance)
     region = base.buffer(distance, quad_segs=512)
     polys = list(region.geoms) if hasattr(region, "geoms") else ([region] if not region.is_empty else [])
-    loops = [r for p in polys for r in [p.exterior, *p.interiors]]
-    return sum(r.length for r in loops), len(loops)
+    return [np.array(r.coords) for p in polys for r in [p.exterior, *p.interiors]]
+
+
+def wire_offset(wire, distance, n=2000):
+    """The length and number of loops of a planar wire's offset with round joins."""
+    loops = wire_offset_loops(wire, distance, n)
+    return sum(np.linalg.norm(np.diff(loop, axis=0), axis=1).sum() for loop in loops), len(loops)
 
 
 def _round(argv):

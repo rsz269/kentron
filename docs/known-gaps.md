@@ -5,6 +5,9 @@ time-consuming to fix when they were found, and remain to be fixed. Each entry s
 fails, how to reproduce it, the evidence, what was tried, and why it was left. Remove an
 entry when it is fixed (the commit fixing it says so).
 
+Each entry's figure is drawn from its repro by `tools/gap_figures.py` (two are sketches, and
+say so): what kentron builds wrongly is marked in red, and what it fails to build is dashed.
+
 Smaller differences on the public corpus are tracked by the corpus runs themselves; this
 log is for the root causes behind them that need real work.
 
@@ -13,6 +16,8 @@ log is for the root causes behind them that need real work.
 ### Saddle vertices: three concave and three convex edges at one corner
 
 *Found 2026-11-08.*
+
+![Three box arms filleted on every edge: kentron's corners are mitred where CadQuery's have corner patches](known-gaps/saddle.svg)
 
 Where six edges meet at a vertex, three concave and three convex (the inside corner where
 three box arms meet in 3D), filleting every edge gives a valid solid with the wrong shape at
@@ -41,6 +46,8 @@ every mixed corner of that solid.
 ### Chamfers of constant throat where the faces' angle varies along the edge
 
 *Found 2026-11-09.*
+
+![A chamfer of constant throat round a cylinder on a tilted box: kentron's chamfer beside OCCT's, in sections across the edge](known-gaps/throat.svg)
 
 OCCT's throat chamfers (`chamf_throat`, and `chamf_throat_with_penetration`, whose section
 is a right-angled triangle with its apex `offset` inside a face) keep the throat constant
@@ -71,6 +78,8 @@ the same all along (planes; a cylinder or a cone on a plane square to its axis: 
 
 *Found 2026-11-09.*
 
+![A profile revolved by 270 degrees and hollowed: kentron's offset fails where a solid with walls 1 thick is expected](known-gaps/revolved.svg)
+
 Partial solids of revolution whose side planes move off a pole or apex on the axis are
 offset as the whole solid of revolution's offset cut by the side planes' moved
 half-spaces (offset/revolved.rs): moving the faces one by one, keeping the topology,
@@ -98,6 +107,8 @@ solid is 9585.3. The thick solid then fails ("an offset leaving nothing").
 
 *Found 2026-11-09.*
 
+![An open wire and its offset: by the wire's tip kentron's contour cuts inside the true one](known-gaps/wire.svg)
+
 An open wire (one B-spline) ending in a cluster of tiny, sharply turning stretches (cut
 at curvature extrema into pieces 0.02 long, curved tighter than the offset distance): their
 offsets fan out into swallowtails crossing nearly tangentially, and the contour is not cut
@@ -120,6 +131,8 @@ exact.
 
 *Found 2026-11-08.*
 
+![A chamfered box shelled: kentron leaves three sliver faces at each corner of the cavity](known-gaps/sliver.svg)
+
 Shells and offsets that fall back on the points-within-the-distance construction
 (`offset/within.rs`, used where faces vanish) have the right volume and are valid, but
 their faces can come out split into thin slivers near the corners of the cavity.
@@ -139,6 +152,8 @@ their faces can come out split into thin slivers near the corners of the cavity.
 ### Profiles leaning along the spine at its corners
 
 *Found 2026-11-09; corner trimming landed 2026-11-09.*
+
+![A leaning profile swept along a spine: OCCT's solid has two faces at each corner that kentron's lacks](known-gaps/evolved.svg)
 
 kentron's evolved solids (`sweep::evolved`) follow OCCT's volume mode: the profile swept
 along the spine with rounded corners (the part outside a corner turned round it, the
@@ -169,6 +184,8 @@ brute force). Profiles leaning along the spine where they stand do not:
 
 *Found 2026-11-08 (`anniedoris_synthetic_cadquery/docs_examples/example24.py`).*
 
+![A slot cut up to a socket: kentron cuts on past the socket, CadQuery only up to it](known-gaps/upto.svg)
+
 `cutBlind(face)` / `extrude(face)` up to a curved face (pykentron's `Solid.dprism`) splits
 the profile's prism, extruded far, by the face's whole surface, and keeps the piece touching
 the profile. Where some of the profile's rays miss the face, that piece runs on along them
@@ -189,6 +206,8 @@ the face (the face itself, as trimmed), up to it, and leaves the others alone.
 *Found 2026-11-07 (usd-brep's `TestSmRemoveFilletNurbsPlanes`, the `expect: not_done` case
 `usd_brep::cpp_fillets::remove_fillets_of_a_nurbs_box`).*
 
+![The fillets of a rounded box removed: kentron leaves no faces where the box is expected](known-gaps/rounded.svg)
+
 `defeature::remove_faces` of every fillet of a box rounded on all its edges leaves no faces,
 where SMLib, OCCT and sampling all give the box back.
 
@@ -202,6 +221,8 @@ where SMLib, OCCT and sampling all give the box back.
 ### Gyroid lattice cells meeting at a corner
 
 *Found 2026-11-08.*
+
+![Four plates of a gyroid cell meeting at a corner: in kentron's union one short edge is used by seven faces](known-gaps/gyroid.svg)
 
 LatticeQuery's gyroid unit cell is a union of eight thickened plates, some a hundred-
 millionth apart. The plates' pairwise unions are valid now (7d15022). The whole cell is
@@ -223,11 +244,14 @@ the union leaves an edge 3.5e-5 long used by seven faces.
 
 *Found 2026-10-24; still failing 2026-11-08 (`jhnphm_spiral_lamp/lamp.py`).*
 
+![A spiral arm and its hub, swept along one spiral: kentron's union is not valid where the arm lies in the hub's channel](known-gaps/lamp.svg)
+
 Two sweeps along B-splines fitted separately to the same parametric spiral, over
 different ranges, have faces that should coincide but differ by 1e-9 to 1e-4 (the frames'
-error times the 30 mm profile). Their union is wrong (61 faces and 2 solids against 37 and
-1), and the spiral lamp's later fillet fails on the invalid solid ("a fillet edge must bound
-two faces, it bounds 4").
+error times the 30 mm profile). Their union is not valid (52 faces against 37, with edges
+bounding 1, 3, 4 or 6 faces where the arm lies in the hub's channel; 61 faces and 2 solids
+when found), and the spiral lamp's later fillet fails on the invalid solid ("a fillet edge
+must bound two faces, it bounds 4").
 
 - **Tried:** a geometric test of partial coincidence (grid points with their feet inside
   the other face all within 1e-6). It catches only some pairs, and accepting 1e-4 would be
@@ -236,6 +260,8 @@ two faces, it bounds 4").
 ### Twisted prisms passing through each other with the same section
 
 *Found 2026-11-08 (`mryndzionek_cadquery_plaground/screw_cap_container.py`).*
+
+![Two twisted prisms crossing where their sections coincide: kentron's intersection is an open shell](known-gaps/twisted.svg)
 
 A knurl tool is the union of two sets of 12 triangular prisms extruded with a twist of +40°
 and −40° (`placeSketch(...).twistExtrude`). A prism of one set and one of the other, whose
@@ -250,13 +276,16 @@ knurled cap is cut to 252 of volume, invalid, against CadQuery's 4804.
   at −60° and the one at 0°, which coincide at z = 7.5.
 - **Evidence:** their section is a closed network of 9 edges about 1 long round the
   coinciding section. CadQuery calls the pair touching (common volume 0, distance 1e-15),
-  but its own union of the two sets is empty, so it is no reference either.
+  but its own union of the two sets is empty, so it is no reference either. Points sampled
+  inside both prisms give the lens 0.1305 ± 0.0003 of volume, where a prism's is 4.33.
 - **Needed:** handling of faces that coincide only along a section (a curve of tangency
   sweeping through), on B-spline ruled surfaces.
 
 ### Mirrored free-form faces meeting the mirror plane almost square
 
 *Found 2026-11-08.*
+
+![A plate united with its mirror image: kentron keeps fragments of the side faces inside the solid](known-gaps/mirrored.svg)
 
 A union of a solid with its mirror image, where a free-form face meets the mirror plane at
 nearly a right angle, keeps fragments of faces inside the other solid. Their intersection
@@ -308,6 +337,8 @@ curve lies in the mirror plane, and there the face and its mirror image cross at
 
 *Found 2026-10-23; not re-checked since (bug32945 still passes as it stands).*
 
+![A sketch of a fitted section curve straying from the surfaces' intersection by more than its edge's tolerance](known-gaps/tolerance.svg)
+
 Fitted B-spline section curves stray from their surfaces between fit points by more than
 the tolerance recorded for them (the teapot spout: 5.75e-7 against 1e-7), so a later
 boolean may not find them on the surface.
@@ -322,6 +353,8 @@ boolean may not find them on the surface.
 
 *Found 2026-11-08 (CadQuery's `tests/test_free_functions.py::test_solid`, the one test of
 its suite in `crates/pykentron/tests/cadquery_baseline.txt`).*
+
+![A diagram: OCCT's solid holds the placed faces themselves, kentron's holds copies of them](known-gaps/copies.svg)
 
 `solid(faces, inner_faces, history=...)` with inner faces of placed shells (boxes `moved` to
 two places): the history's images do not include the solid's faces from the inner shells,

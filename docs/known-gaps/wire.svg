@@ -1,0 +1,83 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 546" width="860" height="546" role="img" aria-label="An open wire turning back at its tip far more tightly than the offset distance (OCCT's test wire offset_wire_058), offset by 2.5 per cent of its length: by the tip, kentron's contour cuts inside the true one by up to 0.68.">
+<style>.card{fill:#fcfcfb;stroke:#e3e2dd}.panel{fill:#f3f2ee}text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans",Helvetica,Arial,sans-serif;font-size:13px;fill:#0b0b0b}.title{font-size:14px;font-weight:600}.note{fill:#52514e}.small{font-size:12px}.body{fill:#8f8e86}.lit{fill:#fff;fill-opacity:.13}.tint{fill-opacity:.6}.wrong{fill:#d03b3b}.first{fill:#2a78d6}.second{fill:#eb6834}.third{fill:#1baf7a}.fourth{fill:#eda100}.sharp,.smooth,.outline,.leader,.rule,.mark,.frame,.glyph,.ink,.thin,.dash,.sketch,.ghost,.one,.two{fill:none;stroke-linecap:round;stroke-linejoin:round}.sharp{stroke:#1d1d1b;stroke-width:1}.smooth{stroke:#1d1d1b;stroke-width:.6;stroke-opacity:.38}.outline{stroke:#1d1d1b;stroke-width:1.7}.leader{stroke:#52514e;stroke-width:.9}.rule{stroke:#e3e2dd}.mark{stroke:#d03b3b;stroke-width:1.8}.frame{stroke:#0b0b0b;stroke-width:1.2}.ink{stroke:#1d1d1b;stroke-width:1.5}.thin{stroke:#52514e;stroke-width:.9}.dash{stroke:#52514e;stroke-width:.9;stroke-dasharray:4 3}.sketch,.one{stroke:#2a78d6;stroke-width:1.6}.two{stroke:#eb6834;stroke-width:1.6}.wash{fill-opacity:.22}.cut{fill:#8f8e86;fill-opacity:.4}.node{fill:#fcfcfb;stroke:#52514e}.group{fill:#e9e8e2;stroke:#52514e}.off{stroke:#d03b3b;stroke-width:1.8}.halo{paint-order:stroke;stroke:#f3f2ee;stroke-opacity:.85;stroke-width:3.5px;stroke-linejoin:round}.ghost{stroke:#8f8e86;stroke-width:1.1;stroke-dasharray:5 4}.dot{fill:#52514e}.bad{fill:#d03b3b}.good{fill:#0c8f0c}.glyph{stroke:#fff;stroke-width:1.7}@media (prefers-color-scheme:dark){.card{fill:#1a1a19;stroke:#383835}.panel{fill:#232321}text{fill:#f0efec}.note{fill:#c3c2b7}.body{fill:#4b4a45}.lit{fill-opacity:.07}.tint{fill-opacity:.55}.wrong{fill:#e04a4a}.first{fill:#3987e5}.second{fill:#d95926}.third{fill:#199e70}.fourth{fill:#c98500}.sharp,.smooth,.outline,.ink{stroke:#f0efec}.leader,.thin,.dash{stroke:#c3c2b7}.rule{stroke:#383835}.mark{stroke:#ff6b6b}.frame{stroke:#f0efec}.sketch,.one{stroke:#3987e5}.two{stroke:#d95926}.halo{stroke:#232321}.cut{fill:#4b4a45;fill-opacity:.9}.node{fill:#1a1a19;stroke:#c3c2b7}.group{fill:#2e2e2b;stroke:#c3c2b7}.off{stroke:#ff6b6b}.ghost{stroke:#77766f}.dot{fill:#c3c2b7}.bad{fill:#e04a4a}.good{fill:#22a722}.glyph{stroke:#1a1a19}}</style>
+<rect class="card" x=".5" y=".5" width="859" height="545" rx="10"/>
+<clipPath id="c1"><rect x="18" y="58" width="824" height="150" rx="6"/></clipPath>
+<rect class="panel" x="18" y="58" width="824" height="150" rx="6"/>
+<g clip-path="url(#c1)"><g transform="translate(18 58)">
+<path class="ink" d="M49.4 56.7L49 58L48.9 58.9L49.2 59.4L49.9 59.9L53.9 60.9L62.8 62.4L90.9 66.8L121.7 71.2L151.6 75.1L181.8 78.7L228.6 83.5L275.2 87.3L321.6 90.3L367.7 92.3L393.9 93L419.8 93.5L445.8 93.6L471.6 93.5L497.2 93L522.9 92.2L548.4 91.2L573.7 89.8L599.1 88.1L624.5 86.1L649.8 83.8L674.9 81.2L700.4 78.3L725.9 75L757.1 70.6L774.8 67.9L720.9 68.9L676.1 69.5L628.5 69.9L580.2 70.1L530.6 69.9L480.2 69.5L426.6 68.8L377.1 67.9"/>
+<path class="one" d="M22.9 47.1L22.8 47.4"/>
+<path class="one" d="M22.8 47.4L22.6 47.7"/>
+<path class="one" d="M22.6 47.7L21.7 50.7L21.1 53.7L20.7 56.6L20.7 59.6L20.9 62.6L21.5 65.5L22.3 68.3L23.4 71"/>
+<path class="one" d="M23.4 71L25.4 74.6L27.9 77.9L30.8 80.9L34.1 83.4"/>
+<path class="one" d="M34.1 83.4L35.6 84.3"/>
+<path class="one" d="M35.6 84.3L38.5 85.7L41.4 86.8L44.9 87.8L49.4 88.8L75.5 93.1L108.9 98"/>
+<path class="one" d="M108.9 98L153.6 103.8"/>
+<path class="one" d="M153.6 103.8L192.1 108.2L230.7 112L269.3 115.2L306.4 117.7L345.1 119.7L382.3 121L419.5 121.7L456.8 121.8L494 121.3L529.8 120.2L567 118.5L602.6 116.2L639.7 113.1L675.3 109.6L710.8 105.5L746.3 100.7"/>
+<path class="one" d="M746.3 100.7L779.8 95.7"/>
+<path class="one" d="M779.8 95.7L780.2 95.6"/>
+<path class="one" d="M780.2 95.6L779.6 95.7"/>
+<path class="one" d="M779.6 95.7L788.9 92.4"/>
+<path class="one" d="M788.9 92.4L792.5 89.9L795.7 86.9L798.4 83.5L800.5 79.6L802 75.5L802.9 71.2L803.1 66.8L802.6 62.6"/>
+<path class="one" d="M802.6 62.6L802 60.1L801.1 57.5L800 55.1L798.7 52.8L797.3 50.7L795.5 48.6L793.6 46.8L791.5 45.1L789.4 43.7L787.1 42.4L784.6 41.4L782.2 40.6L777.2 39.7L771.2 39.6"/>
+<path class="one" d="M771.2 39.6L770.7 39.7"/>
+<path class="one" d="M770.7 39.7L767.1 39.7"/>
+<path class="one" d="M767.1 39.7L692.1 41.1L616.4 41.7L538.3 41.7L458.6 41"/>
+<path class="one" d="M458.6 41L452.2 40.9"/>
+<path class="one" d="M452.2 40.9L428 40.6"/>
+<path class="one" d="M428 40.6L377.7 39.7"/>
+<path class="one" d="M377.7 39.7L372.7 40L367.8 41.2L363.2 43.3L359 46.2L355.5 49.8L352.6 53.8L350.5 58.4L349.3 63.3"/>
+<path class="one" d="M160.5 47.8L208.1 53.1L255.4 57.5L302.3 60.9L349.3 63.3"/>
+<path class="one" d="M116.7 42L160.5 47.8"/>
+<path class="one" d="M66.8 34.4L90.3 38.2L116.7 42"/>
+<path class="one" d="M66.8 34.4L64 32.6L61.1 31L58 29.8L54.7 29L51.4 28.6L48.1 28.5L44.9 28.9L41.7 29.6L38.5 30.7L35.5 32.1L32.7 33.9L30.2 36.1L27.9 38.5L25.9 41.1L24.2 44L22.9 47.1"/>
+</g></g>
+<text x="20" y="31" class="title">An open wire and its offset</text>
+<text x="20" y="49" class="note small">OCCT's test offset/wire_unclosed_outside_0_025/B6: the wire offset_wire_058, offset by 2.5% of its length, 44.2</text>
+<path class="leader" d="M223 74L278.1 144.2"/><circle class="dot" cx="278.1" cy="144.2" r="2.2"/>
+<text x="218" y="78" class="note small halo" text-anchor="end">the wire</text>
+<path class="leader" d="M513 194L494.1 179.6"/><circle class="dot" cx="494.1" cy="179.6" r="2.2"/>
+<text x="518" y="198" class="note small halo">its offset: the contour 44.2 from it</text>
+<path class="leader" d="M737 74L792.8 125.9"/><circle class="dot" cx="792.8" cy="125.9" r="2.2"/>
+<text x="732" y="78" class="note small halo" text-anchor="end">the tip, where the wire turns back</text>
+<path class="thin" d="M32 193v5h63.9v-5"/>
+<text x="63.9" y="189" class="note small" text-anchor="middle">100</text>
+<clipPath id="c2"><rect x="18" y="270" width="300" height="220" rx="6"/></clipPath>
+<rect class="panel" x="18" y="270" width="300" height="220" rx="6"/>
+<g clip-path="url(#c2)"><g transform="translate(18 270)">
+<path class="ink" d="M-88.4 235.9L124.7 199.4L144.6 187.5L153.6 181.7L162 176L169.8 170.4L176.9 165L183.4 159.6L189.4 154.3L194.6 149.1L199.3 144.1L203.4 139L207 134L210 129.1L212.5 124.2L214.4 119.2L215.9 114.3L216.7 109.3L217.1 104.4L216.9 99.6L216.1 94.9L214.8 90.3L213 85.8L210.6 81.4L207.6 77L204.1 72.7L200 68.4L195.3 64.1L190 59.9L184.1 55.6L177.6 51.3L170.4 47.1L162.7 42.8L146.6 34.9L138.2 31.2L129 27.4L108.3 19.9L85.1 12.4L59.7 5.1L31.9 -2.1L2 -9.1L-30.1 -15.9"/>
+</g></g>
+<text x="20" y="243" class="title">The tip</text>
+<text x="20" y="261" class="note small">drawn 10 000× larger</text>
+<path class="thin" d="M240.1 473v5h63.9v-5"/>
+<text x="272.1" y="469" class="note small" text-anchor="middle">0.01</text>
+<text x="20" y="510" class="note small">a corner and a turn 0.02 across,</text>
+<text x="20" y="526" class="note small">where the offset distance is 44.2</text>
+<clipPath id="c3"><rect x="332" y="270" width="510" height="220" rx="6"/></clipPath>
+<rect class="panel" x="332" y="270" width="510" height="220" rx="6"/>
+<g clip-path="url(#c3)"><g transform="translate(332 270)">
+<path class="one" d="M536.6 -30.2L522.1 -18.3L508 -7.2L493.6 3.6L478.3 14.7L463 25.3L447.7 35.4L431.9 45.4L416.5 54.8L401.5 63.4L384.6 72.8L367.5 81.7L352.7 89.1L337.8 96.2L320.2 104.2L302.4 111.7L284.5 118.9L269.1 124.8L253.5 130.4L237.8 135.6L222.1 140.6L206.2 145.3L190.3 149.8L174.3 153.9L158.2 157.7L131.2 163.4L104.4 168.7L80.2 173.1L27.1 182.3L-33.8 192.1"/>
+<path class="mark" d="M-32.4 192L15.9 184.2L56.1 177.4L88.2 171.7L117.6 166.2"/>
+<path class="mark" d="M117.6 166.2L129.1 163.9"/>
+<path class="mark" d="M129.1 163.9L110.2 167.4"/>
+<path class="mark" d="M110.2 167.4L108.1 167.7L107.1 168L111.4 166.5L93.5 172.9L406 61.1"/>
+<path class="mark" d="M406 61.1L425.3 49.7L442 39.3L458.5 28.6L474.7 17.6L490.6 6.1L506.3 -5.6L521.8 -17.7L537 -30.2"/>
+<path class="thin" d="M256.7 114.5L261.4 127.6"/>
+</g></g>
+<text x="334" y="243" class="title">kentron's contour by the tip</text>
+<text x="334" y="261" class="note small">drawn 32× larger</text>
+<g transform="translate(341 505.5)"><circle class="bad" r="7"/><path class="glyph" d="M-2.7 -2.7L2.7 2.7M2.7 -2.7L-2.7 2.7"/></g>
+<text x="354" y="510" class="small">length 2586.92 for 2582.695: a straight piece cuts inside the round of the tip</text>
+<text x="354" y="526" class="small">by up to 0.68; elsewhere the contour is within 0.03 of the true one</text>
+<rect class="frame" x="794.2" y="148.5" width="16" height="6.9" rx="2"/>
+<path class="leader" d="M833 194L802.1 155.4"/><circle class="dot" cx="802.1" cy="155.4" r="2.2"/>
+<text x="828" y="198" class="note small halo" text-anchor="end">by the tip: below</text>
+<path class="thin" d="M346 473v5h20.4v-5"/>
+<text x="356.2" y="469" class="note small" text-anchor="middle">1</text>
+<path class="leader" d="M436 322L544.3 400.4"/><circle class="dot" cx="544.3" cy="400.4" r="2.2"/>
+<text x="436" y="300" class="note small halo" text-anchor="middle">kentron's contour:</text>
+<text x="436" y="316" class="note small halo" text-anchor="middle">a straight piece 16.3 long</text>
+<path class="leader" d="M833 436L676.6 363"/><circle class="dot" cx="676.6" cy="363" r="2.2"/>
+<text x="828" y="440" class="note small halo" text-anchor="end">the true contour: the points</text>
+<text x="828" y="456" class="note small halo" text-anchor="end">44.2 from the wire</text>
+<text x="600.1" y="403" class="note small halo">0.68</text>
+</svg>
