@@ -9,7 +9,7 @@ rust-version.workspace = true
 publish = false
 # (The CadQuery code copied in, under python/pykentron/cadquery_shim/cadquery and
 # python/pykentron/occ_impl/exporters, is Apache-2.0 alone.)
-license = "(MIT OR Apache-2.0) AND Apache-2.0"
+license = "AGPL-3.0-or-later AND Apache-2.0"
 description = "Python bindings of kentron, with a CadQuery-compatible API (the `pykentron` package)."
 
 [lib]

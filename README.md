@@ -170,12 +170,14 @@ An existing CadQuery script runs unchanged with `pykentron-run script.py`, or af
 
 ## Licence
 
-kentron and pykentron are dual-licensed under the [MIT](LICENSE-MIT) and
-[Apache 2.0](LICENSE-APACHE) licences, at your option. These parts keep the licences of the
-code they come from:
+kentron and pykentron are licensed under the [GNU Affero General Public License](LICENSE),
+version 3 or (at your option) any later version (AGPL-3.0-or-later): whoever builds on kentron
+and distributes the result, or lets others use a modified kentron over a network, shares the
+source under the same terms. These parts keep the licences of the code they come from:
 - [`crates/occt-tests`](crates/occt-tests), translated from OCCT's and BRL-CAD's tests: LGPL-2.1 (OCCT's with the
   Open CASCADE exception), and from USD BRep's ([`cases/usd_brep`](crates/occt-tests/cases/usd_brep)): Apache-2.0.
-  Nothing else depends on it.
+  Nothing else depends on it, and as it keeps those licences, its test programs, which link
+  kentron, are for running here, not for distribution.
 - kentron's SLSQP optimizer ([`crates/kentron/src/constraints/slsqp.rs`](crates/kentron/src/constraints/slsqp.rs),
   which solves CadQuery's sketch constraints), translated line by line from NLopt's:
   BSD-3-Clause, and MIT for NLopt's stopping tests ([`LICENSE-SLSQP`](LICENSE-SLSQP)).
@@ -183,6 +185,8 @@ code they come from:
   ([`crates/pykentron/python/pykentron/cadquery_shim/cadquery`](crates/pykentron/python/pykentron/cadquery_shim/cadquery) and
   [`crates/pykentron/python/pykentron/occ_impl/exporters`](crates/pykentron/python/pykentron/occ_impl/exporters), each with its
   `LICENSE.CadQuery` and a list of the files copied in `VENDORED.txt`): Apache-2.0.
+- The `.brep` shapes under `crates/kentron/src/*/tests` were written by kentron itself, while
+  working on cases from OCCT's tests and from the projects below; no OCCT data files are copied.
 - The CadQuery scripts in [`crates/pykentron/tests/found`](crates/pykentron/tests/found), collected from public projects
   on GitHub to test pykentron against CadQuery, and the scripts derived from them in
   [`found/derived`](crates/pykentron/tests/found/derived): each keeps its original project's permissive licence (MIT, Apache-2.0,

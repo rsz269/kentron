@@ -17,7 +17,7 @@
 //!   [`heal`].
 //! * [`meshing`]: triangulation; [`io`]: reading and writing shapes.
 //!
-//! The functionality is modelled on Open CASCADE Technology (OCCT), whose tests are being
+//! The functionality is inspired by Open CASCADE Technology (OCCT), whose tests are being
 //! ported in `crates/occt-tests`, but names and structure are kentron's own. Types carry
 //! `#[doc(alias)]`es for their OCCT counterparts, and `docs/occt-mapping.md` maps OCCT
 //! concepts to kentron ones.

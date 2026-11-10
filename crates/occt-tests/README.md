@@ -96,7 +96,7 @@ tools/crosscheck_cases.py --smlib-python P --occt-python P crates/occt-tests/cas
 ## Licence
 
 This crate is translated from other projects' tests, so it keeps their licence rather than
-kentron's (MIT or Apache-2.0):
+kentron's (AGPL-3.0-or-later):
 - The OCCT tests (`cases/occt`, `tests/draw_*`, `tests/gtest_*`, and the support code they
   use): GNU LGPL 2.1 with the Open CASCADE exception, as OCCT's own
   ([LICENSE-LGPL-2.1](LICENSE-LGPL-2.1), [LICENSE-OCCT-EXCEPTION](LICENSE-OCCT-EXCEPTION)).

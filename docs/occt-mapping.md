@@ -1,6 +1,6 @@
 # OCCT → kentron mapping
 
-kentron's functionality is modelled on OCCT, but its names and structure are its own. This
+kentron's functionality is inspired by OCCT, but its names and structure are its own. This
 table maps OCCT concepts to kentron ones; it grows as tests are ported. Types also carry
 `#[doc(alias = "...")]` entries, so searching the rustdoc for an OCCT name finds them.
 
