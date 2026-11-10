@@ -88,10 +88,11 @@ conversation's context, read back from the cache).
   solids hold their shells unplaced).
 - **44 CadQuery models from a private project** build on pykentron; for the 42 that return
   their parts, every part is valid and within 0.1% of CadQuery's volume.
-- **759 CadQuery scripts from 122 public projects** (5 more open render windows or wait and
-  are not run): of the 745 whose results don't depend on the order a kernel lists faces in
-  (or on how it tells equal shapes apart), pykentron builds 708 as CadQuery does, and 27 more
-  differ only where CadQuery's result is wrong (2026-11-08). Timed on 2026-11-05, on the 701
+- **809 CadQuery scripts from 154 public projects** (5 more open render windows or wait and
+  are not run): of the 795 whose results don't depend on the order a kernel lists faces in
+  (or on how it tells equal shapes apart), pykentron builds 719 as CadQuery does, and 27 more
+  differ only where CadQuery's result is wrong (2026-11-10). 39 of the 49 it fails were added
+  on 2026-11-10 from a hunt that kept only scripts it failed, built differently or ran slower. Timed on 2026-11-05, on the 701
   it then built alike, it took 231 s in all against CadQuery's 1,099 s, and was faster on 663.
   The scripts, what they found and where they stand:
   [`crates/pykentron/tests/found`](crates/pykentron/tests/found/README.md).
