@@ -14,101 +14,67 @@ eating up 1 GB+ of memory, so I figured why not spin up my own kernel.
 
 ## What it is
 
-kentron models solids the way Open CASCADE Technology (OCCT) does: as faces bounded by
-edges and vertices, over exact curves and surfaces (analytic and NURBS). It covers
-primitives, extrusions and revolutions, lofts and pipes, booleans, fillets, chamfers,
-drafts, offsets and thick solids, filling surfaces, removing features, sewing and healing,
-meshing, text from TrueType and OpenType fonts, and BRep, STEP and STL files. All of
-it is kentron's own code: OCCT is the reference to match, not a dependency.
+kentron models solids as faces bounded by edges and vertices, over exact curves and surfaces
+(analytic and NURBS). It is inspired by Open CASCADE Technology (OCCT) and written
+independently: OCCT is not a dependency.
 
-- **[`crates/kentron`](crates/kentron)**: the kernel, [on crates.io](https://crates.io/crates/kentron). Pure
-  Rust, with two optional dependencies: `rayon`, for running independent steps in parallel,
-  and `ttf-parser`, for text (the `text` feature).
-- **[`crates/pykentron`](crates/pykentron)**: Python bindings with a CadQuery-compatible API,
-  [on PyPI](https://pypi.org/project/pykentron/). CadQuery scripts run on kentron by
-  importing `pykentron` in place of `cadquery`, or unchanged with `pykentron-run`.
-  Assembly and sketch constraints are solved by kentron's own solvers, which reach the same
-  solutions as CadQuery's (casadi's IPOPT, nlopt's SLSQP), mostly 20–60× faster (2026-11-05:
-  17–81× on 8 of 9 corpus assemblies and 2× on the ninth, 18–38× on CadQuery's sketch
-  tests), and need neither library.
-- **[`crates/occt-tests`](crates/occt-tests)**: OCCT's own tests, converted to run against kentron.
+- Primitives, extrusions, revolutions, lofts and pipes.
+- Booleans, fillets, chamfers, drafts, offsets and thick solids.
+- Filling surfaces, removing features, sewing and healing.
+- Meshing, and text from TrueType and OpenType fonts.
+- BRep, STEP and STL files.
 
-## Aims and scope
+| Crate | |
+|---|---|
+| [`kentron`](crates/kentron) | The kernel, [on crates.io](https://crates.io/crates/kentron). Pure Rust. Optional dependencies: `rayon` (parallel steps) and `ttf-parser` (text). |
+| [`pykentron`](crates/pykentron) | Python bindings with a CadQuery-compatible API, [on PyPI](https://pypi.org/project/pykentron/). Its own assembly and sketch constraint solvers replace casadi and nlopt. |
+| [`occt-tests`](crates/occt-tests) | OCCT's tests, converted to run against kentron. |
 
-- **OCCT's functionality, not its API.** Names, conventions and data structures are
-  kentron's own. All topology lives in one arena (`topology::Model`) addressed by typed ids,
-  with no reference counting. [`docs/occt-mapping.md`](docs/occt-mapping.md) maps OCCT concepts to kentron's.
-- **Matching OCCT where it matters:** the same shapes, volumes and validity on OCCT's test
-  cases. Where OCCT's expected values are themselves wrong, the converted tests say so and
-  why.
-- **Running real CadQuery code** faster and in less memory than CadQuery on OCCT.
-- **Currently out of scope:** OCCT's visualization, hidden-line removal, OCAF/XDE documents
-  and its internal bookkeeping.
+## Status
 
-It is pre-1.0. Some OCCT features are still missing, for example evolved solids and fillets
-at saddle corners (three concave and three convex edges at one vertex). Some rare
-pathological cases may still run very slowly or fail to converge. The larger known gaps, with what was
-found and tried, are logged in [`docs/known-gaps.md`](docs/known-gaps.md).
+- Pre-1.0.
+- Names, conventions and data structures are kentron's own, not OCCT's.
+  [`docs/occt-mapping.md`](docs/occt-mapping.md) maps OCCT's concepts to them.
+- All topology lives in one arena (`topology::Model`) addressed by typed ids, without
+  reference counting.
+- Out of scope for now: visualization, hidden-line removal, OCAF/XDE documents.
+- Not done yet: evolved solids, fillets at saddle corners. Rare pathological inputs can run
+  very slowly or fail to converge. Known gaps: [`docs/known-gaps.md`](docs/known-gaps.md).
 
 ## How it was made
 
 kentron is 99% vibe coded: written almost entirely by an AI coding agent (Claude, in Claude
-Code), with a human setting the direction and judging the results. The tests are what keep
-it honest. Every change is checked against the test sources below before it is committed,
-and no change may make a passing test fail.
+Code), with a human setting the direction and judging the results. Every change is checked
+against the tests below before it is committed.
 
 <!-- effort -->
-So far (2026-09-25 to 2026-11-09): about 355 hours of the agent's active work, 25.0 million
+So far (2026-09-25 to 2026-11-10): about 358 hours of the agent's active work, 25.1 million
 tokens written by it, and 13.5 billion tokens processed in all (nearly all of them its
 conversation's context, read back from the cache).
 <!-- /effort -->
 
-## Tested against
+## Tests
 
-- **OCCT's DRAW test scripts:** 10,796 run, and 9,649 of them (89%) pass: of the 16,322
-  scripts in its modelling groups (the other groups exercise viewers and documents), and of
-  its data-exchange tests (STEP and IGES files read, written and read again, both readings
-  checked against OCCT's statistics) the 258 whose files OCCT publishes. The 5,305 modelling
-  scripts and 826 data-exchange tests that read models OCCT keeps private (it publishes only
-  part of its test data), and the 479 OCCT itself marks as failing on Linux, never run, and
-  are not counted. [`tools/draw2rs.py`](tools/draw2rs.py) converts most scripts into Rust
-  tests and YAML cases; those using Tcl (conditions, loops, procedures) run as they are, on a
-  Tcl interpreter. [`tools/occt_stats.py`](tools/occt_stats.py) gives the figures, group by
-  group.
-- **OCCT's GTests:** the computational-geometry and topology toolkits, translated by hand.
-- **BRL-CAD:** NIST's MBE PMI test parts and other STEP files from its source tree, with
-  OCCT's reading of them as the reference, plus its `libbg` geometry tests.
-- **CadQuery's own test suite** (v2.8.0), run unchanged against pykentron: 698 of the 699
-  tests that test CadQuery's behaviour pass, its NURBS module, rendering and VTK exports
-  included. The 68 left out test OCCT's own ways instead
-  (its document and binary formats and its assembly documents' classes, its STL and glTF
-  writers' layout and mesh density, its approximations', fillet surfaces' and vertex
-  orders' particulars: `crates/pykentron/tests/cadquery_excluded.txt`); the one failing
-  expects the faces of a solid made from placed shells to be those shells' own (kentron's
-  solids hold their shells unplaced).
-- **44 CadQuery models from a private project** build on pykentron; for the 42 that return
-  their parts, every part is valid and within 0.1% of CadQuery's volume.
-- **809 CadQuery scripts from 154 public projects** (5 more open render windows or wait and
-  are not run): of the 795 whose results don't depend on the order a kernel lists faces in
-  (or on how it tells equal shapes apart), pykentron builds 719 as CadQuery does, and 27 more
-  differ only where CadQuery's result is wrong (2026-11-10). 39 of the 49 it fails were added
-  on 2026-11-10 from a hunt that kept only scripts it failed, built differently or ran slower. Timed on 2026-11-05, on the 701
-  it then built alike, it took 231 s in all against CadQuery's 1,099 s, and was faster on 663.
-  The scripts, what they found and where they stand:
-  [`crates/pykentron/tests/found`](crates/pykentron/tests/found/README.md).
-- **kentron's and pykentron's own tests:** 433 unit tests written during kentron's
-  development, and 58 cases of pykentron's own that it builds as CadQuery does
-  ([`crates/pykentron/tests/test_against_cadquery.py`](crates/pykentron/tests/test_against_cadquery.py)).
+About 13,430 tests run. About 1,150 of them are known gaps, marked as expected failures, so
+`cargo test` is green.
 
-About 13,430 tests run (scripts without their data not counted). About 1,150 of them are
-known gaps, marked as expected failures ([`crates/occt-tests/expected_failures.txt`](crates/occt-tests/expected_failures.txt) for OCCT's scripts): they pass
-while they fail, so `cargo test` is green, and fail once they pass, so a fix is noticed
-as surely as a regression.
+- **OCCT's DRAW scripts:** 9,649 of 10,796 pass (89%). Scripts that need OCCT's unpublished
+  test models are not run.
+- **OCCT's GTests** for geometry and topology, translated by hand.
+- **USD BRep's tests:** 212 cases, translated.
+- **BRL-CAD:** STEP files from its source tree and its `libbg` geometry tests.
+- **CadQuery 2.8.0's test suite,** unchanged: 698 of 699 pass. 68 tests of OCCT internals
+  are left out ([list](crates/pykentron/tests/cadquery_excluded.txt)).
+- **809 CadQuery scripts from 154 public projects:** of the 795 whose results don't depend
+  on a kernel's face order, 719 build as on CadQuery, 27 differ only where CadQuery's result
+  is wrong, and 49 fail ([details](crates/pykentron/tests/found/README.md)).
+- **44 CadQuery models from a private project** build. The 42 that return their parts match
+  CadQuery's volumes within 0.1%, every part valid.
+- **Own tests:** 433 unit tests, and 58 cases compared with CadQuery.
 
 ## Performance
 
-A complex five-part CadQuery model, built on pykentron under each of its profiles and on
-CadQuery 2.8 (OCCT), median of 5 runs:
+A complex five-part CadQuery model, median of 5 runs:
 
 | | wall time | CPU time | peak memory |
 |---|---|---|---|
@@ -116,25 +82,20 @@ CadQuery 2.8 (OCCT), median of 5 runs:
 | pykentron, `low-memory` profile | 3.9 s | 4.3 s | 279 MB |
 | CadQuery 2.8 / OCCT | 38.1 s | 120.5 s | 1,087 MB |
 
-With the default `fast` profile, that is 11× faster than CadQuery, with 33× less CPU time and 2.9×
-less memory. A second complex model from the same project builds in 3.5 s (3.8 s of CPU time,
-447 MB) on pykentron's `fast` profile, against 38.2 s (123.1 s, 1,117 MB) on CadQuery.
-
-pykentron frees shapes that Python no longer refers to, with the data cached for them. Which
-allocator it uses is chosen with `PYKENTRON_PROFILE`:
-
-- `low-memory`: the system's.
-- `fast` (default): mimalloc.
-
-Rust programs using kentron directly make the same choice by declaring their allocator.
+- 701 public CadQuery scripts (2026-11-05): 231 s in all against CadQuery's 1,099 s, faster
+  on 663.
+- Assembly and sketch constraints: mostly 20–60× faster than CadQuery's solvers, with the
+  same solutions.
+- `PYKENTRON_PROFILE` picks the allocator: `fast` (mimalloc, the default) or `low-memory`
+  (the system's).
 
 ## Installing
 
 - Rust: `cargo add kentron`.
 - Python 3.10 or later: `pip install pykentron`, or `pip install "pykentron[cadquery]"` to
-  run CadQuery scripts (it adds what CadQuery's own Python layers need). Wheels are built
-  for Linux on x86-64-v2 (SSE4.2: Intel from 2008, AMD from 2011); elsewhere pip builds from
-  the source distribution, which needs Rust.
+  run CadQuery scripts.
+- Wheels are built for Linux on x86-64-v2. Elsewhere pip builds from source, which needs
+  Rust.
 
 ```python
 import pykentron as cq
@@ -146,51 +107,24 @@ An existing CadQuery script runs unchanged with `pykentron-run script.py`, or af
 
 ## Building and testing
 
-- Rust 1.88 or later. The workspace builds for x86-64-v2 ([`.cargo/config.toml`](.cargo/config.toml)); on an
-  older x86-64 CPU, build with an empty `RUSTFLAGS=`.
-- `cargo test` runs everything. Most of OCCT's converted tests read its test dataset, an
-  external download: see [`crates/occt-tests/README.md`](crates/occt-tests/README.md). Without it those tests fail.
-- [`tools/run_tests.py`](tools/run_tests.py) runs the same tests with every test binary at once (about 60 s on 16
-  threads, against about 120 s for `cargo test --release`, which runs them one after
-  another). `--quick` leaves out the tests expected to fail (about 30 s); a fix that makes
-  one pass then goes unnoticed.
-- [`tools/brute.py`](tools/brute.py) computes reference answers by slow, simple means
-  (volumes and areas from fine meshes, boolean results' faces classified against the
-  operands, fillets as rolling balls on a voxel grid), to judge where kentron and OCCT
-  disagree.
-- pykentron from source: `python3 crates/pykentron/build.py` (see
-  [`crates/pykentron/README.md`](crates/pykentron/README.md)).
-
-## More
-
-- [`crates/pykentron/README.md`](crates/pykentron/README.md): building and using the Python bindings.
-- [`crates/occt-tests/README.md`](crates/occt-tests/README.md): running OCCT's tests, and getting their data.
-- [`crates/pykentron/tests/found/README.md`](crates/pykentron/tests/found/README.md): the CadQuery scripts from public projects pykentron
-  is tested against, and where they stand.
+- Rust 1.88 or later. The workspace builds for x86-64-v2
+  ([`.cargo/config.toml`](.cargo/config.toml)); on an older x86-64 CPU, build with an empty
+  `RUSTFLAGS=`.
+- `cargo test` runs everything. Most of OCCT's converted tests need its test dataset, a
+  separate download: [`crates/occt-tests/README.md`](crates/occt-tests/README.md).
+- [`tools/run_tests.py`](tools/run_tests.py) runs the test binaries in parallel (about 60 s
+  on 16 threads). `--quick` skips the expected failures.
+- pykentron from source: `python3 crates/pykentron/build.py`
+  ([`crates/pykentron/README.md`](crates/pykentron/README.md)).
 
 ## Licence
 
-kentron and pykentron are licensed under the [GNU Affero General Public License](LICENSE),
-version 3 or (at your option) any later version (AGPL-3.0-or-later): whoever builds on kentron
-and distributes the result, or lets others use a modified kentron over a network, shares the
-source under the same terms. These parts keep the licences of the code they come from:
-- [`crates/occt-tests`](crates/occt-tests), translated from OCCT's and BRL-CAD's tests: LGPL-2.1 (OCCT's with the
-  Open CASCADE exception), and from USD BRep's ([`cases/usd_brep`](crates/occt-tests/cases/usd_brep)): Apache-2.0.
-  Nothing else depends on it, and as it keeps those licences, its test programs, which link
-  kentron, are for running here, not for distribution.
-- kentron's SLSQP optimizer ([`crates/kentron/src/constraints/slsqp.rs`](crates/kentron/src/constraints/slsqp.rs),
-  which solves CadQuery's sketch constraints), translated line by line from NLopt's:
-  BSD-3-Clause, and MIT for NLopt's stopping tests ([`LICENSE-SLSQP`](LICENSE-SLSQP)).
-- The CadQuery code copied into pykentron
-  ([`crates/pykentron/python/pykentron/cadquery_shim/cadquery`](crates/pykentron/python/pykentron/cadquery_shim/cadquery) and
-  [`crates/pykentron/python/pykentron/occ_impl/exporters`](crates/pykentron/python/pykentron/occ_impl/exporters), each with its
-  `LICENSE.CadQuery` and a list of the files copied in `VENDORED.txt`): Apache-2.0.
-- The `.brep` shapes under `crates/kentron/src/*/tests` were written by kentron itself, while
-  working on cases from OCCT's tests and from the projects below; no OCCT data files are copied.
-- The CadQuery scripts in [`crates/pykentron/tests/found`](crates/pykentron/tests/found), collected from public projects
-  on GitHub to test pykentron against CadQuery, and the scripts derived from them in
-  [`found/derived`](crates/pykentron/tests/found/derived): each keeps its original project's permissive licence (MIT, Apache-2.0,
-  BSD-3-Clause, the Unlicense or CC0-1.0), copied beside the project's scripts
-  (`found/<project>/LICENSE`) or, for a derived script, in its header. Scripts under other
-  licences, or none, are not included;
-  [`found/cases.tsv`](crates/pykentron/tests/found/cases.tsv) and [`found/passing.tsv`](crates/pykentron/tests/found/passing.tsv) give every script's source and licence.
+[AGPL-3.0-or-later](LICENSE). Third-party parts keep their own licences:
+
+| Part | Origin | Licence |
+|---|---|---|
+| [`constraints/slsqp.rs`](crates/kentron/src/constraints/slsqp.rs) | translated from NLopt's SLSQP | BSD-3-Clause and MIT ([`LICENSE-SLSQP`](LICENSE-SLSQP)) |
+| [`cadquery_shim/cadquery`](crates/pykentron/python/pykentron/cadquery_shim/cadquery), [`occ_impl/exporters`](crates/pykentron/python/pykentron/occ_impl/exporters) | copied from CadQuery 2.8.0 | Apache-2.0 |
+| [`crates/occt-tests`](crates/occt-tests) | translated from OCCT's and BRL-CAD's tests | LGPL-2.1 (OCCT's with the Open CASCADE exception) |
+| [`occt-tests/cases/usd_brep`](crates/occt-tests/cases/usd_brep) | translated from USD BRep's tests | Apache-2.0 |
+| [`pykentron/tests/found`](crates/pykentron/tests/found) | CadQuery scripts from public projects | each project's own: MIT, Apache-2.0, BSD-3-Clause, Unlicense or CC0-1.0 ([`cases.tsv`](crates/pykentron/tests/found/cases.tsv)) |
