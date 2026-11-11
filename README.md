@@ -48,7 +48,7 @@ Code), with a human setting the direction and judging the results. Every change 
 against the tests below before it is committed.
 
 <!-- effort -->
-So far (2026-09-25 to 2026-11-10): about 360 hours of the agent's active work, 25.5 million
+So far (2026-09-25 to 2026-11-11): about 364 hours of the agent's active work, 25.6 million
 tokens written by it, and 13.6 billion tokens processed in all (nearly all of them its
 conversation's context, read back from the cache).
 <!-- /effort -->
@@ -78,9 +78,9 @@ A complex five-part CadQuery model, median of 5 runs:
 
 | | wall time | CPU time | peak memory |
 |---|---|---|---|
-| pykentron, `fast` profile (default) | 3.4 s | 3.7 s | 370 MB |
-| pykentron, `low-memory` profile | 3.9 s | 4.3 s | 279 MB |
-| CadQuery 2.8 / OCCT | 38.1 s | 120.5 s | 1,087 MB |
+| pykentron, `fast` profile (default) | 3.5 s | 3.9 s | 381 MB |
+| pykentron, `low-memory` profile | 4.2 s | 4.6 s | 281 MB |
+| CadQuery 2.8 / OCCT | 41.2 s | 125.4 s | 1,075 MB |
 
 - The 719 public CadQuery scripts that build as on CadQuery (2026-11-10): 268 s in all
   against CadQuery's 1,218 s, faster on 689.
