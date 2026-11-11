@@ -246,15 +246,15 @@ fn fillet_solid_edges(model: &mut Model, shape: Shape, edges: &[(Shape, f64)]) -
     // (Edges ending on fillets made before, as a pocket's rim rounded one edge at a time:
     // those fillets undone and made again with the edges, meeting them as OCCT's do.)
     let found = with_earlier_fillets(model, shape, edges, false)?;
-    // (Where the rounding runs on along earlier fillets, those undone too and made again with
-    // the edges first, as at once: rounding the edges alone there, on round the fillets, is
-    // slow and mostly fails.)
-    let (found, plain, deferred) = match found {
-        Some(found) => (Some(found), fillet_solid_edges_once(model, shape, edges), false),
-        None => match with_earlier_fillets(model, shape, edges, true)? {
-            Some(along) => (Some(along), Err(Error::Failed("not rounded alone".into())), true),
-            None => return fillet_solid_edges_once(model, shape, edges),
-        },
+    let plain = fillet_solid_edges_once(model, shape, edges);
+    // (Where rounding the edges alone fails, those the rounding runs on along undone too and
+    // made again with the edges. Not first: in the public CadQuery scripts rounding alone
+    // there succeeded every time (147 roundings, lattices' and gridfinity bins'), at about
+    // two thirds of the time; only OCCT's blend complex F2 fails so, after 4 s.)
+    let found = match found {
+        None if plain.is_ok() => return plain,
+        None => with_earlier_fillets(model, shape, edges, true)?,
+        found => found,
     };
     let Some((restored, together, core, radii)) = found else { return plain };
     // (The fillets meeting otherwise differ only about the corners where they meet, by less
@@ -273,10 +273,6 @@ fn fillet_solid_edges(model: &mut Model, shape: Shape, edges: &[(Shape, f64)]) -
                 return Ok(rounded);
             }
         }
-    }
-    // (Rounded alone after all, where made again with the fillets it runs on along fails.)
-    if deferred {
-        return fillet_solid_edges_once(model, shape, edges);
     }
     plain
 }
