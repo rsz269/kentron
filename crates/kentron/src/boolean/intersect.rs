@@ -1701,16 +1701,26 @@ impl Section {
 }
 
 /// The samples among `points` where they turn sharply, by more than 20 degrees from one to
-/// the next (a smooth section's samples, a few dozen at least, turn by a few degrees), if any,
-/// apart from the first two and the last two.
+/// the next and more than three times as much as the less turning of the samples either side
+/// of them, if any, apart from the first two and the last two.
+/// (A kink stands out from its neighbours: a section crossing from one branch to another, or
+/// back at a hairpin's tip. Inside a run of samples each turning as sharply, as samples
+/// doubling back and forth one after another, none does: the run's ends are taken, and the
+/// points taken about them reach some way into it.)
 fn sharp_turns(points: &[Point]) -> Option<Vec<usize>> {
-    let sharp = |i: usize| {
+    let angle = |i: usize| {
         let (before, after) = (points[i] - points[i - 1], points[i + 1] - points[i]);
-        before.dot(after) < 20f64.to_radians().cos() * before.length() * after.length()
+        let lengths = before.length() * after.length();
+        if lengths > 0.0 { (before.dot(after) / lengths).clamp(-1.0, 1.0).acos() } else { 0.0 }
     };
     // (Not next to the ends: the end points are the vertices the section was merged into,
     // which may lie off it, its last stretch then turning to meet them.)
-    let turns: Vec<usize> = (2..points.len().saturating_sub(2)).filter(|&i| sharp(i)).collect();
+    let turns: Vec<usize> = (2..points.len().saturating_sub(2))
+        .filter(|&i| {
+            let a = angle(i);
+            a > 20f64.to_radians() && a > 3.0 * angle(i - 1).min(angle(i + 1))
+        })
+        .collect();
     (!turns.is_empty()).then_some(turns)
 }
 
@@ -4335,5 +4345,8 @@ mod tests {
         assert_eq!(sharp_turns(&points), Some(vec![40]));
         let circle: Vec<Point> = (0..48).map(|i| Point::new((i as f64 * TAU / 48.0).cos(), (i as f64 * TAU / 48.0).sin(), 0.0)).collect();
         assert_eq!(sharp_turns(&circle), None);
+        // (Nor a coarsely sampled one, turning 30 degrees at each sample.)
+        let coarse: Vec<Point> = (0..12).map(|i| Point::new((i as f64 * TAU / 12.0).cos(), (i as f64 * TAU / 12.0).sin(), 0.0)).collect();
+        assert_eq!(sharp_turns(&coarse), None);
     }
 }
