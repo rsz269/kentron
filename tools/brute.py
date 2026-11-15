@@ -51,6 +51,11 @@ CLI:
         comparison with --compare=x0,y0,z0,x1,y1,z1 (a box within --box). The box should
         reach R + 2H past it (its sides are a false boundary; voxels within R + H of them
         are not compared).
+    brute.py between PRE.brep R.brep... --box=x0,y0,z0,x1,y1,z1 --r=R [--concave=RC] [--h=H]
+        the same where convex and concave edges filleted (convex with R, concave with RC,
+        R by default) meet, as at a saddle vertex (three of each): no ball rolls everywhere
+        there, and the closing then opening of PRE and its opening then closing differ. A
+        fillet's corner lies between them: the voxels of each result outside that band.
 """
 import sys
 
@@ -401,6 +406,37 @@ def _round(argv):
         print(f"{path}: wrong {int(wrong.sum())} voxels, material extra {extra:.4g}, missing {missing:.4g}{where}")
 
 
+def _between(argv):
+    pre, results = argv[0], [a for a in argv[1:] if not a.startswith("--")]
+    opts = dict(a[2:].split("=", 1) for a in argv if a.startswith("--") and "=" in a)
+    box = np.array([float(x) for x in opts["box"].split(",")])
+    r, h = float(opts["r"]), float(opts.get("h", 0.04))
+    rc = float(opts.get("concave", r))
+    from scipy.ndimage import distance_transform_edt as edt
+
+    lo, hi = box[:3], box[3:]
+    solid = voxelize(load(pre), lo, hi, h)
+    a, b = opening(closing(solid, rc, h), r, h), closing(opening(solid, r, h), rc, h)
+    both, either = a & b, a | b
+    xs, ys, zs = axes(lo, hi, h)
+    X, Y, Z = np.meshgrid(xs, ys, zs, indexing="ij")
+    reach = max(r, rc) + h
+    m = (X > lo[0] + reach) & (X < hi[0] - reach) & (Y > lo[1] + reach) & (Y < hi[1] - reach) & (Z > lo[2] + reach) & (Z < hi[2] - reach)
+    # (Away from both bounds of the band by more than a voxel and a half, where voxelization
+    # alone differs.)
+    near = lambda s: np.where(s, edt(s, sampling=h), edt(~s, sampling=h)) < 1.5 * h
+    m &= ~near(both) & ~near(either)
+    print(f"compared {int(m.sum())} voxels of {h}; the band between the two orders {((either & ~both) & m).sum() * h**3:.4g}")
+    for path in results:
+        v = voxelize(load(path), lo, hi, h)
+        extra, missing = (v & ~either & m), (~v & both & m)
+        where = ""
+        if (extra | missing).any():
+            idx = np.argwhere(extra | missing)
+            where = " around " + ", ".join(f"{a[int(k)]:.3f}" for a, k in zip((xs, ys, zs), idx.mean(axis=0)))
+        print(f"{path}: outside the band: material extra {extra.sum() * h**3:.4g}, missing {missing.sum() * h**3:.4g}{where}")
+
+
 def main(argv):
     if not argv or argv[0] in ("-h", "--help"):
         print(__doc__)
@@ -424,6 +460,8 @@ def main(argv):
         print(f"{sum(b for *_, b in rows)} of {len(rows)} faces misplaced, area {sum(a for a, _, b in rows if b):.5g}")
     elif cmd == "round":
         _round(rest)
+    elif cmd == "between":
+        _between(rest)
     elif cmd == "wire":
         from OCP.GProp import GProp_GProps
         from OCP.BRepGProp import BRepGProp

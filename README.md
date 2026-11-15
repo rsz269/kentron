@@ -38,8 +38,8 @@ independently: OCCT is not a dependency.
 - All topology lives in one arena (`topology::Model`) addressed by typed ids, without
   reference counting.
 - Out of scope for now: visualization, hidden-line removal, OCAF/XDE documents.
-- Not done yet: evolved solids, fillets at saddle corners. Rare pathological inputs can run
-  very slowly or fail to converge. Known gaps: [`docs/known-gaps.md`](docs/known-gaps.md).
+- Not done yet: evolved solids. Rare pathological inputs can run very slowly or fail to
+  converge. Known gaps: [`docs/known-gaps.md`](docs/known-gaps.md).
 
 ## How it was made
 
@@ -48,8 +48,8 @@ Code), with a human setting the direction and judging the results. Every change 
 against the tests below before it is committed.
 
 <!-- effort -->
-So far (2026-09-25 to 2026-11-11): about 364 hours of the agent's active work, 25.6 million
-tokens written by it, and 13.6 billion tokens processed in all (nearly all of them its
+So far (2026-09-25 to 2026-11-15): about 366 hours of the agent's active work, 25.8 million
+tokens written by it, and 13.7 billion tokens processed in all (nearly all of them its
 conversation's context, read back from the cache).
 <!-- /effort -->
 
@@ -58,7 +58,7 @@ conversation's context, read back from the cache).
 About 13,430 tests run. About 1,150 of them are known gaps, marked as expected failures, so
 `cargo test` is green.
 
-- **OCCT's DRAW scripts:** 9,649 of 10,796 pass (89%). Scripts that need OCCT's unpublished
+- **OCCT's DRAW scripts:** 9,653 of 10,796 pass (89%). Scripts that need OCCT's unpublished
   test models are not run.
 - **OCCT's GTests** for geometry and topology, translated by hand.
 - **USD BRep's tests:** 212 cases, translated.

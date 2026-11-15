@@ -192,7 +192,6 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/blend/complex/C2
-expect: not_done
 build:
   - a: {load: {brep: "CFI_cts40124.rle"}}
   - a_14: {select: {of: a, edge: [0.0, -0.05, 0.1], length: 0.1}}

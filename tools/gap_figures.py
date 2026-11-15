@@ -44,13 +44,6 @@ MATERIAL_CLASSES = ["body", "wrong", "first", "second", "third", "fourth"]
 # constants above or a function of a face giving one.
 # ---------------------------------------------------------------------------------------
 
-def scene_saddle(cq, kernel):
-    arms = cq.Workplane().box(15, 6, 6).translate((7.5, 0, 0))
-    arms = arms.union(cq.Workplane().box(6, 15, 6).translate((0, 7.5, 0)))
-    arms = arms.union(cq.Workplane().box(6, 6, 15).translate((0, 0, 7.5)))
-    return {"arms": [(arms.val(), BODY)], "filleted": [(arms.edges().fillet(1).val(), BODY)]}
-
-
 def scene_sliver(cq, kernel):
     box = cq.Workplane().box(20, 20, 20).edges().chamfer(2)
     return {"shelled": [(box.faces(">Z").shell(-3).val(), BODY)]}
@@ -916,26 +909,6 @@ def at(view, x, y, point):
 WIDTH, MARGIN, GAP, TOP = 860, 18, 14, 58
 SIDE, MAIN = 216, 290
 COLUMNS = (MARGIN, MARGIN + SIDE + GAP, MARGIN + SIDE + GAP + MAIN + GAP)
-
-
-def figure_saddle(rebuild):
-    kentron, cadquery = (scene("saddle", k, rebuild) for k in ("kentron", "cadquery"))
-    height = 300
-    figure = Figure(WIDTH, TOP + height + 40, "Filleting every edge where three box arms meet: kentron's fillets run on past the mixed corners, CadQuery blends them with corner patches.")
-    eye = (1, 0.62, 0.52)
-    whole = View(eye, (4.2, 4.2, 4.6), 27, SIDE, height)
-    close = whole.zoomed((2.6, 2.6, 3.0), 11.5, MAIN, height)
-    figure.panel(COLUMNS[0], TOP, SIDE, height, render([kentron["arms"]], whole), "Three arms", "every edge then filleted by 1")
-    figure.frame(*(a + b for a, b in zip(whole.window(close), (COLUMNS[0], TOP, 0, 0))))
-    patches = {i: FIRST for i, f in enumerate(cadquery["filleted"]["faces"]) if not f["plane"] and 3.3 < f["area"] < 4.8}
-    for x, mesh, title, recolour, verdict in (
-            (COLUMNS[1], kentron, "kentron", None, ("bad", "area 1003.0: the corners are mitred")),
-            (COLUMNS[2], cadquery, "CadQuery", patches, ("good", "area 966.2: corner patches blend the fillets"))):
-        info = mesh["filleted"]["info"][0]
-        figure.panel(x, TOP, MAIN, height, render([mesh["filleted"]], close, recolour), title, "%d faces, volume %.3f" % (info["faces"], info["volume"]), verdict)
-    for corner in ((3, -3, 3), (-3, 3, 3)):
-        figure.ring(at(close, COLUMNS[1], TOP, corner), 26)
-    return figure
 
 
 def figure_sliver(rebuild):

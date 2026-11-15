@@ -41,6 +41,9 @@ pub fn fillet(model: &mut Model, shape: Shape, edges: &[Shape], radius: f64) -> 
 #[doc(alias = "BRepFilletAPI_MakeFillet::Add")]
 pub fn fillet_edges(model: &mut Model, shape: Shape, edges: &[(Shape, f64)]) -> Result<Shape> {
     let edges = &sharp(model, shape, edges, |e| e.0)?;
+    // (An open shell's free edges, bounding one face, left out, as OCCT leaves them: no
+    // fillet runs along them.)
+    let edges = &bounded_twice(model, shape, edges)?;
     // An edge where a face meets itself at an angle (a prism of an outline closing at a
     // corner): rounded on a copy with such faces split in two, as at any edge between two
     // faces, the pieces of each merged back after.
@@ -230,6 +233,26 @@ fn self_meeting_at_angle(model: &Model, shape: Shape, edge: Shape) -> bool {
         .flat_map(|f| model.explore(f, NodeKind::Edge).filter(move |e| e.node == edge.node).map(move |_| f.node).collect::<Vec<_>>())
         .collect();
     matches!(faces[..], [a, b] if a == b) && !smooth(model, shape, edge)
+}
+
+/// `edges` less the free edges of `shape` (each bounding one face only); an error if that
+/// leaves none.
+fn bounded_twice(model: &Model, shape: Shape, edges: &[(Shape, f64)]) -> Result<Vec<(Shape, f64)>> {
+    // (Faces using each, in one pass over the faces.)
+    let mut uses: std::collections::HashMap<NodeId, usize> = edges.iter().map(|e| (e.0.node, 0)).collect();
+    for f in model.unique_subshapes(shape, NodeKind::Face) {
+        let mut seen: Vec<NodeId> = model.explore(f, NodeKind::Edge).map(|e| e.node).filter(|n| uses.contains_key(n)).collect();
+        seen.sort_unstable();
+        seen.dedup();
+        for n in seen {
+            *uses.get_mut(&n).expect("an edge") += 1;
+        }
+    }
+    let kept: Vec<(Shape, f64)> = edges.iter().copied().filter(|e| uses[&e.0.node] != 1).collect();
+    if kept.is_empty() && !edges.is_empty() {
+        return Err(Error::InvalidInput("a fillet edge must bound two faces, it bounds 1".into()));
+    }
+    Ok(kept)
 }
 
 /// `edges` less those where the faces meet smoothly; an error if that leaves none.
@@ -504,13 +527,19 @@ fn fillet_solid_edges_once(model: &mut Model, shape: Shape, edges: &[(Shape, f64
     let before: std::collections::HashSet<NodeId> = model.unique_subshapes(shape, NodeKind::Face).into_iter().map(|f| f.node).collect();
     let before_edges: std::collections::HashSet<NodeId> = model.unique_subshapes(shape, NodeKind::Edge).into_iter().map(|e| e.node).collect();
     let rounded = fillet_solid_edges_inner(model, shape, edges)?;
-    // The rolled fillets that are cylinders, tori or spheres made so (as OCCT's are), where
-    // that leaves the solid as sound as they found it.
+    made_exact(model, rounded, &before, &before_edges);
+    Ok(rounded)
+}
+
+/// The rolled fillets of `rounded` (its faces not among `before`) that are cylinders, tori
+/// or spheres made so (as OCCT's are), where that leaves the solid as sound as they found
+/// it.
+fn made_exact(model: &mut Model, rounded: Shape, before: &std::collections::HashSet<NodeId>, before_edges: &std::collections::HashSet<NodeId>) {
     // (Nor changing what they enclose more than their surfaces moved, within the faces'
     // tolerance: a face turned the wrong way round would.)
     // (Measured only where some are: made, measured, undone, measured as rolled, and made
     // again if they pass.)
-    let done = exact::exact_faces(model, rounded, &before, &before_edges);
+    let done = exact::exact_faces(model, rounded, before, before_edges);
     if !done.is_empty() {
         let (exact_faults, exact_volume) = (fault_kinds(model, rounded), volume_of(model, rounded));
         exact::undo(model, done);
@@ -518,10 +547,9 @@ fn fillet_solid_edges_once(model: &mut Model, shape: Shape, edges: &[(Shape, f64
         let (volume, area) = (volume_of(model, rounded), crate::properties::area(model, rounded).mass);
         let moved = (exact_volume - volume).abs();
         if exact_faults.is_subset(&faults) && moved <= 1e-6 * volume.abs().max(1.0) + 1e-5 * area {
-            exact::exact_faces(model, rounded, &before, &before_edges);
+            exact::exact_faces(model, rounded, before, before_edges);
         }
     }
-    Ok(rounded)
 }
 
 /// [`fillet_solid_edges`] with the fillets as they are rolled.
@@ -549,7 +577,20 @@ fn fillet_solid_edges_inner(model: &mut Model, shape: Shape, edges: &[(Shape, f6
             }
             at_once = Some(rounded);
         }
-        let staged = fillet_solid_edges_unstaged(model, shape, &first).and_then(|rounded| {
+        // (A saddle's fillets rolled in the first stage made cylinders, tori or spheres where
+        // they are: the fillets after meet them as they would OCCT's.)
+        let saddled = !saddle_edges(model, &first.iter().map(|&(e, _)| (e, edge_turn(model, shape, e))).collect::<Vec<_>>()).is_empty();
+        let (before_faces, before_edges) = if saddled {
+            (model.unique_subshapes(shape, NodeKind::Face).into_iter().map(|f| f.node).collect(), model.unique_subshapes(shape, NodeKind::Edge).into_iter().map(|e| e.node).collect())
+        } else {
+            Default::default()
+        };
+        let staged = fillet_solid_edges_unstaged(model, shape, &first).map(|rounded| {
+            if saddled {
+                made_exact(model, rounded, &before_faces, &before_edges);
+            }
+            rounded
+        }).and_then(|rounded| {
             // (The first fillets' tools end on faces they leave split where they meet them,
             // as on a hole's wall: one face again, for the others to go on along the edges
             // the first fillets left.)
@@ -575,6 +616,40 @@ fn fillet_solid_edges_inner(model: &mut Model, shape: Shape, edges: &[(Shape, f6
         }
     }
     at_once.unwrap_or_else(|| fillet_solid_edges_unstaged(model, shape, edges))
+}
+
+/// Which way `edge` of `shape` turns (convex or concave), from its curve (a trimmed one's
+/// basis too, as a chamfer's), else from the material beside it; `None` where that cannot
+/// be told.
+fn edge_turn(model: &Model, shape: Shape, edge: Shape) -> Option<bool> {
+    Corner::of(model, shape, edge, false).ok().flatten().or_else(|| Corner::of(model, shape, edge, true).ok().flatten()).map(|c| c.convex).or_else(|| turns_convex(model, shape, edge))
+}
+
+/// The indices of the edges (each with the way it turns: convex, concave or not known) that
+/// meet at saddles: vertices where two convex edges or more and as many concave ones meet.
+fn saddle_edges(model: &Model, edges: &[(Shape, Option<bool>)]) -> Vec<usize> {
+    let mut at: Vec<(NodeId, [usize; 2], Vec<usize>)> = Vec::new();
+    for (i, &(edge, convex)) in edges.iter().enumerate() {
+        let (Some(convex), (a, b)) = (convex, model.edge_vertices(edge)) else { continue };
+        if a.node == b.node {
+            continue;
+        }
+        for v in [a.node, b.node] {
+            let k = match at.iter().position(|(w, _, _)| *w == v) {
+                Some(k) => k,
+                None => {
+                    at.push((v, [0, 0], Vec::new()));
+                    at.len() - 1
+                }
+            };
+            at[k].1[usize::from(!convex)] += 1;
+            at[k].2.push(i);
+        }
+    }
+    let mut found: Vec<usize> = at.into_iter().filter(|(_, [convex, concave], _)| *convex >= 2 && *concave >= 2).flat_map(|(_, _, here)| here).collect();
+    found.sort_unstable();
+    found.dedup();
+    found
 }
 
 /// The edges (with the edges going on from them tangentially) to round first and those to
@@ -614,6 +689,17 @@ fn mixed_corner_stages(model: &Model, shape: Shape, edges: &[(Shape, f64)]) -> O
         };
         odd.push(i);
         paired.extend(others);
+    }
+    // (A saddle's edges, two convex or more and as many concave, all first: rolled together,
+    // their corner patched; the concave ones odd at their other ends, the convex ones then
+    // with them.)
+    if !odd.is_empty() {
+        let turns: Vec<(Shape, Option<bool>)> = edges.iter().zip(&convex).map(|(&(e, _), &c)| (e, c)).collect();
+        for i in saddle_edges(model, &turns) {
+            if !odd.contains(&i) {
+                odd.push(i);
+            }
+        }
     }
     if odd.is_empty() || odd.iter().any(|i| paired.contains(i)) {
         return None;
@@ -828,6 +914,11 @@ fn fillet_solid_edges_as(model: &mut Model, shape: Shape, edges: &[(Shape, f64)]
     let mut corners = Vec::new();
     let mut rolling_tools = Vec::new();
     let roots: Vec<usize> = { let mut r: Vec<usize> = (0..n).map(|i| root(&mut group, i)).collect(); r.sort_unstable(); r.dedup(); r };
+    // (Groups with a saddle among their vertices, two convex edges or more and as many
+    // concave ones meeting there: rolled, all together, their fillets' ends there closed by
+    // a patch spanning them; as tools cutting one another they would meet in creases.)
+    let turns: Vec<(Shape, Option<bool>)> = classified.iter().map(|(e, _, c)| (*e, c.as_ref().map(|c| c.convex).or_else(|| edge_turn(model, shape, *e)))).collect();
+    let saddled: Vec<usize> = saddle_edges(model, &turns).into_iter().map(|i| root(&mut group, i)).collect();
     for r in roots {
         let members: Vec<usize> = (0..n).filter(|&i| root(&mut group, i) == r).collect();
         // A chain of several edges of one radius whose ball would touch faces beyond the
@@ -853,7 +944,7 @@ fn fillet_solid_edges_as(model: &mut Model, shape: Shape, edges: &[(Shape, f64)]
                 }
             }
         }
-        if members.iter().all(|&i| classified[i].2.is_some()) {
+        if members.iter().all(|&i| classified[i].2.is_some()) && !saddled.contains(&r) {
             // An edge alone whose ball would touch its faces off their bounds rolls on onto
             // the faces beyond (where that can be built).
             if let [i] = members[..] {
@@ -892,7 +983,21 @@ fn fillet_solid_edges_as(model: &mut Model, shape: Shape, edges: &[(Shape, f64)]
         let roll = |model: &mut Model, shape: Shape, edges: &[(Shape, &dyn Fn(f64) -> f64)]| {
             ball::fillet_network(model, shape, edges).or_else(|e| if not_in_turn(&e) { Err(e) } else { fillet_in_turn(model, shape, edges) })
         };
-        let rounded = roll(model, local, &edges).or_else(|e| match &members[..] {
+        let rounded = roll(model, local, &edges);
+        // (Round a saddle, where that fails on faces on one surface left apart, as a union
+        // leaves them, those faces made one first: a fillet's end may cross them.)
+        let rounded = match rounded {
+            Err(e) if saddled.contains(&r) => match unified_edges(model, local, &edges) {
+                Some((unified, found)) => {
+                    let edges: Vec<(Shape, &dyn Fn(f64) -> f64)> = found.iter().map(|&(e, k)| (e, edges[k].1)).collect();
+                    let rolled = roll(model, unified, &edges);
+                    rolled.map_err(|_| e)
+                }
+                None => Err(e),
+            },
+            other => other,
+        };
+        let rounded = rounded.or_else(|e| match &members[..] {
             // One edge whose ball rolls off its faces: on onto the faces beyond.
             [i] => runover::fillet(model, local, Shape { placement: Transform::IDENTITY, ..classified[*i].0 }, radii[0]).map_err(|_| e),
             _ => Err(e),
@@ -2719,6 +2824,44 @@ fn in_order(model: &mut Model, shape: Shape, sequence: &[&(Curve, f64, f64, &dyn
         };
     }
     Ok(shape)
+}
+
+/// `shape` with its faces on one surface, and its edges on one curve, merged, and the edges
+/// of it that `edges` (of `shape`) lie along: each with the index of an edge of `edges` on it
+/// (an edge of `edges` in several pieces found as one). `None` where nothing was merged, or
+/// an edge is not found, or one is found along edges of different radii.
+fn unified_edges(model: &mut Model, shape: Shape, edges: &[(Shape, &dyn Fn(f64) -> f64)]) -> Option<(Shape, Vec<(Shape, usize)>)> {
+    use crate::geometry::ParametricCurve;
+    let unified = crate::unify::unify_same_domain(model, shape).ok()?;
+    if model.unique_subshapes(unified, NodeKind::Face).len() == model.unique_subshapes(shape, NodeKind::Face).len() {
+        return None;
+    }
+    let candidates = model.unique_subshapes(unified, NodeKind::Edge);
+    let mut found: Vec<(Shape, usize)> = Vec::new();
+    for (k, &(edge, law)) in edges.iter().enumerate() {
+        let (curve, first, last) = model.edge_curve(Shape { orientation: Orientation::Forward, ..edge })?;
+        let (mid, size) = (curve.point(0.5 * (first + last)), curve.point(first).distance(curve.point(last)));
+        let tol = 1e-6 * size.max(1.0);
+        // (The edge through this one's middle, lying along its curve.)
+        let on = candidates.iter().copied().find(|&e| {
+            let Some((c, a, b)) = model.edge_curve(Shape { orientation: Orientation::Forward, ..e }) else { return false };
+            let through = crate::geometry::extrema::nearest_on_curve(mid, &c, a, b).distance <= tol;
+            // (Its points on that curve carried on past the edge's ends.)
+            let reach = 1e3 * size.max(1.0);
+            through && (0..=4).all(|j| crate::geometry::extrema::nearest_on_curve(c.point(a + (b - a) * j as f64 / 4.0), &curve, first - reach, last + reach).distance <= tol)
+        })?;
+        let on = Shape { orientation: Orientation::Forward, ..on };
+        match found.iter().find(|(e, _)| e.node == on.node) {
+            Some(&(_, other)) => {
+                let (r0, r1) = (edges[other].1(0.5), law(0.5));
+                if (r0 - r1).abs() > 1e-12 * r0.abs().max(1.0) {
+                    return None;
+                }
+            }
+            None => found.push((on, k)),
+        }
+    }
+    Some((unified, found))
 }
 
 /// The edge of `shape` on `curve` within `[first, last]` (the longest such: what is left of

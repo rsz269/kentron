@@ -23,6 +23,13 @@ use super::{contact_vertex, cover_pcurve, joined_extensions, off_patch, reach_cu
 /// Samples along a fillet's stop curve at a corner, and across a corner patch.
 const ACROSS: usize = 32;
 const PATCH: usize = 16;
+/// Points across each fillet near a patch of more than three (less one).
+const INSIDE: usize = 8;
+/// How far past its stop, by the stop's length, a fillet's points through which such a
+/// patch passes lie. (So near, they hold the patch nearly tangent to the fillets, as OCCT's
+/// is: on three box arms' saddle, within 0.9 degrees, OCCT's within 0.6; at 0.03, within 2
+/// degrees, and further off, the patch wavers.)
+const ONWARD: f64 = 0.005;
 
 /// One fillet: its rolling data, surface and spine parameters.
 struct Stripe {
@@ -199,6 +206,16 @@ fn blend_network_past(model: &mut Model, shape: Shape, edges: &[(Shape, Profile)
             }
             [_, _, _] => {
                 let corner = corner(model, shape, vertex, &stripes, &meeting)?;
+                for (n, &(i, k)) in meeting.iter().enumerate() {
+                    ends[i][k] = Some(corner.1[n].take_end(corners.len()));
+                }
+                corners.push(corner.0);
+            }
+            // (More than three, each face there shared by two of them: as at a saddle, three
+            // concave and three convex edges in turn round the vertex. Their corner is closed
+            // by a filling patch.)
+            _ if meeting.len() > 3 => {
+                let corner = corner(model, shape, vertex, &stripes, &meeting).map_err(|_| Error::InvalidInput("fillets meeting other than three at a corner are not supported here".into()))?;
                 for (n, &(i, k)) in meeting.iter().enumerate() {
                     ends[i][k] = Some(corner.1[n].take_end(corners.len()));
                 }
@@ -992,7 +1009,8 @@ impl PendingEnd {
     }
 }
 
-/// The corner where three fillets (`meeting`: fillet and end) meet at `vertex`.
+/// The corner where three fillets or more (`meeting`: fillet and end) meet at `vertex`, as
+/// many faces meeting there, each shared by two of them.
 fn corner(model: &Model, shape: Shape, vertex: VertexId, stripes: &[Stripe], meeting: &[(usize, usize)]) -> Result<(Corner, Vec<PendingEnd>)> {
     let _ = shape;
     // The faces: each shared by two of the fillets.
@@ -1004,11 +1022,11 @@ fn corner(model: &Model, shape: Shape, vertex: VertexId, stripes: &[Stripe], mee
             }
         }
     }
-    if faces.len() != 3 {
-        return Err(Error::InvalidInput("a corner of fillets where other than three faces meet".into()));
+    if faces.len() != meeting.len() {
+        return Err(Error::InvalidInput("a corner of fillets where other than as many faces as fillets meet".into()));
     }
     let side_on = |i: usize, face: Shape| stripes[i].rolling.sides.iter().position(|s| s.face.node == face.node);
-    let mut points = Vec::with_capacity(3);
+    let mut points = Vec::with_capacity(faces.len());
     let mut v: Vec<[f64; 2]> = vec![[0.0; 2]; meeting.len()];
     let mut at: Vec<[usize; 2]> = vec![[0; 2]; meeting.len()];
     for (f, &face) in faces.iter().enumerate() {
@@ -1022,6 +1040,17 @@ fn corner(model: &Model, shape: Shape, vertex: VertexId, stripes: &[Stripe], mee
         points.push((face, p));
         (v[n1][s1], at[n1][s1]) = (t1, f);
         (v[n2][s2], at[n2][s2]) = (t2, f);
+    }
+    // (More than three meeting where their stops all close on one point, as fillets of
+    // equal cylinders' crossing sections: no patch spans them.)
+    let spread = points.iter().map(|(_, p)| p.distance(points[0].1)).fold(0.0, f64::max);
+    let width = meeting.iter().map(|&(i, k)| {
+        let s = &stripes[i];
+        let t = if k == 0 { s.rolling.t0 } else { s.rolling.t1 };
+        s.rolling.contacts[0].point(t).distance(s.rolling.contacts[1].point(t))
+    }).fold(0.0, f64::max);
+    if meeting.len() > 3 && !(spread > 1e-3 * width) {
+        return Err(Error::InvalidInput("fillets meeting more than three at a corner closing on a point".into()));
     }
     let pending = (0..meeting.len()).map(|n| PendingEnd { at: at[n], v: v[n] }).collect();
     Ok((Corner { points, stripes: meeting.to_vec() }, pending))
@@ -1397,7 +1426,32 @@ fn build(model: &mut Model, shape: Shape, stripes: &[Stripe], ends: &[[End; 2]],
     // The corner patches, each using the fillets' stop curves the other way from them.
     let fillet_faces = added.clone();
     for (c, corner) in corners.iter().enumerate() {
-        let face = patch(model, corner, &corner_vertices[c], &stops.iter().map(|s| [(s[0].vertices, s[0].curve.clone()), (s[1].vertices, s[1].curve.clone())]).collect::<Vec<_>>(), &across_edges, tolerance)?;
+        // (Of more than three fillets, the patch passes through points on each fillet's
+        // surface carried on a little past its stop (its sections run on past its edge's
+        // end): nearly tangent to the fillets so.)
+        let mut inside = Vec::new();
+        if corner.stripes.len() > 3 {
+            let n = corner.points.len() as f64;
+            let middle = Point::ORIGIN + corner.points.iter().fold(crate::math::Vector::new(0.0, 0.0, 0.0), |a, (_, p)| a + (*p - Point::ORIGIN)) * (1.0 / n);
+            for &(i, k) in &corner.stripes {
+                let (s, v) = (&stripes[i], v_of(&ends[i][k]));
+                let (lo, hi) = (s.ts[0], s.ts[s.ts.len() - 1]);
+                let size = s.surface.point(0.0, v[0]).distance(s.surface.point(1.0, v[1]));
+                for j in 1..INSIDE {
+                    let w = j as f64 / INSIDE as f64;
+                    let t = v[0] + (v[1] - v[0]) * w;
+                    let (_, _, dt) = s.surface.d1(w, t);
+                    let step = ONWARD * size / dt.length().max(1e-300);
+                    // (Onwards: towards the corner's middle.)
+                    let (a, b) = (t + step, t - step);
+                    let t = if s.surface.point(w, a).distance(middle) < s.surface.point(w, b).distance(middle) { a } else { b };
+                    if t > lo && t < hi {
+                        inside.push(s.surface.point(w, t));
+                    }
+                }
+            }
+        }
+        let face = patch(model, corner, &corner_vertices[c], &stops.iter().map(|s| [(s[0].vertices, s[0].curve.clone()), (s[1].vertices, s[1].curve.clone())]).collect::<Vec<_>>(), &across_edges, &inside, tolerance)?;
         let (i, k) = corner.stripes[0];
         let edge = across_edges[i][k];
         let used = |model: &Model, face: Shape| -> Option<Orientation> {
@@ -1503,6 +1557,7 @@ fn patch(
     vertices: &[VertexId],
     stops: &[[([VertexId; 2], BSplineCurve); 2]],
     across: &[[EdgeId; 2]],
+    inside: &[Point],
     tolerance: f64,
 ) -> Result<Shape> {
     // The three stop curves, each joining two of the corner's points.
@@ -1515,6 +1570,9 @@ fn patch(
             (across[i][k], [index(vs[0]), index(vs[1])], curve.clone())
         })
         .collect();
+    if sides.len() != 3 {
+        return n_sided_patch(model, &sides, inside);
+    }
     // Corner points 0, 1, 2: the bottom from 0 to 1, the right from 1 to 2, the left from
     // 0 to 2 (each curve run from one point to the other, reversed where needed), the top
     // collapsed at 2.
@@ -1580,6 +1638,30 @@ fn patch(
     ];
     let tolerance = tolerance.max(deviation_from_sides(&surface, &sides, bottom, right, left));
     new_face(model, surface, vec![(uses, Orientation::Forward)], tolerance)
+}
+
+/// The patch closing a corner of more than three fillets: a filling surface spanning their
+/// stop curves, in turn round the corner (each joining two of its points), through the
+/// points `inside`.
+fn n_sided_patch(model: &mut Model, sides: &[(EdgeId, [usize; 2], BSplineCurve)], inside: &[Point]) -> Result<Shape> {
+    let mut runs = Vec::with_capacity(sides.len());
+    let mut used = vec![false; sides.len()];
+    let mut at = sides[0].1[1];
+    runs.push((sides[0].0, Orientation::Forward, Curve::BSpline(sides[0].2.clone()), 0.0, 1.0));
+    used[0] = true;
+    while runs.len() < sides.len() {
+        let Some(next) = (0..sides.len()).find(|&n| !used[n] && sides[n].1.contains(&at)) else {
+            return Err(Error::InvalidInput("a corner's stop curves do not close a loop".into()));
+        };
+        let forward = sides[next].1[0] == at;
+        runs.push((sides[next].0, if forward { Orientation::Forward } else { Orientation::Reversed }, Curve::BSpline(sides[next].2.clone()), 0.0, 1.0));
+        used[next] = true;
+        at = sides[next].1[if forward { 1 } else { 0 }];
+    }
+    if at != sides[0].1[0] {
+        return Err(Error::InvalidInput("a corner's stop curves do not close a loop".into()));
+    }
+    crate::fill::face_on_loop(model, &runs, &crate::fill::FillingOptions { points: inside.to_vec(), ..Default::default() })
 }
 
 /// A fillet's stop: its vertices at its two sides and the curve across between them.

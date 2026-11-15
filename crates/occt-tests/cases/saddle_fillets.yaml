@@ -1,0 +1,234 @@
+# Fillets at saddle vertices: three concave and three convex edges meeting at one corner,
+# as where three box arms join. Volumes and areas are OCCT's (7.9, through
+# CadQuery 2.8's OCP), whose corner patches lie between the closing-then-opening and the
+# opening-then-closing of the solid by the balls (`tools/brute.py between`). With one radius,
+# a saddle's corner is symmetric (material and void change places in the vertex), so any
+# symmetric corner has OCCT's volume: the area tells them apart. The unions leave each concave
+# edge in two pieces (split where an arm's edge began), both selected.
+
+case: saddle_arms_all_edges
+tags: [blend, saddle]
+notes: >-
+  Three 6 x 6 arms along +x, +y and +z, unioned, every edge rounded (R 1):
+  the saddle at (3, 3, 3) and the mixed corners about it.
+build:
+  - a0: { box: { corner: [0, -3, -3], size: [15, 6, 6] } }
+  - a1: { box: { corner: [-3, 0, -3], size: [6, 15, 6] } }
+  - a2: { box: { corner: [-3, -3, 0], size: [6, 6, 15] } }
+  - s: { union: { object: a0, tool: a1 } }
+  - s: { union: { object: s, tool: a2 } }
+  - result: { fillet: { shape: s, edges: all, radius: 1 } }
+checks:
+  - valid: result
+  - count: result
+    eq: { solids: 1 }
+  - volume: result
+    eq: 1441.09054
+    rel: 1e-5
+  - area: result
+    eq: 966.176036
+    rel: 2e-4
+---
+case: saddle_arms_saddle
+tags: [blend, saddle]
+notes: >-
+  The six edges at the saddle (3, 3, 3) only, R 1.
+build:
+  - a0: { box: { corner: [0, -3, -3], size: [15, 6, 6] } }
+  - a1: { box: { corner: [-3, 0, -3], size: [6, 15, 6] } }
+  - a2: { box: { corner: [-3, -3, 0], size: [6, 6, 15] } }
+  - s: { union: { object: a0, tool: a1 } }
+  - s: { union: { object: s, tool: a2 } }
+  - concave0: { select: { of: s, edge: [3.0, -1.5, 3.0] } }
+  - concave1: { select: { of: s, edge: [3.0, 1.5, 3.0] } }
+  - concave2: { select: { of: s, edge: [-1.5, 3.0, 3.0] } }
+  - concave3: { select: { of: s, edge: [1.5, 3.0, 3.0] } }
+  - concave4: { select: { of: s, edge: [3.0, 3.0, -1.5] } }
+  - concave5: { select: { of: s, edge: [3.0, 3.0, 1.5] } }
+  - convex6: { select: { of: s, edge: [9.0, 3.0, 3.0] } }
+  - convex7: { select: { of: s, edge: [3.0, 9.0, 3.0] } }
+  - convex8: { select: { of: s, edge: [3.0, 3.0, 9.0] } }
+  - result: { fillet: { shape: s, edges: [
+      { edge: concave0, radius: 1 }, { edge: concave1, radius: 1 }, { edge: concave2, radius: 1 },
+      { edge: concave3, radius: 1 }, { edge: concave4, radius: 1 }, { edge: concave5, radius: 1 },
+      { edge: convex6, radius: 1 }, { edge: convex7, radius: 1 }, { edge: convex8, radius: 1 }
+    ] } }
+checks:
+  - valid: result
+  - count: result
+    eq: { solids: 1 }
+  - volume: result
+    eq: 1481.13717
+    rel: 1e-5
+  - area: result
+    eq: 1058.08937
+    rel: 2e-4
+---
+case: saddle_arms_saddle_concave_larger
+tags: [blend, saddle]
+notes: >-
+  The saddle's concave edges R 1.5, its convex ones R 1.
+build:
+  - a0: { box: { corner: [0, -3, -3], size: [15, 6, 6] } }
+  - a1: { box: { corner: [-3, 0, -3], size: [6, 15, 6] } }
+  - a2: { box: { corner: [-3, -3, 0], size: [6, 6, 15] } }
+  - s: { union: { object: a0, tool: a1 } }
+  - s: { union: { object: s, tool: a2 } }
+  - concave0: { select: { of: s, edge: [3.0, -1.5, 3.0] } }
+  - concave1: { select: { of: s, edge: [3.0, 1.5, 3.0] } }
+  - concave2: { select: { of: s, edge: [-1.5, 3.0, 3.0] } }
+  - concave3: { select: { of: s, edge: [1.5, 3.0, 3.0] } }
+  - concave4: { select: { of: s, edge: [3.0, 3.0, -1.5] } }
+  - concave5: { select: { of: s, edge: [3.0, 3.0, 1.5] } }
+  - convex6: { select: { of: s, edge: [9.0, 3.0, 3.0] } }
+  - convex7: { select: { of: s, edge: [3.0, 9.0, 3.0] } }
+  - convex8: { select: { of: s, edge: [3.0, 3.0, 9.0] } }
+  - result: { fillet: { shape: s, edges: [
+      { edge: concave0, radius: 1.5 }, { edge: concave1, radius: 1.5 }, { edge: concave2, radius: 1.5 },
+      { edge: concave3, radius: 1.5 }, { edge: concave4, radius: 1.5 }, { edge: concave5, radius: 1.5 },
+      { edge: convex6, radius: 1 }, { edge: convex7, radius: 1 }, { edge: convex8, radius: 1 }
+    ] } }
+checks:
+  - valid: result
+  - count: result
+    eq: { solids: 1 }
+  - volume: result
+    eq: 1486.00791
+    rel: 1e-5
+  - area: result
+    eq: 1055.76594
+    rel: 2e-4
+---
+case: saddle_arms_saddle_convex_larger
+tags: [blend, saddle]
+notes: >-
+  The saddle's concave edges R 1, its convex ones R 1.5.
+build:
+  - a0: { box: { corner: [0, -3, -3], size: [15, 6, 6] } }
+  - a1: { box: { corner: [-3, 0, -3], size: [6, 15, 6] } }
+  - a2: { box: { corner: [-3, -3, 0], size: [6, 6, 15] } }
+  - s: { union: { object: a0, tool: a1 } }
+  - s: { union: { object: s, tool: a2 } }
+  - concave0: { select: { of: s, edge: [3.0, -1.5, 3.0] } }
+  - concave1: { select: { of: s, edge: [3.0, 1.5, 3.0] } }
+  - concave2: { select: { of: s, edge: [-1.5, 3.0, 3.0] } }
+  - concave3: { select: { of: s, edge: [1.5, 3.0, 3.0] } }
+  - concave4: { select: { of: s, edge: [3.0, 3.0, -1.5] } }
+  - concave5: { select: { of: s, edge: [3.0, 3.0, 1.5] } }
+  - convex6: { select: { of: s, edge: [9.0, 3.0, 3.0] } }
+  - convex7: { select: { of: s, edge: [3.0, 9.0, 3.0] } }
+  - convex8: { select: { of: s, edge: [3.0, 3.0, 9.0] } }
+  - result: { fillet: { shape: s, edges: [
+      { edge: concave0, radius: 1 }, { edge: concave1, radius: 1 }, { edge: concave2, radius: 1 },
+      { edge: concave3, radius: 1 }, { edge: concave4, radius: 1 }, { edge: concave5, radius: 1 },
+      { edge: convex6, radius: 1.5 }, { edge: convex7, radius: 1.5 }, { edge: convex8, radius: 1.5 }
+    ] } }
+checks:
+  - valid: result
+  - count: result
+    eq: { solids: 1 }
+  - volume: result
+    eq: 1471.43659
+    rel: 1e-5
+  - area: result
+    eq: 1050.29353
+    rel: 2e-4
+---
+case: saddle_arms_saddle_turned
+tags: [blend, saddle]
+notes: >-
+  As saddle_arms_saddle, turned 37 degrees about (1, 2, 3) and moved: no
+  edge along an axis.
+build:
+  - a0: { box: { corner: [0, -3, -3], size: [15, 6, 6] } }
+  - a1: { box: { corner: [-3, 0, -3], size: [6, 15, 6] } }
+  - a2: { box: { corner: [-3, -3, 0], size: [6, 6, 15] } }
+  - s: { union: { object: a0, tool: a1 } }
+  - s: { union: { object: s, tool: a2 } }
+  - s: { rotate: { shape: s, axis: { origin: [0, 0, 0], direction: [1, 2, 3] }, angle: 37 } }
+  - s: { translate: { shape: s, by: [5, -2, 1] } }
+  - concave0: { select: { of: s, edge: [9.214194350962, -1.974005080768, 2.577938603525] } }
+  - concave1: { select: { of: s, edge: [7.852916943682, 0.594499583619, 3.31936129636] } }
+  - concave2: { select: { of: s, edge: [3.513694144487, -0.422061396475, 4.943476216154] } }
+  - concave3: { select: { of: s, edge: [5.952750208191, 1.11181414505, 4.107873833903] } }
+  - concave4: { select: { of: s, edge: [5.530528864614, 2.214194350962, -0.486305855513] } }
+  - concave5: { select: { of: s, edge: [6.625028448233, 1.990566060862, 2.297946476681] } }
+  - convex6: { select: { of: s, edge: [12.050390367448, 4.946502998863, 2.018867878275] } }
+  - convex7: { select: { of: s, edge: [4.449723425482, 7.015761244587, 5.172918028448] } }
+  - convex8: { select: { of: s, edge: [9.36127740728, 1.431495335613, 9.258577307165] } }
+  - result: { fillet: { shape: s, edges: [
+      { edge: concave0, radius: 1 }, { edge: concave1, radius: 1 }, { edge: concave2, radius: 1 },
+      { edge: concave3, radius: 1 }, { edge: concave4, radius: 1 }, { edge: concave5, radius: 1 },
+      { edge: convex6, radius: 1 }, { edge: convex7, radius: 1 }, { edge: convex8, radius: 1 }
+    ] } }
+checks:
+  - valid: result
+  - count: result
+    eq: { solids: 1 }
+  - volume: result
+    eq: 1481.13717
+    rel: 1e-5
+  - area: result
+    eq: 1058.08931
+    rel: 2e-4
+---
+case: saddle_uneven_arms_saddle
+tags: [blend, saddle]
+notes: >-
+  Arms of different sections and lengths meeting at one saddle (3, 3, 3):
+  the edges at it of different lengths, the corners at their other ends unlike.
+build:
+  - a0: { box: { corner: [0, -3, -1], size: [15, 6, 4] } }
+  - a1: { box: { corner: [-4, 0, -3], size: [7, 12, 6] } }
+  - a2: { box: { corner: [-2, -5, 0], size: [5, 8, 10] } }
+  - s: { union: { object: a0, tool: a1 } }
+  - s: { union: { object: s, tool: a2 } }
+  - concave0: { select: { of: s, edge: [3.0, -1.5, 3.0] } }
+  - concave1: { select: { of: s, edge: [3.0, 1.5, 3.0] } }
+  - concave2: { select: { of: s, edge: [-1.0, 3.0, 3.0] } }
+  - concave3: { select: { of: s, edge: [1.5, 3.0, 3.0] } }
+  - concave4: { select: { of: s, edge: [3.0, 3.0, -0.5] } }
+  - concave5: { select: { of: s, edge: [3.0, 3.0, 1.5] } }
+  - convex6: { select: { of: s, edge: [3.0, 3.0, 6.5] } }
+  - convex7: { select: { of: s, edge: [3.0, 7.5, 3.0] } }
+  - convex8: { select: { of: s, edge: [9.0, 3.0, 3.0] } }
+  - result: { fillet: { shape: s, edges: [
+      { edge: concave0, radius: 1 }, { edge: concave1, radius: 1 }, { edge: concave2, radius: 1 },
+      { edge: concave3, radius: 1 }, { edge: concave4, radius: 1 }, { edge: concave5, radius: 1 },
+      { edge: convex6, radius: 1 }, { edge: convex7, radius: 1 }, { edge: convex8, radius: 1 }
+    ] } }
+checks:
+  - valid: result
+  - count: result
+    eq: { solids: 1 }
+  - volume: result
+    eq: 1153.21015
+    rel: 1e-5
+  - area: result
+    eq: 886.810588
+    rel: 2e-4
+---
+case: saddle_occt_blend_simple_x5
+tags: [blend, saddle]
+notes: >-
+  OCCT's tests/blend/simple/X5 (and tolblend_simple/B3, the same model), whose six edges
+  meet at a saddle: OCCT's check is the area within 1%, which a corner without its patch
+  passes. Here OCCT 7.9's own area and volume, closely.
+build:
+  - s: {load: {brep: "CCV_1_i12gsl.rle"}}
+  - s: {rotate: {shape: s, axis: {origin: [0, 0, 0], direction: [0, 0, 1]}, angle: -85}}
+  - s_15: {select: {of: s, edge: [108.335044084, -90.9038955344, 150.0], length: 100.0}}
+  - s_16: {select: {of: s, edge: [103.977256947, -41.0941606298, 100.0], length: 100.0}}
+  - s_18: {select: {of: s, edge: [58.5253091794, -95.2616826718, 100.0], length: 100.0}}
+  - s_20: {select: {of: s, edge: [108.335044084, -90.9038955344, 50.0], length: 100.0}}
+  - s_22: {select: {of: s, edge: [112.692831221, -140.713630439, 100.0], length: 100.0}}
+  - s_25: {select: {of: s, edge: [158.144778989, -86.546108397, 100.0], length: 100.0}}
+  - result: {fillet: {shape: s, edges: [{edge: s_22, radius: 10}, {edge: s_20, radius: 10}, {edge: s_25, radius: 10}, {edge: s_16, radius: 10}, {edge: s_15, radius: 10}, {edge: s_18, radius: 10}]}}
+checks:
+  - valid: result
+  - volume: result
+    eq: 4000000.0
+    rel: 1e-6
+  - area: result
+    eq: 177551.414
+    rel: 1e-4

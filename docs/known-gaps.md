@@ -13,36 +13,6 @@ log is for the root causes behind them that need real work.
 
 ## Fillets
 
-### Saddle vertices: three concave and three convex edges at one corner
-
-*Found 2026-11-08.*
-
-![Three box arms filleted on every edge: kentron's corners are mitred where CadQuery's have corner patches](known-gaps/saddle.svg)
-
-Where six edges meet at a vertex, three concave and three convex (the inside corner where
-three box arms meet in 3D), filleting every edge gives a valid solid with the wrong shape at
-every mixed corner of that solid.
-
-- **Repro:** three 6×6 arms along +x, +y and +z from the origin
-  (`box(15, 6, 6).translate((7.5, 0, 0))` and the same along y and z), unioned, then
-  `edges().fillet(1)`. Its saddle vertex is (3, 3, 3).
-- **Evidence:** the volume is 1440.990 against CadQuery's 1441.091; the area is 1003.0
-  against 966.2, which CadQuery gets with tori and 8 B-spline corner patches that kentron
-  lacks. Against a brute-force rolling ball (the morphological closing then opening of the
-  solid by radius 1, on a 0.02 voxel grid round the mixed corner at (3, −3, 3)), 144 of
-  60 000 points are wrong on kentron, about 0.15 of volume at that corner, and none on
-  CadQuery.
-- **Cause:** `fillet_solid_edges_inner` rounds the concave edges first, so that the
-  convex ones go round their ends as tori, as OCCT does. After that first stage, the three
-  concave fills meet at the saddle vertex only along lines: six short non-manifold edges,
-  each bounding four faces. The second stage rejects them ("a fillet edge must bound two
-  faces, it bounds 4"), and the whole solid is filleted at once instead, every mixed corner
-  mitred.
-- **Needed:** a corner patch for saddle vertices (OCCT fills them with B-spline patches),
-  or a first stage that leaves the saddle manifold. Several days' work.
-- **Not affected:** planar L-shapes and other convex/concave corners without a saddle
-  vertex match CadQuery exactly.
-
 ### Chamfers of constant throat where the faces' angle varies along the edge
 
 *Found 2026-11-09.*
