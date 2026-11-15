@@ -18,32 +18,26 @@ fn agt004() -> DrawResult<()> {
 
 /// `tests/evolved/voluved/bug26470_1`
 #[test]
-#[should_panic]
-fn bug26470_1() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.restore(&[data_file("OCC26470-ClosedWire.brep").as_str(), "a"])?;
-        d.restore(&[data_file("OCC26470-wprof1.brep").as_str(), "b"])?;
-        d.evolved(&["result", "-s", "a", "-p", "b", "-a", "-v"])?;
-        d.checkshape(&["result"])?;
-        d.checkprops(&["result", "-s", "558.33"])?;
-        Ok(())
-    })
+fn bug26470_1() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.restore(&[data_file("OCC26470-ClosedWire.brep").as_str(), "a"])?;
+    d.restore(&[data_file("OCC26470-wprof1.brep").as_str(), "b"])?;
+    d.evolved(&["result", "-s", "a", "-p", "b", "-a", "-v"])?;
+    d.checkshape(&["result"])?;
+    d.checkprops(&["result", "-s", "558.33"])?;
+    Ok(())
 }
 
 /// `tests/evolved/voluved/bug26470_2`
 #[test]
-#[should_panic]
-fn bug26470_2() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.restore(&[data_file("OCC26470-ClosedWire.brep").as_str(), "a"])?;
-        d.restore(&[data_file("OCC26470-wprof2.brep").as_str(), "b"])?;
-        d.evolved(&["result", "-s", "a", "-p", "b", "-a", "-v"])?;
-        d.checkshape(&["result"])?;
-        d.checkprops(&["result", "-s", "572.14"])?;
-        Ok(())
-    })
+fn bug26470_2() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.restore(&[data_file("OCC26470-ClosedWire.brep").as_str(), "a"])?;
+    d.restore(&[data_file("OCC26470-wprof2.brep").as_str(), "b"])?;
+    d.evolved(&["result", "-s", "a", "-p", "b", "-a", "-v"])?;
+    d.checkshape(&["result"])?;
+    d.checkprops(&["result", "-s", "572.14"])?;
+    Ok(())
 }
 
 /// `tests/evolved/voluved/bug30781`

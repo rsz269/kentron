@@ -750,7 +750,7 @@ pub(super) fn pipe_along(model: &mut Model, profile: Shape, pieces: &[SpinePiece
 /// Raises the tolerances of `shape`'s edges to cover how far their faces' surfaces along
 /// their pcurves stray from them, then the rest to match (as OCCT updates tolerances where
 /// pieces of a sweep meet only so closely).
-fn cover_gaps(model: &mut Model, shape: Shape) -> Result<()> {
+pub(super) fn cover_gaps(model: &mut Model, shape: Shape) -> Result<()> {
     for face in model.unique_subshapes(shape, NodeKind::Face) {
         let Some(surface) = model.surface(face).cloned() else { continue };
         let face_tolerance = model.tolerance(face);
@@ -758,11 +758,19 @@ fn cover_gaps(model: &mut Model, shape: Shape) -> Result<()> {
         for coedge in coedges {
             let Some((pcurve, first, last)) = model.effective_pcurve(coedge) else { continue };
             let edge = model[coedge].edge;
-            let Some((curve, a, b)) = model.edge_curve(Shape::from(edge)) else { continue };
-            if (a - first).abs() > 1e-9 || (b - last).abs() > 1e-9 {
-                continue;
-            }
-            let deviation = crate::geometry::measure::curve_on_surface_deviation(&curve, &pcurve, &surface, first, last).max_distance;
+            let deviation = match model.edge_curve(Shape::from(edge)) {
+                Some((curve, a, b)) => {
+                    if (a - first).abs() > 1e-9 || (b - last).abs() > 1e-9 {
+                        continue;
+                    }
+                    crate::geometry::measure::curve_on_surface_deviation(&curve, &pcurve, &surface, first, last).max_distance
+                }
+                // (A degenerate edge: its pcurve's points against its vertex.)
+                None => {
+                    let pole = model.point(model.edge_vertices(Shape::from(edge)).0);
+                    (0..=8).map(|i| pcurve.point(first + (last - first) * i as f64 / 8.0)).map(|q| crate::geometry::ParametricSurface::point(&surface, q.x, q.y).distance(pole)).fold(0.0, f64::max)
+                }
+            };
             let needed = 1.01 * (deviation - face_tolerance);
             if needed > model.tolerance(Shape::from(edge)) {
                 model.set_edge_tolerance(edge, needed)?;

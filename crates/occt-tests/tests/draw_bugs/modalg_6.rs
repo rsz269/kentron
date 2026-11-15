@@ -2202,29 +2202,23 @@ fn bug26464() -> DrawResult<()> {
 
 /// `tests/bugs/modalg_6/bug26470_1`
 #[test]
-#[should_panic]
-fn bug26470_1() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.restore(&[data_file("OCC26470-ClosedWire.brep").as_str(), "a"])?;
-        d.restore(&[data_file("OCC26470-wprof1.brep").as_str(), "b"])?;
-        d.evolved(&["res", "-s", "a", "-p", "b", "-a"])?;
-        Ok(())
-    })
+fn bug26470_1() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.restore(&[data_file("OCC26470-ClosedWire.brep").as_str(), "a"])?;
+    d.restore(&[data_file("OCC26470-wprof1.brep").as_str(), "b"])?;
+    d.evolved(&["res", "-s", "a", "-p", "b", "-a"])?;
+    Ok(())
 }
 
 /// `tests/bugs/modalg_6/bug26470_2`
 #[test]
-#[should_panic]
-fn bug26470_2() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.restore(&[data_file("OCC26470-ClosedWire.brep").as_str(), "a"])?;
-        d.restore(&[data_file("OCC26470-wprof2.brep").as_str(), "b"])?;
-        d.evolved(&["res", "-s", "a", "-p", "b", "-a"])?;
-        d.checkshape(&["res"])?;
-        Ok(())
-    })
+fn bug26470_2() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.restore(&[data_file("OCC26470-ClosedWire.brep").as_str(), "a"])?;
+    d.restore(&[data_file("OCC26470-wprof2.brep").as_str(), "b"])?;
+    d.evolved(&["res", "-s", "a", "-p", "b", "-a"])?;
+    d.checkshape(&["res"])?;
+    Ok(())
 }
 
 /// `tests/bugs/modalg_6/bug26473_2`

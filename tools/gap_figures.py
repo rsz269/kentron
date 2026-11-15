@@ -185,26 +185,6 @@ def data_file(name):
     raise RuntimeError("OCCT test data file not found: %s (set OCCT_TEST_DATA)" % name)
 
 
-def scene_evolved(cq, kernel):
-    """OCCT's tests/evolved/voluved/AGT003: a profile in the plane x + y = 1 swept along a
-    polygon, as a solid. kentron's through its DRAW commands, OCCT's through OCP."""
-    spine = [(0, 0, 0), (0, 10, 0), (20, 10, 0), (20, 0, 0), (13, 0, 0), (13, 5, 0), (6, 5, 0), (6, 0, 0), (0, 0, 0)]
-    profile = [(-1, 2, 0), (0, 1, 5), (0, 1, 10), (0.5, 0.5, 10), (0.5, 0.5, 0)]
-    if kernel == "kentron":
-        CACHE.mkdir(parents=True, exist_ok=True)
-        draw_commands(["polyline p " + " ".join("%g" % x for p in spine for x in p), "polyline t " + " ".join("%g" % x for p in profile for x in p),
-                       "evolved result -s p -p t -a -solid -v", "save result %s" % (CACHE / "evolved.brep")])
-        result = cq.Shape.importBrep(str(CACHE / "evolved.brep"))
-    else:
-        from OCP.BRepOffsetAPI import BRepOffsetAPI_MakeEvolved
-        from OCP.GeomAbs import GeomAbs_Arc
-
-        maker = BRepOffsetAPI_MakeEvolved(cq.Wire.makePolygon(spine).wrapped, cq.Wire.makePolygon(profile).wrapped, GeomAbs_Arc, True, True, False, 1e-7, True, False)
-        maker.Build()
-        result = cq.Shape.cast(maker.Shape())
-    return {"result": [(result, BODY)], "spine": {"points": spine}, "profile": {"points": profile}}
-
-
 def scene_throat(cq, kernel):
     """OCCT's tests/bugs/modalg_7/bug28828_2: a cylinder fused to a box tilted by 20 degrees,
     the edge where they meet chamfered with a throat of 2."""
@@ -1066,28 +1046,6 @@ def figure_gyroid(rebuild):
         figure.add('<path class="ink" d="%s"/>\n' % path_data([(cx, cy), (cx + (r - 9) * math.cos(a), cy - (r - 9) * math.sin(a))]))
     figure.add('<circle class="bad" cx="%s" cy="%s" r="3.6"/>\n' % (number(cx), number(cy)))
     figure.text(cx - r - 8, cy + 4, "the edge, end-on\n(a sketch): seven\nfaces, not two", "note small halo", "end")
-    return figure
-
-
-def figure_evolved(rebuild):
-    kentron, occt = (scene("evolved", k, rebuild) for k in ("kentron", "cadquery"))
-    height = 300
-    figure = Figure(WIDTH, TOP + height + 56, "A profile leaning at 45 degrees to its spine, swept along it (OCCT's test AGT003): at each corner of the spine OCCT's solid has two faces filling in between the sweeps of the two sides, which kentron's lacks.")
-    eye = (1, -0.45, 0.6)
-    whole = View(eye, (10, 5, 4), 29, SIDE, height)
-    close = whole.zoomed((0.5, -0.2, 6.6), 8.6, MAIN, height)
-    spine, profile = kentron["spine"]["points"], kentron["profile"]["points"]
-    figure.panel(COLUMNS[0], TOP, SIDE, height, render([occt["result"]], whole) + traced(whole, spine, "sketch") + traced(whole, profile, "two"), "A profile swept along a spine", "OCCT's test evolved/voluved/AGT003")
-    figure.frame(*(a + b for a, b in zip(whole.window(close), (COLUMNS[0], TOP, 0, 0))))
-    figure.callout(at(whole, COLUMNS[0], TOP, (16.5, 0, 0)), "the spine", (COLUMNS[0] + SIDE - 10, TOP + height - 14), "end")
-    figure.callout(at(whole, COLUMNS[0], TOP, (0, 1, 8.5)), "the profile, in a plane\nat 45° to the spine", (COLUMNS[0] + SIDE / 2 + 16, TOP + 26), "middle")
-    fill = {i: FIRST for i, f in enumerate(occt["result"]["faces"]) if 3.0 < f["area"] < 3.6}
-    for x, mesh, title, recolour, reference, verdict in (
-            (COLUMNS[1], kentron, "kentron", None, [occt["result"]], ("bad", "area %.2f: no faces fill in at the corners;\nin red, where OCCT's join the walls")),
-            (COLUMNS[2], occt, "OCCT", fill, None, ("good", "area %.2f: two faces at each corner fill in\nbetween what is left of the sides' sweeps"))):
-        info = mesh["result"]["info"][0]
-        figure.panel(x, TOP, MAIN, height, render([mesh["result"]], close, recolour, reference=reference), title, "%d faces, volume %.3f" % (info["faces"], info["volume"]), (verdict[0], verdict[1] % info["area"]))
-    figure.callout(at(close, COLUMNS[2], TOP, (0.5, -0.25, 4.6)), "a plane of 3.125\nand a trimmed\nsurface of 3.509", (COLUMNS[2] + 66, TOP + 96), "middle")
     return figure
 
 

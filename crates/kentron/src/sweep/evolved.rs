@@ -39,7 +39,7 @@ pub fn evolved(model: &mut Model, spine: Shape, profile: Shape, options: Evolved
     }
     let plane = crate::make::plane_of_wire(model, spine)?;
     let normal = Vector::from(plane.normal());
-    let swept = super::pipe_cornered(model, profile, spine, &PipeOptions::default(), Corner::Rounded)?;
+    let (swept, untrimmed) = super::pipe_cornered_noting(model, profile, spine, &PipeOptions::default(), Corner::Rounded)?;
     // The lids: faces the sweep's free edges level with the spine bound.
     let size = crate::properties::bounding_box(model, swept).size().length().max(1e-9);
     let height = |p: Point| normal.dot(p - Point::ORIGIN);
@@ -55,7 +55,15 @@ pub fn evolved(model: &mut Model, spine: Shape, profile: Shape, options: Evolved
             uses.entry(e.node).or_insert((e, 0)).1 += 1;
         }
     }
-    let free: Vec<Shape> = uses.values().filter(|&&(e, count)| count == 1 && !model.is_degenerate(e) && level(model, e)).map(|&(e, _)| e).collect();
+    // (An edge shorter than its ends' tolerances, where the sweep turns about a point within
+    // them of the corner's axis, is a point: no lid's.)
+    let collapsed = |model: &Model, e: Shape| -> bool {
+        let Some((curve, a, b)) = model.edge_curve(e) else { return true };
+        let (va, vb) = model.edge_vertices(e);
+        let length = (0..4).map(|k| curve.point(a + (b - a) * k as f64 / 4.0).distance(curve.point(a + (b - a) * (k + 1) as f64 / 4.0))).sum::<f64>();
+        length <= model.tolerance(va).max(model.tolerance(vb))
+    };
+    let free: Vec<Shape> = uses.values().filter(|&&(e, count)| count == 1 && !model.is_degenerate(e) && !collapsed(model, e) && level(model, e)).map(|&(e, _)| e).collect();
     // The free edges in the spine's plane, as they run: polylines in its coordinates, by height.
     let frame = *plane.frame();
     let (x, y) = (Vector::from(frame.x()), Vector::from(frame.y()));
@@ -67,9 +75,11 @@ pub fn evolved(model: &mut Model, spine: Shape, profile: Shape, options: Evolved
         runs.push((height(curve.point(a)), (0..=64).map(|k| flat(curve.point(a + (b - a) * k as f64 / 64.0))).collect()));
     }
     // Each lid piece as often as the free edges at its height wind round it, turned to close
-    // the sweep (its edges run the other way to theirs).
+    // the sweep (its edges run the other way to theirs); and each once, wound round or not,
+    // for the space split as OCCT's (below).
     let counted = model.new_empty(NodeKind::Compound);
     model.add(counted, swept)?;
+    let mut arranged: Vec<Shape> = model.unique_subshapes(swept, NodeKind::Face);
     if !free.is_empty() {
         let edges = model.new_empty(NodeKind::Compound);
         for &e in &free {
@@ -81,6 +91,7 @@ pub fn evolved(model: &mut Model, spine: Shape, profile: Shape, options: Evolved
             let at = height(q);
             let around: Vec<&Vec<Point2>> = runs.iter().filter(|(h, _)| (h - at).abs() <= 1e-6 * size).map(|(_, r)| r).collect();
             let w = winding(&around, flat(q));
+            arranged.push(lid);
             if w == 0 {
                 continue;
             }
@@ -94,13 +105,32 @@ pub fn evolved(model: &mut Model, spine: Shape, profile: Shape, options: Evolved
             }
         }
     }
+    let solid = if untrimmed { enveloped(model, &arranged)? } else { wound_round(model, counted)? };
+    if options.solid {
+        return Ok(solid);
+    }
+    // The faces but the lids (planar, level with the spine).
+    let shell = model.new_empty(NodeKind::Shell);
+    for face in model.unique_subshapes(solid, NodeKind::Face) {
+        let lid = matches!(model.surface(face), Some(crate::geometry::surface::Surface::Plane(p)) if Vector::from(p.normal()).cross(normal).length() <= 1e-9);
+        if !lid {
+            model.add(shell, face)?;
+        }
+    }
+    Ok(shell)
+}
+
+/// The cells the sweep and its lids (`counted`, each lid as often as the sweep winds round
+/// it) wind round, taken the way the largest is wound: where every corner was trimmed, the
+/// cells wound round no times are where the sweep winds back on itself (a piece shorter
+/// than the section reaches inside its corners, as offsets past where they collapse).
+fn wound_round(model: &mut Model, counted: Shape) -> Result<Shape> {
     let faces: Vec<Shape> = model.unique_subshapes(counted, NodeKind::Face);
     let cells = crate::boolean::enclosed_solids(model, &faces)?;
     let cells = model.unique_subshapes(cells, NodeKind::Solid);
     if cells.is_empty() {
         return Err(Error::Failed("an evolved shape enclosing nothing".into()));
     }
-    // The cells the sweep and its lids wind round (taken the way the largest is wound).
     let classifier = crate::boolean::PointClassifier::new(model, counted)?;
     let mut wound = Vec::with_capacity(cells.len());
     for &cell in &cells {
@@ -115,19 +145,34 @@ pub fn evolved(model: &mut Model, spine: Shape, profile: Shape, options: Evolved
     if cells.is_empty() {
         return Err(Error::Failed("an evolved shape enclosing nothing".into()));
     }
-    let solid = joined(model, &cells)?;
-    if options.solid {
-        return Ok(solid);
-    }
-    // The faces but the lids (planar, level with the spine).
-    let shell = model.new_empty(NodeKind::Shell);
-    for face in model.unique_subshapes(solid, NodeKind::Face) {
-        let lid = matches!(model.surface(face), Some(crate::geometry::surface::Surface::Plane(p)) if Vector::from(p.normal()).cross(normal).length() <= 1e-9);
-        if !lid {
-            model.add(shell, face)?;
+    joined(model, &cells)
+}
+
+/// All the space the sweep and its lids (`faces`, each lid once) enclose, as OCCT's
+/// (BRepFill_AdvancedEvolved: BOPAlgo_MakerVolume, then ExtractOuterSolid): where a
+/// corner's trimming failed, the pieces carried on past where they cross divide the solid
+/// within, and the turned sections bulge from it, wound round either way. The cells, or
+/// where there are several, the space within the faces bounding only one of them.
+fn enveloped(model: &mut Model, faces: &[Shape]) -> Result<Shape> {
+    let cells = crate::boolean::enclosed_solids(model, faces)?;
+    let cells = model.unique_subshapes(cells, NodeKind::Solid);
+    let cells = if cells.len() > 1 {
+        let mut uses: std::collections::HashMap<NodeId, (Shape, usize)> = std::collections::HashMap::new();
+        for &cell in &cells {
+            for f in model.unique_subshapes(cell, NodeKind::Face) {
+                uses.entry(f.node).or_insert((f, 0)).1 += 1;
+            }
         }
+        let outer: Vec<Shape> = uses.into_values().filter(|&(_, count)| count == 1).map(|(f, _)| f).collect();
+        let cells = crate::boolean::enclosed_solids(model, &outer)?;
+        model.unique_subshapes(cells, NodeKind::Solid)
+    } else {
+        cells
+    };
+    if cells.is_empty() {
+        return Err(Error::Failed("an evolved shape enclosing nothing".into()));
     }
-    Ok(shell)
+    joined(model, &cells)
 }
 
 /// The cells joined: the faces two of them share are inside; faces left in pieces on one
@@ -264,6 +309,51 @@ mod tests {
         let area = crate::properties::area(&model, solid).mass;
         assert!((volume - 1023.79).abs() < 1e-2, "{volume}");
         assert!((area - 1649.58).abs() < 1e-2, "{area}");
+    }
+
+    /// OCCT's evolved/voluved AGT003: the notched rectangle and a profile leaning along the
+    /// spine where it stands (in the plane x + y = 1, at 45° to the spine). The pieces' sweeps
+    /// cross each other at every corner where neither splits the other (the section turned
+    /// at a corner is no mirror image of itself across the plane bisecting it), so, as OCCT's
+    /// trimming there fails, they are left whole and the whole section turned round each
+    /// corner: the solid all the space they and the lids enclose, OCCT's to the digit.
+    #[test]
+    fn a_profile_leaning_along_the_spine_round_a_notched_rectangle() {
+        let mut model = Model::new();
+        let spine = polyline(&mut model, &[[0.0, 0.0, 0.0], [0.0, 10.0, 0.0], [20.0, 10.0, 0.0], [20.0, 0.0, 0.0], [13.0, 0.0, 0.0], [13.0, 5.0, 0.0], [6.0, 5.0, 0.0], [6.0, 0.0, 0.0], [0.0, 0.0, 0.0]]);
+        let profile = polyline(&mut model, &[[-1.0, 2.0, 0.0], [0.0, 1.0, 5.0], [0.0, 1.0, 10.0], [0.5, 0.5, 10.0], [0.5, 0.5, 0.0]]);
+        let solid = evolved(&mut model, spine, profile, EvolvedOptions { solid: true }).unwrap();
+        assert!(crate::validity::check(&model, solid).is_valid());
+        let volume = crate::properties::volume(&model, solid).mass;
+        let area = crate::properties::area(&model, solid).mass;
+        assert!((volume - 532.942214).abs() < 1e-5, "{volume}");
+        assert!((area - 1573.583261).abs() < 1e-5, "{area}");
+    }
+
+    /// OCCT's evolved/voluved AGT001: a segment standing on the spine where a line meets a
+    /// quarter circle, leaning forward along it (by 0.5 over its height of 5). Where the arc
+    /// meets the next line the section leans out ahead of the line's sweep, which does not
+    /// cut the arc's: the whole section is turned round that corner, as OCCT's. Its volume and
+    /// area as OCCT's.
+    #[test]
+    fn a_segment_leaning_forward_on_a_line_meeting_an_arc() {
+        use crate::geometry::curve::{Circle, Curve};
+        use crate::math::{Direction, Frame};
+        let mut model = Model::new();
+        let p = |x: f64, y: f64| Point::new(x, y, 0.0);
+        let first = crate::make::edge_between(&mut model, p(-1.0, 10.0), p(-1.0, -1.0)).unwrap();
+        let circle = Circle::new(Frame::new(p(0.0, -1.0), Direction::Z, Direction::X), 1.0);
+        let arc = crate::make::edge_from_curve_range(&mut model, Curve::Circle(circle), std::f64::consts::PI, 1.5 * std::f64::consts::PI).unwrap();
+        let second = crate::make::edge_between(&mut model, p(0.0, -2.0), p(10.0, -1.0)).unwrap();
+        let third = crate::make::edge_between(&mut model, p(10.0, -1.0), p(-1.0, 10.0)).unwrap();
+        let spine = crate::make::wire(&mut model, &[first, arc, second, third]).unwrap();
+        let profile = polyline(&mut model, &[[-1.0, -1.0, 0.0], [0.0, -1.5, 5.0]]);
+        let solid = evolved(&mut model, spine, profile, EvolvedOptions { solid: true }).unwrap();
+        assert!(crate::validity::check(&model, solid).is_valid());
+        let volume = crate::properties::volume(&model, solid).mass;
+        let area = crate::properties::area(&model, solid).mass;
+        assert!((volume - 245.265266).abs() < 1e-5, "{volume}");
+        assert!((area - 268.773893).abs() < 1e-5, "{area}");
     }
 
     /// A profile from outside the spine to inside it, round corners between a line and an

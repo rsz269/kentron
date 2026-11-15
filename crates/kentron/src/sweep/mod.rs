@@ -242,6 +242,7 @@ fn spine_pieces(model: &Model, spine: Shape) -> Result<Vec<pipe::SpinePiece>> {
     // (The vertex each edge starts at and the one it ends at, as it runs.)
     let ends = |edge: Shape| model.edge_vertices(edge);
     let mut previous_end = None;
+    let first_start = edges.first().map(|&e| ends(e).0);
     for edge in edges {
         let (curve, first, last) = model.edge_curve(edge).ok_or_else(|| Error::InvalidInput("a pipe's spine has no curve".into()))?;
         let (first, last) = if edge.orientation == Orientation::Reversed { (last, first) } else { (first, last) };
@@ -252,6 +253,13 @@ fn spine_pieces(model: &Model, spine: Shape) -> Result<Vec<pipe::SpinePiece>> {
         };
         previous_end = Some(end);
         pieces.push(pipe::SpinePiece { curve, first, last, gap });
+    }
+    // (A wire closing on the vertex it starts at: the first piece's start may lie as far
+    // from the last's end.)
+    if let (Some(start), Some(end), true) = (first_start, previous_end, pieces.len() > 1) {
+        if start.node == end.node {
+            pieces[0].gap = model.tolerance(start);
+        }
     }
     Ok(pieces)
 }
@@ -333,8 +341,14 @@ pub enum Corner {
 /// sweep, less the ends. Along lines and arcs for mitred corners.
 #[doc(alias = "BRepOffsetAPI_MakePipeShell::SetTransitionMode")]
 pub fn pipe_cornered(model: &mut Model, profile: Shape, spine: Shape, options: &PipeOptions, corner: Corner) -> Result<Shape> {
+    Ok(pipe_cornered_noting(model, profile, spine, options, corner)?.0)
+}
+
+/// [`pipe_cornered`], with whether a round corner's trimming failed: the pieces left whole
+/// there, carried on past where they cross (as OCCT's, BRepFill_TrimShellCorner not done).
+pub(super) fn pipe_cornered_noting(model: &mut Model, profile: Shape, spine: Shape, options: &PipeOptions, corner: Corner) -> Result<(Shape, bool)> {
     if corner == Corner::Unturned {
-        return Ok(pipe_with(model, profile, spine, options)?.shape);
+        return Ok((pipe_with(model, profile, spine, options)?.shape, false));
     }
     let pieces = spine_pieces(model, spine)?;
     let placing = placing(model, profile, &pieces, options)?;
@@ -743,18 +757,19 @@ impl Revolver<'_> {
                     return general(); // skew: a hyperboloid
                 }
                 // Coplanar with the axis: a cone around it, with v along the line (pointing
-                // away from the axis direction's negative side).
-                let x = match Direction::try_from_vector(radial).filter(|_| radial.length() > tol) {
-                    Some(x) => x,
-                    None => match Direction::try_from_vector(self.radial(line.origin + d).1) {
-                        Some(x) => x,
-                        None => return general(),
-                    },
-                };
+                // away from the axis direction's negative side). Its first axis runs the way
+                // the line crosses the axis, toward the line's origin (its radius there not
+                // negative): from the line, not from the origin's own offset from the axis,
+                // whose direction is noise where the origin lies next to the axis.
+                let across = d - z * d.dot(z);
+                let Some(mut x) = Direction::try_from_vector(across) else { return general() };
+                if radial.dot(Vector::from(x)) < 0.0 {
+                    x = -x;
+                }
                 let sigma = d.dot(z).signum();
                 let g = d * sigma;
                 let semi_angle = g.dot(Vector::from(x)).atan2(g.dot(z));
-                let cone = Cone::new(Frame::new(foot, self.axis.direction, x), semi_angle, radial.length());
+                let cone = Cone::new(Frame::new(foot, self.axis.direction, x), semi_angle, radial.dot(Vector::from(x)));
                 SweptSurface::Ruled { surface: Surface::Cone(cone), v0: 0.0, sigma }
             }
             Curve::Circle(circle) => {
@@ -1581,6 +1596,26 @@ mod tests {
             assert_valid_solid(&model, solid, 4.0 * PI * angle / TAU);
             assert!(surfaces(&model, solid).contains(&"cone"));
         }
+    }
+
+    #[test]
+    fn a_segment_starting_next_to_the_axis_sweeps_a_cone() {
+        // A segment starting a few tolerances off the axis, in the plane through it: a cone
+        // whose first axis runs along the segment, not along the start's own offset (a
+        // direction of noise), the same as the segment starting on the axis sweeps.
+        let axis = Axis::new(Point::new(31.0, -14.2174568, 11.0391998), Direction::X);
+        let end = Point::new(36.0, -13.7913627, 10.9402049);
+        let mut areas = Vec::new();
+        for off in [0.0, 6e-7] {
+            let mut model = Model::new();
+            let edge = make::edge_between(&mut model, axis.origin + Vector::new(0.0, off, 0.0), end).unwrap();
+            let wire = make::wire(&mut model, &[edge]).unwrap();
+            let face = revolve(&mut model, wire, axis, 0.431).unwrap().shape;
+            assert!(crate::validity::check(&model, face).is_valid());
+            assert_eq!(surfaces(&model, face), ["cone"]);
+            areas.push(properties::area(&model, face).mass);
+        }
+        assert!((areas[0] - areas[1]).abs() < 1e-5, "{areas:?}");
     }
 
     #[test]
