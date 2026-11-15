@@ -760,7 +760,6 @@ tests/draft/angle/K9
 tests/draft/angle/L4
 tests/draft/angle/M1
 tests/draft/angle/M4
-tests/evolved/voluved/bug30781
 tests/feat/featprism/H8
 tests/feat/featprism/K6
 tests/feat/featprism/K9

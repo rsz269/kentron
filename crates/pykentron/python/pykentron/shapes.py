@@ -749,6 +749,16 @@ class Shape:
             return Shape.cast(s.wrapped)
         return Shape.cast(native.read_brep(str(f)))
 
+    @classmethod
+    def importBin(cls, f) -> "Shape":
+        """Reads a binary BRep file (OCCT's BinTools; from a path, or a binary file object)."""
+        if hasattr(f, "read"):
+            data = f.read()
+        else:
+            with open(str(f), "rb") as file:
+                data = file.read()
+        return Shape.cast(native.read_brep_binary(data))
+
     def exportStep(self, fileName: str, unit: str = "MM", outputUnit=None, **kwargs):
         from . import exporters
 

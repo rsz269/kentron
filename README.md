@@ -59,7 +59,7 @@ conversation's context, read back from the cache).
 About 13,430 tests run. About 1,150 of them are known gaps, marked as expected failures, so
 `cargo test` is green.
 
-- **OCCT's DRAW scripts:** 9,661 of 10,796 pass (89%). Scripts that need OCCT's unpublished
+- **OCCT's DRAW scripts:** 9,662 of 10,796 pass (89%). Scripts that need OCCT's unpublished
   test models are not run.
 - **OCCT's GTests** for geometry and topology, translated by hand.
 - **USD BRep's tests:** 212 cases, translated.

@@ -1557,7 +1557,12 @@ impl Draw {
     ///
     /// Example: `binrestore … a`
     pub fn binrestore(&mut self, args: &[&str]) -> DrawResult {
-        self.not_implemented("binrestore", args)
+        // `binrestore file name`: a shape saved in OCCT's binary BRep format.
+        let [file, name] = args else { return self.not_implemented("binrestore", args) };
+        let bytes = std::fs::read(file).map_err(|e| DrawError::Failed(format!("binrestore: {file}: {e}")))?;
+        let shape = kentron::io::brep::read_binary(&mut self.model, &mut bytes.as_slice())?;
+        self.set_shape_var(name, shape)?;
+        Ok(String::new())
     }
     /// DRAW command `blend`: 354 uses in 337 converted scripts.
     ///

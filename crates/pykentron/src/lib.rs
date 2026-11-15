@@ -1244,6 +1244,12 @@ fn read_brep(path: &str) -> PyResult<Handle> {
     with_model(|m| kentron::io::brep::read(m, &mut f)).map(handle)
 }
 
+/// Reads a binary BRep file's contents (OCCT's `BinTools`).
+#[pyfunction]
+fn read_brep_binary(data: &[u8]) -> PyResult<Handle> {
+    with_model(|m| kentron::io::brep::read_binary(m, &mut &data[..])).map(handle)
+}
+
 /// Writes a BRep file.
 #[pyfunction]
 fn write_brep(shape: Handle, path: &str) -> PyResult<()> {
@@ -1501,6 +1507,7 @@ fn _kentron(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(face_normal_at, m)?)?;
     m.add_function(wrap_pyfunction!(face_uv_center_point, m)?)?;
     m.add_function(wrap_pyfunction!(read_brep, m)?)?;
+    m.add_function(wrap_pyfunction!(read_brep_binary, m)?)?;
     m.add_function(wrap_pyfunction!(write_brep, m)?)?;
     m.add_function(wrap_pyfunction!(read_step, m)?)?;
     m.add_function(wrap_pyfunction!(read_step_assembly, m)?)?;

@@ -53,7 +53,8 @@ def importBrep(fileName: str):
 
 
 def importBin(fileName: str):
-    raise NotImplementedError("reading OCCT's binary BREP files")
+    """The binary BREP file's shape on a workplane."""
+    return _workplane()("XY").newObject([Shape.importBin(str(fileName))])
 
 
 def importStep(fileName: str, unit: str = "MM"):

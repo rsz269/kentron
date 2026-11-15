@@ -6,6 +6,9 @@
 //! them, and last a reference to the root shape. A reference to a shape is its orientation
 //! sign, its number counted back from the end of the table, and a location.
 //!
+//! OCCT's binary BRep format (`BinTools`, DRAW's `binsave`/`binrestore`) holds the same
+//! tables, its numbers in binary ([`read_binary`]).
+//!
 //! Reading builds the shapes in a [`Model`]. Locations of sub-shapes are applied to their
 //! geometry, except those of a compound's children, which become the children's placements.
 //! Meshes (polygons and triangulations) are skipped.
@@ -67,6 +70,16 @@ pub fn read(model: &mut Model, input: &mut dyn Read) -> Result<Shape> {
     let mut text = String::new();
     input.read_to_string(&mut text).map_err(|e| Error::InvalidInput(format!("reading BRep: {e}")))?;
     let file = parse(&text)?;
+    Builder::new(model, &file).root()
+}
+
+/// Reads a shape saved in OCCT's binary BRep format (`BinTools::Write`, DRAW's `binsave`)
+/// into `model` (any version).
+#[doc(alias = "BinTools::Read")]
+pub fn read_binary(model: &mut Model, input: &mut dyn Read) -> Result<Shape> {
+    let mut data = Vec::new();
+    input.read_to_end(&mut data).map_err(|e| Error::InvalidInput(format!("reading BRep: {e}")))?;
+    let file = parse_binary(&data)?;
     Builder::new(model, &file).root()
 }
 
@@ -148,34 +161,25 @@ impl<'a> Words<'a> {
             Err(bad(format!("expected {keyword}, found {w}")))
         }
     }
+}
 
-    /// A real number; like OCCT's `strtod`, the longest numeric prefix (0 if none).
-    fn real(&mut self) -> Result<f64> {
-        let w = self.word()?;
-        if let Ok(v) = w.parse() {
-            return Ok(v);
-        }
-        Ok((1..w.len()).rev().find_map(|n| w.get(..n)?.parse().ok()).unwrap_or(0.0))
-    }
+/// What the tables are read from: the text format's words, or the binary format's numbers
+/// ([`Bytes`]: type codes and flags there single bytes, degrees two).
+trait Tokens {
+    fn real(&mut self) -> Result<f64>;
 
-    fn int(&mut self) -> Result<i64> {
-        let w = self.word()?;
-        let digits = w.char_indices().find(|&(i, c)| !(c.is_ascii_digit() || (i == 0 && (c == '-' || c == '+'))));
-        let (number, rest) = match digits {
-            Some((i, _)) => (&w[..i], Some(&w[i..])),
-            None => (w, None),
-        };
-        let value = number.parse().map_err(|_| bad(format!("expected an integer, found {w}")))?;
-        self.rest = rest;
-        Ok(value)
-    }
+    fn int(&mut self) -> Result<i64>;
+
+    /// A geometry's type code.
+    fn code(&mut self) -> Result<i64>;
+
+    fn flag(&mut self) -> Result<bool>;
+
+    /// A curve's or surface's degree.
+    fn degree(&mut self) -> Result<usize>;
 
     fn count(&mut self) -> Result<usize> {
         usize::try_from(self.int()?).map_err(|_| bad("negative count"))
-    }
-
-    fn flag(&mut self) -> Result<bool> {
-        Ok(self.int()? != 0)
     }
 
     fn point(&mut self) -> Result<Point> {
@@ -231,11 +235,46 @@ impl<'a> Words<'a> {
     }
 }
 
-fn pole3(w: &mut Words) -> Result<Point> {
+impl Tokens for Words<'_> {
+    /// A real number; like OCCT's `strtod`, the longest numeric prefix (0 if none).
+    fn real(&mut self) -> Result<f64> {
+        let w = self.word()?;
+        if let Ok(v) = w.parse() {
+            return Ok(v);
+        }
+        Ok((1..w.len()).rev().find_map(|n| w.get(..n)?.parse().ok()).unwrap_or(0.0))
+    }
+
+    fn int(&mut self) -> Result<i64> {
+        let w = self.word()?;
+        let digits = w.char_indices().find(|&(i, c)| !(c.is_ascii_digit() || (i == 0 && (c == '-' || c == '+'))));
+        let (number, rest) = match digits {
+            Some((i, _)) => (&w[..i], Some(&w[i..])),
+            None => (w, None),
+        };
+        let value = number.parse().map_err(|_| bad(format!("expected an integer, found {w}")))?;
+        self.rest = rest;
+        Ok(value)
+    }
+
+    fn code(&mut self) -> Result<i64> {
+        self.int()
+    }
+
+    fn flag(&mut self) -> Result<bool> {
+        Ok(self.int()? != 0)
+    }
+
+    fn degree(&mut self) -> Result<usize> {
+        self.count()
+    }
+}
+
+fn pole3<T: Tokens>(w: &mut T) -> Result<Point> {
     w.point()
 }
 
-fn pole2(w: &mut Words) -> Result<Point2> {
+fn pole2<T: Tokens>(w: &mut T) -> Result<Point2> {
     w.point2()
 }
 
@@ -251,9 +290,9 @@ struct Spline<P> {
 }
 
 impl<P: ControlPoint> Spline<P> {
-    fn read(w: &mut Words, pole: impl Fn(&mut Words) -> Result<P>) -> Result<Self> {
+    fn read<T: Tokens>(w: &mut T, pole: impl Fn(&mut T) -> Result<P>) -> Result<Self> {
         let (rational, periodic) = (w.flag()?, w.flag()?);
-        let (degree, pole_count, knot_count) = (w.count()?, w.count()?, w.count()?);
+        let (degree, pole_count, knot_count) = (w.degree()?, w.count()?, w.count()?);
         let mut poles = Vec::with_capacity(pole_count);
         let mut weights = Vec::with_capacity(pole_count);
         for _ in 0..pole_count {
@@ -280,9 +319,9 @@ impl<P: ControlPoint> Spline<P> {
     }
 }
 
-fn bezier<P: ControlPoint>(w: &mut Words, pole: impl Fn(&mut Words) -> Result<P>) -> Result<BezierCurve<P>> {
+fn bezier<P: ControlPoint, T: Tokens>(w: &mut T, pole: impl Fn(&mut T) -> Result<P>) -> Result<BezierCurve<P>> {
     let rational = w.flag()?;
-    let degree = w.count()?;
+    let degree = w.degree()?;
     let mut poles = Vec::with_capacity(degree + 1);
     let mut weights = Vec::with_capacity(degree + 1);
     for _ in 0..=degree {
@@ -304,8 +343,8 @@ enum RawCurve {
 }
 
 impl RawCurve {
-    fn read(w: &mut Words) -> Result<Self> {
-        Ok(match w.int()? {
+    fn read<T: Tokens>(w: &mut T) -> Result<Self> {
+        Ok(match w.code()? {
             1 => RawCurve::Ready(Curve::Line(Line::new(w.point()?, w.direction()?))),
             2 => RawCurve::Ready(Curve::Circle(Circle::new(w.frame()?, w.real()?))),
             3 => RawCurve::Ready(Curve::Ellipse(Ellipse::new(w.frame()?, w.real()?, w.real()?))),
@@ -357,8 +396,8 @@ enum RawCurve2 {
 }
 
 impl RawCurve2 {
-    fn read(w: &mut Words) -> Result<Self> {
-        Ok(match w.int()? {
+    fn read<T: Tokens>(w: &mut T) -> Result<Self> {
+        Ok(match w.code()? {
             1 => RawCurve2::Ready(Curve2::Line(Line2::new(w.point2()?, w.direction2()?))),
             2 => RawCurve2::Ready(Curve2::Circle(Circle2::new(w.frame2()?, w.real()?))),
             3 => RawCurve2::Ready(Curve2::Ellipse(Ellipse2::new(w.frame2()?, w.real()?, w.real()?))),
@@ -400,8 +439,8 @@ enum RawSurface {
 }
 
 impl RawSurface {
-    fn read(w: &mut Words) -> Result<Self> {
-        Ok(match w.int()? {
+    fn read<T: Tokens>(w: &mut T) -> Result<Self> {
+        Ok(match w.code()? {
             1 => RawSurface::Ready(Surface::Plane(Plane::from_frame(w.frame3()?))),
             2 => RawSurface::Ready(Surface::Cylinder(Cylinder::new(w.frame3()?, w.real()?))),
             3 => {
@@ -420,7 +459,7 @@ impl RawSurface {
             }
             8 => {
                 let (u_rational, v_rational) = (w.flag()?, w.flag()?);
-                let (u_degree, v_degree) = (w.count()?, w.count()?);
+                let (u_degree, v_degree) = (w.degree()?, w.degree()?);
                 let (poles, weights) = grid(w, u_degree + 1, v_degree + 1, u_rational || v_rational)?;
                 RawSurface::Ready(Surface::Bezier(match weights {
                     Some(weights) => BezierSurface::rational(poles, weights),
@@ -430,18 +469,18 @@ impl RawSurface {
             9 => {
                 let (u_rational, v_rational) = (w.flag()?, w.flag()?);
                 let (u_periodic, v_periodic) = (w.flag()?, w.flag()?);
-                let (u_degree, v_degree) = (w.count()?, w.count()?);
+                let (u_degree, v_degree) = (w.degree()?, w.degree()?);
                 let (u_poles, v_poles) = (w.count()?, w.count()?);
                 let (u_knots, v_knots) = (w.count()?, w.count()?);
                 let (poles, weights) = grid(w, u_poles, v_poles, u_rational || v_rational)?;
-                let knot_vector = |w: &mut Words, count, degree, periodic| -> Result<KnotVector> {
+                fn knot_vector<T: Tokens>(w: &mut T, count: usize, degree: usize, periodic: bool) -> Result<KnotVector> {
                     let (knots, mults) = w.knots(count)?;
                     Ok(if periodic {
                         KnotVector::periodic(knots, mults, degree)
                     } else {
                         KnotVector::new(knots, mults, degree)
                     })
-                };
+                }
                 let u = knot_vector(w, u_knots, u_degree, u_periodic)?;
                 let v = knot_vector(w, v_knots, v_degree, v_periodic)?;
                 RawSurface::BSpline { poles, weights, u, v }
@@ -480,7 +519,7 @@ impl RawSurface {
 
 /// A grid of poles `[i][j]` (with weights if `rational`).
 #[allow(clippy::type_complexity)]
-fn grid(w: &mut Words, nu: usize, nv: usize, rational: bool) -> Result<(Vec<Vec<Point>>, Option<Vec<Vec<f64>>>)> {
+fn grid<T: Tokens>(w: &mut T, nu: usize, nv: usize, rational: bool) -> Result<(Vec<Vec<Point>>, Option<Vec<Vec<f64>>>)> {
     let mut poles = vec![Vec::with_capacity(nv); nu];
     let mut weights = vec![Vec::with_capacity(nv); nu];
     for i in 0..nu {
@@ -831,6 +870,307 @@ fn read_shape(w: &mut Words, version: FormatVersion, count: usize) -> Result<Raw
     }
     let mut children = Vec::new();
     while let Some(r) = read_ref(w, count)? {
+        children.push(r);
+    }
+    Ok(RawShape { kind, geometry, children })
+}
+
+// --- the binary format --------------------------------------------------------------------
+
+/// The binary format's header lines, by version (`BinTools_FormatVersion`: 2 adds the
+/// (u, v) end points of curves on surfaces, 3 writes points on curves and surfaces
+/// unambiguously, 4 adds meshes' normals and drops the end points again).
+const BINARY_VERSIONS: [(&str, u8); 4] = [
+    ("Open CASCADE Topology V1 (c)", 1),
+    ("Open CASCADE Topology V2 (c)", 2),
+    ("Open CASCADE Topology V3 (c)", 3),
+    ("Open CASCADE Topology V4, (c) Open Cascade", 4),
+];
+
+/// The binary format's contents: little-endian numbers (reals of 8 bytes, integers of 4,
+/// degrees of 2, type codes and flags of 1), each table headed by its name and size in
+/// words, as the text format's.
+struct Bytes<'a> {
+    data: &'a [u8],
+    at: usize,
+}
+
+impl<'a> Bytes<'a> {
+    fn take(&mut self, n: usize) -> Result<&'a [u8]> {
+        let bytes = self.data.get(self.at..self.at + n).ok_or_else(|| bad("unexpected end of file"))?;
+        self.at += n;
+        Ok(bytes)
+    }
+
+    fn byte(&mut self) -> Result<u8> {
+        Ok(self.take(1)?[0])
+    }
+
+    fn skip_space(&mut self) {
+        while self.data.get(self.at).is_some_and(|b| b.is_ascii_whitespace()) {
+            self.at += 1;
+        }
+    }
+
+    /// A word, as C++ streams read one (`>>`): after any white space, up to the next.
+    fn word(&mut self) -> Result<&'a str> {
+        self.skip_space();
+        let start = self.at;
+        while self.data.get(self.at).is_some_and(|b| !b.is_ascii_whitespace()) {
+            self.at += 1;
+        }
+        if start == self.at {
+            return Err(bad("unexpected end of file"));
+        }
+        std::str::from_utf8(&self.data[start..self.at]).map_err(|_| bad("a table header that is not text"))
+    }
+
+    /// A table's header: its name and size, then the end of the line.
+    fn table(&mut self, name: &str) -> Result<usize> {
+        let word = self.word()?;
+        if word != name {
+            return Err(bad(format!("expected {name}, found {word}")));
+        }
+        let count = self.word()?.parse().map_err(|_| bad(format!("a bad size of the {name} table")))?;
+        self.byte()?;
+        Ok(count)
+    }
+
+    fn skip(&mut self, n: usize) -> Result<()> {
+        self.take(n).map(|_| ())
+    }
+}
+
+impl Tokens for Bytes<'_> {
+    fn real(&mut self) -> Result<f64> {
+        Ok(f64::from_le_bytes(self.take(8)?.try_into().expect("8 bytes")))
+    }
+
+    fn int(&mut self) -> Result<i64> {
+        Ok(i32::from_le_bytes(self.take(4)?.try_into().expect("4 bytes")) as i64)
+    }
+
+    fn code(&mut self) -> Result<i64> {
+        Ok(self.byte()? as i64)
+    }
+
+    fn flag(&mut self) -> Result<bool> {
+        Ok(self.byte()? != 0)
+    }
+
+    fn degree(&mut self) -> Result<usize> {
+        Ok(u16::from_le_bytes(self.take(2)?.try_into().expect("2 bytes")) as usize)
+    }
+}
+
+fn parse_binary(data: &[u8]) -> Result<File> {
+    // The header line naming the version (the format's lines before it skipped).
+    let mut at = 0;
+    let version = loop {
+        let end = data[at..].iter().position(|&b| b == b'\n').map_or(data.len(), |i| at + i);
+        let line = String::from_utf8_lossy(&data[at..end]);
+        let line = line.trim_end_matches('\r');
+        if let Some(&(_, v)) = BINARY_VERSIONS.iter().find(|(h, _)| *h == line) {
+            at = end + 1;
+            break v;
+        }
+        if end >= data.len() {
+            return Err(bad("no Open CASCADE Topology header"));
+        }
+        at = end + 1;
+    };
+    let mut b = Bytes { data, at };
+    // The locations: elementary (`1` and a 3×4 matrix) or products of powers of earlier ones
+    // (`2`, then index and power pairs ending with index 0); identities not numbered.
+    let mut locations = vec![Transform::IDENTITY];
+    for _ in 0..b.table("Locations")? {
+        let t = match b.byte()? {
+            1 => {
+                let mut rows = [[0.0; 4]; 3];
+                for row in &mut rows {
+                    for v in row.iter_mut() {
+                        *v = b.real()?;
+                    }
+                }
+                Some(Transform::from_rows(rows).ok_or_else(|| bad("a singular location"))?)
+            }
+            2 => {
+                let mut product = Transform::IDENTITY;
+                let mut empty = true;
+                loop {
+                    let index = b.count()?;
+                    if index == 0 {
+                        break;
+                    }
+                    let power = b.int()? as i32;
+                    let l = locations.get(index).ok_or_else(|| bad(format!("no location {index}")))?;
+                    product = l.powi(power) * product;
+                    empty &= power == 0;
+                }
+                (!empty).then_some(product)
+            }
+            t => return Err(bad(format!("unknown location type {t}"))),
+        };
+        if let Some(t) = t {
+            locations.push(t);
+        }
+    }
+    let curves2 = (0..b.table("Curve2ds")?).map(|_| RawCurve2::read(&mut b)).collect::<Result<Vec<_>>>()?;
+    let curves = (0..b.table("Curves")?).map(|_| RawCurve::read(&mut b)).collect::<Result<Vec<_>>>()?;
+    // Meshes, skipped: 3D polygons, polygons on triangulations.
+    for _ in 0..b.table("Polygon3D")? {
+        let (nodes, has_parameters) = (b.count()?, b.flag()?);
+        b.skip(8 * (1 + 3 * nodes + if has_parameters { nodes } else { 0 }))?;
+    }
+    for _ in 0..b.table("PolygonOnTriangulations")? {
+        let nodes = b.count()?;
+        b.skip(4 * nodes + 8)?;
+        if b.flag()? {
+            b.skip(8 * nodes)?;
+        }
+    }
+    let surfaces = (0..b.table("Surfaces")?).map(|_| RawSurface::read(&mut b)).collect::<Result<Vec<_>>>()?;
+    for _ in 0..b.table("Triangulations")? {
+        let (nodes, triangles, has_uv) = (b.count()?, b.count()?, b.flag()?);
+        let has_normals = version >= 4 && b.flag()?;
+        b.skip(8 + 8 * 3 * nodes + if has_uv { 8 * 2 * nodes } else { 0 } + 4 * 3 * triangles + if has_normals { 4 * 3 * nodes } else { 0 })?;
+    }
+    let count = b.table("TShapes")?;
+    let mut shapes = Vec::with_capacity(count);
+    for _ in 0..count {
+        shapes.push(read_binary_shape(&mut b, version, count)?);
+    }
+    let root = read_binary_ref(&mut b, count)?.ok_or_else(|| bad("no root shape"))?;
+    Ok(File { locations, curves2, curves, surfaces, shapes, root })
+}
+
+/// A shape reference (an orientation byte, the number counted back from the end of the
+/// table and a location), or `None` for the end of a list (`*`).
+fn read_binary_ref(b: &mut Bytes, count: usize) -> Result<Option<Ref>> {
+    // (Read as a C++ stream reads a character: after any white space.)
+    b.skip_space();
+    let orientation = match b.byte()? {
+        b'*' => return Ok(None),
+        0 => Orientation::Forward,
+        1 => Orientation::Reversed,
+        2 => Orientation::Internal,
+        3 => Orientation::External,
+        o => return Err(bad(format!("bad shape orientation {o}"))),
+    };
+    let number = b.count()?;
+    if number == 0 || number > count {
+        return Err(bad(format!("shape reference {number} out of range")));
+    }
+    let location = b.count()?;
+    Ok(Some(Ref { index: count - number, orientation, location }))
+}
+
+fn read_binary_shape(b: &mut Bytes, version: u8, count: usize) -> Result<RawShape> {
+    // (`TopAbs_ShapeEnum`.)
+    let kind = match b.byte()? {
+        0 => NodeKind::Compound,
+        1 => NodeKind::CompSolid,
+        2 => NodeKind::Solid,
+        3 => NodeKind::Shell,
+        4 => NodeKind::Face,
+        5 => NodeKind::Wire,
+        6 => NodeKind::Edge,
+        7 => NodeKind::Vertex,
+        k => return Err(bad(format!("unknown shape type {k}"))),
+    };
+    let geometry = match kind {
+        NodeKind::Vertex => {
+            let (tolerance, point) = (b.real()?, b.point()?);
+            // Parameters of the point on curves and surfaces: not needed. (Versions 3 and 4
+            // give the kind first; older ones the parameter, or nothing before a kind of 0,
+            // told apart as OCCT does.)
+            loop {
+                let kind = if version >= 3 {
+                    let kind = b.byte()?;
+                    if (1..=3).contains(&kind) {
+                        b.real()?;
+                    }
+                    kind
+                } else {
+                    let at = b.at;
+                    b.real()?;
+                    let kind = b.byte()?;
+                    if (1..=3).contains(&kind) {
+                        kind
+                    } else {
+                        b.at = at;
+                        let kind = b.byte()?;
+                        if (1..=3).contains(&kind) {
+                            b.real()?;
+                        }
+                        kind
+                    }
+                };
+                match kind {
+                    0 => break,
+                    1 => b.skip(4)?,
+                    2 => b.skip(8)?,
+                    3 => b.skip(8 + 4)?,
+                    t => return Err(bad(format!("unknown point representation {t}"))),
+                }
+                b.skip(4)?; // location
+            }
+            Geometry::Vertex { point, tolerance }
+        }
+        NodeKind::Edge => {
+            let tolerance = b.real()?;
+            let (_same_parameter, _same_range, degenerate) = (b.flag()?, b.flag()?, b.flag()?);
+            let (mut curve, mut on_surfaces) = (None, Vec::new());
+            loop {
+                match b.byte()? {
+                    0 => break,
+                    1 => {
+                        let (c, l) = (b.count()?, b.count()?);
+                        curve = Some((c, l, b.real()?, b.real()?));
+                    }
+                    rep @ (2 | 3) => {
+                        let curve = b.count()?;
+                        let reversed_curve = if rep == 3 {
+                            let c = b.count()?;
+                            b.byte()?; // continuity
+                            Some(c)
+                        } else {
+                            None
+                        };
+                        let (surface, location) = (b.count()?, b.count()?);
+                        let (first, last) = (b.real()?, b.real()?);
+                        if version == 2 || version == 3 {
+                            b.skip(4 * 8)?; // the (u, v) end points
+                        }
+                        on_surfaces.push(OnSurface { curve, reversed_curve, surface, location, first, last });
+                    }
+                    // Continuity across two faces.
+                    4 => b.skip(1 + 4 * 4)?,
+                    5 => b.skip(4 * 2)?,
+                    6 => b.skip(4 * 3)?,
+                    7 => b.skip(4 * 4)?,
+                    t => return Err(bad(format!("unknown edge representation {t}"))),
+                }
+            }
+            Geometry::Edge { tolerance, degenerate, curve, on_surfaces }
+        }
+        NodeKind::Face => {
+            let _natural_restriction = b.flag()?;
+            let tolerance = b.real()?;
+            let (surface, location) = (b.count()?, b.count()?);
+            // An optional triangulation (`2` and its index).
+            if b.byte()? == 2 {
+                b.skip(4)?;
+            }
+            Geometry::Face { tolerance, surface: (surface > 0).then_some((surface, location)) }
+        }
+        _ => Geometry::None,
+    };
+    // The flags (free, modified, checked, orientable, closed, infinite, convex), then the
+    // sub-shapes.
+    b.skip(7)?;
+    let mut children = Vec::new();
+    while let Some(r) = read_binary_ref(b, count)? {
         children.push(r);
     }
     Ok(RawShape { kind, geometry, children })
@@ -1550,6 +1890,28 @@ impl<'a> Writer<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// OCCT's binary BRep (BinTools), versions 3 and 4 (CadQuery 2.8's OCCT 7.9 writes 4):
+    /// a box of 10 with a hole of radius 2 and its vertical edges rounded by 1, turned by 30°
+    /// about z and moved to (1, 2, 3) by locations, and meshed (tables read past). Its
+    /// volume, area and centre as OCCT's; its vertices farthest along x where the rounding
+    /// leaves the side at (5, -4), turned: at 1 + 5 cos 30° + 4 sin 30°.
+    #[test]
+    fn reads_binary_files() {
+        for data in [&include_bytes!("tests/filleted_box_v3.bin")[..], &include_bytes!("tests/filleted_box_v4.bin")[..]] {
+            let mut model = Model::new();
+            let solid = read_binary(&mut model, &mut &data[..]).unwrap();
+            assert!(crate::validity::check(&model, solid).is_valid());
+            let volume = crate::properties::volume(&model, solid);
+            let area = crate::properties::area(&model, solid).mass;
+            assert!((volume.mass - 865.752220392).abs() < 1e-6, "{}", volume.mass);
+            assert!((area - 681.646003294).abs() < 1e-6, "{area}");
+            assert!(volume.center_of_mass.distance(Point::new(1.0, 2.0, 3.0)) < 1e-6, "{:?}", volume.center_of_mass);
+            let x = model.unique_subshapes(solid, NodeKind::Vertex).into_iter().map(|v| model.point(v).x).fold(f64::MIN, f64::max);
+            let (sin, cos) = 30f64.to_radians().sin_cos();
+            assert!((x - (1.0 + 5.0 * cos + 4.0 * sin)).abs() < 1e-9, "{x}");
+        }
+    }
 
     /// A line segment between two vertices, as OCCT writes it.
     #[test]

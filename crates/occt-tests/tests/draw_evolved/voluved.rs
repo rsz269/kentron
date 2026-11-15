@@ -42,16 +42,13 @@ fn bug26470_2() -> DrawResult<()> {
 
 /// `tests/evolved/voluved/bug30781`
 #[test]
-#[should_panic]
-fn bug30781() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.binrestore(&[data_file("bug30781.bin").as_str(), "s"])?;
-        d.explode(&["s"])?;
-        d.evolved(&["result", "-s", "s_1", "-p", "s_2", "-solid", "-a", "-v", "-t", "1.e-6"])?;
-        d.checkshape(&["result"])?;
-        d.checknbshapes(&["result", "-vertex", "24", "-edge", "38", "-wire", "14", "-face", "14"])?;
-        d.checkprops(&["result", "-s", "41330.7"])?;
-        Ok(())
-    })
+fn bug30781() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.binrestore(&[data_file("bug30781.bin").as_str(), "s"])?;
+    d.explode(&["s"])?;
+    d.evolved(&["result", "-s", "s_1", "-p", "s_2", "-solid", "-a", "-v", "-t", "1.e-6"])?;
+    d.checkshape(&["result"])?;
+    d.checknbshapes(&["result", "-vertex", "24", "-edge", "38", "-wire", "14", "-face", "14"])?;
+    d.checkprops(&["result", "-s", "41330.7"])?;
+    Ok(())
 }
