@@ -819,6 +819,41 @@ fn fillet_solid_edges_keeping(model: &mut Model, shape: Shape, edges: &[(Shape, 
     Ok(rounded)
 }
 
+/// How far a fillet of radius `r` along a straight convex edge reaches across its planar
+/// face `k`, where its other face is a cylinder along the edge (a hole's wall breaking
+/// through the face, or a boss's): exactly, the ball's centre `r` off the plane and `r` off
+/// the cylinder (outside a hole's, inside a boss's), not by the cylinder's tangent plane at
+/// the edge, which a hole's wall curves away from. `None` where the cylinder is not along
+/// the edge or the ball fits nowhere.
+fn reach_by_cylinder(c: &Corner, k: usize, r: f64, cylinder: &crate::geometry::surface::Cylinder, sense: f64) -> Option<f64> {
+    let frame = cylinder.frame();
+    let axis = Vector::from(frame.z());
+    if axis.cross(c.tangent).length() > 1e-9 * c.tangent.length() {
+        return None;
+    }
+    let unit = |v: Vector| (v.length() > tolerance::RESOLUTION).then(|| v / v.length());
+    let along = unit(c.into[k])?;
+    // (The plane's side the material lies on: towards the other face, the corner convex.)
+    let other = c.into[1 - k];
+    let normal = unit(other - along * other.dot(along))?;
+    let centre = c.origin + normal * r;
+    let w = centre - frame.origin();
+    let w = w - axis * w.dot(axis);
+    // (The surface's normal, outward from the axis, points out of a boss and into the
+    // material round a hole.)
+    let reach = if sense > 0.0 { cylinder.radius() - r } else { cylinder.radius() + r };
+    if reach <= 0.0 {
+        return None;
+    }
+    let (b, q) = (along.dot(w), w.dot(w) - reach * reach);
+    let discriminant = b * b - q;
+    if discriminant < 0.0 {
+        return None;
+    }
+    let root = discriminant.sqrt();
+    [-b - root, -b + root].into_iter().filter(|&x| x > tolerance::LINEAR).min_by(|x, y| x.total_cmp(y))
+}
+
 /// How far from tangent (one less the cosine of the angle) edges may meet, with their faces,
 /// for a fillet to be carried on from one to the other where it cannot end between them.
 pub(crate) const KINK: f64 = 2e-5;
@@ -862,9 +897,13 @@ fn fillet_solid_edges_as(model: &mut Model, shape: Shape, edges: &[(Shape, f64)]
                 }
                 // How far each contact lies from its edge across the face, and the edges
                 // apart across it (the second into the face from the first).
-                let reach = |c: &Corner, r: f64| {
+                let reach = |c: &Corner, k: usize, r: f64| {
                     let half = 0.5 * c.into[0].angle(c.into[1]);
-                    r / half.tan()
+                    let flat = r / half.tan();
+                    match &c.faces[1 - k] {
+                        (_, Surface::Cylinder(cylinder), sense) => reach_by_cylinder(c, k, r, cylinder, *sense).unwrap_or(flat),
+                        _ => flat,
+                    }
                 };
                 let apart = (b.origin - a.origin).dot(a.into[ka]);
                 let facing = (a.origin - b.origin).dot(b.into[kb]) > tolerance::LINEAR;
@@ -872,7 +911,7 @@ fn fillet_solid_edges_as(model: &mut Model, shape: Shape, edges: &[(Shape, f64)]
                 let along = |p: Point| (p - a.origin).dot(a.tangent) / a.tangent.length();
                 let (lo, hi) = (along(b.origin).min(along(b.end)), along(b.origin).max(along(b.end)));
                 let beside = hi > tolerance::LINEAR && lo < a.origin.distance(a.end) - tolerance::LINEAR;
-                if apart > tolerance::LINEAR && facing && beside && reach(a, *ra) + reach(b, *rb) > apart + tolerance::LINEAR {
+                if apart > tolerance::LINEAR && facing && beside && reach(a, ka, *ra) + reach(b, kb, *rb) > apart + tolerance::LINEAR {
                     return Err(Error::InvalidInput("two fillets passing each other across a face".into()));
                 }
             }
@@ -5932,6 +5971,35 @@ mod tests {
                 assert!(validity::check(&model, r).is_valid());
             }
         }
+    }
+
+    /// A block 12 x 10 x 2 with a hole of radius 3.44 breaking through its side, its axis
+    /// 0.15 outside it, 3.56 from the block's corner: the hole's wall meets the side nearly
+    /// square (92.5 degrees), but curves away from it, so that a fillet of radius 2 there
+    /// reaches only 1.56 across the side, and with the corner's (2) they leave 0.003 of it
+    /// between them (as OCCT makes them: 202.359895), not passing each other as the walls'
+    /// tangent planes at the edges would have it.
+    #[test]
+    fn fillets_beside_a_hole_breaking_through_a_narrow_face() {
+        let mut model = Model::new();
+        let block = Cuboid::from_corners(Point::new(-12.0, -20.0, 0.0), Point::new(0.0, -10.0, 2.0)).build(&mut model).unwrap();
+        let hole = crate::primitives::Cylinder::new(3.44, 2.0).with_frame(Frame::from_z(Point::new(-7.0, -20.15, 0.0), Direction::Z)).build(&mut model).unwrap();
+        let shape = boolean::difference(&mut model, block, hole).unwrap();
+        let x = -7.0 + (3.44f64.powi(2) - 0.15f64.powi(2)).sqrt();
+        let edges: Vec<Shape> = model
+            .unique_subshapes(shape, NodeKind::Edge)
+            .into_iter()
+            .filter(|&e| {
+                let (a, b) = model.edge_vertices(e);
+                let (p, q) = (model.point(a), model.point(b));
+                (p.z - q.z).abs() > 1.0 && (p.y + 20.0).abs() < 1e-9 && ((p.x).abs() < 1e-9 || (p.x - x).abs() < 1e-6)
+            })
+            .collect();
+        assert_eq!(edges.len(), 2);
+        let rounded = fillet(&mut model, shape, &edges, 2.0).unwrap();
+        assert!(validity::check(&model, rounded).is_valid(), "{:?}", validity::check(&model, rounded));
+        let volume = properties::volume(&model, rounded).mass;
+        assert!((volume - 202.35989487916382).abs() < 1e-6 * volume, "{volume}");
     }
 
     /// A slot whose ends are half circles of radius 0.75 between bulging B-spline sides,
