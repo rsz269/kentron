@@ -288,6 +288,42 @@ boolean may not find them on the surface.
 
 ## pykentron
 
+### Sweeps along CadQuery's helices, turned as OCCT's are
+
+*Found 2026-11-16 (`maistrotoad_print/swirlamp/v1.py`).*
+
+![A circle swept along CadQuery's helix, 3.5 off it: kentron's end turned short of CadQuery's, the volume 2% less](known-gaps/helix.svg)
+
+Pipes carry their profile in OCCT's corrected Frenet frame (ported, `sweep/corrected.rs`),
+whose angle law is stepped afresh over each interval where the spine is C2. OCCT's
+`makeHelix` is a B-spline of uniform spans (degree 7 to 14) joined C1, a few spans a turn
+or fewer; pykentron's is a cubic Hermite spline joined C1 every 1/32 turn. Along OCCT's
+own helix (read from BREP) kentron's frames match OCCT's to 1e-5 rad and the swept
+volumes match (107.7665, 400.3721); along pykentron's the law's steps are far shorter and
+come near the rotation-minimizing frame: 105.80 and 392.11, 2% less, as the figure shows.
+
+Building pykentron's helix with OCCT's continuity (C2 cubics within OCCT's spans, through
+the helix 32 a turn, joined C1 only where OCCT's spans join; `_helix_spans` chooses them
+as OCCT does for 51 of 54 sampled helices) makes those sweeps CadQuery's (107.766,
+400.371), but breaks cq_warehouse's countersunk screws with hexalobular recesses (iso14581,
+iso14584, M6, `simple=False`): the union of head and threaded shank is not valid (44 faces
+for 37, area 793.3 for 778.9). The thread's raw end lies in the plane of the head's base,
+and its apex helix meets the base's circle (radius 3 both) at 3°: the helix's crossings of
+that circle and of the plane come out as two vertices 6e-5 and 9e-5 apart (the curves
+3e-6 apart across, at that angle), leaving sliver edges in the section and faces kept that
+are inside the head. The cubic Hermite helix, C1 at every knot, unites with the head
+soundly at the same density.
+
+- **Repro:** apply the helix change (built as described), then
+  `CounterSunkScrew(fastener_type="iso14581", size="M6-1", length=20, simple=False)` from
+  cq_warehouse: `isValid()` is False.
+- **Tried:** (1) Denser C2 helices (64, 96, 128 a turn, within 1e-7 of the helix): still
+  not valid, so not the helix's accuracy. (2) Reusing, for an edge meeting a face inside it
+  at a shallow angle, a vertex the edge already has where it crossed that face's boundary
+  edge only roughly (within that allowance over the angle's sine): removed one of the two
+  slivers, not the other (both crossings found inside the faces, neither on a boundary);
+  reverted.
+
 ### Solids from placed shells keep copies of their faces
 
 *Found 2026-11-08 (CadQuery's `tests/test_free_functions.py::test_solid`, the one test of
