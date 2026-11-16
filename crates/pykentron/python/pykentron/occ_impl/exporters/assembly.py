@@ -116,7 +116,7 @@ def exportStepMeta(assy, path: str, unit: str = "MM", outputUnit=None, **kwargs)
     return exportAssembly(assy, path, unit=unit, outputUnit=outputUnit)
 
 
-def exportCAF(assy, path: str, binary: bool = True) -> bool:
+def exportCAF(assy, path: str, binary: bool = False) -> bool:
     raise NotImplementedError(f"exporting assemblies to {'XBF' if binary else 'XML'} files")
 
 

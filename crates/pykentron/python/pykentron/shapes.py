@@ -1393,10 +1393,15 @@ class Wire(Shape, Mixin1D):
         total = turns * speed
         steps = max(8, int(math.ceil(abs(turns) * 32)))
 
+        # (A negative pitch, as a negative height, runs the line the other way from its
+        # origin: by the length along it, from 0 to `abs(total)`, as OCCT's segment.)
+        way = -1.0 if total < 0 else 1.0
+        total = abs(total)
+
         def at(s):
             # The surface's (u, v) along the line, and their rates.
-            u, v = sign * 2 * math.pi * s / speed, pitch * s / speed
-            du, dv = sign * 2 * math.pi / speed, pitch / speed
+            u, v = way * sign * 2 * math.pi * s / speed, way * pitch * s / speed
+            du, dv = way * sign * 2 * math.pi / speed, way * pitch / speed
             if cone:
                 r, h = radius + v * math.sin(half), v * math.cos(half)
                 dr, dh = dv * math.sin(half), dv * math.cos(half)

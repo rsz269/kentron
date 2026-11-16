@@ -367,6 +367,11 @@ class Location:
             args = tuple(values.get(n, 0) for n in names)
         if not args:
             pass
+        elif all(isinstance(a, (int, float)) for a in args):
+            # Numbers only: CadQuery's (x, y, z, rx, ry, rz) form, any of them left out.
+            x, y, z, rx, ry, rz = (list(args) + [0.0] * 6)[:6]
+            rows = _euler_rows(rx, ry, rz)
+            rows[0][3], rows[1][3], rows[2][3] = float(x), float(y), float(z)
         elif len(args) == 1 and (isinstance(args[0], (Location, Matrix)) or type(args[0]).__name__ == "gp_Trsf"):
             rows = [r[:] for r in args[0].rows]
         elif len(args) == 1 and isinstance(args[0], Plane):
@@ -385,15 +390,13 @@ class Location:
             rows = _euler_rows(*args[1])
             v = Vector(args[0])
             rows[0][3], rows[1][3], rows[2][3] = v.x, v.y, v.z
-        elif len(args) == 3 and not all(isinstance(a, (int, float)) for a in args):
+        elif len(args) == 3:
             t, ax, angle = args
             rows = _rotation_rows(ax, math.radians(angle))
             v = Vector(t)
             rows[0][3], rows[1][3], rows[2][3] = v.x, v.y, v.z
         else:
-            x, y, z, rx, ry, rz = (list(args) + [0.0] * 6)[:6]
-            rows = _euler_rows(rx, ry, rz)
-            rows[0][3], rows[1][3], rows[2][3] = float(x), float(y), float(z)
+            raise TypeError(f"no Location of {args!r}")
         self.rows = rows
 
     @property
