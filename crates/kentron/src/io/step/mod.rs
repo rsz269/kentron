@@ -27,7 +27,7 @@ use crate::geometry::ParametricCurve;
 use crate::math::{Axis, Direction, Direction2, Frame, Frame2, Point, Point2, Transform, Vector, Vector2};
 use crate::topology::{EdgeId, Model, NodeKind, Shape, VertexId};
 
-use super::faces::{align_periods, finish_face, fits, follows, project, CurveSpan, Gaps};
+use super::faces::{align_periods, finish_face, fits, follows, project_within, split_at_poles, CurveSpan, Gaps};
 
 pub mod binstep;
 pub use parse::{parse, Exchange, Instance, Value};
@@ -248,6 +248,8 @@ struct Reader<'a> {
     length: f64,
     /// Radians per angle unit of the file.
     angle: f64,
+    /// The distance accuracy the file declares (its uncertainty), in millimetres; 0 if none.
+    accuracy: f64,
     vertices: HashMap<usize, VertexId>,
     /// Vertices made at the ends of boundary curves (which the file gives no vertices),
     /// shared by position.
@@ -277,6 +279,7 @@ impl<'a> Reader<'a> {
             model,
             length,
             angle,
+            accuracy: accuracy(x),
             vertices: HashMap::default(),
             point_vertices: Vec::new(),
             edges: HashMap::default(),
@@ -745,6 +748,7 @@ impl<'a> Reader<'a> {
                     c.1 = !c.1;
                 }
             }
+            let mut coedges = split_at_poles(self.model, &mut self.gaps, coedges, &surface)?;
             align_periods(&mut coedges, &surface);
             loops.push((outer, coedges));
         }
@@ -885,7 +889,7 @@ impl<'a> Reader<'a> {
             // Parametrized otherwise but along the edge on a free-form surface (where
             // projecting is costly): kept, the tolerances covering the difference.
             Some(pc) if !matches!(surface, Surface::Plane(_) | Surface::Cylinder(_) | Surface::Cone(_) | Surface::Sphere(_) | Surface::Torus(_)) && follows(&pc, &made.span(), surface) => pc,
-            given => match (project(&made.span(), surface, given.is_some()), given) {
+            given => match (project_within(&made.span(), surface, given.is_some(), self.accuracy), given) {
                 (Ok(pc), _) => pc,
                 (Err(_), Some(pc)) => pc,
                 (Err(e), None) => return Err(e),
@@ -1264,6 +1268,20 @@ fn units(x: &Exchange) -> (f64, f64) {
     (length, angle)
 }
 
+/// The distance accuracy the file's geometric context declares
+/// (`UNCERTAINTY_MEASURE_WITH_UNIT`, a `DISTANCE_ACCURACY_VALUE`), in millimetres; 0 if none.
+fn accuracy(x: &Exchange) -> f64 {
+    let mut found: f64 = 0.0;
+    for (_, inst) in x.of_type("UNCERTAINTY_MEASURE_WITH_UNIT") {
+        let Some(p) = inst.record("UNCERTAINTY_MEASURE_WITH_UNIT") else { continue };
+        let (Some(value), Some(unit)) = (p.first().and_then(|v| x.real(v)), p.get(1).and_then(Value::as_reference).and_then(|r| x.get(r).ok())) else { continue };
+        if unit.has("LENGTH_UNIT") && value.is_finite() && value > 0.0 {
+            found = found.max(value * unit_factor(x, &unit, true));
+        }
+    }
+    found
+}
+
 /// Millimetres (lengths) or radians (angles) per unit.
 fn unit_factor(x: &Exchange, u: &Instance, is_length: bool) -> f64 {
     if let Some(si) = u.record("SI_UNIT") {
@@ -1620,6 +1638,23 @@ mod tests {
         let volume = crate::properties::volume(&model, shape).mass;
         let expected = std::f64::consts::PI * 100.0 * 5.0 / 3.0;
         assert!((volume - expected).abs() < 1e-6 * expected, "volume {volume}");
+    }
+
+    /// A quarter ball whose sphere face is bounded by a meridian running over the pole, as
+    /// files write a corner of rounds meeting at a sphere's pole (no seam, no edge at the
+    /// pole): the meridian split at the pole, the halves joined round it, the ball whole.
+    #[test]
+    fn a_sphere_bounded_by_a_meridian_over_its_pole() {
+        let mut model = Model::new();
+        let shape = read(&mut model, &mut include_str!("tests/quarter_ball_over_its_pole.step").as_bytes()).unwrap();
+        let report = crate::validity::check(&model, shape);
+        assert!(report.is_valid(), "{report:?}");
+        let volume = crate::properties::volume(&model, shape).mass;
+        let expected = std::f64::consts::PI * 1000.0 / 3.0;
+        assert!((volume - expected).abs() < 1e-6 * expected, "volume {volume}");
+        let area = crate::properties::area(&model, shape).mass;
+        let expected = std::f64::consts::PI * 100.0 * 2.0;
+        assert!((area - expected).abs() < 1e-6 * expected, "area {area}");
     }
 
     /// Unbounded conics' edges get their parameters from their vertices in closed form.

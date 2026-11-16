@@ -287,6 +287,74 @@ fn agreement(model: &Model, gaps: &Gaps, loops: &[(bool, Vec<Coedge>)], surface:
 }
 
 
+/// The loop on a sphere with each edge along a great circle through a pole split there (in
+/// the faces read before as well), as OCCT's `ShapeFix` splits it: no one pcurve runs over a
+/// pole, its longitude jumping there. Each half is a meridian's arc, its pcurve a line of
+/// fixed longitude; [`close_at_poles`] then joins the halves round the pole. Files leave
+/// such edges whole (a corner of rounds meeting at a sphere's pole).
+pub(crate) fn split_at_poles(model: &mut Model, gaps: &mut Gaps, coedges: Vec<Coedge>, surface: &Surface) -> Result<Vec<Coedge>> {
+    let Surface::Sphere(sphere) = surface else { return Ok(coedges) };
+    let (center, r) = (sphere.frame().origin(), sphere.radius());
+    let z = crate::math::Vector::from(sphere.frame().z());
+    let poles = [center + z * r, center - z * r];
+    let tolerance = 1e-9 * (1.0 + r + (center - Point::ORIGIN).length());
+    let mut out = Vec::with_capacity(coedges.len());
+    for c in coedges {
+        let Some((Curve::Circle(circle), _, _)) = model.edge_curve(Shape::from(c.0)) else {
+            out.push(c);
+            continue;
+        };
+        let curve = Curve::Circle(circle);
+        let (lo, hi) = (c.3.min(c.4), c.3.max(c.4));
+        // (A great circle: centred on the sphere's, of its radius; the latitude then moves as
+        // the circle's angle does. Where it passes a pole within the edge, or both.)
+        let great = circle.center().distance(center) <= tolerance && (circle.radius() - r).abs() <= tolerance;
+        let mut at: Vec<f64> = if great {
+            poles
+                .iter()
+                .filter_map(|&pole| {
+                    let foot = crate::geometry::extrema::nearest_on_curve(pole, &curve, lo, hi);
+                    let inside = foot.parameter - lo > 1e-9 * (hi - lo) && hi - foot.parameter > 1e-9 * (hi - lo);
+                    (foot.distance <= tolerance && inside).then_some(foot.parameter)
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        at.sort_by(f64::total_cmp);
+        // The pieces between, each a meridian's arc: its pcurve the line of its longitude.
+        let meridian = |a: f64, b: f64| -> Option<Curve2> {
+            let (_, va) = sphere.parameters(curve.point(a));
+            let (_, vb) = sphere.parameters(curve.point(b));
+            let (u, _) = sphere.parameters(curve.point(0.5 * (a + b)));
+            let sense = (vb - va).signum();
+            let along = ((vb - va).abs() - (b - a).abs()).abs() <= 1e-6 * (b - a).abs().max(1.0);
+            along.then(|| Curve2::Line(crate::geometry::curve2::Line2::new(Point2::new(u, va - sense * a), crate::math::Direction2::new(0.0, sense))))
+        };
+        let bounds: Vec<f64> = std::iter::once(lo).chain(at.iter().copied()).chain(std::iter::once(hi)).collect();
+        let pcurves: Option<Vec<Curve2>> = bounds.windows(2).map(|w| meridian(w[0], w[1])).collect();
+        let (Some(pcurves), false) = (pcurves, at.is_empty()) else {
+            out.push(c);
+            continue;
+        };
+        // (Split one point after another, each time the piece past the last split.)
+        let mut pieces = Vec::with_capacity(pcurves.len());
+        let mut rest = c.0;
+        for (k, &t) in at.iter().enumerate() {
+            let (h1, h2) = gaps.split(model, rest, t)?;
+            pieces.push((h1, c.1, pcurves[k].clone(), bounds[k], t));
+            rest = h2;
+        }
+        pieces.push((rest, c.1, pcurves[at.len()].clone(), at[at.len() - 1], hi));
+        if !c.1 {
+            pieces.reverse();
+        }
+        out.extend(pieces);
+    }
+    Ok(out)
+}
+
+
 /// The loop with degenerate edges added where consecutive pcurves end at the same point
 /// of a singular part of the surface (a cone's apex, a sphere's pole) but apart in its
 /// parameters: files leave those edges out.
@@ -370,11 +438,17 @@ pub(crate) fn follows(pcurve: &Curve2, edge: &CurveSpan, surface: &Surface) -> b
 /// The edge's curve projected onto the surface (`has_pcurve`: the file gives a pcurve to fall
 /// back on).
 pub(crate) fn project(edge: &CurveSpan, surface: &Surface, has_pcurve: bool) -> Result<Curve2> {
+    project_within(edge, surface, has_pcurve, 0.0)
+}
+
+/// [`project`], for a file declaring its distances accurate to `accuracy`: an edge off the
+/// surface by no more is on it, however short.
+pub(crate) fn project_within(edge: &CurveSpan, surface: &Surface, has_pcurve: bool, accuracy: f64) -> Result<Curve2> {
     use crate::geometry::project as pr;
     // (An edge running its curve backwards: the pcurve over the range the other way round, at
     // the same parameters.)
     if edge.first > edge.last {
-        return project(&CurveSpan { curve: edge.curve, first: edge.last, last: edge.first }, surface, has_pcurve);
+        return project_within(&CurveSpan { curve: edge.curve, first: edge.last, last: edge.first }, surface, has_pcurve, accuracy);
     }
     if let Some(pc) = pr::analytic_pcurve(edge.curve, surface) {
         return Ok(pc);
@@ -420,7 +494,8 @@ pub(crate) fn project(edge: &CurveSpan, surface: &Surface, has_pcurve: bool) -> 
     // Last, for an edge off its face by more than the fits allow (files accurate to a
     // hundredth or so, which OCCT reads with tolerances to match): fitted at the gap measured,
     // the edge's tolerance then covering it. (Not for one off by a tenth of its length: no
-    // edge of the face.)
+    // edge of the face; unless within the accuracy the file declares, as a short edge on a
+    // small fillet's corner may be.)
     let at_gap = || {
         if has_pcurve {
             return None;
@@ -432,7 +507,7 @@ pub(crate) fn project(edge: &CurveSpan, surface: &Surface, has_pcurve: bool) -> 
                 edge.curve.point(t(i as f64)).distance(edge.curve.point(t(i as f64 + 1.0)))
             })
             .sum::<f64>();
-        if gap > 0.1 * length {
+        if gap > 0.1 * length && gap > accuracy {
             return None;
         }
         let tolerance = 1.5 * gap + 1e-7;
@@ -946,3 +1021,27 @@ pub(crate) fn uv_area(coedges: &[(EdgeId, bool, Curve2, f64, f64)]) -> f64 {
     (0..n).map(|i| points[i].x * points[(i + 1) % n].y - points[(i + 1) % n].x * points[i].y).sum::<f64>() * 0.5
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::geometry::curve::Line;
+    use crate::geometry::surface::Torus;
+    use crate::math::{Direction, Frame};
+
+    /// A short edge (0.1 long) off a small torus by 0.011 to 0.013, more than a tenth of its
+    /// length: no edge of the face, unless the file declares its distances accurate only to
+    /// as much (0.02 here, as a file from Onshape does), which covers the gap.
+    #[test]
+    fn a_short_edge_off_its_face_within_the_accuracy_declared() {
+        let torus = Surface::Torus(Torus::new(Frame::new(Point::ORIGIN, Direction::new(0.0, 0.0, 1.0), Direction::new(1.0, 0.0, 0.0)), 0.755, 0.663));
+        let line = Curve::Line(Line::new(Point::new(1.429, 0.0, -0.05), Direction::new(0.0, 0.0, 1.0)));
+        let edge = CurveSpan { curve: &line, first: 0.0, last: 0.1 };
+        assert!(project(&edge, &torus, false).is_err());
+        let pcurve = project_within(&edge, &torus, false, 0.02).unwrap();
+        // (Along the tube's meridian at the outer equator: u 0, v about 0, in whichever
+        // period, rising across it.)
+        let (a, b) = (pcurve.point(0.0), pcurve.point(0.1));
+        assert!(a.x.abs() < 1e-3 && b.x.abs() < 1e-3 && a.y.sin() < 0.0 && b.y.sin() > 0.0 && (b.y - a.y - 0.148).abs() < 0.01, "{a:?} {b:?}");
+    }
+}
