@@ -1,41 +1,27 @@
-//! OCCT's corrected Frenet trihedron (`GeomFill_CorrectedFrenet`), the frame its pipes carry
-//! a profile in by default: the spine's Frenet frame turned about the tangent by an angle
-//! law, which takes the Frenet frame's turning about the tangent out.
+//! OCCT's corrected Frenet trihedron (`GeomFill_CorrectedFrenet`), ported: the frame its pipes
+//! carry a profile in by default, the spine's Frenet frame (`GeomFill_Frenet`, see `frenet`)
+//! turned about the tangent by an angle law that takes the Frenet frame's turning about the
+//! tangent out.
 //!
-//! The law is found as OCCT finds it, and is not the rotation-minimizing frame it stands
-//! for: along each interval where the spine is C2, in steps (of at most a tenth of the
-//! spine, a third of the interval, and the step the spine's curvature allows), each step's
-//! angle the Frenet normal's turn against the previous one carried by the least rotation
-//! taking the previous tangent to this one; the angles summed, interpolated by a cubic
-//! B-spline in the parameter (`Law_Interpolate`), and smoothed by removing knots within a
-//! tenth of a radian (`smoothlaw`). Over a helix those steps are some way from parallel
-//! transport, and OCCT's pipes turn their profiles accordingly; kentron's follow.
-//!
-//! Only spines OCCT corrects: curves not analytic, not planar, with no point where the
-//! curvature vanishes (there OCCT's Frenet frame has its own rules, not ported); elsewhere
-//! the rotation-minimizing frame, which equals OCCT's there.
+//! As OCCT: lines and conics keep their Frenet frame. Other curves get the law, found
+//! interval by interval (the Frenet frame's intervals: where the curve is C2, split at its
+//! singular points) in steps (of at most a tenth of the curve's range, a third of the
+//! interval, and the step the curvature allows), each step's angle the Frenet normal's turn
+//! against the previous one carried by the least rotation taking the previous tangent to this
+//! one (`CalcAngleAT`); the angles summed and interpolated by a cubic B-spline in the
+//! parameter (`Law_Interpolate`), smoothed by removing knots within a tenth of a radian
+//! (`smoothlaw`), or held constant over an interval where they do not change or the curve is
+//! planar (`FindPlane`, one step then). A curve whose angles all stay nought keeps the
+//! Frenet frame. The law's value is checked against the turn measured from the step before
+//! (`GetAngleAT`, OCCT's fix for its bug OCC78).
 
+use crate::error::{Error, Result};
+use crate::geometry::adaptor::{CurveAdaptor, CurveKind, GeomAdaptor};
 use crate::geometry::curve::Curve;
-use crate::geometry::ParametricCurve;
+use crate::geometry::{Continuity, ParametricCurve};
 use crate::math::{Point, Vector};
 
-/// `Precision::PConfusion()` and `Precision::Confusion()`.
-const P_CONFUSION: f64 = 1e-9;
-const CONFUSION: f64 = 1e-7;
-/// `Precision::Angular()`.
-const ANGULAR: f64 = 1e-12;
-
-/// `gp_Dir::Angle`: the angle between two vectors (normalized first), in `[0, π]`.
-fn angle(a: Vector, b: Vector) -> f64 {
-    let (a, b) = (a * (1.0 / a.length()), b * (1.0 / b.length()));
-    let cos = a.dot(b);
-    if cos > -std::f64::consts::FRAC_1_SQRT_2 && cos < std::f64::consts::FRAC_1_SQRT_2 {
-        cos.acos()
-    } else {
-        let sin = a.cross(b).length().min(1.0);
-        if cos < 0.0 { std::f64::consts::PI - sin.asin() } else { sin.asin() }
-    }
-}
+use super::frenet::{angle, Frenet, SingularFunction, ANGULAR, CONFUSION, P_CONFUSION};
 
 /// `v` turned by `angle` about the unit vector `axis` (OCCT's `SetLinearForm` of it).
 fn turned(v: Vector, axis: Vector, angle: f64) -> Vector {
@@ -43,70 +29,22 @@ fn turned(v: Vector, axis: Vector, angle: f64) -> Vector {
     v + cross * angle.sin() + axis.cross(cross) * (1.0 - angle.cos())
 }
 
-/// A curve as the law sees it: run over `[0, length]` from `first` toward `last`.
-struct Spine<'a> {
-    curve: &'a Curve,
-    first: f64,
-    sign: f64,
-}
-
-impl Spine<'_> {
-    fn u(&self, s: f64) -> f64 {
-        self.first + self.sign * s
-    }
-
-    /// Derivatives up to the third along `s`.
-    fn d3(&self, s: f64) -> (Vector, Vector, Vector) {
-        let (_, d1, d2, d3) = self.curve.d3(self.u(s));
-        (d1 * self.sign, d2, d3 * self.sign)
-    }
-
-    /// The Frenet frame's tangent and normal (`GeomFill_Frenet::D0`, away from singular
-    /// points).
-    fn frenet(&self, s: f64) -> (Vector, Vector) {
-        let (d1, d2, _) = self.d3(s);
-        let t = d1 * (1.0 / d1.length());
-        let b = t.cross(d2);
-        let b = if b.length() <= 1e-290 { default_y(t) } else { b * (1.0 / b.length()) };
-        (t, b.cross(t))
-    }
-}
-
-/// `gp_Ax2(P, V).YDirection()`: the Y direction OCCT gives an axis system about `v`.
-fn default_y(v: Vector) -> Vector {
-    let (a, b, c) = (v.x.abs(), v.y.abs(), v.z.abs());
-    // (gp_Ax2's X direction: the axis of the smallest component dropped.)
-    let x = if b <= a && b <= c {
-        if a > c { Vector::new(-v.z, 0.0, v.x) } else { Vector::new(v.z, 0.0, -v.x) }
-    } else if a <= b && a <= c {
-        if b > c { Vector::new(0.0, -v.z, v.y) } else { Vector::new(0.0, v.z, -v.y) }
-    } else if a > b {
-        Vector::new(-v.y, v.x, 0.0)
-    } else {
-        Vector::new(v.y, -v.x, 0.0)
-    };
-    let x = x * (1.0 / x.length());
-    let z = v * (1.0 / v.length());
-    z.cross(x)
-}
-
 /// `GeomFill_CorrectedFrenet::CalcAngleAT`: the turn about the tangent from the frame
 /// `(pt, pn)` to `(t, n)`, `n` first carried back by the least rotation taking `t` to `pt`.
 fn turn_between(t: Vector, n: Vector, pt: Vector, pn: Vector) -> f64 {
     let a = angle(t, pt);
-    let rotated = if a > ANGULAR && a < std::f64::consts::PI - ANGULAR {
+    let rotated = if a.abs() > ANGULAR && a.abs() < std::f64::consts::PI - ANGULAR {
+        // (`Normalized()`: divided by its length.)
         let axis = t.cross(pt);
-        let axis = axis * (1.0 / axis.length());
+        let axis = axis / axis.length();
         turned(n, axis, a)
     } else {
         n
     };
     let mut at = angle(rotated, pn);
-    if at > ANGULAR && std::f64::consts::PI - at > ANGULAR {
-        let c = rotated.cross(pn);
-        if c.length() > 0.0 && std::f64::consts::PI - angle(c, pt) <= ANGULAR {
-            at = -at;
-        }
+    // (`IsOpposite(prevTangent, Angular)`: the cross product is not nought here.)
+    if at > ANGULAR && std::f64::consts::PI - at > ANGULAR && std::f64::consts::PI - angle(rotated.cross(pn), pt) <= ANGULAR {
+        at = -at;
     }
     at
 }
@@ -405,259 +343,357 @@ fn solve(mut a: Vec<Vec<f64>>, mut b: Vec<f64>) -> Option<Vec<f64>> {
     Some(x)
 }
 
-/// The angle law over one interval (ending at its first field): constant, or a B-spline.
-enum Piece {
-    Constant(f64, f64),
-    Spline(f64, Law),
+/// One interval's law (`Law_Constant` or `Law_BSpFunc`), with its bounds.
+#[derive(Clone, Debug)]
+enum IntervalLaw {
+    Constant(f64),
+    Spline(Law),
 }
 
-/// OCCT's corrected Frenet frames along one spine piece.
+/// OCCT's corrected Frenet trihedron along one curve (`SetCurve` done).
+#[derive(Clone, Debug)]
 pub(super) struct CorrectedFrenet {
-    curve: Curve,
-    first: f64,
-    sign: f64,
-    pieces: Vec<Piece>,
-    /// Where each step started: its parameter, the angle there, the Frenet tangent and
-    /// normal (the arrays OCCT added for its bug OCC78, for `angle_at`).
+    frenet: Frenet,
+    /// `isFrenet`: the Frenet frame as it is.
+    is_frenet: bool,
+    /// `EvolAroundT`, a `Law_Composite`: each interval's bounds and law.
+    laws: Vec<(f64, f64, IntervalLaw)>,
+    periodic: bool,
+    /// `HArrPoles`, `HArrAngle`, `HArrTangent`, `HArrNormal` (OCC78): where each step
+    /// started, the angle there, the Frenet tangent and normal there.
     poles: Vec<(f64, f64, Vector, Vector)>,
+    /// The Frenet frame's intervals (`Intervals(T, GeomAbs_C0)`), the law's.
+    intervals: Vec<f64>,
 }
 
 impl CorrectedFrenet {
-    /// The law along `curve` from `first` to `last` (either way); `None` where OCCT keeps the
-    /// Frenet frame (analytic or planar spines: equal to the rotation-minimizing one) or
-    /// where the curvature vanishes (not ported).
-    pub(super) fn new(curve: &Curve, first: f64, last: f64) -> Option<CorrectedFrenet> {
-        if !matches!(curve, Curve::BSpline(_) | Curve::Bezier(_) | Curve::Trimmed(_) | Curve::Offset(_)) {
-            return None;
+    /// The trihedron law along `curve` run from `first` to `last` (`last` the smaller for an
+    /// edge run backwards: the curve reversed then, as `BRepFill_Edge3DLaw` reverses a
+    /// reversed edge's).
+    pub(super) fn new(curve: &Curve, first: f64, last: f64) -> Result<CorrectedFrenet> {
+        CorrectedFrenet::of(edge_adaptor(curve, first, last))
+    }
+
+    /// `SetCurve`.
+    fn of(curve: GeomAdaptor) -> Result<CorrectedFrenet> {
+        let frenet = Frenet::new(curve);
+        let periodic = frenet.curve().is_periodic();
+        let intervals = frenet.intervals(Continuity::C0);
+        let mut law = CorrectedFrenet { frenet, is_frenet: true, laws: Vec::new(), periodic, poles: Vec::new(), intervals };
+        if !matches!(law.frenet.curve().kind(), CurveKind::Circle | CurveKind::Ellipse | CurveKind::Hyperbola | CurveKind::Parabola | CurveKind::Line) {
+            law.init()?;
         }
-        let length = (last - first).abs();
-        if length.is_nan() || length <= 0.0 {
-            return None;
-        }
-        let sign = if last >= first { 1.0 } else { -1.0 };
-        let spine = Spine { curve, first, sign };
-        if planar(curve, first, last) || vanishing_curvature(&spine, length) {
-            return None;
-        }
-        // The intervals where the spine is C2 (GeomFill_Frenet's for C0).
-        let mut breaks = vec![0.0];
-        if let Curve::BSpline(b) = curve {
-            let degree = b.degree();
-            for (&k, &m) in b.knots().iter().zip(b.multiplicities()) {
-                if m + 2 > degree {
-                    let s = (k - first) * sign;
-                    if s > P_CONFUSION && s < length - P_CONFUSION {
-                        breaks.push(s);
-                    }
-                }
-            }
-            breaks.sort_by(f64::total_cmp);
-        }
-        breaks.push(length);
-        let (mut prev_t, mut prev_n) = spine.frenet(0.0);
+        Ok(law)
+    }
+
+    fn curve(&self) -> &GeomAdaptor {
+        self.frenet.curve()
+    }
+
+    /// `Init`.
+    fn init(&mut self) -> Result<()> {
+        let curve = self.curve().clone();
+        let (first, last) = (curve.first_parameter(), curve.last_parameter());
+        let (_, (mut tangent, mut normal, _)) = self.frenet.d0(&curve, first);
         let mut start_angle = 0.0;
-        let average_step = length / 10.0;
-        let mut pieces = Vec::with_capacity(breaks.len() - 1);
-        let mut poles = Vec::new();
-        let mut zero = true;
-        for w in breaks.windows(2) {
-            let (a, b) = (w[0], w[1]);
-            let steps = (((b - a) / average_step) as usize).max(3);
-            let step = (b - a) / steps as f64;
-            let (piece, is_zero) = interval(&spine, a, b, step, &mut start_angle, &mut prev_t, &mut prev_n, &mut poles)?;
-            zero &= is_zero;
-            pieces.push(piece);
+        let average_step = (last - first) / 10.0;
+        let intervals = self.intervals.clone();
+        for w in intervals.windows(2) {
+            // (C++'s `int()`: toward nought.)
+            let steps = (((w[1] - w[0]) / average_step) as i64).max(3);
+            let step = (w[1] - w[0]) / steps as f64;
+            let (law, is_zero) = self.init_interval(w[0], w[1], step, &mut start_angle, &mut tangent, &mut normal)?;
+            if !is_zero {
+                self.is_frenet = false;
+            }
+            self.laws.push((w[0], w[1], law));
         }
-        if zero {
-            return None;
-        }
-        Some(CorrectedFrenet { curve: curve.clone(), first, sign, pieces, poles })
+        Ok(())
     }
 
-    fn spine(&self) -> Spine<'_> {
-        Spine { curve: &self.curve, first: self.first, sign: self.sign }
+    /// `InitInterval`: the angles over `[first, last]`, in steps of at most `step`, carried on
+    /// from the frame `(prev_tangent, prev_normal)` and angle `start_angle` the interval
+    /// before ended with; the law over it, and whether every angle was nought.
+    fn init_interval(&mut self, first: f64, last: f64, step: f64, start_angle: &mut f64, prev_tangent: &mut Vector, prev_normal: &mut Vector) -> Result<(IntervalLaw, bool)> {
+        // (`frenet->SetInterval(First, Last)`.)
+        let curve = self.curve().clone();
+        let trimmed = curve.trim(first, last);
+        let singular = SingularFunction { curve: &curve, ratio: 1.0 };
+        // `aCurveBoundBox.GetGap() * 1e-4`: the box of the singular function (an "other"
+        // curve to BndLib, its sampled bounds kept as values) enlarged by the tolerance
+        // 1e-2 given, the gap that.
+        const LENGTH_MIN: f64 = 1e-2 * 1e-4;
+        let mut params: Vec<f64> = Vec::new();
+        let mut angles: Vec<f64> = Vec::new();
+        let mut param = first;
+        let (mut is_zero, mut is_const) = (true, true);
+        let mut angle_at = 0.0;
+        let mut curr_step = step;
+        let is_planar = find_plane(&curve);
+        let mut i = 1;
+        let mut curr_param = param;
+        let d_last = last - P_CONFUSION;
+        while param < last {
+            if curr_param > d_last {
+                if (d_last - param).abs() < CONFUSION * CONFUSION {
+                    param = curr_param;
+                }
+                curr_step = d_last - param;
+                curr_param = last;
+            }
+            if is_planar {
+                curr_param = last;
+            }
+            let (_, (t, n, _)) = self.frenet.d0(&trimmed, curr_param);
+            if angle(*prev_tangent, t) < std::f64::consts::FRAC_PI_3 || i == 1 {
+                params.push(curr_param);
+                let before = if i > 1 { angles[i - 2] } else { *start_angle };
+                self.poles.push((param, before, *prev_tangent, *prev_normal));
+                angle_at = turn_between(t, n, *prev_tangent, *prev_normal);
+                if is_const && i > 1 && angle_at.abs() > P_CONFUSION {
+                    is_const = false;
+                }
+                angle_at += before;
+                angles.push(angle_at);
+                *prev_normal = n;
+                if is_zero && angle_at.abs() > P_CONFUSION {
+                    is_zero = false;
+                }
+                *prev_tangent = t;
+                param = curr_param;
+                i += 1;
+                // The next step, as the singular function changes.
+                let (p, d1) = singular.d1(param);
+                let l = (Vector::new(p.x, p.y, p.z).length() / 2.0).max(LENGTH_MIN);
+                let norm = d1.length().max(CONFUSION);
+                curr_step = (l / norm).min(step);
+            } else {
+                // (Step too long.)
+                curr_step /= 2.0;
+            }
+            curr_param = param + curr_step;
+        }
+        *start_angle = angle_at;
+        if is_const || is_planar {
+            return Ok((IntervalLaw::Constant(angle_at), is_zero));
+        }
+        // `Law_Interpolate` (its parameters checked increasing: else it throws).
+        if params.windows(2).any(|w| w[1] - w[0] < f64::MIN_POSITIVE || (w[1] - w[0]).is_nan()) {
+            return Err(Error::Failed("a pipe's angle law at parameters not increasing".into()));
+        }
+        let law = Law::interpolate(&angles, &params).ok_or_else(|| Error::Failed("a pipe's angle law not interpolated".into()))?;
+        Ok((IntervalLaw::Spline(law.smoothed(&angles, &params, 0.1)), is_zero))
     }
 
-    /// The angle law's value at `s` (`Law_Composite`: the interval holding it, the last
-    /// past the end).
-    fn law(&self, s: f64) -> f64 {
-        let end = |p: &Piece| match p {
-            Piece::Constant(b, _) | Piece::Spline(b, _) => *b,
+    /// `EvolAroundT->Value(W)` (`Law_Composite::Value`): the interval law holding `w`, the
+    /// first of two at a bound between them (the one a sweep run forward holds there, as
+    /// OCCT's `Prepare` keeps its current law while it holds the value).
+    fn law_value(&self, w: f64) -> f64 {
+        let (first, last) = (self.laws[0].0, self.laws[self.laws.len() - 1].1);
+        let w = if self.periodic { crate::geometry::adaptor::in_period(w, first, last) } else { w };
+        let index = if w <= first {
+            0
+        } else if w >= last {
+            self.laws.len() - 1
+        } else {
+            self.laws.iter().position(|(f, l, _)| *f <= w && w <= *l).unwrap_or(0)
         };
-        let piece = self.pieces.iter().find(|p| s <= end(p)).or(self.pieces.last());
-        match piece {
-            Some(Piece::Constant(_, v)) => *v,
-            Some(Piece::Spline(_, law)) => law.value(s),
-            None => 0.0,
+        match &self.laws[index].2 {
+            IntervalLaw::Constant(v) => *v,
+            IntervalLaw::Spline(law) => law.value(w),
         }
     }
 
     /// `GetAngleAT`: the law's angle, unless it strays more than a quarter turn from the
-    /// turn measured from the step before (OCCT's fix for its bug OCC78).
-    fn angle_at(&self, s: f64) -> f64 {
+    /// turn measured from the step before (OCC78).
+    fn angle_at(&self, trimmed: &GeomAdaptor, param: f64) -> f64 {
         let poles = &self.poles;
-        let n = poles.len();
-        if n == 0 || s == poles[0].0 {
-            return self.law(s);
+        let (mut ib, mut ie) = (0usize, poles.len() - 1);
+        let mut ic = (ie + ib) / 2;
+        if param == poles[ib].0 {
+            return self.law_value(param);
         }
-        let (mut ib, mut ie) = (0usize, n - 1);
-        let mut ic = (ib + ie) / 2;
-        if s > poles[ie].0 {
+        if param > poles[ie].0 {
             ic = ie;
         }
         if ic < ie {
-            while poles[ic].0 > s || s > poles[ic + 1].0 {
-                if poles[ic].0 < s {
+            while poles[ic].0 > param || param > poles[ic + 1].0 {
+                if poles[ic].0 < param {
                     ib = ic;
                 } else {
                     ie = ic;
                 }
                 let next = (ie + ib) / 2;
+                // (Where OCCT's search would go round for ever: not reached for the
+                // parameters a pipe asks for.)
                 if next == ic {
                     break;
                 }
                 ic = next;
             }
-            if poles[ic].0 == s || s == poles[ic + 1].0 {
-                return self.law(s);
+            if poles[ic].0 == param || param == poles[ic + 1].0 {
+                return self.law_value(param);
             }
         }
-        let mut angle = self.law(s);
-        let (_, angle_o, pt, pn) = poles[ic];
-        let d_ang = angle - angle_o;
-        let (t, nrm) = self.spine().frenet(s);
-        let measured = turn_between(t, nrm, pt, pn);
-        if diff_angle(measured, d_ang).abs() > std::f64::consts::FRAC_PI_2 {
-            angle = angle_o + measured;
+        let mut ang_p = self.law_value(param);
+        let (_, ang_po, pt, pn) = poles[ic];
+        let d_ang_law = ang_p - ang_po;
+        let (_, (t, n, _)) = self.frenet.d0(trimmed, param);
+        let d_ang = turn_between(t, n, pt, pn);
+        if diff_angle(d_ang, d_ang_law).abs() > std::f64::consts::FRAC_PI_2 {
+            ang_p = ang_po + d_ang;
         }
-        angle
+        ang_p
     }
 
-    /// The frame's normal at fraction `fraction` of the piece (from its `first` toward its
-    /// `last`): the Frenet normal turned by the law's angle about the tangent.
-    pub(super) fn normal(&self, fraction: f64, length: f64) -> Vector {
-        let s = fraction * length;
-        let (t, n) = self.spine().frenet(s);
-        turned(n, t, self.angle_at(s))
+    /// `D0` at `param`, evaluated as a sweep does after `SetInterval` to the law's interval
+    /// holding it (the first of two at a bound): tangent and normal.
+    pub(super) fn d0(&self, param: f64) -> (Vector, Vector) {
+        let k = self.intervals.windows(2).position(|w| w[0] <= param && param <= w[1]).unwrap_or(if param < self.intervals[0] { 0 } else { self.intervals.len() - 2 });
+        let trimmed = self.curve().trim(self.intervals[k], self.intervals[k + 1]);
+        let (_, (t, n, _)) = self.frenet.d0(&trimmed, param);
+        if self.is_frenet {
+            return (t, n);
+        }
+        // (`Normal.SetLinearForm(sin, T × N, 1 - cos, T × (T × N), Normal)`: summed in that
+        // order.)
+        let angle_at = self.angle_at(&trimmed, param);
+        let cross = t.cross(n);
+        let (sin, one_less_cos, twice) = (angle_at.sin(), 1.0 - angle_at.cos(), t.cross(cross));
+        let normal = Vector::new(sin * cross.x + one_less_cos * twice.x + n.x, sin * cross.y + one_less_cos * twice.y + n.y, sin * cross.z + one_less_cos * twice.z + n.z);
+        (t, normal)
+    }
+
+    /// The frame's tangent and normal at fraction `fraction` of the way along.
+    pub(super) fn at_fraction(&self, fraction: f64) -> (Vector, Vector) {
+        let curve = self.curve();
+        let (first, last) = (curve.first_parameter(), curve.last_parameter());
+        self.d0(first + (last - first) * fraction)
     }
 }
 
-/// An angle in `[0, 2π)` brought into `[-π, π)`.
+/// `GeomFill_Frenet` alone (a pipe's Frenet mode), along `curve` run from `first` to `last`.
+#[derive(Clone, Debug)]
+pub(super) struct FrenetLaw {
+    frenet: Frenet,
+}
+
+impl FrenetLaw {
+    pub(super) fn new(curve: &Curve, first: f64, last: f64) -> FrenetLaw {
+        FrenetLaw { frenet: Frenet::new(edge_adaptor(curve, first, last)) }
+    }
+
+    /// The frame's tangent and normal at fraction `fraction` of the way along (evaluated
+    /// in the Frenet frame's interval holding it, as a sweep sets it).
+    pub(super) fn at_fraction(&self, fraction: f64) -> (Vector, Vector) {
+        let curve = self.frenet.curve();
+        let (first, last) = (curve.first_parameter(), curve.last_parameter());
+        let param = first + (last - first) * fraction;
+        let intervals = self.frenet.intervals(Continuity::C0);
+        let k = intervals.windows(2).position(|w| w[0] <= param && param <= w[1]).unwrap_or(if param < intervals[0] { 0 } else { intervals.len() - 2 });
+        let (_, (t, n, _)) = self.frenet.d0(&curve.trim(intervals[k], intervals[k + 1]), param);
+        (t, n)
+    }
+}
+
+/// An edge's curve as `BRepFill_Edge3DLaw` adapts it: over `[first, last]`, or (`last` the
+/// smaller, the edge reversed) a trimmed copy reversed (`Geom_TrimmedCurve::Reverse`).
+fn edge_adaptor(curve: &Curve, first: f64, last: f64) -> GeomAdaptor {
+    if last >= first {
+        return GeomAdaptor::new(curve, first, last);
+    }
+    let mut basis = curve;
+    while let Curve::Trimmed(t) = basis {
+        basis = t.basis();
+    }
+    let mut reversed = basis.clone();
+    let (u1, u2) = (basis.reversed_parameter(first), basis.reversed_parameter(last));
+    match &mut reversed {
+        Curve::BSpline(b) => b.reverse_as_occt(),
+        // (`Geom_OffsetCurve::Reverse`: its basis reversed, the offset negated.)
+        Curve::Offset(o) if matches!(o.basis(), Curve::BSpline(_)) => {
+            let mut inner = o.basis().clone();
+            if let Curve::BSpline(b) = &mut inner {
+                b.reverse_as_occt();
+            }
+            *o = crate::geometry::curve::OffsetCurve::new(inner, -o.offset(), o.direction());
+        }
+        other => other.reverse(),
+    }
+    GeomAdaptor::new(&reversed, u1, u2)
+}
+
+/// `corr2PI_PI`: an angle in `[0, 2π)` brought into `[-π, π)`.
 fn corr(a: f64) -> f64 {
     if a < std::f64::consts::PI { a } else { a - 2.0 * std::f64::consts::PI }
 }
 
-/// `diffAng`: `a - o` brought into `(-π, π]`.
+/// `diffAng`.
 fn diff_angle(a: f64, o: f64) -> f64 {
     let tau = 2.0 * std::f64::consts::PI;
-    let d = (a - o) - ((a - o) / tau).floor() * tau;
+    let d = (a - o) - ((a - o) / 2.0 / std::f64::consts::PI).floor() * tau;
     if d >= 0.0 { corr(d) } else { -corr(-d) }
 }
 
-/// `InitInterval`: the angles over one interval, from `a` to `b` in steps of at most
-/// `step`, continuing from the frame `(prev_t, prev_n)` and angle `start_angle` the last one
-/// ended with; the law over it, and whether every angle was nought.
-#[allow(clippy::too_many_arguments)]
-fn interval(spine: &Spine, a: f64, b: f64, step: f64, start_angle: &mut f64, prev_t: &mut Vector, prev_n: &mut Vector, poles: &mut Vec<(f64, f64, Vector, Vector)>) -> Option<(Piece, bool)> {
-    const LENGTH_MIN: f64 = 1e-2 * 1e-4;
-    let mut params = Vec::new();
-    let mut angles: Vec<f64> = Vec::new();
-    let (mut zero, mut constant) = (true, true);
-    let mut param = a;
-    let mut current = param;
-    let mut current_step;
-    let d_last = b - P_CONFUSION;
-    let mut angle_at = 0.0;
-    let mut i = 1;
-    let mut guard = 0;
-    while param < b {
-        guard += 1;
-        if guard > 1_000_000 {
-            return None;
-        }
-        if current > d_last {
-            if (d_last - param).abs() < CONFUSION * CONFUSION {
-                param = current;
+/// `FindPlane`: whether the curve lies in a plane (a conic's, else the plane of inertia of
+/// its poles, or of samples of it, all within `Precision::Confusion` of it).
+fn find_plane(curve: &GeomAdaptor) -> bool {
+    let points: Vec<Point> = match (curve.kind(), curve.curve()) {
+        (CurveKind::Line, _) => return false,
+        (CurveKind::Circle | CurveKind::Ellipse | CurveKind::Hyperbola | CurveKind::Parabola, _) => return true,
+        (CurveKind::Bezier, Curve::Bezier(b)) => {
+            if b.poles().len() <= 2 {
+                return false;
             }
-            current = b;
+            b.poles().to_vec()
         }
-        let (t, n) = spine.frenet(current);
-        if angle(*prev_t, t) < std::f64::consts::FRAC_PI_3 || i == 1 {
-            params.push(current);
-            poles.push((param, if i > 1 { angles[i - 2] } else { *start_angle }, *prev_t, *prev_n));
-            angle_at = turn_between(t, n, *prev_t, *prev_n);
-            if constant && i > 1 && angle_at.abs() > P_CONFUSION {
-                constant = false;
+        (CurveKind::BSpline, Curve::BSpline(b)) => {
+            if b.poles().len() <= 2 {
+                return false;
             }
-            angle_at += if i > 1 { angles[i - 2] } else { *start_angle };
-            angles.push(angle_at);
-            *prev_n = n;
-            if zero && angle_at.abs() > P_CONFUSION {
-                zero = false;
-            }
-            *prev_t = t;
-            param = current;
-            i += 1;
-            // The next step: as the curvature (the singular function D1 × D2) changes.
-            let (d1, d2, d3) = spine.d3(param);
-            let l = (d1.cross(d2).length() / 2.0).max(LENGTH_MIN);
-            let norm = d1.cross(d3).length().max(CONFUSION);
-            current_step = (l / norm).min(step);
-        } else {
-            current_step = (current - param) / 2.0;
+            b.poles().to_vec()
         }
-        current = param + current_step;
-    }
-    *start_angle = angle_at;
-    let piece = if constant {
-        Piece::Constant(b, angle_at)
-    } else {
-        let law = Law::interpolate(&angles, &params)?;
-        Piece::Spline(b, law.smoothed(&angles, &params, 0.1))
+        _ => {
+            let nbp = 15 + curve.intervals(Continuity::C3).len() - 1;
+            let (f, l) = (curve.first_parameter(), curve.last_parameter());
+            let inv = 1.0 / (nbp - 1) as f64;
+            (1..=nbp).map(|ii| curve.value((f * (nbp - ii) as f64 + l * (ii - 1) as f64) * inv)).collect()
+        }
     };
-    Some((piece, zero))
+    let Some((origin, normal)) = axe_of_inertia(&points, 1.0e-7) else { return false };
+    let d = -normal.dot(Vector::new(origin.x, origin.y, origin.z));
+    points.iter().all(|p| (normal.x * p.x + normal.y * p.y + normal.z * p.z + d).abs() <= CONFUSION)
 }
 
-/// `FindPlane`: the spine lies in a plane (its poles, a B-spline's or Bezier's, else 15
-/// samples, within `Precision::Confusion` of their plane of inertia).
-fn planar(curve: &Curve, first: f64, last: f64) -> bool {
-    let points: Vec<Point> = match curve {
-        Curve::BSpline(b) => b.poles().to_vec(),
-        Curve::Bezier(b) => b.poles().to_vec(),
-        _ => (0..15).map(|i| curve.point(first + (last - first) * i as f64 / 14.0)).collect(),
-    };
-    if points.len() < 3 {
-        return false;
-    }
-    let n = points.len() as f64;
-    let c = points.iter().fold(Vector::new(0.0, 0.0, 0.0), |s, p| s + Vector::new(p.x, p.y, p.z)) * (1.0 / n);
+/// `GeomLib::AxeOfInertia` (with `GeomLib::Inertia`): the barycentre and the normal of the
+/// plane of inertia of `points` (the largest axis crossed with the middle one); `None` where
+/// it is singular (the middle spread, times the count, within `tolerance`). The
+/// eigen-decomposition is kentron's Jacobi rotations (OCCT's `math_Jacobi`).
+fn axe_of_inertia(points: &[Point], tolerance: f64) -> Option<(Point, Vector)> {
+    let nb = points.len() as f64;
+    let g = points.iter().fold(Vector::new(0.0, 0.0, 0.0), |s, p| s + Vector::new(p.x, p.y, p.z)) * (1.0 / nb);
     let mut m = [[0.0; 3]; 3];
-    for p in &points {
-        let d = [p.x - c.x, p.y - c.y, p.z - c.z];
+    for p in points {
+        let d = [p.x - g.x, p.y - g.y, p.z - g.z];
         for i in 0..3 {
             for j in 0..3 {
                 m[i][j] += d[i] * d[j];
             }
         }
     }
-    let matrix = crate::math::Matrix3::from_rows(m);
-    let (values, vectors) = crate::properties::symmetric_eigen(&matrix);
-    // (All the points on one line: no plane.)
-    if values[1] <= 1e-30 * values[2].max(1e-300) {
-        return false;
+    for row in &mut m {
+        for x in row.iter_mut() {
+            *x /= nb;
+        }
     }
-    let normal = vectors[0];
-    points.iter().all(|p| ((*p - Point::new(c.x, c.y, c.z)).dot(normal)).abs() <= CONFUSION)
-}
-
-/// Points where the spine's curvature vanishes (D1 × D2 nought), found from samples.
-fn vanishing_curvature(spine: &Spine, length: f64) -> bool {
-    let values: Vec<f64> = (0..=256).map(|i| {
-        let (d1, d2, _) = spine.d3(length * i as f64 / 256.0);
-        d1.cross(d2).length()
-    }).collect();
-    let average = values.iter().sum::<f64>() / values.len() as f64;
-    values.iter().any(|&v| v <= 1e-6 * average)
+    let (values, vectors) = crate::properties::symmetric_eigen(&crate::math::Matrix3::from_rows(m));
+    // (Ascending: the largest is OCCT's X direction, the middle its Y.)
+    let y_gap = values[1].abs().sqrt();
+    if y_gap * nb <= tolerance {
+        return None;
+    }
+    let z = vectors[2].cross(vectors[1]);
+    Some((Point::new(g.x, g.y, g.z), z * (1.0 / z.length())))
 }
 
 #[cfg(test)]

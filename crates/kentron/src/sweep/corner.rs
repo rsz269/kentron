@@ -710,8 +710,8 @@ fn turn(p: Point, t1: Vector, t2: Vector) -> Transform {
     Transform::rotation(Axis::new(p, Direction::from_vector(axis)), axis.length().atan2(t1.dot(t2)))
 }
 
-/// The motion carrying the profile along `piece` from fraction `from` to `to` (0 or 1),
-/// turning with the tangent and no more.
+/// The motion carrying the profile along `piece` from fraction `from` to `to` (0 or 1), as
+/// its pipe carries it.
 fn carried(piece: &SpinePiece, from: f64, to: f64) -> Result<Transform> {
     let at = |s: f64| piece.first + (piece.last - piece.first) * s;
     match &piece.curve {
@@ -719,7 +719,9 @@ fn carried(piece: &SpinePiece, from: f64, to: f64) -> Result<Transform> {
         Curve::Circle(c) => Ok(Transform::rotation(c.frame().z_axis(), at(to) - at(from))),
         _ => {
             let single = [SpinePiece { curve: piece.curve.clone(), first: piece.first, last: piece.last, gap: 0.0 }];
-            let (motions, _) = super::pipe::motions(&single, 16, (0, from), &super::pipe::Framing::Minimal)?;
+            // (As the piece's pipe carries it: in OCCT's corrected Frenet frame.)
+            let framing = super::pipe::Framing::Corrected(vec![super::corrected::CorrectedFrenet::new(&piece.curve, piece.first, piece.last)?]);
+            let (motions, _) = super::pipe::motions(&single, 16, (0, from), &framing)?;
             let transforms = &motions[0].transforms;
             Ok(if to <= 0.0 { transforms[0] } else { *transforms.last().expect("samples") })
         }

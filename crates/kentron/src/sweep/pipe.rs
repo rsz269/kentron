@@ -1,6 +1,6 @@
-//! Pipes along general spines: the profile moved rigidly along the spine, turning with its
-//! tangent and no more (a rotation-minimizing frame, which is OCCT's corrected Frenet
-//! trihedron: the Frenet frame with its torsion taken out).
+//! Pipes along general spines: the profile moved rigidly along the spine, carried by a
+//! trihedron law (OCCT's corrected Frenet one by default, see `corrected`), a guide, a fixed
+//! direction, or turning with the tangent and no more (a rotation-minimizing frame).
 
 use std::collections::HashMap;
 
@@ -53,17 +53,15 @@ pub(super) struct PieceMotion {
 
 /// How the frames carrying a pipe's profile turn about the spine.
 pub(super) enum Framing {
-    /// Turning no more than the tangent does (rotation-minimizing).
-    Minimal,
-    /// The second axis the spine's principal normal, where the spine curves.
-    Frenet,
+    /// OCCT's Frenet frame (`GeomFill_Frenet`, a pipe's Frenet mode), each piece's.
+    Frenet(Vec<super::corrected::FrenetLaw>),
     /// The second axis pointing at a point of a guide.
     Guide(GuideLaw),
     /// Not turning at all, the first axis this direction.
     Fixed(Vector),
-    /// OCCT's corrected Frenet frame (its pipes' default), where a piece has one (see
-    /// `corrected`); rotation-minimizing on the others.
-    Corrected(Vec<Option<super::corrected::CorrectedFrenet>>),
+    /// OCCT's corrected Frenet frame (`GeomFill_CorrectedFrenet`, its pipes' default),
+    /// each piece's.
+    Corrected(Vec<super::corrected::CorrectedFrenet>),
 }
 
 /// Samples per piece of a guide and of the spine, for the points matched on the guide.
@@ -157,9 +155,8 @@ impl GuideLaw {
 /// carried on from piece to piece and sampled finely: the motions taking the frame at
 /// `anchor` (piece, fraction) to those at `samples` points per piece, and to the points
 /// halfway between them (to check fits).
-/// Framed otherwise as `framing` says: with the frames' second axis the spine's principal
-/// normal where the spine curves (its sign kept from sample to sample), pointing at a
-/// guide, or fixed.
+/// Framed otherwise as `framing` says: by OCCT's Frenet or corrected Frenet trihedron (the
+/// law's tangent and normal), pointing at a guide, or fixed.
 pub(super) fn motions(pieces: &[SpinePiece], samples: usize, anchor: (usize, f64), framing: &Framing) -> Result<(Vec<PieceMotion>, Vec<Vec<Transform>>)> {
     const FINE: usize = 16;
     let (p0, t0) = pieces[0].point_tangent(0.0)?;
@@ -168,25 +165,13 @@ pub(super) fn motions(pieces: &[SpinePiece], samples: usize, anchor: (usize, f64
         let r = a - t0 * a.dot(t0);
         r * (1.0 / r.length())
     };
-    // The principal normal at fraction `s` of piece `k`, signed as `r`, with `frenet`; or
-    // `r`, carried on.
-    let normal_or = |k: usize, s: f64, t: Vector, r: Vector| -> Vector {
+    // The trihedron law's tangent and normal at fraction `s` of piece `k`; or `(t, r)`,
+    // carried on.
+    let frame_or = |k: usize, s: f64, t: Vector, r: Vector| -> (Vector, Vector) {
         match framing {
-            Framing::Frenet => {
-                let piece = &pieces[k];
-                let (_, _, d2) = piece.curve.d2(piece.at(s));
-                let n = d2 - t * d2.dot(t);
-                if !(n.length() > 1e-9 * d2.length().max(1e-300)) {
-                    return r;
-                }
-                let n = n * (1.0 / n.length());
-                if n.dot(r) < 0.0 { -n } else { n }
-            }
-            Framing::Corrected(laws) => match &laws[k] {
-                Some(law) => law.normal(s, (pieces[k].last - pieces[k].first).abs()),
-                None => r,
-            },
-            _ => r,
+            Framing::Frenet(laws) => laws[k].at_fraction(s),
+            Framing::Corrected(laws) => laws[k].at_fraction(s),
+            _ => (t, r),
         }
     };
     // A guide's frame at fraction `s` of piece `k` (at `x`, tangent `t`), as OCCT's trihedron
@@ -208,7 +193,7 @@ pub(super) fn motions(pieces: &[SpinePiece], samples: usize, anchor: (usize, f64
             _ => None,
         }
     };
-    let r0 = normal_or(0, 0.0, t0, r0);
+    let (t0, r0) = frame_or(0, 0.0, t0, r0);
     let frame = |p: Point, t: Vector, r: Vector| -> Frame { Frame::new(p, Direction::from_vector(t), Direction::from_vector(r)) };
     // One double reflection from (x, t, r) to the point x1 with tangent t1: the new r.
     let reflect = |x: Point, t: Vector, r: Vector, x1: Point, t1: Vector| -> Vector {
@@ -248,7 +233,7 @@ pub(super) fn motions(pieces: &[SpinePiece], samples: usize, anchor: (usize, f64
             t = tangent;
             let flat = r - t * r.dot(t);
             // (The new piece's own frame there: Frenet's, if that is the frame.)
-            r = normal_or(k, 0.0, t, flat * (1.0 / flat.length()));
+            (t, r) = frame_or(k, 0.0, t, flat * (1.0 / flat.length()));
             correction = Correction::between((t, r), (ct, cr));
         }
         x = p;
@@ -269,10 +254,12 @@ pub(super) fn motions(pieces: &[SpinePiece], samples: usize, anchor: (usize, f64
             let (s0, s) = ((i - 1) as f64 / n as f64, i as f64 / n as f64);
             if anchor.0 == k && anchor_frame.is_none() && anchor.1 > s0 && anchor.1 <= s {
                 let (xa, ta) = piece.point_tangent(anchor.1)?;
-                anchor_frame = Some(framed(&correction, anchor.1, xa, ta, normal_or(k, anchor.1, ta, reflect(x, t, r, xa, ta))));
+                let (ta, ra) = frame_or(k, anchor.1, ta, reflect(x, t, r, xa, ta));
+                anchor_frame = Some(framed(&correction, anchor.1, xa, ta, ra));
             }
             let (x1, t1) = piece.point_tangent(s)?;
-            r = normal_or(k, s, t1, reflect(x, t, r, x1, t1));
+            let (t1, r1) = frame_or(k, s, t1, reflect(x, t, r, x1, t1));
+            r = r1;
             (x, t) = (x1, t1);
             if i % (2 * FINE) == 0 {
                 params.push(s);

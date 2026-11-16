@@ -278,6 +278,12 @@ impl<P: ControlPoint> BSplineCurve<P> {
     /// range those of the end spans' polynomials (like OCCT), wrapped round for a periodic
     /// curve.
     fn derivatives(&self, t: f64, order: usize) -> Vec<[f64; 3]> {
+        self.derivatives_on(t, order, None)
+    }
+
+    /// [`Self::derivatives`] on the polynomial of the span of the flat knots starting at
+    /// index `span` where given (`BSplCLib::D0`..`DN` at a given span index).
+    fn derivatives_on(&self, t: f64, order: usize, span: Option<usize>) -> Vec<[f64; 3]> {
         let flat = self.evaluation_knots();
         let p = self.degree;
         // A periodic curve's poles repeat: its first `p` poles again after the last.
@@ -286,7 +292,7 @@ impl<P: ControlPoint> BSplineCurve<P> {
         let (lo, hi) = (flat[p], flat[n]);
         let t = if self.periodic && !(lo..=hi).contains(&t) { lo + (t - lo).rem_euclid(hi - lo) } else { t };
         // The span: flat[span] <= t < flat[span + 1], with p <= span < n.
-        let span = (flat[..n].partition_point(|&k| k <= t)).saturating_sub(1).clamp(p, n - 1);
+        let span = span.unwrap_or_else(|| (flat[..n].partition_point(|&k| k <= t)).saturating_sub(1).clamp(p, n - 1));
         let basis = basis_derivatives(flat, span, t, p, order.min(p));
         // Derivatives of the homogeneous curve (w·P, w).
         let mut homogeneous = vec![[0.0; 4]; order + 1];
@@ -594,6 +600,39 @@ impl<P: ControlPoint> BSplineCurve<P> {
     }
 
     /// Moves knot `i` to `value`; panics if that breaks the knots' increasing order.
+    /// The curve reversed as OCCT's `Geom_BSplineCurve::Reverse` reverses it, its knots by
+    /// `BSplCLib::Reverse` (each the previous plus the original step, from either end: not
+    /// `first + last - knot`, whose roundings differ).
+    pub(crate) fn reverse_as_occt(&mut self) {
+        let original = self.knots.clone();
+        self.reverse();
+        let mut knots = original.clone();
+        let (mut first, mut last) = (0usize, original.len() - 1);
+        let (mut kfirst, mut klast) = (original[first], original[last]);
+        let (mut tfirst, mut tlast) = (kfirst, klast);
+        first += 1;
+        last -= 1;
+        while first <= last {
+            tfirst += klast - original[last];
+            tlast -= original[first] - kfirst;
+            kfirst = original[first];
+            klast = original[last];
+            knots[first] = tfirst;
+            knots[last] = tlast;
+            first += 1;
+            if last == 0 {
+                break;
+            }
+            last -= 1;
+        }
+        self.knots = knots;
+        self.flat = match self.periodic {
+            true => periodic_flatten(&self.knots, &self.multiplicities, self.degree),
+            false => flatten(&self.knots, &self.multiplicities),
+        };
+        self.segments = Default::default();
+    }
+
     pub fn set_knot(&mut self, i: usize, value: f64) {
         let last = self.knots.len() - 1;
         assert!(
@@ -906,6 +945,21 @@ impl<P: ControlPoint> BSplineCurve<P> {
     #[doc(alias = "LocalD1")]
     pub fn local_d1(&self, u: f64, from: usize, to: usize) -> (P, P::Vector) {
         self.local(from, to).d1(u)
+    }
+
+    /// The derivatives of orders `0..=order` at `u` (as coordinates) of the polynomial of the
+    /// span from knot `from` to the next (0-based), computed on the curve's own knots and
+    /// poles (as `Geom_BSplineCurve::LocalD0`..`LocalDN` do, `BSplCLib` at that span), not on
+    /// a segment of it. A periodic curve's by its segment.
+    pub(crate) fn span_derivatives(&self, u: f64, from: usize, order: usize) -> Vec<[f64; 3]> {
+        if self.periodic {
+            let piece = self.local(from, from + 1);
+            return piece.derivatives(u, order);
+        }
+        // (The flat knots repeat each knot its multiplicity: the span starting at knot
+        // `from` starts at the last of its copies.)
+        let span = self.multiplicities[..=from].iter().sum::<usize>() - 1;
+        self.derivatives_on(u, order, Some(span))
     }
 
     /// True if both curves have the same degree, knots, multiplicities and periodicity,
