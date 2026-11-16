@@ -1858,10 +1858,19 @@ def _round_corners(wire: Wire, size: float, vertices, corner_edge, curved_corner
     # (An open wire's ends are no corners: rounding one fails, as OCCT's does.)
     if wanted is not None and not closed and any((p - w).Length <= 1e-6 for w in wanted for p in (starts[0], ends[-1])):
         raise ValueError("a 2D fillet or chamfer at an end of an open wire")
-    for i in range(n if closed else n - 1):
+    corners = list(range(n if closed else n - 1))
+    if wanted is not None:
+        # (The corners given, one by one in their order, as OCCT's 2D fillets add them.)
+        corners = [i for w in wanted for i in corners if (edges[i].endPoint() - w).Length <= 1e-6]
+    fitted = True
+    for i in corners:
         j = (i + 1) % n
-        p = ends[i]
-        if wanted is not None and not any((p - w).Length <= 1e-6 for w in wanted):
+        if i in inserts:
+            continue
+        # (Next to an edge an earlier corner took all of, a fillet now: OCCT's 2D fillets
+        # leave the corner, not authorized.)
+        if wanted is not None and min((ends[k] - starts[k]).Length for k in (i, j)) <= 1e-9:
+            fitted = False
             continue
         corner = _line_corner(Edge.makeLine(starts[i], ends[i]) if edges[i].geomType() == "LINE" else edges[i], Edge.makeLine(starts[j], ends[j]) if edges[j].geomType() == "LINE" else edges[j])
         if corner is None:
@@ -1875,9 +1884,25 @@ def _round_corners(wire: Wire, size: float, vertices, corner_edge, curved_corner
         if made is None:
             continue
         pa, e, pb = made
+        # (A corner taking more of a straight edge than what is left of it does not fit: OCCT's
+        # 2D fillets leave it, the edge reaching to the earlier corner's end or the vertex
+        # past it at most.)
+        def within(k, q, toward_end):
+            if edges[k].geomType() != "LINE":
+                return True
+            d = ends[k] - starts[k]
+            t = (q - starts[k]).dot(d) / max(d.dot(d), 1e-300)
+            return -1e-9 <= t < 1.0 if toward_end else 0.0 < t <= 1.0 + 1e-9
+        if wanted is not None and not (within(i, pa, True) and within(j, pb, False)):
+            fitted = False
+            continue
+        fitted = True
         ends[i], starts[j] = pa, pb
         inserts[i] = e
-    # (Corners taking more of a straight edge than it has: they do not fit, as OCCT finds.)
+    # (Corners taking more of a straight edge than it has: they do not fit, as OCCT finds;
+    # given corners, where the last one added did not.)
+    if not fitted:
+        raise ValueError("the corners do not fit on the edge between them")
     for i in range(n):
         if edges[i].geomType() == "LINE" and (ends[i] - starts[i]).dot(edges[i].endPoint() - edges[i].startPoint()) < -1e-9:
             raise ValueError("the corners do not fit on the edge between them")

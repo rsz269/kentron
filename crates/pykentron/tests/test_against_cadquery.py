@@ -423,8 +423,21 @@ def wire_of_a_translated_face_relocated(cq):
     return cq.Solid.extrudeLinear(cq.Face.makeFromWires(wire), cq.Vector(0, 0, 2))
 
 
+def face_corners_rounded_where_they_fit(cq):
+    # (lights_top's mask outline: a notch 1.6 deep rounded with radius 1 at every corner.
+    # As OCCT's 2D fillets add them one by one, a corner the one before has left too little
+    # of an edge for is left sharp: two of the notch's four.)
+    V = cq.Vector
+    points = [(9.8, 18), (2.7, 18), (2.7, 5.8), (5.2, 5.8), (5.2, 4.2), (7.3, 4.2), (7.3, 5.8), (9.8, 5.8)]
+    face = cq.Face.makeFromWires(cq.Wire.makePolygon([V(x, y, 0) for x, y in points], close=True))
+    corners = [v for p in points for v in face.Vertices() if (V(v.toTuple()) - V(p[0], p[1], 0)).Length < 1e-9]
+    rounded = face.fillet2D(1, corners)
+    assert len(rounded.Edges()) == 14, f"{len(rounded.Edges())} edges, not 14"
+    return cq.Solid.extrudeLinear(rounded, V(0, 0, 1))
+
+
 CASES = [
-    wire_corner_rounded_between_an_arc_and_a_line, wire_of_a_translated_face_relocated, sketch_faces_merged_after_a_rounding,
+    wire_corner_rounded_between_an_arc_and_a_line, wire_of_a_translated_face_relocated, face_corners_rounded_where_they_fit, sketch_faces_merged_after_a_rounding,
     box, cylinder_along_y, cone, workplane_box, fused_boxes, cut_bores, intersected,
     polyline_prism_xz, polyline_prism_custom_plane, hexagon, face_with_hole, loft,
     rotated_mirrored, revolved, located, euler_location, offset_outline, smoothed_helix_spline,
