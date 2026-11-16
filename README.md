@@ -65,11 +65,12 @@ About 13,430 tests run. About 1,150 of them are known gaps, marked as expected f
 - **OCCT's GTests** for geometry and topology, translated by hand.
 - **USD BRep's tests:** 212 cases, translated.
 - **BRL-CAD:** STEP files from its source tree and its `libbg` geometry tests.
-- **CadQuery 2.8.0's test suite,** unchanged: 698 of 699 pass. 68 tests of OCCT internals
+- **CadQuery 2.8.0's test suite,** unchanged: 738 of 739 pass. 28 tests of OCCT internals
   are left out ([list](crates/pykentron/tests/cadquery_excluded.txt)).
 - **809 CadQuery scripts from 154 public projects:** of the 795 whose results don't depend
-  on a kernel's face order, 719 build as on CadQuery, 27 differ only where CadQuery's result
-  is wrong, and 49 fail ([details](crates/pykentron/tests/found/README.md)).
+  on a kernel's face order, 724 build as on CadQuery, 27 differ only where CadQuery's result
+  is wrong, 2 fail where no valid result exists (CadQuery's results are invalid), and 42 fail
+  ([details](crates/pykentron/tests/found/README.md)).
 - **44 CadQuery models from a private project** build. The 42 that return their parts match
   CadQuery's volumes within 0.1%, every part valid.
 - **Own tests:** 433 unit tests, and 58 cases compared with CadQuery.

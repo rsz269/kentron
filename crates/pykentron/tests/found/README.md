@@ -33,7 +33,7 @@ Scripts under other licences, or none, are not copied: [`cases.tsv`](cases.tsv) 
 
 ## Where they stand
 
-On 2026-11-10:
+On 2026-11-16:
 
 | | scripts |
 |---|---|
@@ -42,18 +42,19 @@ On 2026-11-10:
 | left out: the result depends on face order (below) | 14 |
 | left out: CadQuery itself fails | 0 |
 | compared | 795 |
-| build as on CadQuery | 719 |
+| build as on CadQuery | 724 |
 | differ where CadQuery's result is wrong (below) | 27 |
-| differ | 28 |
-| fail on pykentron | 21 |
-| **pykentron's failures** | **49** |
+| fail where no valid result exists, CadQuery's result invalid (below) | 2 |
+| differ | 31 |
+| fail on pykentron | 11 |
+| **pykentron's failures** | **42** |
 
 Of the 191 scripts that failed or built differently when found up to 2026-10-23, 131 now
 build as on CadQuery, and 15 more differ only where CadQuery's result is wrong. Of the 26 found
 on 2026-10-29, 10 now build as on CadQuery, 4 more differ only where CadQuery's result is
 wrong, and 2 are left out (face order). Of the 50 found on 2026-11-10, the 11 that were
-slower build as on CadQuery and the other 39 still fail or differ; the 10 failures that
-are not theirs are the same as on 2026-11-08.
+slower and 5 more build as on CadQuery, 2 fail where no valid result exists, and 32 still
+fail or differ; the 10 failures that are not theirs are the same as on 2026-11-08.
 
 Some differences are not pykentron's:
 
@@ -71,6 +72,11 @@ Some differences are not pykentron's:
   dropped by `union(glue=True)`, which assumes shapes only touch; a fuzzy union coming out
   empty (the spindle vacuum shroud); a fillet that fails on OCCT inside a script's `try`, so
   that CadQuery's result lacks it.
+- **No valid result exists**, by a geometric argument from the script's numbers, and
+  pykentron says so where CadQuery returns an invalid solid: fillets of radius 1 round a box
+  1.25 high, and of radius 3 round a plate 5 high (the ball tangent to the top would reach
+  through the bottom; CadQuery's results, invalid by OCCT's own check, are larger than the
+  boxes they round, which rounding convex edges cannot make).
 - **The script depends on face or edge order**, which OCCT does not define and kentron does
   not copy: an asymmetric chamfer measures its first length on the edge's "first" face, a
   workplane on several faces takes the first one's normal, an edge picked by index, a loop
