@@ -117,17 +117,19 @@ def exportStepMeta(assy, path: str, unit: str = "MM", outputUnit=None, **kwargs)
 
 
 def exportCAF(assy, path: str, binary: bool = False) -> bool:
-    """Writes the assembly as an OCAF document (as CadQuery's `toCAF` makes it): OCCT's XML
-    format; its binary one (XBF) is not written yet."""
-    if binary:
-        raise NotImplementedError("exporting assemblies to XBF files")
+    """Writes the assembly as an OCAF document (as CadQuery's `toCAF` makes it): OCCT's
+    binary format (XBF) or its XML one."""
     import os
-
-    from ..ocaf import write_xml
 
     folder = os.path.dirname(os.path.abspath(str(path)))
     if not os.path.isdir(folder):
         return False
+    if binary:
+        from ..xbf import write_xbf
+
+        return write_xbf(assy, str(path))
+    from ..ocaf import write_xml
+
     return write_xml(assy, str(path))
 
 

@@ -7,6 +7,7 @@ kentron takes them in.
 from __future__ import annotations
 
 import math
+import struct
 from typing import Iterable, Sequence, Tuple, Union
 
 Tuple3 = Tuple[float, float, float]
@@ -735,41 +736,65 @@ def _to_srgb(c: float) -> float:
     return c * 12.92 if c <= 0.0031308 else 1.055 * c ** (1 / 2.4) - 0.055
 
 
+def _single(x: float) -> float:
+    """`x` as single precision holds it."""
+    return struct.unpack("f", struct.pack("f", x))[0]
+
+
 class Color:
     """An RGBA colour (CadQuery's `Color`), components from 0 to 1: by name, hex string
     ("#RGB", "#RGBA", "#RRGGBB", "#RRGGBBAA"), or components (sRGB, unless `srgb` is false:
     linear). Read as OCCT's from `wrapped`: `GetRGB()` gives the linear components."""
 
     def __init__(self, *args, **kwargs):
+        # (Kept as OCCT keeps a colour: its linear components and alpha in single precision;
+        # the sRGB components converted from those, as CadQuery's `toTuple` gives them.)
         if not args:
-            r, g, b, a = 1.0, 1.0, 0.0, 1.0
+            linear, a = (1.0, 1.0, 0.0), 1.0
         elif len(args) == 1 and isinstance(args[0], Color):
-            r, g, b, a = args[0].toTuple()
+            self._rgba = args[0].toTuple()
+            return
         elif len(args) == 1 and isinstance(args[0], str):
-            r, g, b, a = self._parse(args[0])
+            linear, a = self._parse(args[0])
         elif len(args) in (3, 4, 5):
             r, g, b = (float(c) for c in args[:3])
             a = float(args[3]) if len(args) > 3 else float(kwargs.get("a") or 1.0)
             if len(args) == 5 and not args[4]:
-                r, g, b = _to_srgb(r), _to_srgb(g), _to_srgb(b)
+                linear = (r, g, b)
+            else:
+                linear = (_to_linear(r), _to_linear(g), _to_linear(b))
         else:
             raise ValueError(f"Unsupported arguments: {args}, {kwargs}")
-        self._rgba = (float(r), float(g), float(b), float(a))
+        linear = tuple(_single(c) for c in linear)
+        self._rgba = (*(_to_srgb(c) for c in linear), _single(float(a)))
 
     @classmethod
     def _parse(cls, text: str):
+        """The linear components of a colour named (OCCT's names, then X11's) or given in hex,
+        and its alpha."""
         from ._colors import NAMED
+        from .occ_impl._occt_colors import BY_NAME
 
         name = text.lower().replace(" ", "").replace("_", "")
+        if name in BY_NAME:
+            return BY_NAME[name], 1.0
         if name in NAMED:
-            return (*NAMED[name], 1.0)
+            return tuple(_to_linear(c) for c in NAMED[name]), 1.0
         if text.startswith("#") and len(text) in (4, 5, 7, 9):
             digits = text[1:]
             step = 1 if len(digits) in (3, 4) else 2
             values = [int(digits[i:i + step] * (2 // step), 16) / 255.0 for i in range(0, len(digits), step)]
             if len(values) == 3:
                 values.append(1.0)
-            return tuple(values)
+
+            # (OCCT converts a hex colour in single precision, each step rounded.)
+            def linear(v):
+                x = _single(v)
+                if x <= _single(0.04045):
+                    return _single(x / _single(12.92))
+                return _single(_single(_single(x + _single(0.055)) / _single(1.055)) ** _single(2.4))
+
+            return tuple(linear(c) for c in values[:3]), values[3]
         raise ValueError(f"Unknown color name: {text}")
 
     def toTuple(self):

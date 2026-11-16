@@ -1258,6 +1258,42 @@ fn write_brep_binary(py: Python<'_>, shape: Handle) -> PyResult<Py<pyo3::types::
     Ok(pyo3::types::PyBytes::new(py, &out).unbind())
 }
 
+/// OCCT's shape streams for one binary OCAF document (XBF), written in file order: the
+/// shapes and locations already written are referred back to.
+#[pyclass(module = "pykentron._kentron")]
+struct ShapeStreams {
+    writer: kentron::io::brep::ShapeStreamWriter,
+}
+
+#[pymethods]
+impl ShapeStreams {
+    #[new]
+    fn new() -> Self {
+        Self { writer: kentron::io::brep::ShapeStreamWriter::new() }
+    }
+
+    /// The stream of `shape`, its first byte at file position `base`.
+    fn shape(&mut self, py: Python<'_>, shape: &Handle, base: u64) -> PyResult<Py<pyo3::types::PyBytes>> {
+        let writer = &mut self.writer;
+        let bytes = with_model(|m| writer.shape(m, shape.shape, base))?;
+        Ok(pyo3::types::PyBytes::new(py, &bytes).unbind())
+    }
+
+    /// The stream of the placement `rows`, its first byte at file position `base`.
+    fn location(&mut self, py: Python<'_>, rows: Rows, base: u64) -> PyResult<Py<pyo3::types::PyBytes>> {
+        let t = Transform::from_rows(rows).ok_or_else(|| PyValueError::new_err("a singular placement"))?;
+        Ok(pyo3::types::PyBytes::new(py, &self.writer.location(t, base)).unbind())
+    }
+}
+
+/// The shapes and placements of a binary OCAF document's streams starting at `shapes` and
+/// `locations` (file positions; every stream of the document).
+#[pyfunction]
+fn read_shape_streams(data: &[u8], shapes: Vec<u64>, locations: Vec<u64>) -> PyResult<(Vec<Option<Handle>>, Vec<Rows>)> {
+    with_model(|m| kentron::io::brep::read_shape_streams(m, data, &shapes, &locations))
+        .map(|(s, l)| (s.into_iter().map(|s| s.map(handle)).collect(), l.into_iter().map(|t| t.rows()).collect()))
+}
+
 /// Writes a BRep file.
 #[pyfunction]
 fn write_brep(shape: Handle, path: &str) -> PyResult<()> {
@@ -1518,6 +1554,8 @@ fn _kentron(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(read_brep_binary, m)?)?;
     m.add_function(wrap_pyfunction!(write_brep, m)?)?;
     m.add_function(wrap_pyfunction!(write_brep_binary, m)?)?;
+    m.add_function(wrap_pyfunction!(read_shape_streams, m)?)?;
+    m.add_class::<ShapeStreams>()?;
     m.add_function(wrap_pyfunction!(read_step, m)?)?;
     m.add_function(wrap_pyfunction!(read_step_assembly, m)?)?;
     cadquery::register(m)?;

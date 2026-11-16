@@ -1,5 +1,5 @@
 """CadQuery's `occ_impl.importers.assembly` on pykentron: assemblies read from STEP files and
-OCAF XML documents."""
+OCAF documents (XML and binary)."""
 
 from __future__ import annotations
 
@@ -100,7 +100,10 @@ def importStep(assy, path: str, unit: str = "MM") -> None:
 
 
 def importXbf(assy, path: str) -> None:
-    raise NotImplementedError("reading XBF files (OCAF's binary format)")
+    """Fills `assy` from an OCAF binary document (XBF, as CadQuery's)."""
+    from ..xbf import read_xbf
+
+    read_xbf(assy, str(path))
 
 
 def importXml(assy, path: str) -> None:

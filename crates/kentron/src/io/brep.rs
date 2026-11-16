@@ -2120,6 +2120,543 @@ impl Writer<'_, Bin> {
     }
 }
 
+// --- OCCT's shape streams (BinTools_ShapeWriter / ShapeReader) -----------------------------
+
+/// OCCT's shape streams, as its binary documents (OCAF's XBF, format version 12) keep a
+/// shape in each attribute that holds one: each shape, location and surface written where
+/// first met, a later use of it a reference back to that place in the file (its distance,
+/// in 1, 2, 4 or 8 bytes). One writer serves a whole document, its streams written in file
+/// order, each at the absolute position given; geometry bodies as the binary BRep format's.
+#[derive(Default)]
+pub struct ShapeStreamWriter {
+    shapes: HashMap<NodeId, u64>,
+    locations: Vec<(Transform, u64)>,
+    surfaces: HashMap<FaceId, u64>,
+    /// Per edge its uses on faces: (face, the coedge's orientation on it, coedge).
+    uses: HashMap<EdgeId, Vec<(FaceId, Orientation, CoEdgeId)>>,
+    faces: std::collections::HashSet<FaceId>,
+}
+
+/// (`BinTools_ObjectType`.)
+const STREAM_LOCATION: u8 = 5;
+const STREAM_SIMPLE_LOCATION: u8 = 6;
+const STREAM_IDENTITY: u8 = 7;
+const STREAM_LOCATION_END: u8 = 8;
+const STREAM_CURVE: u8 = 9;
+const STREAM_NO_CURVE: u8 = 10;
+const STREAM_CURVE2: u8 = 11;
+const STREAM_NO_CURVE2: u8 = 12;
+const STREAM_SURFACE: u8 = 13;
+const STREAM_NO_SURFACE: u8 = 14;
+const STREAM_POLYGON3: u8 = 15;
+const STREAM_POLYGON_ON_MESH: u8 = 17;
+const STREAM_MESH: u8 = 19;
+const STREAM_NO_SHAPE: u8 = 198;
+const STREAM_SHAPE_END: u8 = 199;
+
+/// A shape's flags as a byte (free, modified, checked, orientable, closed, infinite, convex:
+/// bits 0 to 6), from the text format's digits.
+fn flag_bits(digits: &str) -> u8 {
+    digits.bytes().enumerate().fold(0, |b, (i, c)| b | ((c - b'0') << i))
+}
+
+fn stream_code(kind: NodeKind) -> u8 {
+    match kind {
+        NodeKind::Compound => 0,
+        NodeKind::CompSolid => 1,
+        NodeKind::Solid => 2,
+        NodeKind::Shell => 3,
+        NodeKind::Face => 4,
+        NodeKind::Wire => 5,
+        NodeKind::Edge => 6,
+        _ => 7,
+    }
+}
+
+fn orientation_code(o: Orientation) -> u8 {
+    match o {
+        Orientation::Forward => 0,
+        Orientation::Reversed => 1,
+        Orientation::Internal => 2,
+        Orientation::External => 3,
+    }
+}
+
+impl ShapeStreamWriter {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The stream of `shape` (its placement and orientation the occurrence's), its first byte
+    /// at file position `base`.
+    pub fn shape(&mut self, model: &Model, shape: Shape, base: u64) -> Result<Vec<u8>> {
+        for face in model.unique_subshapes(shape, NodeKind::Face) {
+            let Ok(face) = FaceId::try_from(face.node) else { continue };
+            if !self.faces.insert(face) {
+                continue;
+            }
+            let record = model.get(face).ok_or_else(|| bad("no face"))?;
+            for &use_id in &record.wires {
+                let wire_use = model.get(use_id).ok_or_else(|| bad("no wire use"))?;
+                let wire = model.get(wire_use.wire).ok_or_else(|| bad("no wire"))?;
+                for &c in &wire.coedges {
+                    let coedge = model.get(c).ok_or_else(|| bad("no coedge"))?;
+                    self.uses.entry(coedge.edge).or_default().push((face, coedge.orientation.compose(wire_use.orientation), c));
+                }
+            }
+        }
+        let mut out = Bin::default();
+        self.write_shape(model, &mut out, base, shape.node, shape.orientation, shape.placement)?;
+        Ok(out.0)
+    }
+
+    /// The stream of a location (`7` for the identity), its first byte at `base`.
+    pub fn location(&mut self, t: Transform, base: u64) -> Vec<u8> {
+        let mut out = Bin::default();
+        self.write_location(&mut out, base, t);
+        out.0
+    }
+
+    fn reference(out: &mut Bin, base: u64, target: u64) {
+        let delta = base + out.0.len() as u64 - target;
+        if delta <= 0xff {
+            out.byte(1).byte(delta as u8);
+        } else if delta <= 0xffff {
+            out.byte(2);
+            out.0.extend_from_slice(&(delta as u16).to_le_bytes());
+        } else if delta <= 0xffff_ffff {
+            out.byte(3);
+            out.0.extend_from_slice(&(delta as u32).to_le_bytes());
+        } else {
+            out.byte(4);
+            out.0.extend_from_slice(&delta.to_le_bytes());
+        }
+    }
+
+    fn write_location(&mut self, out: &mut Bin, base: u64, t: Transform) {
+        if t == Transform::IDENTITY {
+            out.byte(STREAM_IDENTITY);
+            return;
+        }
+        if let Some(&(_, at)) = self.locations.iter().find(|(l, _)| *l == t) {
+            Self::reference(out, base, at);
+            return;
+        }
+        self.locations.push((t, base + out.0.len() as u64));
+        out.byte(STREAM_SIMPLE_LOCATION);
+        for row in t.rows() {
+            out.reals(&row);
+        }
+    }
+
+    fn write_surface(&mut self, model: &Model, out: &mut Bin, base: u64, face: FaceId) -> Result<()> {
+        if let Some(&at) = self.surfaces.get(&face) {
+            Self::reference(out, base, at);
+            return Ok(());
+        }
+        let surface = model.surface(Shape::new(face.into())).ok_or_else(|| bad("a face without a surface"))?;
+        self.surfaces.insert(face, base + out.0.len() as u64);
+        out.byte(STREAM_SURFACE).surface(surface);
+        Ok(())
+    }
+
+    fn write_shape(&mut self, model: &Model, out: &mut Bin, base: u64, node: NodeId, orientation: Orientation, placement: Transform) -> Result<()> {
+        if let Some(&at) = self.shapes.get(&node) {
+            Self::reference(out, base, at);
+            self.write_location(out, base, placement);
+            out.byte(orientation_code(orientation));
+            return Ok(());
+        }
+        if matches!(node.kind, NodeKind::CoEdge | NodeKind::Product | NodeKind::Instance) {
+            return Err(Error::InvalidInput(format!("shape streams cannot hold a {:?}", node.kind)));
+        }
+        self.shapes.insert(node, base + out.0.len() as u64);
+        out.byte(200 + 4 * stream_code(node.kind) + orientation_code(orientation));
+        self.write_location(out, base, placement);
+        let shape = Shape::new(node);
+        let flags = match node.kind {
+            NodeKind::Vertex => {
+                out.real(model.tolerance(shape)).point(model.point(shape)).byte(0);
+                "0101101"
+            }
+            NodeKind::Edge => {
+                let edge = EdgeId::try_from(node).map_err(|_| bad("not an edge"))?;
+                let edge_uses = self.uses.get(&edge).cloned().unwrap_or_default();
+                let same_parameter = edge_uses.iter().all(|u| model.is_same_parameter(u.2));
+                let same_range = edge_uses.iter().all(|u| model.is_same_range(u.2));
+                out.real(model.tolerance(shape)).byte(u8::from(same_parameter) | (u8::from(same_range) << 1) | (u8::from(model.is_degenerate(shape)) << 2));
+                if let Some((curve, first, last)) = model.edge_curve(shape) {
+                    out.byte(1).byte(STREAM_CURVE).curve(&curve);
+                    out.byte(STREAM_IDENTITY).real(first).real(last);
+                }
+                let mut done = vec![false; edge_uses.len()];
+                for i in 0..edge_uses.len() {
+                    if done[i] {
+                        continue;
+                    }
+                    let (face, use_orientation, coedge) = edge_uses[i];
+                    let seam = (i + 1..edge_uses.len()).find(|&j| !done[j] && edge_uses[j].0 == face && edge_uses[j].1 != use_orientation);
+                    let Some((pcurve, first, last)) = model.effective_pcurve(coedge) else { continue };
+                    match seam {
+                        Some(j) => {
+                            done[j] = true;
+                            let Some((other, _, _)) = model.effective_pcurve(edge_uses[j].2) else { continue };
+                            let (forward, reversed) = if use_orientation == Orientation::Reversed { (other, pcurve) } else { (pcurve, other) };
+                            out.byte(3).byte(STREAM_CURVE2).curve2(&forward).byte(STREAM_CURVE2).curve2(&reversed).byte(6);
+                        }
+                        None => {
+                            out.byte(2).byte(STREAM_CURVE2).curve2(&pcurve);
+                        }
+                    }
+                    self.write_surface(model, out, base, face)?;
+                    out.byte(STREAM_IDENTITY).real(first).real(last);
+                }
+                out.byte(0);
+                if model.is_closed_edge(shape) { "0101100" } else { "0101000" }
+            }
+            NodeKind::Face => {
+                let face = FaceId::try_from(node).map_err(|_| bad("not a face"))?;
+                out.flag(false).real(model.tolerance(shape));
+                self.write_surface(model, out, base, face)?;
+                // (Identity location; no mesh written.)
+                out.byte(STREAM_IDENTITY).byte(0);
+                "0101000"
+            }
+            NodeKind::Wire => {
+                if model.is_closed_wire(WireId::try_from(node).map_err(|_| bad("not a wire"))?) { "0101100" } else { "0101000" }
+            }
+            NodeKind::Shell => {
+                if model.is_closed_shell(ShellId::try_from(node).map_err(|_| bad("not a shell"))?) { "0101100" } else { "0101000" }
+            }
+            NodeKind::Solid => "0100000",
+            _ => "0101000",
+        };
+        out.byte(flag_bits(flags));
+        let children: Vec<(NodeId, Orientation, Transform)> = if node.kind == NodeKind::Wire {
+            let wire = model.get(WireId::try_from(node).map_err(|_| bad("not a wire"))?).ok_or_else(|| bad("no wire"))?;
+            let mut out = Vec::with_capacity(wire.coedges.len());
+            for &c in &wire.coedges {
+                let coedge = model.get(c).ok_or_else(|| bad("no coedge"))?;
+                out.push((coedge.edge.into(), coedge.orientation, Transform::IDENTITY));
+            }
+            out
+        } else {
+            model.children_local(shape).map(|c| (c.node, c.orientation, c.placement)).collect()
+        };
+        for (child, o, t) in children {
+            self.write_shape(model, out, base, child, o, t)?;
+        }
+        out.byte(STREAM_SHAPE_END);
+        Ok(())
+    }
+}
+
+/// Reads OCCT's shape streams (see [`ShapeStreamWriter`]) out of a document's bytes: the
+/// shapes whose streams start at `shapes` and the locations at `locations` (positions in
+/// file order, every stream of the document among them, as later ones may refer back into
+/// earlier ones). A shape met several times is one shape of `model`.
+pub fn read_shape_streams(model: &mut Model, data: &[u8], shapes: &[u64], locations: &[u64]) -> Result<(Vec<Option<Shape>>, Vec<Transform>)> {
+    let mut reader = StreamReader { file: File { locations: vec![Transform::IDENTITY], curves2: Vec::new(), curves: Vec::new(), surfaces: Vec::new(), shapes: Vec::new(), root: Ref { index: 0, orientation: Orientation::Forward, location: 0 } }, at: HashMap::new() };
+    // All the streams parsed in file order, then built.
+    let mut starts: Vec<(u64, bool)> = shapes.iter().map(|&p| (p, true)).chain(locations.iter().map(|&p| (p, false))).collect();
+    starts.sort_by_key(|s| s.0);
+    let mut shape_refs: HashMap<u64, Option<Ref>> = HashMap::new();
+    let mut location_refs: HashMap<u64, usize> = HashMap::new();
+    for (p, is_shape) in starts {
+        let mut b = Bytes { data, at: p as usize };
+        if is_shape {
+            let r = reader.shape(&mut b)?;
+            shape_refs.insert(p, r);
+        } else {
+            let l = reader.location(&mut b)?;
+            location_refs.insert(p, l);
+        }
+    }
+    let file = reader.file;
+    let mut builder = Builder::new(model, &file);
+    let mut out = Vec::with_capacity(shapes.len());
+    for p in shapes {
+        out.push(match shape_refs[p] {
+            Some(r) => {
+                let s = builder.shape(Ref { location: 0, ..r }, &[])?;
+                Some(s.with_placement(builder.location(r.location)?))
+            }
+            None => None,
+        });
+    }
+    let transforms = locations.iter().map(|p| file.locations[location_refs[p]]).collect();
+    Ok((out, transforms))
+}
+
+/// The tables a stream's definitions fill (a binary BRep file's), by where each was defined.
+struct StreamReader {
+    file: File,
+    /// (kind, position) -> index in its table.
+    at: HashMap<(u8, u64), usize>,
+}
+
+impl StreamReader {
+    /// A reference's target: the position of its type byte less the distance it gives.
+    fn target(b: &mut Bytes, code: u8, start: usize) -> Result<u64> {
+        let delta = match code {
+            1 => b.byte()? as u64,
+            2 => u16::from_le_bytes(b.take(2)?.try_into().expect("2 bytes")) as u64,
+            3 => u32::from_le_bytes(b.take(4)?.try_into().expect("4 bytes")) as u64,
+            _ => u64::from_le_bytes(b.take(8)?.try_into().expect("8 bytes")),
+        };
+        (start as u64).checked_sub(delta).ok_or_else(|| bad("a reference before the file"))
+    }
+
+    fn known(&self, kind: u8, at: u64) -> Result<usize> {
+        self.at.get(&(kind, at)).copied().ok_or_else(|| bad(format!("a reference to nothing read at {at}")))
+    }
+
+    fn location(&mut self, b: &mut Bytes) -> Result<usize> {
+        let start = b.at;
+        match b.byte()? {
+            STREAM_IDENTITY => Ok(0),
+            c @ 1..=4 => {
+                let at = Self::target(b, c, start)?;
+                self.known(STREAM_LOCATION, at)
+            }
+            STREAM_SIMPLE_LOCATION => {
+                let mut rows = [[0.0; 4]; 3];
+                for row in &mut rows {
+                    for v in row.iter_mut() {
+                        *v = b.real()?;
+                    }
+                }
+                let t = Transform::from_rows(rows).ok_or_else(|| bad("a singular location"))?;
+                self.file.locations.push(t);
+                let index = self.file.locations.len() - 1;
+                self.at.insert((STREAM_LOCATION, start as u64), index);
+                Ok(index)
+            }
+            STREAM_LOCATION => {
+                let mut product = Transform::IDENTITY;
+                while b.data.get(b.at) != Some(&STREAM_LOCATION_END) {
+                    let l = self.location(b)?;
+                    let power = b.int()? as i32;
+                    product = self.file.locations[l].powi(power) * product;
+                }
+                b.byte()?;
+                self.file.locations.push(product);
+                let index = self.file.locations.len() - 1;
+                self.at.insert((STREAM_LOCATION, start as u64), index);
+                Ok(index)
+            }
+            c => Err(bad(format!("a location of type {c}"))),
+        }
+    }
+
+    /// A curve, 2D curve or surface: `None` for an empty one; its index (from 1) otherwise.
+    fn geometry(&mut self, b: &mut Bytes, define: u8, empty: u8) -> Result<Option<usize>> {
+        let start = b.at;
+        let code = b.byte()?;
+        if code == empty {
+            return Ok(None);
+        }
+        if (1..=4).contains(&code) {
+            let at = Self::target(b, code, start)?;
+            return self.known(define, at).map(Some);
+        }
+        if code != define {
+            return Err(bad(format!("geometry of type {code}")));
+        }
+        let index = match define {
+            STREAM_CURVE => {
+                self.file.curves.push(RawCurve::read(b)?);
+                self.file.curves.len()
+            }
+            STREAM_CURVE2 => {
+                self.file.curves2.push(RawCurve2::read(b)?);
+                self.file.curves2.len()
+            }
+            _ => {
+                self.file.surfaces.push(RawSurface::read(b)?);
+                self.file.surfaces.len()
+            }
+        };
+        self.at.insert((define, start as u64), index);
+        Ok(Some(index))
+    }
+
+    /// Meshes and polygons, skipped (their definitions kept for references to them).
+    fn mesh(&mut self, b: &mut Bytes, define: u8) -> Result<()> {
+        let start = b.at;
+        let code = b.byte()?;
+        if (1..=4).contains(&code) {
+            Self::target(b, code, start)?;
+            return Ok(());
+        }
+        if code != define {
+            return Ok(()); // empty
+        }
+        match define {
+            STREAM_POLYGON3 => {
+                let (nodes, has_parameters) = (b.count()?, b.flag()?);
+                b.skip(8 + 24 * nodes + if has_parameters { 8 * nodes } else { 0 })?;
+            }
+            STREAM_POLYGON_ON_MESH => {
+                let nodes = b.count()?;
+                b.skip(4 * nodes + 8)?;
+                if b.flag()? {
+                    b.skip(8 * nodes)?;
+                }
+            }
+            _ => {
+                let (nodes, triangles, has_uv, has_normals) = (b.count()?, b.count()?, b.flag()?, b.flag()?);
+                b.skip(8 + 24 * nodes + if has_uv { 16 * nodes } else { 0 } + 12 * triangles + if has_normals { 12 * nodes } else { 0 })?;
+            }
+        }
+        self.at.insert((define, start as u64), 0);
+        Ok(())
+    }
+
+    fn shape(&mut self, b: &mut Bytes) -> Result<Option<Ref>> {
+        let start = b.at;
+        let code = b.byte()?;
+        if code == STREAM_NO_SHAPE {
+            return Ok(None);
+        }
+        let orientation = |o: u8| match o & 3 {
+            0 => Orientation::Forward,
+            1 => Orientation::Reversed,
+            2 => Orientation::Internal,
+            _ => Orientation::External,
+        };
+        if (1..=4).contains(&code) {
+            let at = Self::target(b, code, start)?;
+            let index = self.known(STREAM_SHAPE_END, at)?;
+            let location = self.location(b)?;
+            let o = b.byte()?;
+            return Ok(Some(Ref { index, orientation: orientation(o), location }));
+        }
+        if code < 200 {
+            return Err(bad(format!("a shape of type {code}")));
+        }
+        let kind = match (code - 200) >> 2 {
+            0 => NodeKind::Compound,
+            1 => NodeKind::CompSolid,
+            2 => NodeKind::Solid,
+            3 => NodeKind::Shell,
+            4 => NodeKind::Face,
+            5 => NodeKind::Wire,
+            6 => NodeKind::Edge,
+            7 => NodeKind::Vertex,
+            k => return Err(bad(format!("unknown shape type {k}"))),
+        };
+        let location = self.location(b)?;
+        let geometry = match kind {
+            NodeKind::Vertex => {
+                let (tolerance, point) = (b.real()?, b.point()?);
+                loop {
+                    match b.byte()? {
+                        0 => break,
+                        1 => {
+                            b.real()?;
+                            self.geometry(b, STREAM_CURVE, STREAM_NO_CURVE)?;
+                        }
+                        2 => {
+                            b.real()?;
+                            self.geometry(b, STREAM_CURVE2, STREAM_NO_CURVE2)?;
+                            self.geometry(b, STREAM_SURFACE, STREAM_NO_SURFACE)?;
+                        }
+                        3 => {
+                            b.real()?;
+                            b.real()?;
+                            self.geometry(b, STREAM_SURFACE, STREAM_NO_SURFACE)?;
+                        }
+                        t => return Err(bad(format!("unknown point representation {t}"))),
+                    }
+                    self.location(b)?;
+                }
+                Geometry::Vertex { point, tolerance }
+            }
+            NodeKind::Edge => {
+                let tolerance = b.real()?;
+                let flags = b.byte()?;
+                let (mut curve, mut on_surfaces) = (None, Vec::new());
+                loop {
+                    match b.byte()? {
+                        0 => break,
+                        1 => {
+                            let c = self.geometry(b, STREAM_CURVE, STREAM_NO_CURVE)?;
+                            let l = self.location(b)?;
+                            let (first, last) = (b.real()?, b.real()?);
+                            if let Some(c) = c {
+                                curve = Some((c, l, first, last));
+                            }
+                        }
+                        rep @ (2 | 3) => {
+                            let c = self.geometry(b, STREAM_CURVE2, STREAM_NO_CURVE2)?;
+                            let reversed = if rep == 3 {
+                                let r = self.geometry(b, STREAM_CURVE2, STREAM_NO_CURVE2)?;
+                                b.byte()?; // continuity
+                                r
+                            } else {
+                                None
+                            };
+                            let s = self.geometry(b, STREAM_SURFACE, STREAM_NO_SURFACE)?;
+                            let l = self.location(b)?;
+                            let (first, last) = (b.real()?, b.real()?);
+                            if let (Some(curve), Some(surface)) = (c, s) {
+                                on_surfaces.push(OnSurface { curve, reversed_curve: reversed, surface, location: l, first, last });
+                            }
+                        }
+                        4 => {
+                            b.byte()?;
+                            for _ in 0..2 {
+                                self.geometry(b, STREAM_SURFACE, STREAM_NO_SURFACE)?;
+                                self.location(b)?;
+                            }
+                        }
+                        5 => {
+                            self.mesh(b, STREAM_POLYGON3)?;
+                            self.location(b)?;
+                        }
+                        rep @ (6 | 7) => {
+                            self.mesh(b, STREAM_POLYGON_ON_MESH)?;
+                            if rep == 7 {
+                                self.mesh(b, STREAM_POLYGON_ON_MESH)?;
+                            }
+                            self.mesh(b, STREAM_MESH)?;
+                            self.location(b)?;
+                        }
+                        t => return Err(bad(format!("unknown edge representation {t}"))),
+                    }
+                }
+                Geometry::Edge { tolerance, degenerate: flags & 4 != 0, curve, on_surfaces }
+            }
+            NodeKind::Face => {
+                b.byte()?; // natural restriction
+                let tolerance = b.real()?;
+                let surface = self.geometry(b, STREAM_SURFACE, STREAM_NO_SURFACE)?;
+                let l = self.location(b)?;
+                if b.byte()? == 2 {
+                    self.mesh(b, STREAM_MESH)?;
+                }
+                Geometry::Face { tolerance, surface: surface.map(|s| (s, l)) }
+            }
+            _ => Geometry::None,
+        };
+        b.byte()?; // flags
+        // (Its place in the table taken before its sub-shapes', as they may refer to it.)
+        let index = self.file.shapes.len();
+        self.file.shapes.push(RawShape { kind, geometry, children: Vec::new() });
+        self.at.insert((STREAM_SHAPE_END, start as u64), index);
+        let mut children = Vec::new();
+        while b.data.get(b.at) != Some(&STREAM_SHAPE_END) {
+            if let Some(r) = self.shape(b)? {
+                children.push(r);
+            }
+        }
+        b.byte()?;
+        self.file.shapes[index].children = children;
+        Ok(Some(Ref { index, orientation: orientation(code - 200), location }))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2171,6 +2708,39 @@ mod tests {
         assert!((volume.mass - 865.752220392).abs() < 1e-6, "{}", volume.mass);
         assert!((crate::properties::area(&other, back).mass - 681.646003294).abs() < 1e-6);
         assert!(volume.center_of_mass.distance(Point::new(1.0, 2.0, 3.0)) < 1e-6, "{:?}", volume.center_of_mass);
+    }
+
+    /// The filleted box of `reads_binary_files` in a shape stream, then the same box moved in
+    /// a second stream after it (written as a reference back into the first, with its
+    /// placement), and a placement stream: read back, the same box twice, sharing its faces,
+    /// and the placement.
+    #[test]
+    fn shape_streams_read_back() {
+        let mut model = Model::new();
+        let solid = read_binary(&mut model, &mut &include_bytes!("tests/filleted_box_v4.bin")[..]).unwrap();
+        let moved = solid.moved(&Transform::translation(Vector::new(10.0, 0.0, 0.0)));
+        let mut writer = ShapeStreamWriter::new();
+        let mut data = vec![0u8; 5];
+        let first = data.len() as u64;
+        data.extend(writer.shape(&model, solid, first).unwrap());
+        let second = data.len() as u64;
+        let again = writer.shape(&model, moved, second).unwrap();
+        // (A reference, its placement (a type byte and 12 reals) and orientation.)
+        assert!(again.len() <= 1 + 8 + 1 + 96 + 1, "the second stream refers back: {} bytes", again.len());
+        data.extend(again);
+        let third = data.len() as u64;
+        data.extend(writer.location(Transform::translation(Vector::new(1.0, 2.0, 3.0)), third));
+        let mut other = Model::new();
+        let (shapes, locations) = read_shape_streams(&mut other, &data, &[first, second], &[third]).unwrap();
+        let (a, b) = (shapes[0].unwrap(), shapes[1].unwrap());
+        assert!(crate::validity::check(&other, a).is_valid());
+        for (s, x) in [(a, 1.0), (b, 11.0)] {
+            let volume = crate::properties::volume(&other, s);
+            assert!((volume.mass - 865.752220392).abs() < 1e-6, "{}", volume.mass);
+            assert!((volume.center_of_mass.x - x).abs() < 1e-6, "{:?}", volume.center_of_mass);
+        }
+        assert_eq!(a.node, b.node);
+        assert!(locations[0] == Transform::translation(Vector::new(1.0, 2.0, 3.0)));
     }
 
     /// A line segment between two vertices, as OCCT writes it.

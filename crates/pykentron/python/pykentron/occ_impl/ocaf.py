@@ -14,7 +14,7 @@ from xml.sax.saxutils import escape
 
 from ..geom import Color, Location
 from ..shapes import Compound, Shape
-from ._occt_colors import NAMES as _COLOR_NAMES, SRGB as _COLOR_SRGB
+from ._occt_colors import LINEAR as _COLOR_LINEAR, NAMES as _COLOR_NAMES, SRGB as _COLOR_SRGB
 
 # OCAF's GUIDs: tree nodes linking documents' parts, a label marked an assembly, names.
 _DOC_TREE = "efd212eb-6dfd-11d4-b9c8-0060b0ee281b"
@@ -34,9 +34,13 @@ def _nearest_color(rgba) -> int:
     import struct
 
     f = lambda x: struct.unpack("f", struct.pack("f", x))[0]
-    r, g, b = (f(c) for c in rgba[:3])
+    # (From the linear components OCCT keeps, in single precision, as sRGB.)
+    lin = lambda c: c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+    srgb = lambda c: c * 12.92 if c <= 0.0031308 else 1.055 * c ** (1 / 2.4) - 0.055
+    r, g, b = (f(srgb(f(lin(c)))) for c in rgba[:3])
     best, distance = 0, float("inf")
     for i, (x, y, z) in enumerate(_COLOR_SRGB):
+        x, y, z = f(x), f(y), f(z)
         d = f(f(f(r - x) ** 2) + f(f(g - y) ** 2) + f(f(b - z) ** 2))
         if d < distance:
             best, distance = i, d
@@ -595,15 +599,19 @@ def _color_of(value: str):
     """A colour attribute's value: a named colour's index (OCCT's XML), else components."""
     parts = value.split()
     if len(parts) == 1 and re.fullmatch(r"-?\d+", parts[0]):
-        r, g, b = _COLOR_SRGB[int(parts[0])]
-        return Color(r, g, b, 1.0)
+        r, g, b = _COLOR_LINEAR[int(parts[0])]
+        return Color(r, g, b, 1.0, False)
     numbers = [float(p) for p in parts]
     return Color(*numbers[:4], False) if len(numbers) >= 3 else None
 
 
 def read_xml(assy, path: str) -> None:
     """Fills `assy` from an OCAF XML document, as CadQuery's `_importDoc` does."""
-    doc = _Read(path)
+    read_document(assy, _Read(path), path)
+
+
+def read_document(assy, doc, path: str) -> None:
+    """Fills `assy` from a document read (XML or binary), as CadQuery's `_importDoc` does."""
 
     def process(entry: str, parent):
         for comp in doc.components(entry):

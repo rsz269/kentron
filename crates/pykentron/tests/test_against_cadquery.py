@@ -677,15 +677,15 @@ def _assembly_summary(assy):
     return out
 
 
-def test_xml_assembly_read_as_cadquery_reads_its_own(tmp_path):
-    # (OCAF's XML document: written by each, read by each; CadQuery reading pykentron's file
-    # and pykentron reading CadQuery's both give what CadQuery gives reading its own.
-    # pykentron's side through the CadQuery shim, in a process of its own.)
+def test_xml_assembly_read_as_cadquery_reads_its_own(tmp_path, suffix=".xml"):
+    # (OCAF's documents, XML and binary (XBF): written by each, read by each; CadQuery reading
+    # pykentron's file and pykentron reading CadQuery's both give what CadQuery gives reading
+    # its own. pykentron's side through the CadQuery shim, in a process of its own.)
     import json
     import subprocess
 
     here = Path(__file__).resolve().parent
-    theirs, ours = tmp_path / "theirs.xml", tmp_path / "ours.xml"
+    theirs, ours = tmp_path / f"theirs{suffix}", tmp_path / f"ours{suffix}"
     _xml_assembly(cadquery).export(str(theirs))
     run = (
         "import sys, json; sys.path[:0] = [%r, %r]; import pykentron.shim; import cadquery as cq; import test_against_cadquery as t\n"
@@ -699,6 +699,10 @@ def test_xml_assembly_read_as_cadquery_reads_its_own(tmp_path):
     assert json.loads(json.dumps(_assembly_summary(cadquery.Assembly.load(str(ours))))) == expected
     assert read_theirs == expected
     assert read_ours == expected
+
+
+def test_xbf_assembly_read_as_cadquery_reads_its_own(tmp_path):
+    test_xml_assembly_read_as_cadquery_reads_its_own(tmp_path, ".xbf")
 
 
 # Constraint solving: the same CadQuery code (`cq` the module) run on CadQuery (IPOPT through
@@ -874,12 +878,13 @@ if __name__ == "__main__":
     except Exception as e:
         failed += 1
         print(f"FAILED  gyroid_plates_a_hundred_millionth_apart: {type(e).__name__}: {str(e)[:300]}")
-    with tempfile.TemporaryDirectory() as folder:
-        try:
-            test_xml_assembly_read_as_cadquery_reads_its_own(Path(folder))
-            print("ok      xml_assembly_read_as_cadquery_reads_its_own")
-        except Exception as e:
-            failed += 1
-            print(f"FAILED  xml_assembly_read_as_cadquery_reads_its_own: {type(e).__name__}: {str(e)[:300]}")
-    print(f"{len(CASES) + len(FOUND) + 4 + len(SOLVES) - failed} passed, {failed} failed")
+    for suffix in (".xml", ".xbf"):
+        with tempfile.TemporaryDirectory() as folder:
+            try:
+                test_xml_assembly_read_as_cadquery_reads_its_own(Path(folder), suffix)
+                print(f"ok      assembly{suffix}_read_as_cadquery_reads_its_own")
+            except Exception as e:
+                failed += 1
+                print(f"FAILED  assembly{suffix}_read_as_cadquery_reads_its_own: {type(e).__name__}: {str(e)[:300]}")
+    print(f"{len(CASES) + len(FOUND) + 5 + len(SOLVES) - failed} passed, {failed} failed")
     sys.exit(1 if failed else 0)

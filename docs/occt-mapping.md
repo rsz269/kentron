@@ -162,6 +162,7 @@ table maps OCCT concepts to kentron ones; it grows as tests are ported. Types al
 | `BRepTools::Write/Read` | `io::brep::write/read` |
 | `BinTools::Read` (binary BRep, versions 1 to 4); DRAW `binrestore` | `io::brep::read_binary` (the meshes skipped, as `read`'s) |
 | `BinTools::Write` | `io::brep::write_binary` (version 3, without meshes) |
+| `BinTools_ShapeWriter`, `BinTools_ShapeReader` (shapes in binary OCAF documents) | `io::brep::ShapeStreamWriter`, `io::brep::read_shape_streams` |
 | `StlAPI_Writer` (DRAW `writestl`) | `io::stl::write` (nodes and triangles from `meshing::triangulate`) |
 | `BRepMesh_IncrementalMesh` (DRAW `incmesh`; CadQuery `tessellate`) | `meshing::mesh`, `mesh_with(MeshOptions)`, `triangulate` |
 | `BRepExtrema_DistShapeShape` (DRAW `distmini`; CadQuery `distance`) | `distance::distance` -> `ShapeDistance` |

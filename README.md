@@ -37,8 +37,8 @@ independently: OCCT is not a dependency.
   [`docs/occt-mapping.md`](docs/occt-mapping.md) maps OCCT's concepts to them.
 - All topology lives in one arena (`topology::Model`) addressed by typed ids, without
   reference counting.
-- Out of scope for now: visualization, hidden-line removal. OCAF documents: an assembly's
-  in OCCT's XML format (pykentron), not its binary one.
+- Out of scope for now: visualization, hidden-line removal. OCAF documents: only an
+  assembly's, in OCCT's binary and XML formats (pykentron).
 - Not done yet: OCCT's classic construction of evolved shapes, from the spine's bisector
   loci (kentron's evolved solids are OCCT's volume mode). Rare pathological inputs can run
   very slowly or fail to converge. Known gaps: [`docs/known-gaps.md`](docs/known-gaps.md).
@@ -50,8 +50,8 @@ Code), with a human setting the direction and judging the results. Every change 
 against the tests below before it is committed.
 
 <!-- effort -->
-So far (2026-09-25 to 2026-11-16): about 371 hours of the agent's active work, 26.4 million
-tokens written by it, and 13.9 billion tokens processed in all (nearly all of them its
+So far (2026-09-25 to 2026-11-16): about 372 hours of the agent's active work, 26.5 million
+tokens written by it, and 14.0 billion tokens processed in all (nearly all of them its
 conversation's context, read back from the cache).
 <!-- /effort -->
 
