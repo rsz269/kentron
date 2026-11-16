@@ -611,10 +611,10 @@ pub fn pipe_recorded(profile: Handle, spine: Handle, aux: Option<Handle>, curvil
 /// `sections` (wires or vertices) swept along `spine`, blended between: a shell, or with
 /// `solid` a solid.
 #[pyfunction]
-#[pyo3(signature = (sections, spine, solid=true, contact=false, correction=false, aux=None, curvilinear=true, fixed=None))]
+#[pyo3(signature = (sections, spine, solid=true, contact=false, correction=false, aux=None, curvilinear=true, fixed=None, frenet=false))]
 #[allow(clippy::too_many_arguments)]
-pub fn pipe_through(sections: Vec<Handle>, spine: Handle, solid: bool, contact: bool, correction: bool, aux: Option<Handle>, curvilinear: bool, fixed: Option<Xyz>) -> PyResult<Handle> {
-    let options = sweep::PipeOptions { contact, correction, ..Default::default() };
+pub fn pipe_through(sections: Vec<Handle>, spine: Handle, solid: bool, contact: bool, correction: bool, aux: Option<Handle>, curvilinear: bool, fixed: Option<Xyz>, frenet: bool) -> PyResult<Handle> {
+    let options = sweep::PipeOptions { contact, correction, frenet, ..Default::default() };
     let sections: Vec<(Shape, sweep::PipeOptions)> = sections.iter().map(|h| (h.shape, options)).collect();
     let guide = guide_of(aux, curvilinear, fixed)?;
     with_model(|m| sweep::pipe_through_with(m, &sections, spine.shape, solid, guide).map(|s| s.shape)).map(handle)

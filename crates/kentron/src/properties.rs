@@ -305,9 +305,11 @@ fn integrate_face(model: &Model, face: Shape, mut sample: impl FnMut(Point, Vect
             Surface::Plane(_) => (0.0, 0.0),
             Surface::Cylinder(_) | Surface::Cone(_) => (angular, 0.0),
             Surface::Sphere(_) | Surface::Torus(_) => (angular, angular),
-            // About a piece per knot span (at most 8 across the surface), so that each
-            // Gauss rule sees a few polynomial spans, not dozens; more where the surface
-            // turns further (a helical sweep winding many times), each piece short in angle.
+            // A piece per knot span, or per four of them (at least 8 pieces, up to 256 across
+            // the surface): across dozens of spans (a swept surface fitted through hundreds of
+            // sections) a Gauss rule converges only as fast as the spans' joins are smooth (a
+            // sweep's volume 1e-3 short with 8 pieces across 510 spans, 7e-7 with four spans a
+            // piece). More where the surface turns further, each piece short in angle.
             Surface::BSpline(b) => {
                 use crate::geometry::ParametricSurface;
                 let angle = |x: Vector, y: Vector| {
@@ -327,7 +329,7 @@ fn integrate_face(model: &Model, face: Shape, mut sample: impl FnMut(Point, Vect
                 let density = |knots: &[f64], turn: f64| {
                     let spans = knots.len().saturating_sub(1);
                     let range = knots[knots.len() - 1] - knots[0];
-                    let pieces = (spans.min(8) as f64).max((turn / MAX_ANGLE_STEP).ceil().min(4.0 * spans as f64));
+                    let pieces = (spans.div_ceil(4).max(spans.min(8)).min(256) as f64).max((turn / MAX_ANGLE_STEP).ceil().min(4.0 * spans as f64));
                     if spans > 1 && range > 0.0 { pieces / range } else { 0.0 }
                 };
                 (density(b.u_knots(), u_turn), density(b.v_knots(), v_turn))
@@ -1430,10 +1432,13 @@ fn face_extremes(model: &Model, face: Shape, surface: &Surface) -> Vec<Point> {
     // (On a sphere a coordinate is stationary only at the points of its axes: those the face
     // has, found in closed form below, and its boundary's, its edges' extremes. No search.)
     let sphere = matches!(surface, Surface::Sphere(_));
-    let n = if sphere { 0 } else { 24 };
-    let grid: Vec<[f64; 2]> = (0..=n)
-        .flat_map(|i| (0..=n).map(move |j| (i, j)))
-        .map(|(i, j)| [lo[0] + (hi[0] - lo[0]) * i as f64 / n as f64, lo[1] + (hi[1] - lo[1]) * j as f64 / n as f64])
+    // (Finer along a direction a free-form surface turns far in, a helical sweep winding
+    // many times: some 16 samples a turn, so that the best of them lies on the extreme's
+    // own hump, where Newton's steps climb it.)
+    let (nu, nv) = if sphere { (0, 0) } else { grid_sizes(surface, lo, hi) };
+    let grid: Vec<[f64; 2]> = (0..=nu)
+        .flat_map(|i| (0..=nv).map(move |j| (i, j)))
+        .map(|(i, j)| [lo[0] + (hi[0] - lo[0]) * i as f64 / nu as f64, lo[1] + (hi[1] - lo[1]) * j as f64 / nv as f64])
         .filter(|&uv| !sphere && inside(uv))
         .collect();
     if grid.is_empty() && !sphere {
@@ -1503,6 +1508,41 @@ fn face_extremes(model: &Model, face: Shape, surface: &Surface) -> Vec<Point> {
         }
     }
     found
+}
+
+/// The grid [`face_extremes`] searches over `[lo, hi]` of `surface`'s parameters: 24 steps
+/// each way, more along a direction a free-form surface turns more than a turn and a half
+/// in (its tangent's turn along iso-lines at either end and the middle), up to 256.
+fn grid_sizes(surface: &Surface, lo: [f64; 2], hi: [f64; 2]) -> (usize, usize) {
+    const BASE: usize = 24;
+    fn free_form(s: &Surface) -> bool {
+        match s {
+            Surface::BSpline(_) | Surface::Bezier(_) => true,
+            Surface::Trimmed(t) => free_form(t.basis()),
+            Surface::Offset(o) => free_form(o.basis()),
+            _ => false,
+        }
+    }
+    if !free_form(surface) {
+        return (BASE, BASE);
+    }
+    const CHORDS: usize = 128;
+    let turn = |at: &dyn Fn(f64) -> Point| {
+        let points: Vec<Point> = (0..=CHORDS).map(|i| at(i as f64 / CHORDS as f64)).collect();
+        points
+            .windows(3)
+            .map(|w| {
+                let (x, y) = (w[1] - w[0], w[2] - w[1]);
+                let (lx, ly) = (x.length(), y.length());
+                if lx > 0.0 && ly > 0.0 { (x.dot(y) / (lx * ly)).clamp(-1.0, 1.0).acos() } else { 0.0 }
+            })
+            .sum::<f64>()
+    };
+    let size = |turned: f64| ((turned / (std::f64::consts::PI / 8.0)).ceil() as usize).clamp(BASE, 256);
+    let across = [0.0, 0.5, 1.0];
+    let u_turn = across.iter().map(|&t| turn(&|s| surface.point(lo[0] + (hi[0] - lo[0]) * s, lo[1] + (hi[1] - lo[1]) * t))).fold(0.0, f64::max);
+    let v_turn = across.iter().map(|&t| turn(&|s| surface.point(lo[0] + (hi[0] - lo[0]) * t, lo[1] + (hi[1] - lo[1]) * s))).fold(0.0, f64::max);
+    (size(u_turn), size(v_turn))
 }
 
 /// Mass properties of point masses `(point, mass)`; the mass of an empty set is 0 (with
@@ -1987,7 +2027,7 @@ mod tests {
 
 /// The eigenvalues of a symmetric matrix, ascending, with unit eigenvectors (Jacobi
 /// rotations).
-fn symmetric_eigen(m: &Matrix3) -> ([f64; 3], [Vector; 3]) {
+pub(crate) fn symmetric_eigen(m: &Matrix3) -> ([f64; 3], [Vector; 3]) {
     let mut a = [[0.0; 3]; 3];
     for i in 0..3 {
         for j in 0..3 {

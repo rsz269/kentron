@@ -61,6 +61,9 @@ pub(super) enum Framing {
     Guide(GuideLaw),
     /// Not turning at all, the first axis this direction.
     Fixed(Vector),
+    /// OCCT's corrected Frenet frame (its pipes' default), where a piece has one (see
+    /// `corrected`); rotation-minimizing on the others.
+    Corrected(Vec<Option<super::corrected::CorrectedFrenet>>),
 }
 
 /// Samples per piece of a guide and of the spine, for the points matched on the guide.
@@ -179,6 +182,10 @@ pub(super) fn motions(pieces: &[SpinePiece], samples: usize, anchor: (usize, f64
                 let n = n * (1.0 / n.length());
                 if n.dot(r) < 0.0 { -n } else { n }
             }
+            Framing::Corrected(laws) => match &laws[k] {
+                Some(law) => law.normal(s, (pieces[k].last - pieces[k].first).abs()),
+                None => r,
+            },
             _ => r,
         }
     };

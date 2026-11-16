@@ -2429,7 +2429,10 @@ class Solid(Shape, Mixin3D):
     @classmethod
     def sweep_multi(cls, profiles, path, makeSolid: bool = True, isFrenet: bool = False, mode=None) -> "Shape":
         wires = [p if p.ShapeType() == "Wire" else p.outerWire() for p in profiles]
-        return Shape.cast(native.pipe_through([w.wrapped for w in wires], cls._toWire(path).wrapped, makeSolid, **_guide(mode)))
+        # (One section: OCCT's pipe shell sweeps it as `sweep` does.)
+        if len(wires) == 1:
+            return cls.sweep(wires[0], [], path, makeSolid, isFrenet, mode)
+        return Shape.cast(native.pipe_through([w.wrapped for w in wires], cls._toWire(path).wrapped, makeSolid, frenet=bool(isFrenet), **_guide(mode)))
 
     def outerShell(self) -> Shell:
         return self.Shells()[0]

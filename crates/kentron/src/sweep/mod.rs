@@ -3,6 +3,7 @@
 //! The dimension goes up by one: a vertex sweeps an edge, an edge a face, a face a solid.
 
 mod corner;
+mod corrected;
 mod draft;
 mod evolved;
 pub use evolved::{evolved, EvolvedOptions};
@@ -172,7 +173,8 @@ pub fn extrude(model: &mut Model, profile: Shape, v: Vector) -> Result<Sweep> {
 
 /// Sweeps `profile` along the `spine` (an edge, or a wire of edges meeting smoothly),
 /// keeping its relation to the spine's tangent (OCCT's corrected Frenet trihedron: the
-/// profile turns with the tangent and no more): along a straight spine the profile is
+/// profile turns with the tangent and, as near as OCCT's law for it comes, no more; its law
+/// ported, so that off a helix the profile turns as OCCT's does): along a straight spine the profile is
 /// translated, along a circular arc it turns about the arc's axis, along other curves its
 /// faces sweep B-spline surfaces.
 #[doc(alias = "BRepOffsetAPI_MakePipe")]
@@ -227,8 +229,28 @@ fn framing(model: &Model, pieces: &[pipe::SpinePiece], options: &PipeOptions) ->
         Some(Guide::Wire { wire, curvilinear }) => pipe::Framing::Guide(pipe::GuideLaw::new(pieces, &spine_pieces(model, wire)?, curvilinear)?),
         Some(Guide::Fixed(d)) => pipe::Framing::Fixed(Vector::from(d)),
         None if options.frenet => pipe::Framing::Frenet,
-        None => pipe::Framing::Minimal,
+        None => {
+            // (OCCT's corrected Frenet frame; equal to the rotation-minimizing one where no
+            // piece has a law of its own.)
+            let laws: Vec<_> = pieces.iter().map(|p| corrected::CorrectedFrenet::new(&p.curve, p.first, p.last)).collect();
+            if laws.iter().all(Option::is_none) { pipe::Framing::Minimal } else { pipe::Framing::Corrected(laws) }
+        }
     })
+}
+
+/// OCCT's corrected Frenet frames along `curve` from `first` to `last`, at fractions
+/// `fractions` of the way: tangent and normal each; `None` where OCCT keeps the Frenet frame
+/// (which kentron's rotation-minimizing frame equals there). For checking the law against
+/// OCCT's (`GeomFill_CorrectedFrenet`).
+#[doc(hidden)]
+pub fn corrected_frenet_frames(curve: &Curve, first: f64, last: f64, fractions: &[f64]) -> Option<Vec<(Vector, Vector)>> {
+    let law = corrected::CorrectedFrenet::new(curve, first, last)?;
+    let length = (last - first).abs();
+    Some(fractions.iter().map(|&f| {
+        let (_, d1) = curve.d1(first + (last - first) * f);
+        let t = if last >= first { d1 } else { -d1 };
+        (t * (1.0 / t.length()), law.normal(f, length))
+    }).collect())
 }
 
 /// The edges of a pipe's spine, in order, each run in the direction the spine takes it.
@@ -1411,6 +1433,83 @@ mod tests {
         let &(_, _, last) = swept.ends().first().unwrap();
         let corner = model.explore(last, NodeKind::Vertex).map(|v| model.point(v)).min_by(|a, b| a.distance(Point::new(0.0, 1.0, 10.0)).total_cmp(&b.distance(Point::new(0.0, 1.0, 10.0)))).unwrap();
         assert!(corner.distance(Point::new(0.0, 1.0, 10.0)) < 1e-4, "{corner:?}");
+    }
+
+    /// A disc of `radius` about (`at`, 0, `at`) facing -y, swept along OCCT's helix (its
+    /// `makeHelix`, a B-spline) read from `text`: the solid and the helix's edge.
+    fn disc_along_occt_helix(model: &mut Model, text: &str, at: f64, radius: f64) -> (Shape, Shape) {
+        use crate::geometry::curve::Circle;
+        use crate::math::Frame;
+        let helix = crate::io::brep::read(model, &mut text.as_bytes()).unwrap();
+        let frame = Frame::new(Point::new(at, 0.0, at), Direction::from_vector(Vector::new(0.0, -1.0, 0.0)), Direction::X);
+        let circle = make::edge_from_curve(model, Curve::Circle(Circle::new(frame, radius))).unwrap();
+        let wire = make::wire(model, &[circle]).unwrap();
+        let disc = make::planar_face(model, wire).unwrap();
+        let swept = pipe(model, disc, helix).unwrap();
+        let edge = model.unique_subshapes(helix, NodeKind::Edge)[0];
+        (swept.shape, edge)
+    }
+
+    /// Along a spine neither planar nor analytic a pipe carries its profile in OCCT's
+    /// corrected Frenet frame (its pipes' default), not the rotation-minimizing one: off a
+    /// helix the two part by some 2% of the volume. OCCT's own helices, and its frames along
+    /// them (`GeomFill_CorrectedFrenet::D0`), volumes (`BRepGProp`, to 1e-10) and boxes
+    /// (`BRepBndLib::AddOptimal`) of the same sweeps (CadQuery's `circle().sweep(helix)`).
+    #[test]
+    fn a_profile_beside_a_helix_is_carried_in_occts_corrected_frenet_frame() {
+        let mut model = Model::new();
+        let (solid, edge) = disc_along_occt_helix(&mut model, include_str!("tests/occt_helix_pitch_3.brep"), 2.5, 0.4);
+        let (curve, first, last) = model.edge_curve(edge).unwrap();
+        let occt = [
+            (0.25, Vector::new(0.31499948868665395, 0.37944901927493924, -0.8699389426266839)),
+            (0.5, Vector::new(-0.33363955004636886, 0.41634923003874313, -0.8457765480852508)),
+            (0.75, Vector::new(0.9988536072977064, -0.004550482107215127, 0.047652537193206314)),
+            (1.0, Vector::new(-0.29563813987918497, -0.34168065793915303, 0.8921056093529748)),
+        ];
+        let fractions: Vec<f64> = occt.iter().map(|o| o.0).collect();
+        let frames = corrected_frenet_frames(&curve, first, last, &fractions).expect("a law of its own");
+        for ((f, normal), (_, n)) in occt.iter().zip(frames) {
+            assert!(n.dot(*normal) > (1e-4f64).cos(), "at {f}: {n:?} vs OCCT's {normal:?}");
+        }
+        assert_valid_solid_near(&model, solid, 107.76652081612313, [-7.94207, -7.94002, 0.67953, 7.87341, 7.87957, 21.96415]);
+        let mut model = Model::new();
+        let (solid, _) = disc_along_occt_helix(&mut model, include_str!("tests/occt_helix_pitch_minus_3.brep"), 3.5, 0.8);
+        assert_valid_solid_near(&model, solid, 400.37211222834685, [-7.37863, -7.37045, 0.49192, 7.32225, 7.23529, 21.03103]);
+    }
+
+    /// A valid solid of about `volume` (to 1e-5) whose tight box is `bounds` (to 1e-4).
+    #[track_caller]
+    fn assert_valid_solid_near(model: &Model, shape: Shape, volume: f64, bounds: [f64; 6]) {
+        assert!(validity::check(model, shape).is_valid());
+        let v = properties::volume(model, shape).mass;
+        assert!((v - volume).abs() <= 1e-5 * volume, "{v} vs {volume}");
+        let b = properties::tight_bounding_box(model, shape);
+        let got = [b.min.x, b.min.y, b.min.z, b.max.x, b.max.y, b.max.z];
+        assert!(got.iter().zip(bounds).all(|(g, e)| (g - e).abs() <= 1e-4), "{got:?} vs {bounds:?}");
+    }
+
+    /// A round tube about a spine (its profile square to it, centred on it) holds its
+    /// cross-section times the spine's length (Pappus), whatever the spine: a volume found
+    /// from its surface fitted through hundreds of sections, with as many knot spans.
+    #[test]
+    fn a_round_tube_holds_its_section_times_its_length() {
+        use crate::geometry::curve::Circle;
+        use crate::math::Frame;
+        let mut model = Model::new();
+        let points: Vec<Point> = [0.0, 0.3, 0.5, 2.0, 2.2, 4.5, 5.0, 7.5, 7.6, 8.0].iter().map(|&t: &f64| Point::new(10.0 * t, 6.0 * (0.7 * t).sin(), 0.4 * t * t)).collect();
+        let spine = crate::geometry::fit::interpolate(&points, false, 1e-9).unwrap();
+        let (_, d) = Curve::BSpline(spine.clone()).d1(spine.knots()[0]);
+        let edge = make::edge_from_curve(&mut model, Curve::BSpline(spine)).unwrap();
+        let radius = 1.5;
+        let frame = Frame::new(points[0], Direction::from_vector(d), Direction::from_vector(d.cross(Vector::new(0.0, 0.0, 1.0))));
+        let circle = make::edge_from_curve(&mut model, Curve::Circle(Circle::new(frame, radius))).unwrap();
+        let wire = make::wire(&mut model, &[circle]).unwrap();
+        let disc = make::planar_face(&mut model, wire).unwrap();
+        let swept = pipe(&mut model, disc, edge).unwrap();
+        let length = properties::length(&model, edge).mass;
+        let v = properties::volume(&model, swept.shape).mass;
+        let exact = PI * radius * radius * length;
+        assert!((v - exact).abs() <= 1e-6 * exact, "{v} vs {exact} ({:e})", (v - exact) / exact);
     }
 
     /// A fixed frame carries a rectangle by translations alone, corrected square to the
