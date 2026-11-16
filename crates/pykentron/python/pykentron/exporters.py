@@ -75,10 +75,12 @@ def export(w, fname, exportType: Optional[str] = None, tolerance: float = 0.1, a
     fname = str(fname)
     # (As CadQuery's writers do, BRep, STEP and STL files in a directory that does not exist
     # are quietly not written.)
-    if kind in ("BREP", "STEP", "STL") and not _in_a_directory(fname):
+    if kind in ("BREP", "BIN", "STEP", "STL") and not _in_a_directory(fname):
         return
     if kind == "BREP":
         shape.exportBrep(fname)
+    elif kind == "BIN":
+        shape.exportBin(fname)
     elif kind == "STEP":
         # The shape's lengths are in `unit`; the file is written in `outputUnit` (by default
         # the same), declared so.

@@ -100,7 +100,9 @@ drops mimalloc and the `fast` profile (`low-memory` is then the default).
   `distance`, `isInside`, `tessellate`). As in CadQuery, a shape's bounding box is tight
   until it is tessellated, then bounded by its meshes, widened by their deviation.
 - Files: STEP import and export (shapes, or an `Assembly` with names, colours and
-  placements), BRep import and export (OCCT's binary BRep import too), STL export.
+  placements), OCAF XML documents (an `Assembly`, its sub-shapes' names, colours and layers
+  too, read and written as CadQuery's), BRep import and export (OCCT's binary BRep
+  too), STL export. Not OCAF's binary documents (XBF).
 - Splines: interpolated, approximated (`makeSplineApprox`, smoothed too, as
   `parametricCurve` makes them), Bézier.
 - `Assembly`, `Location`, `Plane`, `Vector`, `Color` (by OCCT's colour names, which are

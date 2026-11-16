@@ -1250,6 +1250,14 @@ fn read_brep_binary(data: &[u8]) -> PyResult<Handle> {
     with_model(|m| kentron::io::brep::read_binary(m, &mut &data[..])).map(handle)
 }
 
+/// A shape in OCCT's binary BRep format (`BinTools`), as bytes.
+#[pyfunction]
+fn write_brep_binary(py: Python<'_>, shape: Handle) -> PyResult<Py<pyo3::types::PyBytes>> {
+    let mut out = Vec::new();
+    with_model(|m| kentron::io::brep::write_binary(m, shape.shape, &mut out))?;
+    Ok(pyo3::types::PyBytes::new(py, &out).unbind())
+}
+
 /// Writes a BRep file.
 #[pyfunction]
 fn write_brep(shape: Handle, path: &str) -> PyResult<()> {
@@ -1509,6 +1517,7 @@ fn _kentron(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(read_brep, m)?)?;
     m.add_function(wrap_pyfunction!(read_brep_binary, m)?)?;
     m.add_function(wrap_pyfunction!(write_brep, m)?)?;
+    m.add_function(wrap_pyfunction!(write_brep_binary, m)?)?;
     m.add_function(wrap_pyfunction!(read_step, m)?)?;
     m.add_function(wrap_pyfunction!(read_step_assembly, m)?)?;
     cadquery::register(m)?;

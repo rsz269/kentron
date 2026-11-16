@@ -117,7 +117,18 @@ def exportStepMeta(assy, path: str, unit: str = "MM", outputUnit=None, **kwargs)
 
 
 def exportCAF(assy, path: str, binary: bool = False) -> bool:
-    raise NotImplementedError(f"exporting assemblies to {'XBF' if binary else 'XML'} files")
+    """Writes the assembly as an OCAF document (as CadQuery's `toCAF` makes it): OCCT's XML
+    format; its binary one (XBF) is not written yet."""
+    if binary:
+        raise NotImplementedError("exporting assemblies to XBF files")
+    import os
+
+    from ..ocaf import write_xml
+
+    folder = os.path.dirname(os.path.abspath(str(path)))
+    if not os.path.isdir(folder):
+        return False
+    return write_xml(assy, str(path))
 
 
 def exportVRML(assy, path: str, tolerance: float = 1e-3, angularTolerance: float = 0.1) -> None:

@@ -60,8 +60,16 @@ impl Default for WriteOptions {
 /// Writes `shape` and everything below it.
 #[doc(alias = "BRepTools::Write")]
 pub fn write(model: &Model, shape: Shape, out: &mut dyn Write, options: &WriteOptions) -> Result<()> {
-    let text = Writer::new(model, options.version).file(shape)?;
+    let text = Writer::<Text>::new(model, options.version).file(shape)?;
     out.write_all(text.as_bytes()).map_err(|e| Error::InvalidInput(format!("writing BRep: {e}")))
+}
+
+/// Writes `shape` and everything below it in OCCT's binary BRep format (`BinTools`, version
+/// 3, without meshes).
+#[doc(alias = "BinTools::Write")]
+pub fn write_binary(model: &Model, shape: Shape, out: &mut dyn Write) -> Result<()> {
+    let bytes = Writer::<Bin>::new(model, FormatVersion::V3).file(shape)?;
+    out.write_all(&bytes).map_err(|e| Error::InvalidInput(format!("writing BRep: {e}")))
 }
 
 /// Reads a shape into `model`; any format version is accepted.
@@ -1475,37 +1483,29 @@ impl Coordinates for Point2 {
     }
 }
 
-/// Text in the BRep format's word-separated style.
-#[derive(Default)]
-struct Text(String);
+/// What the BRep formats write, typed: OCCT's text format writes each as a word, its binary
+/// format each in its own width (reals 8 bytes, integers 4, degrees 2, type codes and flags 1,
+/// little-endian). The geometry is written alike in both.
+trait Out: Sized {
+    fn real(&mut self, v: f64) -> &mut Self;
+    fn int(&mut self, v: i64) -> &mut Self;
+    /// A geometry's type code.
+    fn code(&mut self, v: u8) -> &mut Self;
+    /// A curve's or surface's degree.
+    fn degree(&mut self, v: usize) -> &mut Self;
+    fn flag(&mut self, b: bool) -> &mut Self;
+    /// The end of a line (of the text format only).
+    fn line(&mut self) -> &mut Self;
 
-impl Text {
-    fn word(&mut self, w: impl std::fmt::Display) -> &mut Self {
-        use std::fmt::Write as _;
-        let _ = write!(self.0, "{w} ");
-        self
+    fn count(&mut self, v: usize) -> &mut Self {
+        self.int(v as i64)
     }
 
-    fn line(&mut self) -> &mut Self {
-        self.0.push('\n');
-        self
-    }
-
-    /// Reals, in exponent form when plain digits would be long: OCCT reads each number
-    /// into a short buffer.
     fn reals(&mut self, values: &[f64]) -> &mut Self {
         for &v in values {
             self.real(v);
         }
         self
-    }
-
-    fn real(&mut self, v: f64) -> &mut Self {
-        if v == 0.0 || (1e-4..1e15).contains(&v.abs()) {
-            self.word(v)
-        } else {
-            self.word(format_args!("{v:e}"))
-        }
     }
 
     fn point(&mut self, p: impl Coordinates) -> &mut Self {
@@ -1536,13 +1536,9 @@ impl Text {
         self.point(f.origin()).direction2(f.x()).direction2(f.y())
     }
 
-    fn flag(&mut self, b: bool) -> &mut Self {
-        self.word(u8::from(b))
-    }
-
     fn knots(&mut self, knots: &[f64], multiplicities: &[usize]) -> &mut Self {
         for (k, m) in knots.iter().zip(multiplicities) {
-            self.real(*k).word(m);
+            self.real(*k).count(*m);
         }
         self
     }
@@ -1558,46 +1554,46 @@ impl Text {
     }
 
     fn bezier<P: ControlPoint + Coordinates>(&mut self, c: &BezierCurve<P>) -> &mut Self {
-        self.flag(c.is_rational()).word(c.degree()).poles(c.poles(), c.weights())
+        self.flag(c.is_rational()).degree(c.degree()).poles(c.poles(), c.weights())
     }
 
     fn bspline<P: ControlPoint + Coordinates>(&mut self, c: &BSplineCurve<P>) -> &mut Self {
-        self.flag(c.is_rational()).flag(c.is_periodic()).word(c.degree());
-        self.word(c.poles().len()).word(c.knots().len());
+        self.flag(c.is_rational()).flag(c.is_periodic()).degree(c.degree());
+        self.count(c.poles().len()).count(c.knots().len());
         self.poles(c.poles(), c.weights()).knots(c.knots(), c.multiplicities())
     }
 
     fn curve(&mut self, c: &Curve) -> &mut Self {
         match c {
-            Curve::Line(l) => self.word(1).point(l.origin).direction(l.direction),
-            Curve::Circle(c) => self.word(2).right_handed_frame(c.frame()).real(c.radius()),
-            Curve::Ellipse(e) => self.word(3).right_handed_frame(e.frame()).real(e.major_radius()).real(e.minor_radius()),
-            Curve::Parabola(p) => self.word(4).right_handed_frame(p.frame()).real(p.focal()),
-            Curve::Hyperbola(h) => self.word(5).right_handed_frame(h.frame()).real(h.major_radius()).real(h.minor_radius()),
-            Curve::Bezier(b) => self.word(6).bezier(b),
-            Curve::BSpline(b) => self.word(7).bspline(b),
+            Curve::Line(l) => self.code(1).point(l.origin).direction(l.direction),
+            Curve::Circle(c) => self.code(2).right_handed_frame(c.frame()).real(c.radius()),
+            Curve::Ellipse(e) => self.code(3).right_handed_frame(e.frame()).real(e.major_radius()).real(e.minor_radius()),
+            Curve::Parabola(p) => self.code(4).right_handed_frame(p.frame()).real(p.focal()),
+            Curve::Hyperbola(h) => self.code(5).right_handed_frame(h.frame()).real(h.major_radius()).real(h.minor_radius()),
+            Curve::Bezier(b) => self.code(6).bezier(b),
+            Curve::BSpline(b) => self.code(7).bspline(b),
             Curve::Trimmed(t) => {
                 let (u1, u2) = t.range();
-                self.word(8).real(u1).real(u2).line().curve(t.basis())
+                self.code(8).real(u1).real(u2).line().curve(t.basis())
             }
-            Curve::Offset(o) => self.word(9).real(o.offset()).direction(o.direction()).line().curve(o.basis()),
+            Curve::Offset(o) => self.code(9).real(o.offset()).direction(o.direction()).line().curve(o.basis()),
         }
     }
 
     fn curve2(&mut self, c: &Curve2) -> &mut Self {
         match c {
-            Curve2::Line(l) => self.word(1).point(l.origin).direction2(l.direction),
-            Curve2::Circle(c) => self.word(2).frame2(c.frame()).real(c.radius()),
-            Curve2::Ellipse(e) => self.word(3).frame2(e.frame()).real(e.major_radius()).real(e.minor_radius()),
-            Curve2::Parabola(p) => self.word(4).frame2(p.frame()).real(p.focal()),
-            Curve2::Hyperbola(h) => self.word(5).frame2(h.frame()).real(h.major_radius()).real(h.minor_radius()),
-            Curve2::Bezier(b) => self.word(6).bezier(b),
-            Curve2::BSpline(b) => self.word(7).bspline(b),
+            Curve2::Line(l) => self.code(1).point(l.origin).direction2(l.direction),
+            Curve2::Circle(c) => self.code(2).frame2(c.frame()).real(c.radius()),
+            Curve2::Ellipse(e) => self.code(3).frame2(e.frame()).real(e.major_radius()).real(e.minor_radius()),
+            Curve2::Parabola(p) => self.code(4).frame2(p.frame()).real(p.focal()),
+            Curve2::Hyperbola(h) => self.code(5).frame2(h.frame()).real(h.major_radius()).real(h.minor_radius()),
+            Curve2::Bezier(b) => self.code(6).bezier(b),
+            Curve2::BSpline(b) => self.code(7).bspline(b),
             Curve2::Trimmed(t) => {
                 let (u1, u2) = t.range();
-                self.word(8).real(u1).real(u2).line().curve2(t.basis())
+                self.code(8).real(u1).real(u2).line().curve2(t.basis())
             }
-            Curve2::Offset(o) => self.word(9).real(o.offset()).line().curve2(o.basis()),
+            Curve2::Offset(o) => self.code(9).real(o.offset()).line().curve2(o.basis()),
         }
     }
 
@@ -1610,36 +1606,48 @@ impl Text {
 
     fn surface(&mut self, s: &Surface) -> &mut Self {
         match s {
-            Surface::Plane(p) => self.word(1).frame(p.frame()),
-            Surface::Cylinder(c) => self.word(2).frame(c.frame()).real(c.radius()),
-            Surface::Cone(c) => self.word(3).frame(c.frame()).real(c.radius()).real(c.semi_angle()),
-            Surface::Sphere(s) => self.word(4).frame(s.frame()).real(s.radius()),
-            Surface::Torus(t) => self.word(5).frame(t.frame()).real(t.major_radius()).real(t.minor_radius()),
-            Surface::Extrusion(e) => self.word(6).direction(e.direction()).line().curve(e.basis()),
+            Surface::Plane(p) => self.code(1).frame(p.frame()),
+            Surface::Cylinder(c) => self.code(2).frame(c.frame()).real(c.radius()),
+            Surface::Cone(c) => self.code(3).frame(c.frame()).real(c.radius()).real(c.semi_angle()),
+            Surface::Sphere(s) => self.code(4).frame(s.frame()).real(s.radius()),
+            Surface::Torus(t) => self.code(5).frame(t.frame()).real(t.major_radius()).real(t.minor_radius()),
+            Surface::Extrusion(e) => self.code(6).direction(e.direction()).line().curve(e.basis()),
             Surface::Revolution(r) => {
                 let axis = r.axis();
-                self.word(7).point(axis.origin).direction(axis.direction).line().curve(r.basis())
+                self.code(7).point(axis.origin).direction(axis.direction).line().curve(r.basis())
             }
             Surface::Bezier(b) => {
                 let rational = b.weights().is_some();
-                self.word(8).flag(rational).flag(rational).word(b.u_degree()).word(b.v_degree());
+                self.code(8).flag(rational).flag(rational).degree(b.u_degree()).degree(b.v_degree());
                 self.grid(b.poles(), b.weights())
             }
             Surface::BSpline(b) => {
                 let (u, v) = (b.u_knot_vector(), b.v_knot_vector());
                 let rational = b.weights().is_some();
-                self.word(9).flag(rational).flag(rational).flag(u.periodic).flag(v.periodic);
-                self.word(u.degree).word(v.degree).word(b.u_pole_count()).word(b.v_pole_count());
-                self.word(u.knots.len()).word(v.knots.len());
+                self.code(9).flag(rational).flag(rational).flag(u.periodic).flag(v.periodic);
+                self.degree(u.degree).degree(v.degree).count(b.u_pole_count()).count(b.v_pole_count());
+                self.count(u.knots.len()).count(v.knots.len());
                 self.grid(b.poles(), b.weights());
                 self.knots(&u.knots, &u.multiplicities).knots(&v.knots, &v.multiplicities)
             }
             Surface::Trimmed(t) => {
                 let (u1, u2, v1, v2) = t.trim();
-                self.word(10).reals(&[u1, u2, v1, v2]).line().surface(t.basis())
+                self.code(10).reals(&[u1, u2, v1, v2]).line().surface(t.basis())
             }
-            Surface::Offset(o) => self.word(11).real(o.offset()).line().surface(o.basis()),
+            Surface::Offset(o) => self.code(11).real(o.offset()).line().surface(o.basis()),
         }
+    }
+}
+
+/// Text in the BRep format's word-separated style.
+#[derive(Default)]
+struct Text(String);
+
+impl Text {
+    fn word(&mut self, w: impl std::fmt::Display) -> &mut Self {
+        use std::fmt::Write as _;
+        let _ = write!(self.0, "{w} ");
+        self
     }
 
     fn reference(&mut self, orientation: Orientation, number: usize, location: usize) -> &mut Self {
@@ -1654,20 +1662,118 @@ impl Text {
     }
 }
 
+impl Out for Text {
+    /// Reals, in exponent form when plain digits would be long: OCCT reads each number
+    /// into a short buffer.
+    fn real(&mut self, v: f64) -> &mut Self {
+        if v == 0.0 || (1e-4..1e15).contains(&v.abs()) {
+            self.word(v)
+        } else {
+            self.word(format_args!("{v:e}"))
+        }
+    }
+
+    fn int(&mut self, v: i64) -> &mut Self {
+        self.word(v)
+    }
+
+    fn code(&mut self, v: u8) -> &mut Self {
+        self.word(v)
+    }
+
+    fn degree(&mut self, v: usize) -> &mut Self {
+        self.word(v)
+    }
+
+    fn flag(&mut self, b: bool) -> &mut Self {
+        self.word(u8::from(b))
+    }
+
+    fn line(&mut self) -> &mut Self {
+        self.0.push('\n');
+        self
+    }
+}
+
+/// Bytes in OCCT's binary BRep format (`BinTools`).
+#[derive(Default)]
+struct Bin(Vec<u8>);
+
+impl Bin {
+    fn byte(&mut self, b: u8) -> &mut Self {
+        self.0.push(b);
+        self
+    }
+
+    /// A table's header: its name and size as words, then a line's end.
+    fn table(&mut self, name: &str, count: usize) -> &mut Self {
+        self.0.extend_from_slice(format!("{name} {count}\n").as_bytes());
+        self
+    }
+
+    fn reference(&mut self, orientation: Orientation, number: usize, location: usize) -> &mut Self {
+        let o = match orientation {
+            Orientation::Forward => 0,
+            Orientation::Reversed => 1,
+            Orientation::Internal => 2,
+            Orientation::External => 3,
+        };
+        self.byte(o).count(number).count(location)
+    }
+
+    /// A shape's flags (free, modified, checked, orientable, closed, infinite, convex), as
+    /// the text format's digits.
+    fn flags(&mut self, digits: &str) -> &mut Self {
+        for c in digits.bytes() {
+            self.byte(c - b'0');
+        }
+        self
+    }
+}
+
+impl Out for Bin {
+    fn real(&mut self, v: f64) -> &mut Self {
+        self.0.extend_from_slice(&v.to_le_bytes());
+        self
+    }
+
+    fn int(&mut self, v: i64) -> &mut Self {
+        self.0.extend_from_slice(&(v as i32).to_le_bytes());
+        self
+    }
+
+    fn code(&mut self, v: u8) -> &mut Self {
+        self.byte(v)
+    }
+
+    fn degree(&mut self, v: usize) -> &mut Self {
+        self.0.extend_from_slice(&(v as u16).to_le_bytes());
+        self
+    }
+
+    fn flag(&mut self, b: bool) -> &mut Self {
+        self.byte(u8::from(b))
+    }
+
+    fn line(&mut self) -> &mut Self {
+        self
+    }
+}
+
 /// A child as written: the node, its orientation and the index of its location.
 type Child = (NodeId, Orientation, usize);
 
-/// Gathers the tables of a file, then writes them.
-struct Writer<'a> {
+/// Gathers the tables of a file, then writes them (as text or binary, by `O`).
+struct Writer<'a, O> {
     model: &'a Model,
     version: FormatVersion,
     /// Locations other than the identity; location `i` is `locations[i - 1]`.
     locations: Vec<Transform>,
-    curves2: Text,
+    curves2: O,
     curve2_count: usize,
-    curves: Text,
+    curves: O,
     curve_count: usize,
-    surfaces: Text,
+    surfaces: O,
     surface_count: usize,
     /// Shapes, each after its sub-shapes, with their children.
     shapes: Vec<(NodeId, Vec<Child>)>,
@@ -1675,17 +1781,17 @@ struct Writer<'a> {
     face_surfaces: HashMap<FaceId, usize>,
 }
 
-impl<'a> Writer<'a> {
+impl<'a, O: Out + Default> Writer<'a, O> {
     fn new(model: &'a Model, version: FormatVersion) -> Self {
         Self {
             model,
             version,
             locations: Vec::new(),
-            curves2: Text::default(),
+            curves2: O::default(),
             curve2_count: 0,
-            curves: Text::default(),
+            curves: O::default(),
             curve_count: 0,
-            surfaces: Text::default(),
+            surfaces: O::default(),
             surface_count: 0,
             shapes: Vec::new(),
             numbers: HashMap::new(),
@@ -1751,14 +1857,11 @@ impl<'a> Writer<'a> {
         Ok(())
     }
 
-    fn file(mut self, root: Shape) -> Result<String> {
-        self.collect(root.node)?;
-        let root_location = self.location(root.placement);
+    /// The faces' surfaces written, and per edge its uses on faces: (face, the coedge's
+    /// orientation on the face, coedge).
+    fn surfaces_and_uses(&mut self) -> Result<HashMap<EdgeId, Vec<(FaceId, Orientation, CoEdgeId)>>> {
         let model = self.model;
-        // Surfaces, then the curves of edges and of their uses on faces.
-        let faces: Vec<FaceId> =
-            self.shapes.iter().filter_map(|(n, _)| FaceId::try_from(*n).ok()).collect();
-        // Per edge: (face, the coedge's orientation on the face, coedge).
+        let faces: Vec<FaceId> = self.shapes.iter().filter_map(|(n, _)| FaceId::try_from(*n).ok()).collect();
         let mut uses: HashMap<EdgeId, Vec<(FaceId, Orientation, CoEdgeId)>> = HashMap::new();
         for &face in &faces {
             let surface = model.surface(Shape::new(face.into())).ok_or_else(|| bad("a face without a surface"))?;
@@ -1775,6 +1878,17 @@ impl<'a> Writer<'a> {
                 }
             }
         }
+        Ok(uses)
+    }
+}
+
+impl Writer<'_, Text> {
+    fn file(mut self, root: Shape) -> Result<String> {
+        self.collect(root.node)?;
+        let root_location = self.location(root.placement);
+        let model = self.model;
+        // Surfaces, then the curves of edges and of their uses on faces.
+        let mut uses = self.surfaces_and_uses()?;
         let mut shapes = Text::default();
         shapes.word("TShapes").word(self.shapes.len()).line();
         let count = self.shapes.len();
@@ -1887,6 +2001,125 @@ impl<'a> Writer<'a> {
     }
 }
 
+impl Writer<'_, Bin> {
+    /// The shape in OCCT's binary BRep format, version 3 (as `BinTools::Write` of OCCT 7.5
+    /// writes it; later versions read it): its tables as the text format's, each number in
+    /// its own width; no meshes.
+    fn file(mut self, root: Shape) -> Result<Vec<u8>> {
+        self.collect(root.node)?;
+        let root_location = self.location(root.placement);
+        let model = self.model;
+        let mut uses = self.surfaces_and_uses()?;
+        let mut shapes = Bin::default();
+        let count = self.shapes.len();
+        shapes.table("TShapes", count);
+        let shape_list = std::mem::take(&mut self.shapes);
+        for (node, children) in &shape_list {
+            let shape = Shape::new(*node);
+            // (`TopAbs_ShapeEnum`.)
+            let kind = match node.kind {
+                NodeKind::Compound => 0,
+                NodeKind::CompSolid => 1,
+                NodeKind::Solid => 2,
+                NodeKind::Shell => 3,
+                NodeKind::Face => 4,
+                NodeKind::Wire => 5,
+                NodeKind::Edge => 6,
+                NodeKind::Vertex => 7,
+                _ => unreachable!("not collected"),
+            };
+            shapes.byte(kind);
+            let flags = match node.kind {
+                NodeKind::Vertex => {
+                    // (No representations of the point on curves or surfaces.)
+                    shapes.real(model.tolerance(shape)).point(model.point(shape)).byte(0);
+                    "0101101"
+                }
+                NodeKind::Edge => {
+                    let edge = EdgeId::try_from(*node).map_err(|_| bad("not an edge"))?;
+                    let edge_uses = uses.remove(&edge).unwrap_or_default();
+                    let same_parameter = edge_uses.iter().all(|u| model.is_same_parameter(u.2));
+                    let same_range = edge_uses.iter().all(|u| model.is_same_range(u.2));
+                    shapes.real(model.tolerance(shape)).flag(same_parameter).flag(same_range).flag(model.is_degenerate(shape));
+                    if let Some((curve, first, last)) = model.edge_curve(shape) {
+                        let c = self.add_curve(&curve);
+                        shapes.byte(1).count(c).count(0).real(first).real(last);
+                    }
+                    let mut done = vec![false; edge_uses.len()];
+                    for i in 0..edge_uses.len() {
+                        if done[i] {
+                            continue;
+                        }
+                        let (face, orientation, coedge) = edge_uses[i];
+                        let surface = self.face_surfaces[&face];
+                        let seam = (i + 1..edge_uses.len()).find(|&j| !done[j] && edge_uses[j].0 == face && edge_uses[j].1 != orientation);
+                        let Some((pcurve, first, last)) = model.effective_pcurve(coedge) else { continue };
+                        match seam {
+                            Some(j) => {
+                                done[j] = true;
+                                let Some((other, _, _)) = model.effective_pcurve(edge_uses[j].2) else { continue };
+                                let (forward, reversed) = if orientation == Orientation::Reversed { (other, pcurve.clone()) } else { (pcurve.clone(), other) };
+                                let (c1, c2) = (self.add_curve2(&forward), self.add_curve2(&reversed));
+                                // (Continuity across the seam: `GeomAbs_CN`.)
+                                shapes.byte(3).count(c1).count(c2).byte(6).count(surface).count(0).real(first).real(last);
+                                shapes.point(forward.point(first)).point(forward.point(last));
+                            }
+                            None => {
+                                let c = self.add_curve2(&pcurve);
+                                shapes.byte(2).count(c).count(surface).count(0).real(first).real(last);
+                                shapes.point(pcurve.point(first)).point(pcurve.point(last));
+                            }
+                        }
+                    }
+                    shapes.byte(0);
+                    if model.is_closed_edge(shape) { "0101100" } else { "0101000" }
+                }
+                NodeKind::Wire => {
+                    if model.is_closed_wire(WireId::try_from(*node).map_err(|_| bad("not a wire"))?) { "0101100" } else { "0101000" }
+                }
+                NodeKind::Face => {
+                    let face = FaceId::try_from(*node).map_err(|_| bad("not a face"))?;
+                    let surface = self.face_surfaces[&face];
+                    // (Natural restriction no; no triangulation, 1 (2 would be one).)
+                    shapes.flag(false).real(model.tolerance(shape)).count(surface).count(0).byte(1);
+                    "0101000"
+                }
+                NodeKind::Shell => {
+                    if model.is_closed_shell(ShellId::try_from(*node).map_err(|_| bad("not a shell"))?) { "0101100" } else { "0101000" }
+                }
+                NodeKind::Solid => "0100000",
+                _ => "0101000",
+            };
+            shapes.flags(flags);
+            for &(child, orientation, location) in children {
+                shapes.reference(orientation, count - self.numbers[&child], location);
+            }
+            shapes.byte(b'*');
+        }
+        shapes.reference(root.orientation, count - self.numbers[&root.node], root_location);
+
+        let mut out = Bin::default();
+        out.0.extend_from_slice(b"\nOpen CASCADE Topology V3 (c)\n");
+        out.table("Locations", self.locations.len());
+        for l in &self.locations {
+            out.byte(1);
+            for row in l.rows() {
+                out.reals(&row);
+            }
+        }
+        out.table("Curve2ds", self.curve2_count);
+        out.0.extend_from_slice(&self.curves2.0);
+        out.table("Curves", self.curve_count);
+        out.0.extend_from_slice(&self.curves.0);
+        out.table("Polygon3D", 0).table("PolygonOnTriangulations", 0);
+        out.table("Surfaces", self.surface_count);
+        out.0.extend_from_slice(&self.surfaces.0);
+        out.table("Triangulations", 0);
+        out.0.extend_from_slice(&shapes.0);
+        Ok(out.0)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1911,6 +2144,33 @@ mod tests {
             let (sin, cos) = 30f64.to_radians().sin_cos();
             assert!((x - (1.0 + 5.0 * cos + 4.0 * sin)).abs() < 1e-9, "{x}");
         }
+    }
+
+    /// A box 1 x 2 x 3 OCCT wrote unmeshed (version 4): each face's surface followed by 1, no
+    /// triangulation.
+    #[test]
+    fn reads_binary_files_without_meshes() {
+        let mut model = Model::new();
+        let solid = read_binary(&mut model, &mut &include_bytes!("tests/box_unmeshed_v4.bin")[..]).unwrap();
+        assert!(crate::validity::check(&model, solid).is_valid());
+        assert!((crate::properties::volume(&model, solid).mass - 6.0).abs() < 1e-12);
+    }
+
+    /// The filleted box of `reads_binary_files`, written in the binary format and read back:
+    /// the same volume, area and centre (its fillets' seams on two pcurves each).
+    #[test]
+    fn writes_binary_files_that_read_back() {
+        let mut model = Model::new();
+        let solid = read_binary(&mut model, &mut &include_bytes!("tests/filleted_box_v4.bin")[..]).unwrap();
+        let mut bytes = Vec::new();
+        write_binary(&model, solid, &mut bytes).unwrap();
+        let mut other = Model::new();
+        let back = read_binary(&mut other, &mut bytes.as_slice()).unwrap();
+        assert!(crate::validity::check(&other, back).is_valid());
+        let volume = crate::properties::volume(&other, back);
+        assert!((volume.mass - 865.752220392).abs() < 1e-6, "{}", volume.mass);
+        assert!((crate::properties::area(&other, back).mass - 681.646003294).abs() < 1e-6);
+        assert!(volume.center_of_mass.distance(Point::new(1.0, 2.0, 3.0)) < 1e-6, "{:?}", volume.center_of_mass);
     }
 
     /// A line segment between two vertices, as OCCT writes it.

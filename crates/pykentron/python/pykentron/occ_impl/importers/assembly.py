@@ -1,4 +1,5 @@
-"""CadQuery's `occ_impl.importers.assembly` on pykentron: assemblies read from STEP files."""
+"""CadQuery's `occ_impl.importers.assembly` on pykentron: assemblies read from STEP files and
+OCAF XML documents."""
 
 from __future__ import annotations
 
@@ -103,4 +104,7 @@ def importXbf(assy, path: str) -> None:
 
 
 def importXml(assy, path: str) -> None:
-    raise NotImplementedError("reading XML files (OCAF's XML format)")
+    """Fills `assy` from an OCAF XML document (as CadQuery's)."""
+    from ..ocaf import read_xml
+
+    read_xml(assy, str(path))

@@ -570,7 +570,13 @@ class Shape:
 
     def _sub(self, kind: str) -> list:
         cls = _KINDS[kind]
-        return [_cast_as(cls, h) for h in native.subshapes(self.wrapped, kind, kind == "Edge")]
+        subs = [_cast_as(cls, h) for h in native.subshapes(self.wrapped, kind, kind == "Edge")]
+        # (A transformed copy's sub-shapes are of the copy's geometry, as OCCT's: their
+        # locations leave its transformation out too.)
+        if "_baked" in self.__dict__:
+            for sub in subs:
+                sub._baked = self._baked
+        return subs
 
     def Vertices(self) -> List["Vertex"]:
         return self._sub("Vertex")
@@ -598,7 +604,7 @@ class Shape:
         return self._sub("Compound")
 
     def __iter__(self):
-        return (Shape.cast(h) for h in native.children(self.wrapped))
+        return (self._with_baked(Shape.cast(h)) for h in native.children(self.wrapped))
 
     def _entities(self, topo_type: str) -> list:
         """The native shapes of the sub-shapes of a type (CadQuery's, by its type name)."""
@@ -748,6 +754,20 @@ class Shape:
             s.__setstate__((f.read(), False))
             return Shape.cast(s.wrapped)
         return Shape.cast(native.read_brep(str(f)))
+
+    def exportBin(self, f) -> bool:
+        """Writes a binary BRep file (OCCT's BinTools; to a path, or a binary file object)."""
+        data = native.write_brep_binary(self.wrapped)
+        if hasattr(f, "write"):
+            f.write(data)
+            return True
+        from .exporters import _in_a_directory
+
+        if not _in_a_directory(str(f)):
+            return False
+        with open(str(f), "wb") as out:
+            out.write(data)
+        return True
 
     @classmethod
     def importBin(cls, f) -> "Shape":
@@ -1322,7 +1342,7 @@ class Wire(Shape, Mixin1D):
 
     def __iter__(self):
         """The edges in order along the wire."""
-        return (Shape.cast(h) for h in native.ordered_edges(self.wrapped))
+        return (self._with_baked(Shape.cast(h)) for h in native.ordered_edges(self.wrapped))
 
     def Vertices(self) -> List[Vertex]:
         """The vertices in order along the wire."""

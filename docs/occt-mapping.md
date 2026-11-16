@@ -161,6 +161,7 @@ table maps OCCT concepts to kentron ones; it grows as tests are ported. Types al
 | `TopoDS_Shape::Reversed`, `Located`, `Moved`, `IsSame` | `Shape::reversed`, `with_placement`, `moved`, `is_same` |
 | `BRepTools::Write/Read` | `io::brep::write/read` |
 | `BinTools::Read` (binary BRep, versions 1 to 4); DRAW `binrestore` | `io::brep::read_binary` (the meshes skipped, as `read`'s) |
+| `BinTools::Write` | `io::brep::write_binary` (version 3, without meshes) |
 | `StlAPI_Writer` (DRAW `writestl`) | `io::stl::write` (nodes and triangles from `meshing::triangulate`) |
 | `BRepMesh_IncrementalMesh` (DRAW `incmesh`; CadQuery `tessellate`) | `meshing::mesh`, `mesh_with(MeshOptions)`, `triangulate` |
 | `BRepExtrema_DistShapeShape` (DRAW `distmini`; CadQuery `distance`) | `distance::distance` -> `ShapeDistance` |
