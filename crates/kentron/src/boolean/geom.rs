@@ -206,7 +206,11 @@ pub(super) fn foot_on(surface: &Surface, p: Point) -> crate::geometry::extrema::
     let (u0, u1, v0, v1) = surface.bounds();
     let on_bound = |x: f64, a: f64, b: f64, periodic: bool| !periodic && ((x - a).abs() <= 1e-12 * (b - a).abs().max(1.0) || (x - b).abs() <= 1e-12 * (b - a).abs().max(1.0));
     let distance = foot.point.distance(p);
-    let astray = distance > best.0.sqrt() * (1.0 + 1e-9) + 1e-12 || on_bound(foot.u, u0, u1, surface.u_period().is_some()) || on_bound(foot.v, v0, v1, surface.v_period().is_some());
+    // (Or a foot just off the point, far nearer than the samples are: where a surface winds
+    // back onto itself, as a thread whose flanks touch from turn to turn, the point may lie
+    // on the next turn, its nearest sample on this one.)
+    let grazing = distance > on_tol() && distance < 1e-3 * best.0.sqrt();
+    let astray = distance > best.0.sqrt() * (1.0 + 1e-9) + 1e-12 || grazing || on_bound(foot.u, u0, u1, surface.u_period().is_some()) || on_bound(foot.v, v0, v1, surface.v_period().is_some());
     if !astray || winding_samples(surface) == 0 {
         return foot;
     }
@@ -233,9 +237,19 @@ pub(super) fn foot_on(surface: &Surface, p: Point) -> crate::geometry::extrema::
         }
         (other.0 < 4.0 * best.0).then(|| (grid.samples[other.1].0, grid.samples[other.1].1))
     });
-    let Some(other) = other else { return foot };
-    let second = crate::geometry::extrema::newton_foot_from_sample(p, surface, other);
-    if second.point.distance(p) < distance { second } else { foot }
+    let nearer = match other {
+        Some(other) => {
+            let second = crate::geometry::extrema::newton_foot_from_sample(p, surface, other);
+            if second.point.distance(p) < distance { second } else { foot }
+        }
+        None => foot,
+    };
+    // (Grazing still, from more of the samples nearest the point: the next turn's may lie
+    // farther than those of the turn the point is not on, as [`uv_within`] finds them.)
+    if grazing && nearer.point.distance(p) > on_tol() {
+        return foot_from_nearest_samples(surface, p, nearer, 32);
+    }
+    nearer
 }
 
 /// Where the last point's foot was found on a free-form surface: its parameters, the point

@@ -1544,6 +1544,53 @@ mod tests {
         assert!((removed - expected).abs() < 1e-4 * volume, "{removed} vs {expected}");
     }
 
+    /// A thread whose flank is one pitch long, so that its turns touch along a helix, cut
+    /// across by a box: the box's top and bottom meet the flank in circles closing where the
+    /// turns touch, there ending on the edges of two turns. The same away from the origin: a
+    /// point there lies on one turn, the nearest of the surface's samples on the next (once
+    /// that turn's foot, 5e-5 off, was taken: the circle lost its second end and the thread
+    /// was all outside the box).
+    #[test]
+    fn a_thread_whose_turns_touch_cut_across_away_from_the_origin() {
+        let common = |z0: f64| {
+            let mut model = Model::new();
+            // (As pykentron's `makeHelix`: a spline through points and tangents, 32 a turn,
+            // by the length along it; the ISO thread's internal profile, swept in the
+            // helix's Frenet frame.)
+            let (r, turns) = (3.0, 5.0);
+            let speed = (2.0 * PI).hypot(1.0);
+            let steps = (turns * 32.0) as usize;
+            let params: Vec<f64> = (0..=steps).map(|i| turns * speed * i as f64 / steps as f64).collect();
+            let (points, tangents): (Vec<Point>, Vec<Option<Vector>>) = params
+                .iter()
+                .map(|&s| {
+                    let (u, du, dv) = (2.0 * PI * s / speed, 2.0 * PI / speed, 1.0 / speed);
+                    (Point::new(r * u.cos(), r * u.sin(), z0 + s / speed), Some(Vector::new(-r * u.sin() * du, r * u.cos() * du, dv)))
+                })
+                .collect();
+            let helix = crate::geometry::fit::interpolate_with_tangents(&points, Some(&params), &tangents, false, false, 1e-9).unwrap();
+            let helix = crate::make::edge_from_curve(&mut model, crate::geometry::curve::Curve::BSpline(helix)).unwrap();
+            let spine = crate::make::wire(&mut model, &[helix]).unwrap();
+            let depth = 5.0 / 8.0 * 3f64.sqrt() / 2.0;
+            let corners = [Point::new(r, 0.0, z0 - 0.5), Point::new(r, 0.0, z0 + 0.5), Point::new(r - depth, 0.0, z0)];
+            let sides: Vec<Shape> = (0..3).map(|i| crate::make::edge_between(&mut model, corners[i], corners[(i + 1) % 3]).unwrap()).collect();
+            let outline = crate::make::wire(&mut model, &sides).unwrap();
+            let profile = crate::make::planar_face(&mut model, outline).unwrap();
+            let options = crate::sweep::PipeOptions { frenet: true, ..Default::default() };
+            let thread = crate::sweep::pipe_with(&mut model, profile, spine, &options).unwrap().shape;
+            let tool = Cuboid::from_corners(Point::new(-6.5, -6.5, z0 + 1.0), Point::new(6.5, 6.5, z0 + turns - 1.0)).build(&mut model).unwrap();
+            let common = intersection(&mut model, thread, tool).unwrap();
+            assert!(validity::check(&model, common).is_valid(), "{:?}", validity::check(&model, common));
+            properties::volume(&model, common).mass
+        };
+        // (Three of the five turns' worth: the thread's cross-section, 0.2706, about the
+        // helix, 2π 2.9 round at its centroid.)
+        let (near, far) = (common(-1.0), common(50.0));
+        let expected = 3.0 * 0.5 * 5.0 / 8.0 * 3f64.sqrt() / 2.0 * (2.0 * PI * (3.0 - 5.0 / 8.0 * 3f64.sqrt() / 2.0 / 3.0)).hypot(1.0);
+        assert!((near - expected).abs() < 2e-3 * expected, "{near} vs {expected}");
+        assert!((far - near).abs() < 1e-6 * near, "{far} vs {near}");
+    }
+
     /// A socket with a thread fused into its bore (the bore's ceiling at z 5.37 meeting the
     /// thread's swept faces in fitted sections, straying 2e-6 from them, more than their
     /// tolerance), and a box 20 x 20 from z 5.27, just under the ceiling, its corners in the
