@@ -5,6 +5,7 @@
 mod corner;
 mod corrected;
 mod frenet;
+pub(crate) mod guide_wire;
 mod draft;
 mod evolved;
 pub use evolved::{evolved, EvolvedOptions};

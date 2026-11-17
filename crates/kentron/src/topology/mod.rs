@@ -48,6 +48,7 @@ pub mod slots;
 mod substitution;
 mod table;
 mod wire_curve;
+pub(crate) mod comp_curve;
 
 pub use entities::*;
 pub use explore::{AncestorExplorer, Explorer};
