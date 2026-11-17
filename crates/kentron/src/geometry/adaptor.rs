@@ -39,6 +39,17 @@ pub(crate) trait CurveAdaptor {
     /// `Resolution(R3d)`: the parameter step that moves a point along the curve by at most
     /// `r3d`.
     fn resolution(&self, r3d: f64) -> f64;
+
+    /// `GetType()`: the kind of curve, `None` for `GeomAbs_OtherCurve`.
+    fn curve_type(&self) -> Option<CurveKind> {
+        None
+    }
+
+    /// The curve itself, for the kinds `curve_type` names (`Line()`, `Circle()`, `BSpline()`,
+    /// …).
+    fn basis_curve(&self) -> Option<&Curve> {
+        None
+    }
 }
 
 use std::sync::Arc;
@@ -455,6 +466,14 @@ fn locate_u(knots: &[f64], periodic: bool, u: f64, tolerance: f64) -> (usize, us
 }
 
 impl CurveAdaptor for GeomAdaptor {
+    fn curve_type(&self) -> Option<CurveKind> {
+        Some(self.kind())
+    }
+
+    fn basis_curve(&self) -> Option<&Curve> {
+        Some(&self.curve)
+    }
+
     fn first_parameter(&self) -> f64 {
         self.first
     }
