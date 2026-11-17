@@ -24,6 +24,9 @@ enum Contact {
     On,
     /// Parameters where it crosses or touches it.
     At(Vec<f64>),
+    /// As `At`, the curve also lying along the surface over a stretch (three samples running
+    /// or more within the classifying distance), crossing it there at most once.
+    Along(Vec<f64>),
 }
 
 /// Whether `curve` over `[first, last]` keeps clear of `face`'s surface (over the face's
@@ -381,6 +384,7 @@ fn contact_from(curve: &Curve, first: f64, last: f64, surface: &Surface, toleran
     // there. It crosses the surface over that stretch only if on either side of it, met
     // once, where it leaves the surface; from an end of the curve, or back on the side it
     // came from, it lies along the surface and turns away, not met within the stretch.)
+    let mut along = false;
     let mut i = 0;
     while i <= n {
         if !(found[i] && values[i].abs() <= on_tol()) {
@@ -393,6 +397,20 @@ fn contact_from(curve: &Curve, first: f64, last: f64, surface: &Surface, toleran
         }
         if i - start < 3 {
             continue;
+        }
+        // (Lying on the surface itself over the stretch, as far as where it runs off the
+        // surface's edge (a circle across a thread's crest, a strip of a cylinder): the
+        // samples beside it have their feet on the surface's bounds. Not where it turns
+        // away from the surface within them.)
+        let (u0, u1, v0, v1) = crate::geometry::ParametricSurface::bounds(surface);
+        let on_bound = |k: usize| {
+            let foot = geom::foot_on(surface, points[k]);
+            let (du, dv) = (1e-9 * (u1 - u0).abs().max(1.0), 1e-9 * (v1 - v0).abs().max(1.0));
+            (foot.u - u0).abs() <= du || (foot.u - u1).abs() <= du || (foot.v - v0).abs() <= dv || (foot.v - v1).abs() <= dv
+        };
+        let beside: Vec<usize> = [start.checked_sub(1), (i <= n).then_some(i)].into_iter().flatten().collect();
+        if geom::freeform(surface) && !beside.is_empty() && beside.iter().all(|&k| on_bound(k)) {
+            along = true;
         }
         let (lo, hi) = (ts[start], ts[i - 1]);
         let before = (start > 0).then(|| values[start - 1]).filter(|v| v.abs() > on_tol());
@@ -408,7 +426,7 @@ fn contact_from(curve: &Curve, first: f64, last: f64, surface: &Surface, toleran
             kept
         });
     }
-    Contact::At(roots)
+    if along { Contact::Along(roots) } else { Contact::At(roots) }
 }
 
 /// [`surface_contact`] for a circle about a cylinder's or cone's axis (or a sphere's
@@ -2705,7 +2723,21 @@ impl Graph {
                 if geom::freeform(&face.surface) && clear_of_face(face, curve, edge.first, edge.last, edge.tolerance) {
                     continue;
                 }
-                match surface_contact(curve, edge.first, edge.last, &face.surface, edge.tolerance) {
+                // (An edge lying along a free-form face over a stretch, not all along it (as a
+                // circle across a thread's crest, that strip of a cylinder): on it there, as
+                // far as it is split where it crosses the face's boundary; and met where it
+                // crosses the surface elsewhere.)
+                let contact = match surface_contact(curve, edge.first, edge.last, &face.surface, edge.tolerance) {
+                    Contact::Along(ts) => {
+                        if geom::freeform(&face.surface) {
+                            meetings.push((fi, Meeting::On));
+                        }
+                        Contact::At(ts)
+                    }
+                    contact => contact,
+                };
+                match contact {
+                    Contact::Along(_) => unreachable!("taken as met above"),
                     Contact::On => meetings.push((fi, Meeting::On)),
                     // (An edge of a face on the very surface of this one lies on it as far as
                     // it strays from its own face's: a fitted section bounding a face cut to

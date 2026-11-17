@@ -2857,6 +2857,24 @@ mod tests {
             .collect()
     }
 
+    /// A countersunk screw's head and its threaded shank (cq_warehouse's iso14581 M6, made by
+    /// CadQuery): the thread's crest, a strip of the cylinder of radius 3, reaches into the
+    /// head across its base, whose circle (radius 3 too) lies on the crest for 2.4 of its
+    /// length, crossing the strip at the thread's lead. The crest is cut along that stretch
+    /// (the circle lying along the crest, off its edges beyond): its piece inside the head
+    /// was kept whole, the shell left open (area 780.13). OCCT's union: 778.9465.
+    #[test]
+    fn a_thread_crest_reaching_into_a_head_across_its_base_circle() {
+        let mut model = Model::new();
+        let mut read = |text: &str| crate::io::brep::read(&mut model, &mut text.as_bytes()).unwrap();
+        let head = read(include_str!("tests/countersunk_head_a.brep"));
+        let shank = read(include_str!("tests/countersunk_threaded_shank_b.brep"));
+        let result = union(&mut model, head, shank).unwrap();
+        assert!(crate::validity::check(&model, result).is_valid());
+        let area = crate::properties::area(&model, result).mass;
+        assert!((area - 778.9465).abs() < 1e-2, "{area}");
+    }
+
     /// A thickened Schwarz plate's wall lying flat in a face of its cell (z = 0), and its
     /// mirror image across x = 1.99, continuing it from the corner edge they share: their
     /// section is that corner, in the plane. Their corner edges leave it a hair apart, each

@@ -283,7 +283,9 @@ impl Graph {
                     let reach = 1e-3 * face.extent.0.distance(face.extent.1);
                     !face.near_boundary(mid, geom::TOL, &self.edges, &self.vertices) && face.inside_by_nearest_edge(mid, reach, &self.edges) == Some(true)
                 };
-                if at == Location::Inside || sliver() {
+                // (Not a piece of an edge lying on the face's surface over a stretch only,
+                // past that stretch: off the surface.)
+                if (at == Location::Inside || sliver()) && !off_surface(p) {
                     reps.insert(p.rep);
                     arcs.push(self.arc_from_3d(fi, p, pi));
                 }
