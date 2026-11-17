@@ -26,6 +26,11 @@ pub(crate) mod curvlin;
 pub(crate) mod function_root;
 pub(crate) mod ext_pc;
 pub(crate) mod function_roots;
+// (The ports below serve the guide-plane trihedron, not wired in yet.)
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) mod int_curve_plane;
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) mod polynomial_roots;
 pub(crate) mod tangential_deflection;
 pub(crate) mod brent_minimum;
 pub(crate) mod particle_swarm;

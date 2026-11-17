@@ -668,6 +668,181 @@ fn search_near_extremum(
     }
 }
 
+/// `math_FunctionSample(A, B, N)`: `n` parameters evenly spaced from `a` to `b`.
+#[doc(alias = "math_FunctionSample")]
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct FunctionSample {
+    pub a: f64,
+    pub b: f64,
+    pub n: i32,
+}
+
+impl FunctionSample {
+    /// `GetParameter(Index)`, 1-based.
+    pub(crate) fn parameter(&self, index: i32) -> f64 {
+        assert!(index > 0 && index <= self.n, "math_FunctionSample: index out of range");
+        ((self.n - index) as f64 * self.a + (index - 1) as f64 * self.b) / (self.n - 1) as f64
+    }
+}
+
+/// `Standard_NumericError`: raised by `math_FunctionAllRoots` where one of its
+/// `math_FunctionRoots` searches fails or finds the function null throughout (the check OCCT
+/// compiles out of release builds, which then read past the results).
+#[doc(alias = "Standard_NumericError")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct NumericError;
+
+/// The outcome of `math_FunctionAllRoots`.
+#[doc(alias = "math_FunctionAllRoots")]
+#[derive(Clone, Debug, Default)]
+pub(crate) struct FunctionAllRoots {
+    /// `GetInterval(i)`: the intervals where the function is null (within `EpsNul`).
+    pub intervals: Vec<(f64, f64)>,
+    /// `GetIntervalState(i)`: the state numbers at their ends.
+    pub interval_states: Vec<(i32, i32)>,
+    /// `GetPoint(i)`: the isolated roots.
+    pub points: Vec<f64>,
+    /// `GetPointState(i)`.
+    pub point_states: Vec<i32>,
+}
+
+/// Runs `math_FunctionRoots` where `math_FunctionAllRoots` checks it with
+/// `Standard_NumericError_Raise_if(!IsDone() || IsAllNull() [|| NbSolutions() == 0])`.
+#[allow(clippy::too_many_arguments)]
+fn checked_roots(function: &mut dyn FunctionWithDerivative, a: f64, b: f64, sample_count: i32, eps_x: f64, eps_f: f64, k: f64, need_solution: bool) -> Result<FunctionRoots, NumericError> {
+    let res = function_roots(function, a, b, sample_count, eps_x, eps_f, 0.0, k);
+    if !res.done || res.all_null || (need_solution && res.solutions.is_empty()) {
+        return Err(NumericError);
+    }
+    Ok(res)
+}
+
+/// `math_FunctionAllRoots(F, S, EpsX, EpsF, EpsNul)`: the intervals where `|F| <= eps_nul`
+/// found from the samples `s` (their ends solved for `F = ±EpsNul` by `math_FunctionRoots`),
+/// and the isolated roots between them.
+#[doc(alias = "math_FunctionAllRoots")]
+pub(crate) fn function_all_roots(function: &mut dyn FunctionWithDerivative, s: &FunctionSample, eps_x: f64, eps_f: f64, eps_nul: f64) -> Result<FunctionAllRoots, NumericError> {
+    let mut out = FunctionAllRoots::default();
+    let mut pdeb: Vec<f64> = Vec::new();
+    let mut pfin: Vec<f64> = Vec::new();
+    let mut ideb: Vec<i32> = Vec::new();
+    let mut ifin: Vec<i32> = Vec::new();
+    let mut deb_nul = 0.0;
+    let mut fin_nul;
+    let mut indd = 0;
+    let mut indf;
+    let mut val = 0.0;
+    let mut valsav = 0.0;
+    let mut valbid = 0.0;
+    let nbp = s.n;
+
+    function.value(s.parameter(1), &mut val);
+    let mut p_nul = val.abs() <= eps_nul;
+    if !p_nul {
+        valsav = val;
+    }
+    let mut inter_nul = false;
+    let mut nuld = false;
+    let mut nulf = false;
+
+    let mut i = 2;
+    while i <= nbp {
+        function.value(s.parameter(i), &mut val);
+        let nul = val.abs() <= eps_nul;
+        if !nul {
+            valsav = val;
+        }
+        if inter_nul && !nul {
+            inter_nul = false;
+            pdeb.push(deb_nul);
+            ideb.push(indd);
+            let mut cst = if val > 0.0 { eps_nul } else { -eps_nul };
+            let res1 = checked_roots(function, s.parameter(i - 1), s.parameter(i), 10, eps_x, eps_f, cst, true)?;
+            fin_nul = res1.solutions[0];
+            indf = res1.state_numbers[0];
+            cst = -cst;
+            let res2 = checked_roots(function, s.parameter(i - 1), s.parameter(i), 10, eps_x, eps_f, cst, false)?;
+            // (lbr, 13 May 87: != 0 -> == 0.)
+            if !res2.solutions.is_empty() && res2.solutions[0] < fin_nul {
+                fin_nul = res2.solutions[0];
+                indf = res2.state_numbers[0];
+            }
+            pfin.push(fin_nul);
+            ifin.push(indf);
+        } else if !inter_nul && p_nul && nul {
+            inter_nul = true;
+            if i == 2 {
+                deb_nul = s.parameter(1);
+                function.value(deb_nul, &mut valbid);
+                indd = function.get_state_number();
+                nuld = true;
+            } else {
+                let mut cst = if valsav > 0.0 { eps_nul } else { -eps_nul };
+                let res1 = checked_roots(function, s.parameter(i - 2), s.parameter(i - 1), 10, eps_x, eps_f, cst, true)?;
+                deb_nul = *res1.solutions.last().unwrap();
+                indd = *res1.state_numbers.last().unwrap();
+                cst = -cst;
+                let res3 = checked_roots(function, s.parameter(i - 2), s.parameter(i - 1), 10, eps_x, eps_f, cst, false)?;
+                if let Some(&last) = res3.solutions.last() {
+                    if last > deb_nul {
+                        deb_nul = last;
+                        indd = *res3.state_numbers.last().unwrap();
+                    }
+                }
+            }
+        }
+        i += 1;
+        p_nul = nul;
+    }
+
+    if inter_nul {
+        // Add the interval ending at the last point.
+        pdeb.push(deb_nul);
+        ideb.push(indd);
+        fin_nul = s.parameter(nbp);
+        function.value(fin_nul, &mut valbid);
+        indf = function.get_state_number();
+        pfin.push(fin_nul);
+        ifin.push(indf);
+        nulf = true;
+    }
+
+    let push = |out: &mut FunctionAllRoots, res: FunctionRoots| {
+        out.points.extend_from_slice(&res.solutions);
+        out.point_states.extend_from_slice(&res.state_numbers);
+    };
+    if pdeb.is_empty() {
+        // No null interval.
+        let res = checked_roots(function, s.parameter(1), s.parameter(nbp), nbp, eps_x, eps_f, 0.0, false)?;
+        push(&mut out, res);
+    } else {
+        let nbp_min = 3;
+        let span = s.parameter(nbp) - s.parameter(1);
+        if !nuld {
+            // The solutions between the first sample and the start of the first null
+            // interval.
+            let nbrpt = (((pdeb[0] - s.parameter(1)) / span).abs() * nbp as f64).trunc() as i32;
+            let res = checked_roots(function, s.parameter(1), pdeb[0], nbrpt.max(nbp_min), eps_x, eps_f, 0.0, false)?;
+            push(&mut out, res);
+        }
+        for k in 1..pdeb.len() {
+            let nbrpt = (((pdeb[k] - pfin[k - 1]) / span).abs() * nbp as f64).trunc() as i32;
+            let res = checked_roots(function, pfin[k - 1], pdeb[k], nbrpt.max(nbp_min), eps_x, eps_f, 0.0, false)?;
+            push(&mut out, res);
+        }
+        if !nulf {
+            // The solutions between the end of the last null interval and the last sample.
+            let last = pfin[pdeb.len() - 1];
+            let nbrpt = (((s.parameter(nbp) - last) / span).abs() * nbp as f64).trunc() as i32;
+            let res = checked_roots(function, last, s.parameter(nbp), nbrpt.max(nbp_min), eps_x, eps_f, 0.0, false)?;
+            push(&mut out, res);
+        }
+    }
+    out.intervals = pdeb.iter().copied().zip(pfin.iter().copied()).collect();
+    out.interval_states = ideb.iter().copied().zip(ifin.iter().copied()).collect();
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

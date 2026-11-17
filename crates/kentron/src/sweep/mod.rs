@@ -14,6 +14,9 @@ mod middle;
 mod pipe;
 pub use middle::middle_path;
 mod pipe_shell;
+// (For the guide-plane trihedron, not wired in yet.)
+#[cfg_attr(not(test), allow(dead_code))]
+mod plan_func;
 mod skeleton;
 mod tube;
 pub use tube::tube_between;
