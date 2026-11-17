@@ -2104,7 +2104,7 @@ impl Draw {
             // (Frenet's frame turns as the corrected one does where the spine is straight
             // between its corners.)
             let straight = self.model.explore(spine, NodeKind::Edge).all(|e| matches!(self.model.edge_curve(e), Some((kentron::geometry::curve::Curve::Line(_), _, _))));
-            if !self.sweep_mode.is_empty() && self.sweep_mode != ["-CF"] && !(self.sweep_mode == ["-FR"] && straight) {
+            if !self.sweep_mode.is_empty() && self.sweep_mode != ["-CF"] && !(self.sweep_mode == ["-FR"] && straight) || self.sweep_guide()?.is_some() {
                 return self.not_implemented("buildsweep", args);
             }
             let profile = if solid && profile.kind() == NodeKind::Wire { make::planar_face(&mut self.model, profile)? } else { profile };
@@ -2114,14 +2114,15 @@ impl Draw {
             return self.set_shape_var(args[0], r);
         }
         let frenet = self.sweep_mode == ["-FR"];
+        let guide = self.sweep_guide()?;
         let r = if let [(profile, contact, correction)] = self.sweep_profiles[..] {
             let profile = if solid && profile.kind() == NodeKind::Wire { make::planar_face(&mut self.model, profile)? } else { profile };
-            let options = kentron::sweep::PipeOptions { contact, correction, frenet, ..Default::default() };
+            let options = kentron::sweep::PipeOptions { contact, correction, frenet, guide };
             kentron::sweep::pipe_with(&mut self.model, profile, spine, &options)?.shape
         } else {
             let sections: Vec<(Shape, kentron::sweep::PipeOptions)> =
                 self.sweep_profiles.iter().map(|&(s, contact, correction)| (s, kentron::sweep::PipeOptions { contact, correction, frenet, ..Default::default() })).collect();
-            kentron::sweep::pipe_through(&mut self.model, &sections, spine, solid)?
+            kentron::sweep::pipe_through_with(&mut self.model, &sections, spine, solid, guide)?.shape
         };
         self.sweep_result = Some(r);
         self.set_shape_var(args[0], r)
@@ -5678,12 +5679,12 @@ impl Draw {
     ///
     /// Example: `setsweep -FR`
     pub fn setsweep(&mut self, args: &[&str]) -> DrawResult {
-        // `setsweep -CF|-DT|-FR|-SM n|-DM n|...`: the trihedron's mode. The rotation-minimizing frame
-        // kentron sweeps with is OCCT's corrected Frenet (`-CF`) and what its discrete
-        // trihedron (`-DT`) approximates; Frenet's (`-FR`) is the same along a plane curve.
-        // Fixed, constant-binormal, guided and surface modes are not supported.
+        // `setsweep -CF|-DT|-FR|-CN dx dy dz|-FX dx dy dz [nx ny nz]|-G guide curvilinear
+        // contact|-SM n|-DM n|...`: the trihedron's mode (corrected Frenet, discrete, Frenet,
+        // constant binormal, fixed, guided). Guides with contact and surface (`-DX`) modes are
+        // not supported.
         match args {
-            ["-CF"] | ["-DT"] | ["-FR"] => {
+            ["-CF"] | ["-DT"] | ["-FR"] | ["-CN", _, _, _] | ["-FX", _, _, _] | ["-FX", _, _, _, _, _, _] | ["-G", _, "0" | "1", "0"] => {
                 self.sweep_mode = args.iter().map(|a| a.to_string()).collect();
                 Ok(String::new())
             }
@@ -5691,6 +5692,23 @@ impl Draw {
             ["-SM" | "-DM", n] if n.parse::<u32>().is_ok() => Ok(String::new()),
             _ => self.not_implemented("setsweep", args),
         }
+    }
+    /// What `setsweep` set to turn the profile, beyond the Frenet frames.
+    fn sweep_guide(&self) -> DrawResult<Option<kentron::sweep::Guide>> {
+        use kentron::sweep::Guide;
+        let mode: Vec<&str> = self.sweep_mode.iter().map(String::as_str).collect();
+        let direction = |xyz: &[&str]| -> DrawResult<Direction> {
+            let v = self.numbers(xyz)?;
+            Direction::try_from_vector(Vector::new(v[0], v[1], v[2])).ok_or_else(|| DrawError::Failed("setsweep: a null direction".into()))
+        };
+        Ok(match mode[..] {
+            ["-DT"] => Some(Guide::Discrete),
+            ["-CN", ..] => Some(Guide::Binormal(direction(&mode[1..4])?)),
+            // (`gp_Ax2(0, D, Nx)`: only its main direction matters to a fixed frame.)
+            ["-FX", ..] => Some(Guide::Fixed(direction(&mode[1..4])?)),
+            ["-G", guide, curvilinear, _] => Some(Guide::Wire { wire: self.shape_var(guide)?, curvilinear: curvilinear == "1" }),
+            _ => None,
+        })
     }
     /// DRAW command `errorsweep`.
     ///

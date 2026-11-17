@@ -79,7 +79,7 @@ fn blend(at: &[(f64, Point)], g: f64) -> Point {
 
 /// Sweeps `sections` (wires of as many edges, or vertices) along the spine's `pieces`:
 /// a shell, or with `solid` a solid closed by planar faces at the ends.
-pub(super) fn pipe_shell(model: &mut Model, sections: &[(Shape, PipeOptions)], pieces: &[SpinePiece], solid: bool, framing: &Framing) -> Result<super::Sweep> {
+pub(super) fn pipe_shell(model: &mut Model, sections: &[(Shape, PipeOptions)], spine: Shape, pieces: &[SpinePiece], solid: bool, framing: &Framing) -> Result<super::Sweep> {
     if sections.is_empty() || pieces.is_empty() {
         return Err(Error::InvalidInput("a sweep needs a spine and sections".into()));
     }
@@ -101,7 +101,7 @@ pub(super) fn pipe_shell(model: &mut Model, sections: &[(Shape, PipeOptions)], p
     for &(section, options) in sections {
         // (Where it stands found before it is placed, as OCCT finds it.)
         let (k, s) = section_placement(model, section, pieces)?;
-        let placing = super::placing(model, section, pieces, &options)?;
+        let placing = super::placing(model, section, spine, pieces, &options)?;
         let section = section.moved(&placing);
         let (at_anchor, _) = motions(pieces, SAMPLES, (k, s), framing)?;
         placed.push((along(k, s), section, at_anchor[0].transforms[0]));

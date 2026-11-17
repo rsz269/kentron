@@ -575,18 +575,20 @@ pub fn make_wedge(dx: f64, dy: f64, dz: f64, xmin: f64, zmin: f64, xmax: f64, zm
 /// with `frenet`, carried in the spine's Frenet frame.
 /// With `aux` (a wire), the profile kept facing it (`curvilinear`: its point at the same
 /// fraction of its length); with `fixed` (a direction), carried by translations alone,
-/// turned square to that direction first with `correction`.
+/// turned square to that direction first with `correction`; with `binormal` (a direction),
+/// in the Frenet frame turned to keep that binormal; with `discrete`, in OCCT's discrete
+/// trihedron.
 #[pyfunction]
-#[pyo3(signature = (profile, spine, contact=false, correction=false, corner="transformed", frenet=false, aux=None, curvilinear=true, fixed=None))]
+#[pyo3(signature = (profile, spine, contact=false, correction=false, corner="transformed", frenet=false, aux=None, curvilinear=true, fixed=None, binormal=None, discrete=false))]
 #[allow(clippy::too_many_arguments)]
-pub fn pipe(profile: Handle, spine: Handle, contact: bool, correction: bool, corner: &str, frenet: bool, aux: Option<Handle>, curvilinear: bool, fixed: Option<Xyz>) -> PyResult<Handle> {
+pub fn pipe(profile: Handle, spine: Handle, contact: bool, correction: bool, corner: &str, frenet: bool, aux: Option<Handle>, curvilinear: bool, fixed: Option<Xyz>, binormal: Option<Xyz>, discrete: bool) -> PyResult<Handle> {
     let corner = match corner {
         "transformed" => sweep::Corner::Unturned,
         "right" => sweep::Corner::Mitred,
         "round" => sweep::Corner::Rounded,
         other => return Err(pyo3::exceptions::PyValueError::new_err(format!("unknown transition {other}"))),
     };
-    let options = sweep::PipeOptions { contact, correction, frenet, guide: guide_of(aux, curvilinear, fixed)? };
+    let options = sweep::PipeOptions { contact, correction, frenet, guide: guide_of(aux, curvilinear, fixed, binormal, discrete)? };
     with_model(|m| {
         sweep::pipe_cornered(m, profile.shape, spine.shape, &options, corner)
     })
@@ -599,7 +601,7 @@ pub fn pipe(profile: Handle, spine: Handle, contact: bool, correction: bool, cor
 #[pyo3(signature = (profile, spine, aux=None, curvilinear=true, fixed=None))]
 #[allow(clippy::type_complexity)]
 pub fn pipe_recorded(profile: Handle, spine: Handle, aux: Option<Handle>, curvilinear: bool, fixed: Option<Xyz>) -> PyResult<(Handle, Vec<(Handle, Vec<Handle>)>, Vec<(Handle, Handle, Handle)>)> {
-    let options = sweep::PipeOptions { guide: guide_of(aux, curvilinear, fixed)?, ..Default::default() };
+    let options = sweep::PipeOptions { guide: guide_of(aux, curvilinear, fixed, None, false)?, ..Default::default() };
     with_model(|m| {
         let swept = sweep::pipe_with(m, profile.shape, spine.shape, &options)?;
         let generated = swept.history().iter().map(|(n, s)| (handle(Shape::from(*n)), s.iter().map(|&x| handle(x)).collect())).collect();
@@ -611,12 +613,12 @@ pub fn pipe_recorded(profile: Handle, spine: Handle, aux: Option<Handle>, curvil
 /// `sections` (wires or vertices) swept along `spine`, blended between: a shell, or with
 /// `solid` a solid.
 #[pyfunction]
-#[pyo3(signature = (sections, spine, solid=true, contact=false, correction=false, aux=None, curvilinear=true, fixed=None, frenet=false))]
+#[pyo3(signature = (sections, spine, solid=true, contact=false, correction=false, aux=None, curvilinear=true, fixed=None, frenet=false, binormal=None, discrete=false))]
 #[allow(clippy::too_many_arguments)]
-pub fn pipe_through(sections: Vec<Handle>, spine: Handle, solid: bool, contact: bool, correction: bool, aux: Option<Handle>, curvilinear: bool, fixed: Option<Xyz>, frenet: bool) -> PyResult<Handle> {
+pub fn pipe_through(sections: Vec<Handle>, spine: Handle, solid: bool, contact: bool, correction: bool, aux: Option<Handle>, curvilinear: bool, fixed: Option<Xyz>, frenet: bool, binormal: Option<Xyz>, discrete: bool) -> PyResult<Handle> {
     let options = sweep::PipeOptions { contact, correction, frenet, ..Default::default() };
     let sections: Vec<(Shape, sweep::PipeOptions)> = sections.iter().map(|h| (h.shape, options)).collect();
-    let guide = guide_of(aux, curvilinear, fixed)?;
+    let guide = guide_of(aux, curvilinear, fixed, binormal, discrete)?;
     with_model(|m| sweep::pipe_through_with(m, &sections, spine.shape, solid, guide).map(|s| s.shape)).map(handle)
 }
 
@@ -627,7 +629,7 @@ pub fn pipe_through(sections: Vec<Handle>, spine: Handle, solid: bool, contact: 
 #[allow(clippy::type_complexity)]
 pub fn pipe_through_recorded(sections: Vec<Handle>, spine: Handle, solid: bool, aux: Option<Handle>, curvilinear: bool, fixed: Option<Xyz>) -> PyResult<(Handle, Vec<(Handle, Vec<Handle>)>, Vec<(Handle, Handle, Handle)>)> {
     let sections: Vec<(Shape, sweep::PipeOptions)> = sections.iter().map(|h| (h.shape, Default::default())).collect();
-    let guide = guide_of(aux, curvilinear, fixed)?;
+    let guide = guide_of(aux, curvilinear, fixed, None, false)?;
     with_model(|m| {
         let swept = sweep::pipe_through_with(m, &sections, spine.shape, solid, guide)?;
         let generated = swept.history().iter().map(|(n, s)| (handle(Shape::from(*n)), s.iter().map(|&x| handle(x)).collect())).collect();
@@ -636,12 +638,15 @@ pub fn pipe_through_recorded(sections: Vec<Handle>, spine: Handle, solid: bool, 
     })
 }
 
-/// What turns a pipe's profile: a guide wire `aux`, or nothing (`fixed`, its direction).
-fn guide_of(aux: Option<Handle>, curvilinear: bool, fixed: Option<Xyz>) -> PyResult<Option<sweep::Guide>> {
-    Ok(match (aux, fixed) {
-        (Some(wire), _) => Some(sweep::Guide::Wire { wire: wire.shape, curvilinear }),
-        (None, Some(d)) => Some(sweep::Guide::Fixed(direction(d)?)),
-        (None, None) => None,
+/// What turns a pipe's profile: a guide wire `aux`, nothing (`fixed`, its direction), a
+/// constant `binormal`, or the `discrete` trihedron.
+fn guide_of(aux: Option<Handle>, curvilinear: bool, fixed: Option<Xyz>, binormal: Option<Xyz>, discrete: bool) -> PyResult<Option<sweep::Guide>> {
+    Ok(match (aux, fixed, binormal) {
+        (Some(wire), _, _) => Some(sweep::Guide::Wire { wire: wire.shape, curvilinear }),
+        (None, Some(d), _) => Some(sweep::Guide::Fixed(direction(d)?)),
+        (None, None, Some(b)) => Some(sweep::Guide::Binormal(direction(b)?)),
+        (None, None, None) if discrete => Some(sweep::Guide::Discrete),
+        (None, None, None) => None,
     })
 }
 

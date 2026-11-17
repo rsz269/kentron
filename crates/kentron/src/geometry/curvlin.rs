@@ -106,8 +106,17 @@ pub(crate) struct CurvlinFunc<'a> {
 impl<'a> CurvlinFunc<'a> {
     /// `Approx_CurvlinFunc(C, Tol)`: lengths are computed to `tolerance`.
     pub(crate) fn new(curve: &'a dyn CurveAdaptor, tolerance: f64) -> Self {
+        Self::holding(Held::Borrowed(curve), tolerance)
+    }
+
+    /// [`CurvlinFunc::new`], holding the curve itself.
+    pub(crate) fn owning(curve: Box<dyn CurveAdaptor>, tolerance: f64) -> CurvlinFunc<'static> {
+        CurvlinFunc::holding(Held::Owned(curve), tolerance)
+    }
+
+    fn holding(curve: Held<'a>, tolerance: f64) -> Self {
         let mut function = CurvlinFunc {
-            curve: Held::Borrowed(curve),
+            curve,
             first_s: 0.0,
             last_s: 1.0,
             first_u1: 0.0,

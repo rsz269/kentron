@@ -598,7 +598,7 @@ impl FrenetLaw {
 
 /// An edge's curve as `BRepFill_Edge3DLaw` adapts it: over `[first, last]`, or (`last` the
 /// smaller, the edge reversed) a trimmed copy reversed (`Geom_TrimmedCurve::Reverse`).
-fn edge_adaptor(curve: &Curve, first: f64, last: f64) -> GeomAdaptor {
+pub(super) fn edge_adaptor(curve: &Curve, first: f64, last: f64) -> GeomAdaptor {
     if last >= first {
         return GeomAdaptor::new(curve, first, last);
     }

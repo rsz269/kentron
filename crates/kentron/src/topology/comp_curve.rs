@@ -214,10 +214,12 @@ impl EdgeWire {
     /// writes the flag in a BRep file. Fails for an edge with no 3D curve that is not
     /// degenerate (OCCT's `BRepAdaptor_Curve` then reads a curve on a surface, not ported).
     pub(crate) fn from_model(model: &Model, wire: Shape, keys: &mut ShapeKeys) -> Result<EdgeWire> {
-        let id = WireId::try_from(wire.node).map_err(|_| Error::InvalidInput("not a wire".into()))?;
+        // (An edge alone: the wire `BRepLib_MakeWire` makes of it.)
+        let single = wire.kind() == NodeKind::Edge;
+        let id = if single { None } else { Some(WireId::try_from(wire.node).map_err(|_| Error::InvalidInput("not a wire".into()))?) };
         let mut edges = Vec::new();
         // (A wire's children are its coedges, each over its edge.)
-        let uses: Vec<Shape> = model.children(wire).flat_map(|c| if c.kind() == NodeKind::Edge { vec![c] } else { model.children(c).collect() }).collect();
+        let uses: Vec<Shape> = if single { vec![wire] } else { model.children(wire).flat_map(|c| if c.kind() == NodeKind::Edge { vec![c] } else { model.children(c).collect() }).collect() };
         for edge in uses {
             if edge.kind() != NodeKind::Edge {
                 continue;
@@ -238,7 +240,14 @@ impl EdgeWire {
             let vertices = [Some(vertex(start, Orientation::Forward, keys)), Some(vertex(end, Orientation::Reversed, keys))];
             edges.push(WireEdge { key: keys.of(edge), curve, first, last, tolerance: model.tolerance(edge), orientation: edge.orientation, vertices, degenerated });
         }
-        Ok(EdgeWire { edges, closed: model.is_closed_wire(id) })
+        let closed = match id {
+            Some(id) => model.is_closed_wire(id),
+            None => {
+                let (start, end) = model.edge_vertices(wire);
+                start.node == end.node
+            }
+        };
+        Ok(EdgeWire { edges, closed })
     }
 
     /// `BRepTools_WireExplorer(W)` (without a face): the edges in the order they connect,
@@ -525,19 +534,6 @@ impl CompCurve {
         self.wire.closed
     }
 
-    /// `GetType()`: OCCT 8.1 gives `GeomAbs_OtherCurve` whatever the wire (its one-edge
-    /// case commented out as temporary); `None` here.
-    #[doc(alias = "GetType")]
-    pub(crate) fn curve_type(&self) -> Option<CurveKind> {
-        None
-    }
-
-    /// The curve `Line()`, `Circle()`, `BSpline()`, ... read their answer from: the first
-    /// edge's (with its placement applied).
-    pub(crate) fn basis_curve(&self) -> &Curve {
-        self.curves[0].curve.curve()
-    }
-
     /// `Prepare(W, Delta, CurIndex)`: the edge (1-based index, searched from `index`)
     /// carrying the wire's parameter `w`, the parameter on it and the ratio of the edge's
     /// parameter to the wire's (negative where the edge runs backwards). Near a knot, the
@@ -615,6 +611,22 @@ impl CompCurve {
 }
 
 impl CurveAdaptor for CompCurve {
+    /// `GetType()`: OCCT 8.1 gives `GeomAbs_OtherCurve` whatever the wire (its one-edge
+    /// case commented out as temporary); `None` here.
+    fn curve_type(&self) -> Option<CurveKind> {
+        None
+    }
+
+    /// The curve `Line()`, `Circle()`, `BSpline()`, ... read their answer from: the first
+    /// edge's (with its placement applied).
+    fn basis_curve(&self) -> Option<&Curve> {
+        Some(self.curves[0].curve.curve())
+    }
+
+    fn trimmed(&self, first: f64, last: f64, tolerance: f64) -> Box<dyn CurveAdaptor> {
+        Box::new(self.trim(first, last, tolerance))
+    }
+
     fn first_parameter(&self) -> f64 {
         self.t_first
     }

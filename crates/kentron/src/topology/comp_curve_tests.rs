@@ -161,5 +161,5 @@ fn edges_at_parameters() {
     let (e, _) = c.edge(1.0);
     assert_eq!(e.orientation, Orientation::Reversed);
     assert_eq!(c.curve_type(), None);
-    assert!(matches!(c.basis_curve(), Curve::Line(_)));
+    assert!(matches!(c.basis_curve(), Some(Curve::Line(_))));
 }

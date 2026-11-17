@@ -5,6 +5,7 @@
 mod corner;
 mod corrected;
 mod frenet;
+mod guide;
 pub(crate) mod guide_wire;
 mod draft;
 mod evolved;
@@ -19,6 +20,7 @@ mod pipe_shell;
 mod plan_func;
 mod skeleton;
 mod tube;
+mod trihedra;
 pub use tube::tube_between;
 
 use std::collections::HashMap;
@@ -193,7 +195,7 @@ pub fn pipe(model: &mut Model, profile: Shape, spine: Shape) -> Result<Sweep> {
 fn pipe_framed(model: &mut Model, profile: Shape, spine: Shape, options: &PipeOptions) -> Result<Sweep> {
     use crate::geometry::ParametricCurve;
     let pieces = spine_pieces(model, spine)?;
-    let framing = framing(model, &pieces, options)?;
+    let framing = framing(model, spine, &pieces, options)?;
     // (Along a single line or arc, OCCT's trihedra are its Frenet frame: an extrusion or a
     // revolution.)
     if let ([piece], pipe::Framing::Frenet(_) | pipe::Framing::Corrected(_)) = (&pieces[..], &framing) {
@@ -223,7 +225,7 @@ fn pipe_framed(model: &mut Model, profile: Shape, spine: Shape, options: &PipeOp
         let inverse = profile.placement.inverse();
         let local: Vec<pipe::SpinePiece> = pieces.iter().map(|p| pipe::SpinePiece { curve: p.curve.transformed(&inverse), first: p.first, last: p.last, gap: p.gap }).collect();
         let local_options = PipeOptions { guide: options.guide.map(|g| g.moved(&inverse)), ..*options };
-        let framing = self::framing(model, &local, &local_options)?;
+        let framing = self::framing(model, spine.moved(&inverse), &local, &local_options)?;
         let sweep = pipe::pipe_along(model, Shape { placement: Transform::IDENTITY, ..profile }, &local, &framing)?;
         return Ok(sweep.moved(&profile.placement));
     }
@@ -231,10 +233,21 @@ fn pipe_framed(model: &mut Model, profile: Shape, spine: Shape, options: &PipeOp
 }
 
 /// The frames `options` carry a profile in along the spine's `pieces`.
-fn framing(model: &Model, pieces: &[pipe::SpinePiece], options: &PipeOptions) -> Result<pipe::Framing> {
+fn framing(model: &Model, spine: Shape, pieces: &[pipe::SpinePiece], options: &PipeOptions) -> Result<pipe::Framing> {
     Ok(match options.guide {
-        Some(Guide::Wire { wire, curvilinear }) => pipe::Framing::Guide(pipe::GuideLaw::new(pieces, &spine_pieces(model, wire)?, curvilinear)?),
-        Some(Guide::Fixed(d)) => pipe::Framing::Fixed(Vector::from(d)),
+        Some(Guide::Wire { wire, curvilinear }) => {
+            let laws = guide::GuideFraming::new(model, spine, pieces, wire, curvilinear)?;
+            laws.status()?;
+            pipe::Framing::Guide(laws)
+        }
+        Some(Guide::Fixed(d)) => {
+            let t = Vector::from(d);
+            let a = if t.x.abs() < 0.9 { Vector::new(1.0, 0.0, 0.0) } else { Vector::new(0.0, 1.0, 0.0) };
+            let n = a - t * a.dot(t);
+            pipe::Framing::Fixed(t, n * (1.0 / n.length()))
+        }
+        Some(Guide::Binormal(b)) => pipe::Framing::Binormal(pieces.iter().map(|p| trihedra::ConstantBinormalLaw::new(&p.curve, p.first, p.last, Vector::from(b))).collect()),
+        Some(Guide::Discrete) => pipe::Framing::Discrete(pieces.iter().map(|p| trihedra::DiscreteLaw::new(&p.curve, p.first, p.last)).collect::<Result<_>>()?),
         None if options.frenet => pipe::Framing::Frenet(pieces.iter().map(|p| corrected::FrenetLaw::new(&p.curve, p.first, p.last)).collect()),
         None => pipe::Framing::Corrected(pieces.iter().map(|p| corrected::CorrectedFrenet::new(&p.curve, p.first, p.last)).collect::<Result<_>>()?),
     })
@@ -255,6 +268,17 @@ pub fn corrected_frenet_frames(curve: &Curve, first: f64, last: f64, fractions: 
 pub fn frenet_frames(curve: &Curve, first: f64, last: f64, fractions: &[f64]) -> Vec<(Vector, Vector)> {
     let law = corrected::FrenetLaw::new(curve, first, last);
     fractions.iter().map(|&f| law.at_fraction(f)).collect()
+}
+
+/// OCCT's guided trihedra (`GeomFill_GuideTrihedronAC` by curvilinear abscissa, else
+/// `GeomFill_GuideTrihedronPlan`, under `GeomFill_LocationGuide` as a pipe shell sets them)
+/// along each edge of `spine` towards `guide`, at fractions `fractions` of each edge's way:
+/// tangent and normal. For checking against OCCT's.
+#[doc(hidden)]
+pub fn guided_frames(model: &Model, spine: Shape, guide: Shape, curvilinear: bool, fractions: &[f64]) -> Result<Vec<Vec<(Vector, Vector)>>> {
+    let pieces = spine_pieces(model, spine)?;
+    let laws = guide::GuideFraming::new(model, spine, &pieces, guide, curvilinear)?;
+    (0..pieces.len()).map(|k| fractions.iter().map(|&f| laws.at_fraction(k, f)).collect()).collect()
 }
 
 /// The edges of a pipe's spine, in order, each run in the direction the spine takes it.
@@ -304,6 +328,16 @@ pub enum Guide {
     /// frame's first axis this direction (what `correction` turns the profile square to).
     #[doc(alias = "GeomFill_Fixed")]
     Fixed(Direction),
+    /// The spine's Frenet frame turned about the tangent so that its binormal is this
+    /// direction (the tangent turned square to it where the spine is not).
+    #[doc(alias = "GeomFill_ConstantBiNormal")]
+    Binormal(Direction),
+    /// A frame carried along the spine from sample to sample (ten per stretch of the spine's
+    /// curve where it is smooth) by the least rotations taking each tangent onto the next,
+    /// and between samples from the one before: no turning about the tangent but what the
+    /// samples make. Lines and conics keep their Frenet frame.
+    #[doc(alias = "GeomFill_DiscreteTrihedron")]
+    Discrete,
 }
 
 impl Guide {
@@ -311,6 +345,8 @@ impl Guide {
         match self {
             Guide::Wire { wire, curvilinear } => Guide::Wire { wire: wire.moved(t), curvilinear },
             Guide::Fixed(d) => Guide::Fixed(d.transformed(t)),
+            Guide::Binormal(d) => Guide::Binormal(d.transformed(t)),
+            Guide::Discrete => Guide::Discrete,
         }
     }
 }
@@ -339,7 +375,7 @@ pub fn pipe_with(model: &mut Model, profile: Shape, spine: Shape, options: &Pipe
         return pipe_framed(model, profile, spine, options);
     }
     let pieces = spine_pieces(model, spine)?;
-    let placing = placing(model, profile, &pieces, options)?;
+    let placing = placing(model, profile, spine, &pieces, options)?;
     pipe_framed(model, profile.moved(&placing), spine, options)
 }
 
@@ -377,7 +413,7 @@ pub(super) fn pipe_cornered_noting(model: &mut Model, profile: Shape, spine: Sha
         return Ok((pipe_with(model, profile, spine, options)?.shape, false));
     }
     let pieces = spine_pieces(model, spine)?;
-    let placing = placing(model, profile, &pieces, options)?;
+    let placing = placing(model, profile, spine, &pieces, options)?;
     corner::pipe_cornered(model, profile.moved(&placing), &pieces, corner)
 }
 
@@ -398,7 +434,7 @@ pub fn pipe_through(model: &mut Model, sections: &[(Shape, PipeOptions)], spine:
 pub fn pipe_evolving(model: &mut Model, first: Shape, last: Shape, spine: Shape) -> Result<Shape> {
     let pieces = spine_pieces(model, spine)?;
     // (GeomFill_Pipe's trihedron: the corrected Frenet one.)
-    let framing = framing(model, &pieces, &PipeOptions::default())?;
+    let framing = framing(model, spine, &pieces, &PipeOptions::default())?;
     let (motion, _) = pipe::motions(&pieces, 64, (0, 0.0), &framing)?;
     let to_end = *motion.last().and_then(|m| m.transforms.last()).ok_or_else(|| Error::InvalidInput("a pipe needs a spine".into()))?;
     let options = PipeOptions::default();
@@ -412,14 +448,14 @@ pub fn pipe_through_with(model: &mut Model, sections: &[(Shape, PipeOptions)], s
     let pieces = spine_pieces(model, spine)?;
     // (In Frenet's frame if the sections say so.)
     let frenet = sections.iter().any(|(_, o)| o.frenet);
-    let framing = framing(model, &pieces, &PipeOptions { guide, frenet, ..Default::default() })?;
+    let framing = framing(model, spine, &pieces, &PipeOptions { guide, frenet, ..Default::default() })?;
     // (Each section corrected square to the guide's fixed direction, where it has one.)
     let sections: Vec<(Shape, PipeOptions)> = sections.iter().map(|&(s, o)| (s, PipeOptions { guide: guide.or(o.guide), ..o })).collect();
-    pipe_shell::pipe_shell(model, &sections, &pieces, solid, &framing)
+    pipe_shell::pipe_shell(model, &sections, spine, &pieces, solid, &framing)
 }
 
 /// The motion placing `profile` on the spine as `options` say (contact, correction).
-fn placing(model: &Model, profile: Shape, pieces: &[pipe::SpinePiece], options: &PipeOptions) -> Result<Transform> {
+fn placing(model: &Model, profile: Shape, spine: Shape, pieces: &[pipe::SpinePiece], options: &PipeOptions) -> Result<Transform> {
     use crate::geometry::ParametricCurve;
     let mut placing = Transform::IDENTITY;
     if !options.contact && !options.correction {
@@ -429,9 +465,11 @@ fn placing(model: &Model, profile: Shape, pieces: &[pipe::SpinePiece], options: 
     let piece = &pieces[k];
     let t = piece.first + (piece.last - piece.first) * s;
     let (at, d) = piece.curve.d1(t);
-    // (Square to a fixed frame's direction where the frame is fixed.)
+    // (Square to the trihedron law's tangent there, as `GeomFill_SectionPlacement` turns
+    // it: the spine's but where a guide, a fixed direction or a binormal turns it.)
     let tangent = match options.guide {
         Some(Guide::Fixed(d)) => Vector::from(d),
+        Some(Guide::Wire { .. } | Guide::Binormal(_)) => framing(model, spine, pieces, options)?.frame(pieces, k, s)?.0,
         _ if piece.last < piece.first => -d,
         _ => d,
     };
@@ -1525,6 +1563,44 @@ mod tests {
                 assert!(n.dot(*normal) > (1e-7f64).cos(), "case {k} at {f}: {n:?} vs OCCT's {normal:?}");
             }
         }
+    }
+
+    /// Guided trihedra match OCCT 8.1's (`BRepFill_PipeShell::Set(guide, curvilinear,
+    /// BRepFill_NoContact)`: the guide made compatible, the laws per spine edge) at the
+    /// start, a fifth, half, 85% and the end of each edge: a line then a B-spline spine with
+    /// a one-edge guide run the other way, and a twisted B-spline spine with a two-edge
+    /// guide, by curvilinear abscissa and by planes.
+    #[test]
+    #[allow(clippy::excessive_precision, clippy::approx_constant)]
+    fn guided_trihedra_match_occts() {
+        let v = Vector::new;
+        let mut model = Model::new();
+        let mut read = |text: &str| crate::io::brep::read(&mut model, &mut text.as_bytes()).unwrap();
+        let wire = |model: &Model, s: Shape| model.explore(s, NodeKind::Wire).next().unwrap();
+        let (s1, g1) = (read(include_str!("tests/occt_guided_spine1.brep")), read(include_str!("tests/occt_guided_guide1.brep")));
+        let (s2, g2) = (read(include_str!("tests/occt_guided_spine2.brep")), read(include_str!("tests/occt_guided_guide2.brep")));
+        let (s1, g1, s2, g2) = (wire(&model, s1), wire(&model, g1), wire(&model, s2), wire(&model, g2));
+        // (Edge from 1, fraction, OCCT's tangent and normal.)
+        let occt: Vec<(&str, Vec<(usize, f64, Vector, Vector)>)> = vec![
+            ("ac1", vec![(1, 0.00, v(0.0, 0.0, 1.0), v(0.8944271909999159, -0.4472135954999579, 0.0)), (1, 0.20, v(0.11199757558584492, 0.0012091346964355149, 0.9937077442871113), v(0.9936498383838857, 0.010727522354058413, -0.11200410235264228)), (1, 0.50, v(0.14890225472886137, 0.1765351263443357, 0.9729663240334944), v(0.6273164768943394, 0.7437321463538633, -0.23094703353095763)), (1, 0.85, v(-0.08175088760328468, 0.22845254339272295, 0.9701166052560234), v(-0.326855263843675, 0.9133957873184837, -0.24263918110340063)), (1, 1.00, v(-0.11119283595502778, 0.1461442895046839, 0.9829944048047525), v(-0.5952113306586946, 0.7823052292634607, -0.18363550888254312)), (2, 0.00, v(-0.11119283595502778, 0.1461442895046839, 0.9829944048047525), v(-0.5952113306586946, 0.7823052292634607, -0.18363550888254312)), (2, 0.20, v(0.015957734740819105, 0.028391215761507955, 0.9994695040717977), v(-0.999845401349166, -0.0069289015888459775, 0.016160560748231387)), (2, 0.50, v(0.5309429024280947, -0.13570417941839374, 0.8364711651035027), v(-0.4946392747453249, -0.8511141552013959, 0.17588826764521023)), (2, 0.85, v(0.9284607244341514, 0.18541119442453757, 0.32184370766767706), v(0.10204647212494776, -0.9604870924530259, 0.25894219964691917)), (2, 1.00, v(0.8669214468630179, 0.47286624374344677, 0.15762208124782218), v(0.43643578047197085, -0.8728715609439766, 0.2182178902359924))]),
+            ("plan1", vec![(1, 0.00, v(0.0, 0.0, 1.0), v(0.8944271909999159, -0.4472135954999579, 0.0)), (1, 0.20, v(0.0, 0.0, 1.0), v(0.9846310984607183, 0.17464707253211895, -3.819082371619055e-16)), (1, 0.50, v(0.0, 0.0, 1.0), v(0.38400387612345066, 0.9233314806298796, -3.0463990067944494e-16)), (1, 0.85, v(0.0, 0.0, 1.0), v(-0.5255917011571439, 0.8507369532791788, 2.397690547869565e-16)), (1, 1.00, v(0.0, 0.0, 1.0), v(-0.70153965367855, 0.7126304191631033, 0.0)), (2, 0.00, v(0.0, 0.0, 1.0), v(-0.70153965367855, 0.7126304191631033, 0.0)), (2, 0.20, v(0.26300503448406154, 0.029222781609340182, 0.9643517931082258), v(-0.9392185016671852, -0.2208663457320191, 0.26284342002232397)), (2, 0.50, v(0.6882472016116853, 0.22941573387056177, 0.6882472016116853), v(-0.11454945463558708, -0.9024180105792066, 0.41535545816199004)), (2, 0.85, v(0.9317472055275791, 0.14761923358443763, 0.33174644966825223), v(0.06401441163177476, -0.9661014283652787, 0.2501003502876514)), (2, 1.00, v(0.970142500145332, 0.0, 0.242535625036333), v(-0.044293038829553315, -0.9831826656787351, 0.17717215531821043))]),
+            ("ac2", vec![(1, 0.00, v(0.447213595499958, 0.894427190999916, -0.0), v(0.0, 0.0, 1.0)), (1, 0.20, v(0.9932772021804727, 0.07454562119487636, 0.08856268960009335), v(-0.09970853989839225, 0.16227134717746505, 0.9816955826306549)), (1, 0.50, v(0.3669726583263472, -0.5674925319802315, 0.7370775360757916), v(-0.09613596750773015, 0.7649798345925445, 0.6368388559267689)), (1, 0.85, v(0.9607276791828682, 0.2770646752809532, 0.015410780751149713), v(-0.19660015674610173, 0.6404197759783085, 0.7424357809961084)), (1, 1.00, v(0.5383819020581662, 0.7537346628814308, -0.3768673314407169), v(0.0, 0.4472135954999594, 0.8944271909999153))]),
+            ("plan2", vec![(1, 0.00, v(0.4364357804719847, 0.8728715609439694, 0.21821789023599236), v(-0.09624564277436798, -0.19585192130751383, 0.9758989707787914)), (1, 0.20, v(0.8869525753639098, 0.12901128368929538, 0.4434762876819549), v(-0.4173407997758966, -0.1874390936350486, 0.8892093358819881)), (1, 0.50, v(0.345834250622541, -0.9222246683267759, 0.1729171253112705), v(0.16144403953640898, 0.24002549993718886, 0.9572479205921887)), (1, 0.85, v(0.7455811295485929, 0.5523911422862476, 0.37279056477429645), v(-0.5831352669173484, 0.8115643746120947, -0.036283968053568955)), (1, 1.00, v(0.4364357804719847, 0.8728715609439694, 0.21821789023599236), v(-0.3443791719660621, -0.062005616970099535, 0.9367808118125214))]),
+        ];
+        let fractions = [0.0, 0.2, 0.5, 0.85, 1.0];
+        let mut worst = 0.0f64;
+        for (name, frames) in occt {
+            let (spine, guide) = if name.ends_with('1') { (s1, g1) } else { (s2, g2) };
+            let ours = guided_frames(&model, spine, guide, name.starts_with("ac"), &fractions).unwrap();
+            for (edge, f, t, n) in frames {
+                let i = fractions.iter().position(|&x| x == f).unwrap();
+                let (lt, ln) = ours[edge - 1][i];
+                let off = (lt - t).length().max((ln - n).length());
+                worst = worst.max(off);
+                assert!(off < 1e-7, "{name} edge {edge} at {f}: {lt:?}, {ln:?} vs OCCT's {t:?}, {n:?}");
+            }
+        }
+        eprintln!("largest difference from OCCT: {worst:e}");
     }
 
     /// A valid solid of about `volume` (to 1e-5) whose tight box is `bounds` (to 1e-4).

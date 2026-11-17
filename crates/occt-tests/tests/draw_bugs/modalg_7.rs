@@ -2626,18 +2626,15 @@ fn bug30199() -> DrawResult<()> {
 
 /// `tests/bugs/modalg_7/bug30204_1`
 #[test]
-#[should_panic]
-fn bug30204_1() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.restore(&[data_file("bug30204_path.brep").as_str(), "path"])?;
-        d.restore(&[data_file("bug30204_base.brep").as_str(), "base"])?;
-        d.mksweep(&["path"])?;
-        d.setsweep(&["-CN", "0", "1", "0"])?;
-        d.addsweep(&["base"])?;
-        d.buildsweep(&["result"])?;
-        Ok(())
-    })
+fn bug30204_1() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.restore(&[data_file("bug30204_path.brep").as_str(), "path"])?;
+    d.restore(&[data_file("bug30204_base.brep").as_str(), "base"])?;
+    d.mksweep(&["path"])?;
+    d.setsweep(&["-CN", "0", "1", "0"])?;
+    d.addsweep(&["base"])?;
+    d.buildsweep(&["result"])?;
+    Ok(())
 }
 
 /// `tests/bugs/modalg_7/bug30230`
