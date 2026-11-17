@@ -1411,7 +1411,6 @@ class Wire(Shape, Mixin1D):
         speed = math.hypot(2 * math.pi, pitch)
         turns = height / pitch
         total = turns * speed
-        steps = max(8, int(math.ceil(abs(turns) * 32)))
 
         # (A negative pitch, as a negative height, runs the line the other way from its
         # origin: by the length along it, from 0 to `abs(total)`, as OCCT's segment.)
@@ -1431,9 +1430,36 @@ class Wire(Shape, Mixin1D):
             around = x * -math.sin(u) + y * math.cos(u)
             return c + radial * r + z * h, radial * dr + around * (r * du) + z * dh
 
-        params = [total * i / steps for i in range(steps + 1)]
-        samples = [at(s) for s in params]
-        e = native.make_spline([p.toTuple() for p, _ in samples], [d.toTuple() for _, d in samples], params, False, False, 1e-9)
+        # With OCCT's continuity (its 3D curve approximated from the line on the surface):
+        # uniform spans, as many as OCCT's approximation within 5e-7 takes, joined with
+        # tangents continuous (knots of multiplicity two); within each span a cubic C2
+        # through points of the helix, its end tangents the helix's. Pipes along it then
+        # turn as OCCT's do along its own (their frames found per interval where the spine is
+        # C2), while it keeps to the helix closely (OCCT's own, of high degree, keeps only
+        # within its tolerance: nothing of a helix of a radius that small).
+        reach = max(abs(radius), abs(radius + total / speed * pitch * math.sin(half))) if cone else abs(radius)
+        spans, _ = _helix_spans(abs(turns), reach)
+        h = total / spans
+        # (Points enough a turn for the cubics to keep within 5e-7 of the helix, 32 at
+        # least: a cubic's error between points h apart along an arc of radius r is about
+        # r h^4 / 384.)
+        per_turn = max(32, int(math.ceil(2 * math.pi * (reach / (384 * 5e-7)) ** 0.25)))
+        per_span = max(4, int(math.ceil(abs(turns) * per_turn / spans)))
+        poles, knots, mults = [], [], []
+        for k in range(spans):
+            u0, u1 = h * k, h * (k + 1)
+            params = [u0 + (u1 - u0) * i / per_span for i in range(per_span + 1)]
+            samples = [at(u) for u in params]
+            d0, d1 = samples[0][1], samples[-1][1]
+            span = native.make_spline([p.toTuple() for p, _ in samples], [d0.toTuple(), d1.toTuple()], params, False, False, 1e-9)
+            _, span_poles, _, _, _, _ = native.edge_bspline_data(span)
+            # (The pole at each joint dropped: it lies between its neighbours, the tangents
+            # matching, so the knot there has multiplicity two.)
+            poles.extend(span_poles[(1 if k > 0 else 0):(len(span_poles) - 1 if k < spans - 1 else len(span_poles))])
+            knots.extend(params if k == 0 else params[1:])
+            mults.extend(([4] if k == 0 else [2]) + [1] * (per_span - 1))
+        mults.append(4)
+        e = native.make_bspline([tuple(q) for q in poles], None, knots, mults, 3, False)
         return cls.assembleEdges([Shape.cast(e)])
 
     def close(self) -> "Wire":
@@ -1464,6 +1490,19 @@ class Wire(Shape, Mixin1D):
         """Corners rounded to `radius` (at `vertices`, else all), between straight edges."""
         return _round_corners(self, radius, vertices, lambda a, b, p: _fillet_corner(a, b, p, radius))
 
+
+
+def _helix_spans(turns: float, radius: float, tolerance: float = 5e-7, max_degree: int = 14):
+    """The uniform spans and degree OCCT's approximation of a helix of `turns` turns and
+    `radius` takes (as its error estimate decides, nearly: by the Chebyshev bound of a
+    polynomial of that degree on each span's arc, within `tolerance`)."""
+    spans = 1
+    while True:
+        a = math.pi * turns / spans
+        for degree in range(3, max_degree + 1):
+            if radius * a ** (degree + 1) / (2 ** degree * math.factorial(degree + 1)) <= tolerance:
+                return spans, degree
+        spans *= 2
 
 
 def _quasi_uniform_deflection(edge: "Edge", deflection: float, u1: float, u2: float) -> List[float]:

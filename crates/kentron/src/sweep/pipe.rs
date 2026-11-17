@@ -691,11 +691,15 @@ pub(super) fn section_placement(model: &Model, profile: Shape, pieces: &[SpinePi
     let side = |p: Point| (p - origin).dot(normal);
     let last = pieces.len() - 1;
     let mut best: (f64, (usize, f64)) = (f64::INFINITY, (0, 0.0));
+    // (Of crossings as near within 1e-6, the first along the spine: a profile midway
+    // between two turns of a helix, built only that close to the helix, stands at the earlier,
+    // as along OCCT's own.)
+    const TIE: f64 = 1e-6;
     let (first_point, last_point) = (pieces[0].curve.point(pieces[0].at(0.0)), pieces[last].curve.point(pieces[last].at(1.0)));
     if side(first_point).abs() <= 1e-5 {
         best = (first_point.distance(origin), (0, 0.0));
     }
-    if side(last_point).abs() <= 1e-5 && last_point.distance(origin) < best.0 {
+    if side(last_point).abs() <= 1e-5 && last_point.distance(origin) < best.0 - TIE {
         best = (last_point.distance(origin), (last, 1.0));
     }
     // Where the spine crosses the plane.
@@ -710,7 +714,7 @@ pub(super) fn section_placement(model: &Model, profile: Shape, pieces: &[SpinePi
             let crossing = || piece.point_tangent(s1).is_ok_and(|(_, t)| t.dot(normal).abs() > 1e-3 * normal.length());
             if value.abs() <= 1e-12 * (1.0 + (piece.curve.point(piece.at(s1)) - origin).length()) && crossing() {
                 let d = piece.curve.point(piece.at(s1)).distance(origin);
-                if d < best.0 {
+                if d < best.0 - TIE {
                     best = (d, (k, s1));
                 }
             } else if (previous < 0.0) != (value < 0.0) {
@@ -721,7 +725,7 @@ pub(super) fn section_placement(model: &Model, profile: Shape, pieces: &[SpinePi
                 }
                 let s = 0.5 * (lo + hi);
                 let d = piece.curve.point(piece.at(s)).distance(origin);
-                if d < best.0 {
+                if d < best.0 - TIE {
                     best = (d, (k, s));
                 }
             }

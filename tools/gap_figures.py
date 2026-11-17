@@ -168,15 +168,6 @@ def scene_lamp(cq, kernel):
     return {"arm": [(arm.val(), FIRST)], "hub": [(hub, SECOND)], "union": [(arm.union(hub).val(), BODY)], "start": (float(xs), float(ys), float(zs))}
 
 
-def scene_helix(cq, kernel):
-    """After maistrotoad's swirlamp (swirlamp/v1.py): a circle swept along a helix, off it."""
-    helix = cq.Workplane(obj=cq.Wire.makeHelix(pitch=3, height=20, radius=5))
-    sweep = cq.Workplane("XZ").move(2.5, 2.5).circle(0.4).sweep(helix).val()
-    caps = [f for f in sweep.Faces() if f.geomType() == "PLANE"]
-    end = max(caps, key=lambda f: f.Center().z).Center()
-    return {"sweep": [(sweep, BODY)], "end": (end.x, end.y, end.z)}
-
-
 def draw_commands(commands):
     """kentron's DRAW interpreter run on commands (crates/occt-tests' draw_commands): what
     they print, or a RuntimeError saying which command failed and why."""
@@ -983,22 +974,6 @@ def figure_lamp(rebuild):
             (COLUMNS[2], cadquery["union"], "CadQuery: their union", ("good", "one valid solid"))):
         info = mesh["info"][0]
         figure.panel(x, TOP, MAIN, height, render([mesh], close) + (marked(close, mesh) if verdict[0] == "bad" else ""), title, "%d faces, volume %.0f" % (info["faces"], info["volume"]), verdict)
-    return figure
-
-
-def figure_helix(rebuild):
-    kentron, cadquery = (scene("helix", k, rebuild) for k in ("kentron", "cadquery"))
-    height = 300
-    figure = Figure(WIDTH, TOP + height + 56, "A circle swept along CadQuery's helix, off it: OCCT's corrected Frenet law, stepped over the C2 intervals of OCCT's helix, turns it further than along kentron's helix, C2 over far shorter ones.")
-    whole = View((0.3, 0.8, 0.5), (0, 0, 11), 34, SIDE, height)
-    close = whole.zoomed(cadquery["end"], 4.5, MAIN, height)
-    figure.panel(COLUMNS[0], TOP, SIDE, height, render([cadquery["sweep"]], whole), "Swept along a helix", "6.7 turns, the circle 3.5 off it")
-    figure.frame(*(a + b for a, b in zip(whole.window(close), (COLUMNS[0], TOP, 0, 0))))
-    for x, mesh, title, verdict, reference in (
-            (COLUMNS[1], kentron["sweep"], "kentron: its end", ("bad", "turned short of CadQuery's (in red,\nwhere it is not), volume 2% less"), [cadquery["sweep"]]),
-            (COLUMNS[2], cadquery["sweep"], "CadQuery: its end", ("good", "OCCT's sweep along OCCT's helix"), None)):
-        info = mesh["info"][0]
-        figure.panel(x, TOP, MAIN, height, render([mesh], close, reference=reference), title, "volume %.3f" % info["volume"], verdict)
     return figure
 
 
