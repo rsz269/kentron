@@ -50,6 +50,12 @@ pub(crate) trait CurveAdaptor {
     fn basis_curve(&self) -> Option<&Curve> {
         None
     }
+
+    /// `Trim(First, Last, Tol)`: the same curve over `[first, last]`. Panics by default, as
+    /// the base `Adaptor3d_Curve::Trim` raises `Standard_NotImplemented`.
+    fn trimmed(&self, _first: f64, _last: f64, _tolerance: f64) -> Box<dyn CurveAdaptor> {
+        panic!("Adaptor3d_Curve::Trim: Standard_NotImplemented")
+    }
 }
 
 use std::sync::Arc;
@@ -82,7 +88,7 @@ pub(crate) fn in_period(u: f64, first: f64, last: f64) -> f64 {
 }
 
 /// `BSplCLib::Hunt`: 1-based, `0` below the first value and `len + 1` above the last.
-fn hunt(values: &[f64], x: f64) -> usize {
+pub(crate) fn hunt(values: &[f64], x: f64) -> usize {
     if values[0] > x {
         return 0;
     }
@@ -472,6 +478,11 @@ impl CurveAdaptor for GeomAdaptor {
 
     fn basis_curve(&self) -> Option<&Curve> {
         Some(&self.curve)
+    }
+
+    /// `GeomAdaptor_Curve::Trim` (the tolerance unused, as in OCCT).
+    fn trimmed(&self, first: f64, last: f64, _tolerance: f64) -> Box<dyn CurveAdaptor> {
+        Box::new(self.trim(first, last))
     }
 
     fn first_parameter(&self) -> f64 {
