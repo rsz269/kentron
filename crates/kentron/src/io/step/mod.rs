@@ -162,6 +162,12 @@ pub fn read_assembly(model: &mut Model, input: &mut dyn Read) -> Result<Vec<Node
     let mut reader = Reader::new(&exchange, model)?;
     let roots = reader.assembly()?;
     reader.gaps.apply(reader.model)?;
+    // (Edges meeting at a shallow angle and crossing just beside their vertex, within the
+    // reading's largest tolerance (read.maxprecision.val, 1): the vertex's tolerance raised
+    // to cover it, as OCCT's ShapeFix_Wire::FixIntersectingEdges does.)
+    let mut faces: Vec<Shape> = reader.face_instances.keys().map(|&node| Shape { node, orientation: crate::topology::Orientation::Forward, placement: Transform::IDENTITY }).collect();
+    faces.sort_by_key(|f| f.node.index);
+    crate::validity::cover_crossings_at_vertices(reader.model, &faces, 1.0);
     Ok(roots)
 }
 
@@ -772,6 +778,21 @@ impl<'a> Reader<'a> {
         let surface_id = Self::reference(&p[2])?;
         let surface = self.surface(surface_id)?;
         let same_sense = p[3].as_bool().unwrap_or(true);
+        // (A face bounded by one vertex loop only, on a sphere, B-spline or revolution
+        // surface: the whole surface within its natural bounds, as OCCT's
+        // StepToTopoDS_TranslateFace makes it, ISO 10303-42 calling it the surface's domain.
+        // On a torus OCCT leaves the face without bounds, which is the whole torus too.)
+        let bounds = self.list(&p[1])?.to_vec();
+        if let [only] = &bounds[..] {
+            let b = self.get(Self::reference(only)?)?;
+            let lp = b.record("FACE_OUTER_BOUND").or(b.record("FACE_BOUND")).and_then(|bp| bp.get(1)).and_then(Value::as_reference);
+            let vertex_loop = lp.and_then(|l| self.get(l).ok()).is_some_and(|l| l.has("VERTEX_LOOP"));
+            if vertex_loop && matches!(surface, Surface::Sphere(_) | Surface::BSpline(_) | Surface::Revolution(_) | Surface::Torus(_)) {
+                let face = crate::make::face_on_surface(self.model, surface)?;
+                self.face_instances.insert(face.node, id);
+                return Ok(if same_sense { face } else { face.reversed() });
+            }
+        }
         let face = self.model.new_empty(NodeKind::Face);
         self.model.set_face_surface(face, surface.clone(), crate::tolerance::LINEAR)?;
         self.face_instances.insert(face.node, id);
@@ -1436,52 +1457,69 @@ fn unit_factor(x: &Exchange, u: &Instance, is_length: bool) -> f64 {
     1.0
 }
 
-/// The colours of styled items: item instance -> RGB.
+/// The colours of styled items: item instance -> RGB and opacity. As OCCT's
+/// STEPConstruct_Styles::GetColors reads a style and STEPCAFControl_Reader applies it: of
+/// each presentation style, a surface style usage's fill colour, its rendering's colour (and
+/// transparency) over it, and its boundary's curve colour; a curve style's colour. kentron
+/// keeps one colour an item: the surface's, else the boundary's or curve's (parameter-line
+/// styles and the like give none).
 fn colors(x: &Exchange) -> HashMap<usize, [f64; 4]> {
     let mut out = HashMap::default();
+    let get = |v: &Value| v.as_reference().and_then(|r| x.get(r).ok());
+    let list = |v: &Value| -> Vec<Value> { x.list(v).map(<[Value]>::to_vec).unwrap_or_default() };
+    // A colour entity's components.
+    let colour = |v: &Value| -> Option<[f64; 3]> {
+        let c = get(v)?;
+        if let Some(c) = c.record("COLOUR_RGB") {
+            return Some([x.real(&c[1])?, x.real(&c[2])?, x.real(&c[3])?]);
+        }
+        if let Some(c) = c.record("DRAUGHTING_PRE_DEFINED_COLOUR") {
+            return c[0].as_str().and_then(named_colour);
+        }
+        None
+    };
     // (Over-riding styled items too: the same, with the style they override after.)
     for (_, inst) in x.of_type("STYLED_ITEM").chain(x.of_type("OVER_RIDING_STYLED_ITEM")) {
         let Some(p) = inst.record("STYLED_ITEM").or(inst.record("OVER_RIDING_STYLED_ITEM")) else { continue };
         let Some(item) = p.get(2).and_then(Value::as_reference) else { continue };
-        let mut stack: Vec<&Value> = vec![&p[1]];
-        let mut depth = 0;
-        let mut found = None;
-        // (The transparency of its rendering, where it has one.)
+        let (mut surface, mut boundary, mut curve, mut rendering) = (None, None, None, None);
         let mut transparency: Option<f64> = None;
-        while let Some(v) = stack.pop() {
-            depth += 1;
-            if depth > 200 {
-                break;
-            }
-            match v {
-                Value::List(_) => stack.extend(x.list(v).unwrap_or(&[])),
-                Value::Typed(_) => stack.extend(x.typed(v).map_or(&[][..], |(_, params)| params)),
-                Value::Reference(r) => {
-                    let Ok(i) = x.get(*r) else { continue };
-                    if let Some(t) = i.record("SURFACE_STYLE_TRANSPARENT") {
-                        transparency = transparency.or(t.first().and_then(|v| x.real(v)));
-                    }
-                    if let Some(c) = i.record("COLOUR_RGB") {
-                        let rgb = [x.real(&c[1]), x.real(&c[2]), x.real(&c[3])];
-                        if let [Some(r), Some(g), Some(b)] = rgb {
-                            found = found.or(Some([r, g, b]));
-                            continue;
+        for psa in list(&p[1]) {
+            let Some(psa) = get(&psa) else { continue };
+            let Some(styles) = psa.record("PRESENTATION_STYLE_ASSIGNMENT").or(psa.record("PRESENTATION_STYLE_BY_CONTEXT")).and_then(|r| r.first().cloned()) else { continue };
+            for select in list(&styles) {
+                let Some(style) = get(&select) else { continue };
+                if let Some(usage) = style.record("SURFACE_STYLE_USAGE") {
+                    let Some(side) = usage.get(1).and_then(get) else { continue };
+                    let Some(elements) = side.record("SURFACE_SIDE_STYLE").and_then(|r| r.get(1).cloned()) else { continue };
+                    for element in list(&elements) {
+                        let Some(e) = get(&element) else { continue };
+                        if let Some(fill) = e.record("SURFACE_STYLE_FILL_AREA") {
+                            // FILL_AREA_STYLE(name, (FILL_AREA_STYLE_COLOUR(name, colour), ...))
+                            let fas = fill.first().and_then(get);
+                            let found = fas.and_then(|f| f.record("FILL_AREA_STYLE").and_then(|r| r.get(1).cloned())).map(|fs| {
+                                list(&fs).iter().filter_map(get).find_map(|c| c.record("FILL_AREA_STYLE_COLOUR").and_then(|r| r.get(1).and_then(colour)))
+                            });
+                            surface = surface.or(found.flatten());
+                        } else if let Some(b) = e.record("SURFACE_STYLE_BOUNDARY") {
+                            boundary = boundary.or(b.first().and_then(get).and_then(|cs| cs.record("CURVE_STYLE").and_then(|r| r.get(3).and_then(colour))));
+                        } else if let Some(r) = e.record("SURFACE_STYLE_RENDERING_WITH_PROPERTIES").or(e.record("SURFACE_STYLE_RENDERING")) {
+                            rendering = rendering.or(r.get(1).and_then(colour));
+                            if let Some(props) = r.get(2) {
+                                for prop in list(props) {
+                                    if let Some(t) = get(&prop).and_then(|t| t.record("SURFACE_STYLE_TRANSPARENT").and_then(|v| v.first().and_then(|v| x.real(v)))) {
+                                        transparency = transparency.or(Some(t));
+                                    }
+                                }
+                            }
                         }
                     }
-                    if let Some(c) = i.record("DRAUGHTING_PRE_DEFINED_COLOUR") {
-                        if let Some(c) = c[0].as_str().and_then(named_colour) {
-                            found = found.or(Some(c));
-                            continue;
-                        }
-                    }
-                    for (_, params) in i.records() {
-                        stack.extend(params.iter());
-                    }
+                } else if let Some(cs) = style.record("CURVE_STYLE") {
+                    curve = curve.or(cs.get(3).and_then(colour));
                 }
-                _ => {}
             }
         }
-        if let Some([r, g, b]) = found {
+        if let Some([r, g, b]) = rendering.or(surface).or(boundary).or(curve) {
             out.entry(item).or_insert([r, g, b, 1.0 - transparency.unwrap_or(0.0).clamp(0.0, 1.0)]);
         }
     }

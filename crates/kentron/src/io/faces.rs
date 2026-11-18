@@ -389,7 +389,15 @@ fn close_at_poles(model: &mut Model, coedges: Vec<(EdgeId, bool, Curve2, f64, f6
         let (a, b) = model.edge_vertices(Shape::from(coedges[i].0));
         let vertex = if coedges[i].1 { b } else { a };
         let v = VertexId::try_from(vertex.node).expect("a vertex");
-        let edge = model.add_edge(v, v, crate::tolerance::LINEAR)?;
+        // (Its tolerance, and its vertex's, covering how far the vertex is from the point on
+        // the surface, as OCCT's FixVertexTolerance raises them.)
+        let point = model.point(vertex);
+        let gap = 1.0000001 * point.distance(p).max(point.distance(q));
+        let tolerance = gap.max(crate::tolerance::LINEAR);
+        if tolerance > model[v].tolerance {
+            model.set_vertex_point(v.into(), point, tolerance)?;
+        }
+        let edge = model.add_edge(v, v, tolerance)?;
         let pcurve = Curve2::BSpline(BSplineCurve2::new(vec![end, start], vec![0.0, 1.0], vec![2, 2], 1));
         out.push((edge, true, pcurve, 0.0, 1.0));
     }
@@ -452,7 +460,8 @@ pub(crate) fn project(edge: &CurveSpan, surface: &Surface, has_pcurve: bool) -> 
     if edge.first > edge.last {
         return project(&CurveSpan { curve: edge.curve, first: edge.last, last: edge.first }, surface, has_pcurve);
     }
-    if let Some(pc) = pr::analytic_pcurve(edge.curve, surface) {
+    // (On a sphere, a meridian's arc on the half of its great circle its range lies on.)
+    if let Some(pc) = pr::analytic_pcurve_on_range(edge.curve, surface, edge.first, edge.last).or_else(|| pr::analytic_pcurve(edge.curve, surface)) {
         return Ok(pc);
     }
     // An edge well off the surface (bad data, which OCCT reads with tolerances to cover the
@@ -643,7 +652,9 @@ pub(crate) fn align_periods(coedges: &mut [(EdgeId, bool, Curve2, f64, f64)], su
             let step = |d: f64, period: Option<f64>| period.map_or(d, |p| 0.25 * p);
             surface.point(end.x + step(1.0, pu), end.y).distance(p) <= 1e-9 * size
         };
-        if shifted && !(0..n).any(|i| along_pole(&coedges[i])) {
+        // (Not where the loop itself ends at a pole, a period from its start, as a whole
+        // sphere's seam used both ways: the pole's edge added there closes it.)
+        if shifted && !(0..n).any(|i| along_pole(&coedges[i])) && !at_pole(n - 1) {
             if let Some(i) = (0..n - 1).find(|&i| at_pole(i)) {
                 use crate::math::Transformable2;
                 let t = crate::math::Transform2::translation(gap);
@@ -764,24 +775,33 @@ pub(crate) fn seams_to_sides(coedges: &mut [(EdgeId, bool, Curve2, f64, f64)], s
             let side = side_of(&coedges[i]).expect("a seam");
             let other = if side == lo { hi } else { lo };
             let shift = if k == 0 { crate::math::Vector2::new(other - side, 0.0) } else { crate::math::Vector2::new(0.0, other - side) };
+            // By the neighbours that are neither seams (a seam's other use, which may move
+            // too) nor collapsed.
+            let fixed = |j: usize| !collapsed[j] && !seams.contains(&j);
+            let (start, end) = ends(&coedges[i]);
+            let (previous, next) = ((i + n - 1) % n, (i + 1) % n);
+            let gap = |shift: f64| {
+                let moved = |p: Point2| if k == 0 { Point2::new(p.x + shift, p.y) } else { Point2::new(p.x, p.y + shift) };
+                let before = if fixed(previous) { moved(start).distance(ends(&coedges[previous]).1) } else { 0.0 };
+                let after = if fixed(next) { moved(end).distance(ends(&coedges[next]).0) } else { 0.0 };
+                before + after
+            };
             let better = if span.0 <= span.1 && !same_edge_twice {
                 let width = |x: f64| span.1.max(x) - span.0.min(x);
                 if (width(other) - width(side)).abs() <= at {
-                    ties.push((i, shift));
+                    // (A tie by the span (the face across the whole range): the side its
+                    // neighbours in the loop meet it on, else left to the faces around.)
+                    let (moved, stay) = (gap(other - side), gap(0.0));
+                    if (moved - stay).abs() > at {
+                        moved < stay
+                    } else {
+                        ties.push((i, shift));
+                        false
+                    }
+                } else {
+                    width(other) < width(side) - at
                 }
-                width(other) < width(side) - at
             } else {
-                // By the neighbours that are neither seams (a seam's other use, which may
-                // move too) nor collapsed.
-                let fixed = |j: usize| !collapsed[j] && !seams.contains(&j);
-                let (start, end) = ends(&coedges[i]);
-                let (previous, next) = ((i + n - 1) % n, (i + 1) % n);
-                let gap = |shift: f64| {
-                    let moved = |p: Point2| if k == 0 { Point2::new(p.x + shift, p.y) } else { Point2::new(p.x, p.y + shift) };
-                    let before = if fixed(previous) { moved(start).distance(ends(&coedges[previous]).1) } else { 0.0 };
-                    let after = if fixed(next) { moved(end).distance(ends(&coedges[next]).0) } else { 0.0 };
-                    before + after
-                };
                 gap(other - side) < gap(0.0) - 1e-9
             };
             if better {

@@ -242,10 +242,24 @@ pub fn analytic_pcurve_on_range(curve: &Curve, surface: &Surface, first: f64, la
     let (a, b) = (pcurve.point(first).y, pcurve.point(last).y);
     let turn = std::f64::consts::TAU;
     let shift = -((0.5 * (a + b)) / turn).round() * turn;
-    if (a + shift).abs() > half || (b + shift).abs() > half {
+    if (a + shift).abs() <= half && (b + shift).abs() <= half {
+        return Some(if shift == 0.0 { pcurve } else { crate::math::Transformable2::transformed(&pcurve, &crate::math::Transform2::translation(crate::math::Vector2::new(0.0, shift))) });
+    }
+    // (A meridian's arc on its far half: the same points at the opposite longitude, the
+    // latitude mirrored, (u + π, π - v).)
+    let Curve2::Line(line) = &pcurve else { return None };
+    let (o, d) = (line.origin, line.direction);
+    if d.x().abs() > 1e-12 {
         return None;
     }
-    Some(if shift == 0.0 { pcurve } else { crate::math::Transformable2::transformed(&pcurve, &crate::math::Transform2::translation(crate::math::Vector2::new(0.0, shift))) })
+    let mirrored = |v: f64| std::f64::consts::PI - v;
+    let (ma, mb) = (mirrored(a), mirrored(b));
+    let shift = -((0.5 * (ma + mb)) / turn).round() * turn;
+    if (ma + shift).abs() > half || (mb + shift).abs() > half {
+        return None;
+    }
+    let u = o.x + std::f64::consts::PI;
+    Some(Curve2::Line(Line2::new(Point2::new(u, mirrored(o.y) + shift), Direction2::new(0.0, -d.y()))))
 }
 
 fn curve_on_sphere_parameters(curve: &Curve, sphere: &Sphere) -> Option<Curve2> {
