@@ -514,7 +514,9 @@ pub(crate) fn project(edge: &CurveSpan, surface: &Surface, has_pcurve: bool) -> 
         }
         let gap = gap_to(edge, surface, first_foot)?;
         let tolerance = 1.5 * gap + 1e-7;
-        pr::pcurve_on_range_from(edge.curve, surface, edge.first, edge.last, &[tolerance], first_foot)
+        // (The gap is measured at samples; between them the curve may stray further, a few
+        // times as far: the fit then allowed that, the edge's tolerance covering it.)
+        pr::pcurve_on_range_from(edge.curve, surface, edge.first, edge.last, &[tolerance, 4.0 * tolerance], first_foot)
             .or_else(|| pr::polyline_pcurve_on_range(edge.curve, surface, edge.first, edge.last, tolerance))
     };
     let fitted = if far { None } else {

@@ -1843,6 +1843,23 @@ fn range(curve: &Curve, start: Point, end: Point, closed: bool) -> (f64, f64) {
             last -= t;
         }
     }
+    // (An edge between two vertices found at one place on a curve not periodic, the curve
+    // coming back about there: the edge runs it round, to the end where its end vertex lies
+    // near, as a curve closed only to the file's accuracy.)
+    if period.is_none() && !closed {
+        let (lo, hi) = (curve.first_parameter(), curve.last_parameter());
+        let span = (hi - lo).abs();
+        let apart = start.distance(end);
+        if lo.is_finite() && hi.is_finite() && (last - first).abs() <= 1e-6 * span && apart > 0.0 {
+            let near = |q: Point| q.distance(end) <= 4.0 * apart + 1e-7;
+            if (first - lo).abs() <= 1e-6 * span && near(curve.point(hi)) {
+                return (lo, hi);
+            }
+            if (first - hi).abs() <= 1e-6 * span && near(curve.point(lo)) {
+                return (lo, hi);
+            }
+        }
+    }
     // A closed curve (not periodic) run through its closing point: a vertex there is at the
     // end of the curve's range where the edge ends, at its start where the edge starts.
     if period.is_none() && last < first {
