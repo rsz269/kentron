@@ -181,9 +181,12 @@ fn document(model: &Model, nodes: &[Node], s: &mut Stats) {
             Some(d) => seen.insert(d),
             None => true,
         };
-        if fresh {
-            products.push(node);
+        // (A product's labels once: its subtree, representations included, under its first
+        // occurrence only.)
+        if !fresh {
+            return;
         }
+        products.push(node);
         for child in &node.children {
             gather(child, products, seen);
         }
@@ -229,6 +232,13 @@ fn document(model: &Model, nodes: &[Node], s: &mut Stats) {
         if let Some(l) = &product.layer {
             layered += 1;
             add_layer(l);
+        }
+        // (An external reference: a label under the product's, with one named for the file
+        // under that, as STEPCAFControl_Reader's SetExternRefs makes them.)
+        if product.external.is_some() {
+            levels[1] += 1;
+            levels[2] += 1;
+            named += 1;
         }
         if !product.children.is_empty() {
             for child in &product.children {

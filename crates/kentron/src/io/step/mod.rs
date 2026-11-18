@@ -59,6 +59,8 @@ pub struct Node {
     pub validation: Validation,
     /// Those it gives this occurrence of it (in its parent).
     pub occurrence_validation: Validation,
+    /// The file of the external reference the file gives the product, by name (not read).
+    pub external: Option<String>,
     /// The file's product definition this node is an occurrence of (its entity number): the
     /// same for every occurrence of one product. `None` for shapes read without products, and
     /// for nodes made otherwise than by reading.
@@ -74,7 +76,7 @@ pub struct Validation {
     pub area: Option<f64>,
 }
 
-/// A face or edge of a product's shape with a name, colour or layer of its own.
+/// A face, wire, edge or vertex of a product's shape with a name, colour or layer of its own.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Subshape {
     /// A face, edge or wire of the product's shape (unplaced within it).
@@ -265,6 +267,11 @@ struct Reader<'a> {
     face_instances: HashMap<crate::topology::NodeId, usize>,
     edge_instances: HashMap<crate::topology::NodeId, usize>,
     shell_instances: HashMap<crate::topology::NodeId, usize>,
+    /// The file's instance of each wire (a composite curve) and vertex (a point) of a
+    /// geometric set.
+    item_instances: HashMap<crate::topology::NodeId, usize>,
+    /// External references: product definition -> the referenced file's name.
+    externals: HashMap<usize, String>,
     /// Tolerances needed to cover the gaps between the file's curves, pcurves and points.
     gaps: Gaps,
 }
@@ -289,9 +296,12 @@ impl<'a> Reader<'a> {
             face_instances: HashMap::default(),
             edge_instances: HashMap::default(),
             shell_instances: HashMap::default(),
+            item_instances: HashMap::default(),
+            externals: HashMap::default(),
             gaps: Gaps::default(),
         };
         reader.colors = colors(x);
+        reader.externals = external_references(x);
         reader.layers = layers(x);
         reader.materials = materials(x);
         reader.validations = validations(x, length);
@@ -1033,13 +1043,28 @@ impl<'a> Reader<'a> {
                 let item = Self::reference(&item)?;
                 let it = self.get(item)?;
                 let element = if let Some(cp) = it.record("COMPOSITE_CURVE").map(<[Value]>::to_vec) {
-                    let segments = self.model.new_empty(NodeKind::Compound);
+                    // (As StepToTopoDS_TranslateCompositeCurve: a wire of its segments, each
+                    // the way it runs; their edges loose where they do not join.)
+                    let mut edges = Vec::new();
                     for segment in self.list(&cp[1])?.to_vec() {
                         let sp = self.get(Self::reference(&segment)?)?.record("COMPOSITE_CURVE_SEGMENT").ok_or_else(|| invalid("a composite curve's segment".into()))?.to_vec();
                         let made = self.segment_edge(Self::reference(&sp[2])?)?;
-                        self.model.add(segments, Shape::from(made.id))?;
+                        let edge = Shape::from(made.id);
+                        edges.push(if sp[1].as_bool().unwrap_or(true) { edge } else { edge.reversed() });
                     }
-                    Some(segments)
+                    match crate::make::wire(self.model, &edges) {
+                        Ok(wire) => {
+                            self.item_instances.insert(wire.node, item);
+                            Some(wire)
+                        }
+                        Err(_) => {
+                            let loose = self.model.new_empty(NodeKind::Compound);
+                            for e in edges {
+                                self.model.add(loose, e)?;
+                            }
+                            Some(loose)
+                        }
+                    }
                 } else if (is_curve(&it) || it.has("CARTESIAN_POINT")) && !self.three_d(item) {
                     None
                 } else if is_curve(&it) {
@@ -1058,12 +1083,19 @@ impl<'a> Reader<'a> {
                         Err(_) => None,
                     }
                 } else if it.has("CARTESIAN_POINT") {
-                    Some(crate::make::vertex(self.model, self.point(item)?))
+                    let vertex = crate::make::vertex(self.model, self.point(item)?);
+                    self.item_instances.insert(vertex.node, item);
+                    Some(vertex)
                 } else if it.has("CURVE_BOUNDED_SURFACE") {
-                    Some(self.curve_bounded_face(item)?)
+                    let face = self.curve_bounded_face(item)?;
+                    // (The surface's styles and layers are the face's.)
+                    self.face_instances.insert(face.node, item);
+                    Some(face)
                 } else if it.has("B_SPLINE_SURFACE") || it.has("B_SPLINE_SURFACE_WITH_KNOTS") || it.has("RECTANGULAR_TRIMMED_SURFACE") || it.has("BEZIER_SURFACE") {
                     let surface = self.surface(item)?;
-                    Some(crate::make::face_on_surface(self.model, surface)?)
+                    let face = crate::make::face_on_surface(self.model, surface)?;
+                    self.face_instances.insert(face.node, item);
+                    Some(face)
                 } else {
                     self.body(item)?
                 };
@@ -1118,7 +1150,9 @@ impl<'a> Reader<'a> {
         for (id, inst) in x.of_type("NEXT_ASSEMBLY_USAGE_OCCURRENCE") {
             let p = inst.params();
             let (parent, child) = (Self::reference(&p[3])?, Self::reference(&p[4])?);
-            let name = p[1].as_str().unwrap_or("").to_string();
+            // (As OCCT's ReadNames: the occurrence's description, else its name, else its id.)
+            let text = |k: usize| p.get(k).and_then(Value::as_str).filter(|s| !s.trim().is_empty());
+            let name = text(2).or(text(1)).or(p.first().and_then(Value::as_str)).unwrap_or("").to_string();
             children.entry(parent).or_default().push((child, id, name));
             is_child.insert(child);
         }
@@ -1164,7 +1198,9 @@ impl<'a> Reader<'a> {
         let pd = self.get(definition)?.params();
         let formation = self.get(Self::reference(&pd[2])?)?.params();
         let product = self.get(Self::reference(&formation[2])?)?.params();
-        Ok(product[0].as_str().or(product[1].as_str()).unwrap_or("").to_string())
+        // (As OCCT's STEPCAFControl_Reader::ReadNames: the product's name, else its id.)
+        let text = |k: usize| product.get(k).and_then(Value::as_str).filter(|s| !s.trim().is_empty());
+        Ok(text(1).or(product.first().and_then(Value::as_str)).unwrap_or("").to_string())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1236,7 +1272,13 @@ impl<'a> Reader<'a> {
             kids.push(kid);
         }
         let validation = self.validations.get(&definition).copied().unwrap_or_default();
-        Ok(Node { name, shape, color, alpha, placement, children: kids, subshapes, material, layer, validation, occurrence_validation: Validation::default(), definition: Some(definition) })
+        // (An external reference only for a product with a shape representation, as OCCT
+        // binds one only to a definition it transfers, and whose shape is a compound (an
+        // assembly's, or one of several bodies), as STEPCAFControl_Reader::AddShape records
+        // one only for a compound.)
+        let compound = shape.is_none_or(|s| s.kind() == NodeKind::Compound);
+        let external = self.externals.get(&definition).filter(|_| compound && reps_of.contains_key(&definition)).cloned();
+        Ok(Node { name, shape, color, alpha, placement, children: kids, subshapes, material, layer, validation, occurrence_validation: Validation::default(), definition: Some(definition), external })
     }
 
     /// The shape of `bodies` (each with the item it is made of: a compound of several) and
@@ -1285,7 +1327,7 @@ impl<'a> Reader<'a> {
             }
         }
         for &(_, body) in bodies {
-            for (kind, instances) in [(NodeKind::Face, &self.face_instances), (NodeKind::Edge, &self.edge_instances)] {
+            for (kind, instances) in [(NodeKind::Face, &self.face_instances), (NodeKind::Wire, &self.item_instances), (NodeKind::Edge, &self.edge_instances), (NodeKind::Vertex, &self.item_instances)] {
                 for s in self.model.unique_subshapes(body, kind) {
                     let Some(&inst) = instances.get(&s.node) else { continue };
                     let name = self.x.get(inst).ok().and_then(|i| i.params().first().and_then(Value::as_str).map(str::to_string)).filter(|n| !n.is_empty() && n != "NONE");
@@ -1440,6 +1482,108 @@ fn colors(x: &Exchange) -> HashMap<usize, [f64; 4]> {
         }
         if let Some([r, g, b]) = found {
             out.entry(item).or_insert([r, g, b, 1.0 - transparency.unwrap_or(0.0).clamp(0.0, 1.0)]);
+        }
+    }
+    out
+}
+
+/// The external references of product definitions: definition -> the referenced file's name,
+/// as OCCT's STEPConstruct_ExternRefs::LoadExternRefs and FileName find them (an applied
+/// document reference's, AP214; else an AP203 product definition with associated documents'),
+/// those of a format other than STEP AP203 or AP214 left out, as STEPCAFControl_Reader does.
+/// (The file is not looked for: kentron reads from bytes. OCCT, not finding it, keeps the
+/// name the external identification gives, else the document file's.)
+fn external_references(x: &Exchange) -> HashMap<usize, String> {
+    let mut out: HashMap<usize, String> = HashMap::default();
+    let adrs: Vec<usize> = x.of_type("APPLIED_DOCUMENT_REFERENCE").map(|(id, _)| id).collect();
+    let mut pdwads: Vec<usize> = x.of_type("PRODUCT_DEFINITION_WITH_ASSOCIATED_DOCUMENTS").map(|(id, _)| id).collect();
+    if adrs.is_empty() && pdwads.is_empty() {
+        return out;
+    }
+    // (Graph().Shareds: the instances an instance refers to; Sharings: those referring to it.)
+    let shareds = |id: usize| -> Vec<usize> {
+        let mut found = Vec::new();
+        let Ok(inst) = x.get(id) else { return found };
+        let mut values: Vec<&Value> = inst.records().flat_map(|(_, v)| v.iter()).collect();
+        while let Some(v) = values.pop() {
+            match v {
+                Value::Reference(r) => found.push(*r),
+                Value::List(_) => values.extend(x.list(v).unwrap_or(&[])),
+                Value::Typed(_) => values.extend(x.typed(v).map_or(&[][..], |(_, p)| p)),
+                _ => {}
+            }
+        }
+        found.reverse();
+        found
+    };
+    let mut sharings: HashMap<usize, Vec<usize>> = HashMap::default();
+    for id in x.ids() {
+        for r in shareds(id) {
+            sharings.entry(r).or_default().push(id);
+        }
+    }
+    let sharing = |id: usize| sharings.get(&id).cloned().unwrap_or_default();
+    let is = |id: usize, t: &str| x.get(id).is_ok_and(|i| i.has(t));
+    let is_definition = |id: usize| is(id, "PRODUCT_DEFINITION") || is(id, "PRODUCT_DEFINITION_WITH_ASSOCIATED_DOCUMENTS");
+    let is_formation = |id: usize| is(id, "PRODUCT_DEFINITION_FORMATION") || is(id, "PRODUCT_DEFINITION_FORMATION_WITH_SPECIFIED_SOURCE");
+    let text = |id: usize, k: usize| x.get(id).ok().and_then(|i| i.params().get(k).and_then(Value::as_str).map(str::to_string)).filter(|s| !s.is_empty());
+    for adr in adrs {
+        // findPDWADandExcludeExcess: the definition with documents of the product the
+        // referenced document is equivalent to, taken off the AP203 ones.
+        let mut pdwad = None;
+        for doc in shareds(adr).into_iter().filter(|&d| is(d, "DOCUMENT") || is(d, "DOCUMENT_FILE")) {
+            for dpe in sharing(doc).into_iter().filter(|&e| is(e, "DOCUMENT_PRODUCT_EQUIVALENCE")) {
+                for pdf in shareds(dpe).into_iter().filter(|&f| is_formation(f)) {
+                    for s in sharing(pdf).into_iter().filter(|&s| is(s, "PRODUCT_DEFINITION_WITH_ASSOCIATED_DOCUMENTS")) {
+                        pdwad = Some(s);
+                    }
+                    if let Some(p) = pdwad {
+                        pdwads.retain(|&q| q != p);
+                    }
+                }
+            }
+        }
+        let shape = shareds(adr).into_iter().filter(|&d| is_definition(d)).last();
+        // The document file: the definition's (with documents), else the reference's; with the
+        // format a shape representation of it describes.
+        let doc_file = shareds(pdwad.unwrap_or(adr)).into_iter().filter(|&d| is(d, "DOCUMENT_FILE")).last();
+        let Some(doc_file) = doc_file else { continue };
+        let mut format = None;
+        for pd in sharing(doc_file).into_iter().filter(|&p| is(p, "PROPERTY_DEFINITION")) {
+            for pdr in sharing(pd).into_iter().filter(|&r| is(r, "PROPERTY_DEFINITION_REPRESENTATION")) {
+                let Some(rep) = x.get(pdr).ok().and_then(|i| i.params().get(1).and_then(Value::as_reference)) else { continue };
+                if !(is(rep, "SHAPE_REPRESENTATION") || x.get(rep).is_ok_and(|i| i.name().ends_with("SHAPE_REPRESENTATION"))) {
+                    continue;
+                }
+                let items = x.get(rep).ok().and_then(|i| i.params().get(1).and_then(|v| x.list(v)).map(<[Value]>::to_vec)).unwrap_or_default();
+                format = items.iter().filter_map(Value::as_reference).find(|&i| is(i, "DESCRIPTIVE_REPRESENTATION_ITEM")).map(|i| text(i, 1).unwrap_or_default());
+            }
+        }
+        if let Some(f) = &format {
+            if !f.eq_ignore_ascii_case("STEP AP203") && !f.eq_ignore_ascii_case("STEP AP214") {
+                continue;
+            }
+        }
+        // FileName: the external identification's assigned id (not an entity number), or
+        // its source's; else the document file's id, else its name.
+        let aeia = sharing(doc_file).into_iter().find(|&a| is(a, "APPLIED_EXTERNAL_IDENTIFICATION_ASSIGNMENT"));
+        let from_aeia = aeia.and_then(|a| {
+            text(a, 0).filter(|n| !n.starts_with('#')).or_else(|| {
+                let source = x.get(a).ok()?.params().get(2)?.as_reference()?;
+                let id = x.get(source).ok()?.params().first()?.clone();
+                x.typed(&id).and_then(|(_, p)| p.first().and_then(Value::as_str)).or(id.as_str()).map(str::to_string).filter(|s| !s.is_empty())
+            })
+        });
+        let name = from_aeia.or_else(|| text(doc_file, 0)).or_else(|| text(doc_file, 1));
+        if let (Some(shape), Some(name)) = (shape, name) {
+            out.insert(shape, name);
+        }
+    }
+    // The AP203 ones left: the first of the definition's documents with a name.
+    for pdwad in pdwads {
+        let docs = x.get(pdwad).ok().and_then(|i| i.params().get(4).and_then(|v| x.list(v)).map(<[Value]>::to_vec)).unwrap_or_default();
+        if let Some(name) = docs.iter().filter_map(Value::as_reference).find_map(|d| text(d, 1)) {
+            out.insert(pdwad, name);
         }
     }
     out
