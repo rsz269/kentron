@@ -1041,8 +1041,6 @@ tests/de/step_1/Z9
 tests/de/step_1/ZA4
 tests/de/step_1/ZA5
 tests/de/step_1/ZE9
-tests/de/step_1/ZF1
-tests/de/step_1/ZF9
 tests/de/step_1/ZG3
 tests/de/step_1/ZG7
 tests/de/step_1/ZG8
@@ -1064,8 +1062,6 @@ tests/de/step_1/ZT1
 tests/de/step_1/ZT5
 tests/de/step_1/ZU2
 tests/de/step_1/ZV1
-tests/de/step_1/ZV6
-tests/de/step_1/ZV8
 tests/de/step_1/ZX5
 tests/de/step_1/ZY4
 tests/de/step_2/C5

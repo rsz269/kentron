@@ -442,10 +442,26 @@ impl<'a> Writer<'a> {
                 loose_edges.push(e);
             }
         }
-        if !loose_edges.is_empty() {
+        // (A set for each compound of its own (with a colour or layer as a whole) holding
+        // loose edges, the innermost one an edge is in; the shape's own set for the rest.)
+        let mut owned: Vec<(NodeId, crate::hashing::FastSet<NodeId>)> = Vec::new();
+        for c in model.explore_all(shape).filter(|c| c.kind() == NodeKind::Compound) {
+            if c.node != shape.node && self.body_marks.contains_key(&c.node) && !owned.iter().any(|(o, _)| *o == c.node) {
+                owned.push((c.node, model.explore(c, NodeKind::Edge).map(|e| e.node).collect()));
+            }
+        }
+        owned.sort_by_key(|(_, edges)| edges.len());
+        let mut groups: Vec<(NodeId, Vec<Shape>)> = Vec::new();
+        for e in loose_edges {
+            let owner = owned.iter().find(|(_, edges)| edges.contains(&e.node)).map_or(shape.node, |(c, _)| *c);
+            match groups.iter_mut().find(|(c, _)| *c == owner) {
+                Some((_, members)) => members.push(e),
+                None => groups.push((owner, vec![e])),
+            }
+        }
+        for (compound, loose_edges) in groups {
             let mut ids = Vec::new();
             let mut set_name = String::new();
-            let compound = shape.node;
             for e in loose_edges {
                 let Some((curve, first, last)) = model.edge_curve(Shape { orientation: Orientation::Forward, ..e }) else { continue };
                 let basis = self.curve(&curve, first, last)?;
