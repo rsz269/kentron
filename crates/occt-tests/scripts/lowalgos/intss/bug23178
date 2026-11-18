@@ -6,7 +6,8 @@ puts ""
 #  Intersection of cylinders fails to produce results
 #######################################################################
 
-set GoodNbCurv 6
+# kentron deviation (draw_deviations.json): OCCT's intersection splits its curves where kentron's run on unbroken (at a seam, or a cone's apex, where OCCT's approximation cuts the corner by up to 3e-3); checked against OCCT 8.1's own result (DRAW): the curves' total length agrees (79.42808 kentron, 79.42764 OCCT), 2 kentron curve(s) for OCCT's 6.
+set GoodNbCurv 2
 
 foreach c [directory result*] {
   unset $c

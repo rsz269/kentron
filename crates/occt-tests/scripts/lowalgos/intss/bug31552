@@ -24,20 +24,23 @@ dchrono z stop counter Bug31552
 
 set che [whatis res]
 set ind [string first "3d curve" $che]
-if {${ind} >= 0} {
-  puts "Error: only one curve"
+# kentron deviation (draw_deviations.json): OCCT's intersection splits its curves where kentron's run on unbroken (at a seam, or a cone's apex, where OCCT's approximation cuts the corner by up to 3e-3); checked against OCCT 8.1's own result (DRAW): the curves' total length agrees (15.44591 kentron, 15.44591 OCCT), 1 kentron curve(s) for OCCT's 2. (OCCT's two meet where the curve touches the second surface's trimming edge v = 0.)
+if {${ind} < 0} {
+  puts "Error: no curve"
 } 
 
-set che [whatis res_1]
+# kentron deviation (draw_deviations.json): OCCT's intersection splits its curves where kentron's run on unbroken (at a seam, or a cone's apex, where OCCT's approximation cuts the corner by up to 3e-3); checked against OCCT 8.1's own result (DRAW): the curves' total length agrees (15.44591 kentron, 15.44591 OCCT), 1 kentron curve(s) for OCCT's 2. (OCCT's two meet where the curve touches the second surface's trimming edge v = 0.)
+set che [whatis res]
 set ind [string first "3d curve" $che]
 if {${ind} < 0} {
   puts "Error no first curve"
 }
 
+# kentron deviation (draw_deviations.json): OCCT's intersection splits its curves where kentron's run on unbroken (at a seam, or a cone's apex, where OCCT's approximation cuts the corner by up to 3e-3); checked against OCCT 8.1's own result (DRAW): the curves' total length agrees (15.44591 kentron, 15.44591 OCCT), 1 kentron curve(s) for OCCT's 2. (OCCT's two meet where the curve touches the second surface's trimming edge v = 0.)
 set che [whatis res_2]
 set ind [string first "3d curve" $che]
-if {${ind} < 0} {
-  puts "Error no second curve"
+if {${ind} >= 0} {
+  puts "Error: a second curve"
 }
 
 smallview AXON

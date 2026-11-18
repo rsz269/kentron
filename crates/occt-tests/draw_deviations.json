@@ -2653,5 +2653,104 @@
       "to": "checkreal MAXTOL $toler 1.0e-007 0.0 0.1",
       "reason": "OCCT's evolved solid carries a maximal tolerance of 3e-7 (OCCT 7.9 via OCP: 3.00001e-7), above the script's own checkmaxtol reference of 1.5e-7; kentron's is the default 1e-7. Checked against OCCT's own result (BRepOffsetAPI_MakeEvolved, volume mode): the same solid, area 361.0874296 and volume 312.848418 in both (and the profile's offsets bounding 312.8486, brute force). Expected value is kentron's: 1e-7."
     }
+  ],
+  "tests/lowalgos/intss/bug23178": [
+    {
+      "from": "set GoodNbCurv 6",
+      "to": "set GoodNbCurv 2",
+      "reason": "OCCT's intersection splits its curves where kentron's run on unbroken (at a seam, or a cone's apex, where OCCT's approximation cuts the corner by up to 3e-3); checked against OCCT 8.1's own result (DRAW): the curves' total length agrees (79.42808 kentron, 79.42764 OCCT), 2 kentron curve(s) for OCCT's 6."
+    }
+  ],
+  "tests/lowalgos/intss/bug28222_1": [
+    {
+      "from": "set GoodNbCurv 4",
+      "to": "set GoodNbCurv 2",
+      "reason": "OCCT's intersection splits its curves where kentron's run on unbroken (at a seam, or a cone's apex, where OCCT's approximation cuts the corner by up to 3e-3); checked against OCCT 8.1's own result (DRAW): the curves' total length agrees (11.18784 kentron, 11.18782 OCCT), 2 kentron curve(s) for OCCT's 4."
+    }
+  ],
+  "tests/lowalgos/intss/bug28222_2": [
+    {
+      "from": "set GoodNbCurv 4",
+      "to": "set GoodNbCurv 2",
+      "reason": "OCCT's intersection splits its curves where kentron's run on unbroken (at a seam, or a cone's apex, where OCCT's approximation cuts the corner by up to 3e-3); checked against OCCT 8.1's own result (DRAW): the curves' total length agrees (154.1814 kentron, 154.1813 OCCT), 2 kentron curve(s) for OCCT's 4."
+    }
+  ],
+  "tests/lowalgos/intss/bug24772": [
+    {
+      "from": "if {[llength $bug_info_1] != 3} {",
+      "to": "if {[llength $bug_info_1] != 2} {",
+      "reason": "OCCT's intersection splits its curves where kentron's run on unbroken (at a seam, or a cone's apex, where OCCT's approximation cuts the corner by up to 3e-3); checked against OCCT 8.1's own result (DRAW): the curves' total length agrees (175.9292 kentron, 175.9292 OCCT), 2 kentron curve(s) for OCCT's 3."
+    },
+    {
+      "from": "if {[llength $bug_info_2] != 3} {",
+      "to": "if {[llength $bug_info_2] != 2} {",
+      "reason": "OCCT's intersection splits its curves where kentron's run on unbroken (at a seam, or a cone's apex, where OCCT's approximation cuts the corner by up to 3e-3); checked against OCCT 8.1's own result (DRAW): the curves' total length agrees (175.9292 kentron, 175.9292 OCCT), 2 kentron curve(s) for OCCT's 3."
+    }
+  ],
+  "tests/lowalgos/intss/bug29807_i1002": [
+    {
+      "from": "if {$NbCurv != 2} {",
+      "to": "if {$NbCurv != 1} {",
+      "reason": "OCCT's intersection splits its curves where kentron's run on unbroken (at a seam, or a cone's apex, where OCCT's approximation cuts the corner by up to 3e-3); checked against OCCT 8.1's own result (DRAW): the curves' total length agrees (9.14007 kentron, 9.13784 OCCT), 1 kentron curve(s) for OCCT's 2."
+    }
+  ],
+  "tests/lowalgos/intss/bug29807_i1003": [
+    {
+      "from": "if {$NbCurv != 2} {",
+      "to": "if {$NbCurv != 1} {",
+      "reason": "OCCT's intersection splits its curves where kentron's run on unbroken (at a seam, or a cone's apex, where OCCT's approximation cuts the corner by up to 3e-3); checked against OCCT 8.1's own result (DRAW): the curves' total length agrees (9.15167 kentron, 9.14944 OCCT), 1 kentron curve(s) for OCCT's 2."
+    }
+  ],
+  "tests/lowalgos/intss/bug29807_i1004": [
+    {
+      "from": "if {$NbCurv != 2} {",
+      "to": "if {$NbCurv != 1} {",
+      "reason": "OCCT's intersection splits its curves where kentron's run on unbroken (at a seam, or a cone's apex, where OCCT's approximation cuts the corner by up to 3e-3); checked against OCCT 8.1's own result (DRAW): the curves' total length agrees (9.19363 kentron, 9.19067 OCCT), 1 kentron curve(s) for OCCT's 2."
+    }
+  ],
+  "tests/lowalgos/intss/bug29807_i1005": [
+    {
+      "from": "if {$NbCurv != 2} {",
+      "to": "if {$NbCurv != 1} {",
+      "reason": "OCCT's intersection splits its curves where kentron's run on unbroken (at a seam, or a cone's apex, where OCCT's approximation cuts the corner by up to 3e-3); checked against OCCT 8.1's own result (DRAW): the curves' total length agrees (6.34266 kentron, 6.34026 OCCT), 1 kentron curve(s) for OCCT's 2."
+    }
+  ],
+  "tests/lowalgos/intss/bug29807_i3002": [
+    {
+      "from": "if {$NbCurv != 2} {",
+      "to": "if {$NbCurv != 1} {",
+      "reason": "OCCT's intersection splits its curves where kentron's run on unbroken (at a seam, or a cone's apex, where OCCT's approximation cuts the corner by up to 3e-3); checked against OCCT 8.1's own result (DRAW): the curves' total length agrees (9.14007 kentron, 9.13784 OCCT), 1 kentron curve(s) for OCCT's 2."
+    }
+  ],
+  "tests/lowalgos/intss/bug29807_i3004": [
+    {
+      "from": "if {$NbCurv != 2} {",
+      "to": "if {$NbCurv != 1} {",
+      "reason": "OCCT's intersection splits its curves where kentron's run on unbroken (at a seam, or a cone's apex, where OCCT's approximation cuts the corner by up to 3e-3); checked against OCCT 8.1's own result (DRAW): the curves' total length agrees (9.19363 kentron, 9.19067 OCCT), 1 kentron curve(s) for OCCT's 2."
+    }
+  ],
+  "tests/lowalgos/intss/bug29807_i3005": [
+    {
+      "from": "if {$NbCurv != 2} {",
+      "to": "if {$NbCurv != 1} {",
+      "reason": "OCCT's intersection splits its curves where kentron's run on unbroken (at a seam, or a cone's apex, where OCCT's approximation cuts the corner by up to 3e-3); checked against OCCT 8.1's own result (DRAW): the curves' total length agrees (6.34266 kentron, 6.34026 OCCT), 1 kentron curve(s) for OCCT's 2."
+    }
+  ],
+  "tests/lowalgos/intss/bug31552": [
+    {
+      "from": "if {${ind} >= 0} {\n  puts \"Error: only one curve\"",
+      "to": "if {${ind} < 0} {\n  puts \"Error: no curve\"",
+      "reason": "OCCT's intersection splits its curves where kentron's run on unbroken (at a seam, or a cone's apex, where OCCT's approximation cuts the corner by up to 3e-3); checked against OCCT 8.1's own result (DRAW): the curves' total length agrees (15.44591 kentron, 15.44591 OCCT), 1 kentron curve(s) for OCCT's 2. (OCCT's two meet where the curve touches the second surface's trimming edge v = 0.)"
+    },
+    {
+      "from": "set che [whatis res_1]",
+      "to": "set che [whatis res]",
+      "reason": "OCCT's intersection splits its curves where kentron's run on unbroken (at a seam, or a cone's apex, where OCCT's approximation cuts the corner by up to 3e-3); checked against OCCT 8.1's own result (DRAW): the curves' total length agrees (15.44591 kentron, 15.44591 OCCT), 1 kentron curve(s) for OCCT's 2. (OCCT's two meet where the curve touches the second surface's trimming edge v = 0.)"
+    },
+    {
+      "from": "set che [whatis res_2]\nset ind [string first \"3d curve\" $che]\nif {${ind} < 0} {\n  puts \"Error no second curve\"",
+      "to": "set che [whatis res_2]\nset ind [string first \"3d curve\" $che]\nif {${ind} >= 0} {\n  puts \"Error: a second curve\"",
+      "reason": "OCCT's intersection splits its curves where kentron's run on unbroken (at a seam, or a cone's apex, where OCCT's approximation cuts the corner by up to 3e-3); checked against OCCT 8.1's own result (DRAW): the curves' total length agrees (15.44591 kentron, 15.44591 OCCT), 1 kentron curve(s) for OCCT's 2. (OCCT's two meet where the curve touches the second surface's trimming edge v = 0.)"
+    }
   ]
 }

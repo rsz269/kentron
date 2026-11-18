@@ -1222,7 +1222,7 @@ fn exact_section(s1: &Surface, s2: &Surface, a: Point, b: Point, middle: Point) 
     let scale = 1.0 + (a - Point::ORIGIN).length().max((b - Point::ORIGIN).length());
     let tolerance = 1e-9 * scale;
     let curves: Vec<Curve> = match quadrics(s1, s2, tolerance) {
-        Q::Circles(v) => v.into_iter().map(Curve::Circle).collect(),
+        Q::Circles(v) | Q::CirclesAndPoints(v, _) => v.into_iter().map(Curve::Circle).collect(),
         Q::Ellipses(v) => v.into_iter().map(Curve::Ellipse).collect(),
         Q::Parabolas(v) => v.into_iter().map(Curve::Parabola).collect(),
         Q::Hyperbolas(v) => v.into_iter().map(Curve::Hyperbola).collect(),

@@ -403,6 +403,8 @@ pub enum QuadricIntersection {
     Ellipses(Vec<Ellipse>),
     Parabolas(Vec<Parabola>),
     Hyperbolas(Vec<Hyperbola>),
+    /// Circles and isolated points both (a cone's apex on a sphere about its axis).
+    CirclesAndPoints(Vec<Circle>, Vec<Point>),
     /// The intersection has no closed form; see [`cylinder_quadric`].
     NotAnalytic,
 }
@@ -538,6 +540,10 @@ pub fn quadrics(a: &Surface, b: &Surface, tolerance: f64) -> QuadricIntersection
         }
         (Surface::Cone(c1), Surface::Cone(c2)) if coaxial_cones(c1, c2, tol).is_some() => coaxial_cones(c1, c2, tol).expect("checked"),
         (Surface::Cone(c1), Surface::Cone(c2)) if c1.apex().distance(c2.apex()) <= tol => common_apex_cones(c1, c2, tol),
+        (Surface::Torus(torus), other) | (other, Surface::Torus(torus)) => torus_elementary(torus, other, tol),
+        (Surface::Sphere(sphere), Surface::Cone(cone)) | (Surface::Cone(cone), Surface::Sphere(sphere)) if Line::new(cone.frame().origin(), cone.frame().z()).distance_to_point(sphere.frame().origin()) <= tol => {
+            sphere_cone(sphere, cone)
+        }
         (Surface::Cone(_), _) | (_, Surface::Cone(_)) => {
             // Coincident surfaces have proportional equations; other meetings are curves
             // of higher degree.
@@ -546,7 +552,6 @@ pub fn quadrics(a: &Surface, b: &Surface, tolerance: f64) -> QuadricIntersection
                 _ => Q::NotAnalytic,
             }
         }
-        (Surface::Torus(torus), other) | (other, Surface::Torus(torus)) => torus_elementary(torus, other, tol),
         _ => Q::NotAnalytic,
     }
 }
@@ -621,7 +626,15 @@ fn torus_elementary(torus: &crate::geometry::surface::Torus, other: &Surface, to
         }
     };
     match meridian {
-        Meridian::Line(a, b, k) => line(a, b, k, &mut found),
+        Meridian::Line(a, b, k) => {
+            line(a, b, k, &mut found);
+            // (A slanted meridian crosses the axis: its other half, mirrored, meets the
+            // torus's meridian circle on this side too, a cone's other nappe, as OCCT
+            // takes both sides of the torus in IntAna_QuadQuadGeo.)
+            if a != 0.0 && b != 0.0 {
+                line(-a, b, k, &mut found);
+            }
+        }
         Meridian::Circle((p, q), radius) => {
             let gap = ((p - big).powi(2) + q * q).sqrt();
             if gap <= tol {
@@ -637,6 +650,42 @@ fn torus_elementary(torus: &crate::geometry::surface::Torus, other: &Surface, to
         .map(|(rho, h)| Circle::new(Frame::new(c + z * h, f.z(), f.x()), rho))
         .collect();
     if circles.is_empty() { Q::Empty } else { Q::Circles(circles) }
+}
+
+/// A sphere with its centre on a cone's axis meets the cone in circles about the axis, a
+/// circle of no size being a point (the apex on the sphere), as OCCT's
+/// IntAna_QuadQuadGeo::Perform(gp_Sphere, gp_Cone): with x along the axis from the
+/// sphere's centre away from the apex, d the apex's distance from the centre and t the
+/// tangent of the cone's half-angle, x² + y² = R² and y = t (x + d), so
+/// (1 + t²) x² + 2 t² d x + t² d² - R² = 0.
+fn sphere_cone(sphere: &crate::geometry::surface::Sphere, cone: &crate::geometry::surface::Cone) -> QuadricIntersection {
+    use QuadricIntersection as Q;
+    let center = sphere.frame().origin();
+    let apex = cone.apex();
+    let d = center.distance(apex);
+    let axis = if d > f64::EPSILON { Direction::from_vector(center - apex) } else { cone.frame().z() };
+    let radius = sphere.radius();
+    let (sin, cos) = cone.semi_angle_sin_cos();
+    let t2 = (sin / cos).powi(2);
+    let roots = crate::geometry::polynomial_roots::PolynomialRoots::quadratic(1.0 + t2, 2.0 * t2 * d, t2 * d * d - radius * radius);
+    let (mut circles, mut points) = (Vec::new(), Vec::new());
+    for &x in &roots.roots {
+        let along = d + x;
+        let c = apex + Vector::from(axis) * along;
+        let r = (sin / cos * along).abs();
+        // (OCCT's least circle radius, myEPSILON_MINI_CIRCLE_RADIUS.)
+        if r <= 0.01 * crate::tolerance::LINEAR {
+            points.push(c);
+        } else {
+            circles.push(Circle::new(Frame::from_z(c, axis), r));
+        }
+    }
+    match (circles.is_empty(), points.is_empty()) {
+        (true, true) => Q::Empty,
+        (false, true) => Q::Circles(circles),
+        (true, false) => Q::Points(points),
+        (false, false) => Q::CirclesAndPoints(circles, points),
+    }
 }
 
 /// Two cones on one axis meet in circles: where their meridians (lines in the plane of

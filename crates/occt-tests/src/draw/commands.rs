@@ -943,13 +943,31 @@ impl Draw {
                 touching.push(v);
             }
         }
-        let points = touching;
+        let mut points: Vec<Point> = touching.iter().map(|&v| self.model.point(v)).collect();
+        // (OCCT's command also gives the surfaces' own isolated points, as a cone's apex on a
+        // sphere, that are in or on both faces (IntTools_FaceFace::Perform).)
+        let surfaces: Vec<Surface> = [a, b].iter().filter_map(|&f| self.model.surface(f).map(|s| s.transformed(&f.placement))).collect();
+        if let [s1, s2] = &surfaces[..] {
+            let isolated = match kentron::geometry::intersect::quadrics(s1, s2, 1e-7) {
+                kentron::geometry::intersect::QuadricIntersection::Points(p) | kentron::geometry::intersect::QuadricIntersection::CirclesAndPoints(_, p) => p,
+                _ => Vec::new(),
+            };
+            for p in isolated {
+                let mut in_both = true;
+                for (&f, s) in [a, b].iter().zip(&surfaces) {
+                    let (u, v, _) = kentron::geometry::extrema::nearest_on_surface(p, s, None);
+                    in_both &= self.classify_in_face(f, Point2::new(u, v), self.model.tolerance(f))? != "OUT of shape";
+                }
+                if in_both && !points.iter().any(|q| q.distance(p) <= 1e-7) {
+                    points.push(p);
+                }
+            }
+        }
         if edges.is_empty() {
             return Ok(if points.is_empty() { " has no 3d curves\n has no 3d points\n".into() } else { format!(" has no 3d curves\n{} point(s) found.\n", points.len()) });
         }
         // The edges in connected chains, each in order.
         let chains = chain_edges(&self.model, &edges);
-        let surfaces: Vec<Surface> = [a, b].iter().filter_map(|&f| self.model.surface(f).map(|s| s.transformed(&f.placement))).collect();
         let mut tolerance: f64 = 1e-7;
         let mut names = Vec::new();
         for (k, chain) in chains.iter().enumerate() {
@@ -976,7 +994,16 @@ impl Draw {
             self.set(&name, DrawObject::Curve(curve));
             names.push(name);
         }
-        Ok(format!("Tolerance Reached={}\n{} curve(s) found.\n{}\n", format_real(tolerance), chains.len(), names.join(" ")))
+        let mut text = format!("Tolerance Reached={}\n{} curve(s) found.\n{}\n", format_real(tolerance), chains.len(), names.join(" "));
+        if !points.is_empty() {
+            let mut names = Vec::new();
+            for (k, &p) in points.iter().enumerate() {
+                names.push(format!("p_{}", k + 1));
+                self.set(names.last().unwrap(), DrawObject::Point(p));
+            }
+            text += &format!("{} point(s) found.\n{}\n", points.len(), names.join(" "));
+        }
+        Ok(text)
     }
     /// DRAW command `baddobjects`: 269 uses in 255 converted scripts.
     ///
@@ -2742,13 +2769,15 @@ impl Draw {
         // vertices"), checked against `count` where given (otherwise only reported, as OCCT
         // does).
         need(args, 1, "checksection shape [-r count]")?;
-        let shape = self.shape_var(args[0])?;
+        // (A variable that is not a shape, as a curve, counts as an empty shape: OCCT's
+        // DBRep::Get gives a null one.)
+        let shape = self.shape_var(args[0]).ok();
         let expected = match args.iter().position(|a| *a == "-r") {
             Some(i) => Some(self.number(args.get(i + 1).copied().unwrap_or("0"))? as usize),
             None => None,
         };
         let mut ends: Vec<(Shape, usize)> = Vec::new();
-        for edge in self.model.unique_subshapes(shape, NodeKind::Edge) {
+        for edge in shape.map(|s| self.model.unique_subshapes(s, NodeKind::Edge)).unwrap_or_default() {
             let (a, b) = self.model.edge_vertices(edge);
             for v in [a, b] {
                 match ends.iter_mut().find(|(w, _)| w.is_same(&v)) {
@@ -3985,7 +4014,7 @@ impl Draw {
         };
         let (curves, points) = match bounds {
             None => match elementary_intersection(&s1, &s2, tolerance) {
-                Some(found) => found,
+                Some(found) => found?,
                 None => (self.intersect_by_section(&s1, &s2, None)?, Vec::new()),
             },
             Some(b) => (self.intersect_by_section(&s1, &s2, Some(&b))?, Vec::new()),
@@ -4003,32 +4032,28 @@ impl Draw {
     }
 
     /// The curves where two surfaces meet, as a section of faces on their domains (or on
-    /// `bounds`, both surfaces' `u1 u2 v1 v2`), unbounded ones limited to a large box;
-    /// fails if a curve runs out to it (OCCT finds no intersection then).
+    /// `bounds`, both surfaces' `u1 u2 v1 v2`), an infinite parameter range limited as
+    /// OCCT's IntPatch_HInterTool::Bounds does: to ±1e5 if infinite both ways, else to 2e5
+    /// from its finite end.
     fn intersect_by_section(&mut self, s1: &Surface, s2: &Surface, bounds: Option<&[f64]>) -> DrawResult<Vec<Curve>> {
-        const FAR: f64 = 1e4;
         let mut faces = Vec::new();
         for (k, s) in [s1, s2].into_iter().enumerate() {
             let (mut u0, mut u1, mut v0, mut v1) = kentron::geometry::ParametricSurface::bounds(s);
             if let Some(b) = bounds {
                 (u0, u1, v0, v1) = (b[4 * k], b[4 * k + 1], b[4 * k + 2], b[4 * k + 3]);
             }
-            let clamp = |a: f64, b: f64| if a.abs() > 1e100 || b.abs() > 1e100 { (a.max(-FAR), b.min(FAR)) } else { (a, b) };
-            ((u0, u1), (v0, v1)) = (clamp(u0, u1), clamp(v0, v1));
+            let infinite = |x: f64| x.abs() >= 1e100;
+            let limit = |a: f64, b: f64| match (infinite(a), infinite(b)) {
+                (true, true) => (-1e5, 1e5),
+                (true, false) => (b - 2e5, b),
+                (false, true) => (a, a + 2e5),
+                (false, false) => (a, b),
+            };
+            ((u0, u1), (v0, v1)) = (limit(u0, u1), limit(v0, v1));
             faces.push(make::face_on_domain(&mut self.model, s.clone(), u0, u1, v0, v1)?);
         }
         let section = boolean::section(&mut self.model, faces[0], faces[1])?;
         let edges = self.model.unique_subshapes(section, NodeKind::Edge);
-        for &e in &edges {
-            if let Some((c, first, last)) = self.model.edge_curve(e) {
-                if [first, last].iter().any(|&t| {
-                    let p = c.point(t);
-                    [p.x, p.y, p.z].iter().any(|x: &f64| x.abs() > FAR / 2.0)
-                }) {
-                    return Err(DrawError::Failed("intersect: an intersection curve is unbounded".into()));
-                }
-            }
-        }
         chain_edges(&self.model, &edges).iter().map(|chain| self.fit_on_surfaces(chain, s1, s2)).collect()
     }
 
@@ -6870,27 +6895,29 @@ fn chain_curve(model: &kentron::topology::Model, chain: &[Shape]) -> DrawResult<
 /// Where two surfaces meet in closed form (elementary ones, an extrusion along lines, or a
 /// cylinder or cone and a quadric along branches made B-splines): the curves and isolated
 /// points; `None` if not.
-fn elementary_intersection(s1: &Surface, s2: &Surface, tolerance: f64) -> Option<(Vec<Curve>, Vec<Point>)> {
+fn elementary_intersection(s1: &Surface, s2: &Surface, tolerance: f64) -> Option<DrawResult<(Vec<Curve>, Vec<Point>)>> {
     use kentron::geometry::intersect::{extrusion_lines, quadrics, ruled_quadric, QuadricIntersection as Q};
     let lines = match (s1, s2) {
         (Surface::Extrusion(e), other) | (other, Surface::Extrusion(e)) => extrusion_lines(e, other, tolerance.max(1e-7)),
         _ => None,
     };
     if let Some(lines) = lines {
-        return Some((lines.into_iter().map(Curve::Line).collect(), Vec::new()));
+        return Some(Ok((lines.into_iter().map(Curve::Line).collect(), Vec::new())));
     }
     let elementary = |s: &Surface| matches!(s, Surface::Plane(_) | Surface::Cylinder(_) | Surface::Cone(_) | Surface::Sphere(_) | Surface::Torus(_));
     if !elementary(s1) || !elementary(s2) {
         return None;
     }
     let tolerance = tolerance.max(1e-7);
-    Some(match quadrics(s1, s2, tolerance) {
-        // (Coinciding surfaces are left to the general method, failing as OCCT's.)
-        Q::Same => return None,
+    Some(Ok(match quadrics(s1, s2, tolerance) {
+        // (Coinciding surfaces: OCCT's intersection is not done, IntPatch_ImpImpIntersection's
+        // status not OK, and the command fails.)
+        Q::Same => return Some(Err(DrawError::Failed("No intersections found!".into()))),
         Q::Empty => (Vec::new(), Vec::new()),
         Q::Points(p) => (Vec::new(), p),
         Q::Lines(c) => (c.into_iter().map(Curve::Line).collect(), Vec::new()),
         Q::Circles(c) => (c.into_iter().map(Curve::Circle).collect(), Vec::new()),
+        Q::CirclesAndPoints(c, p) => (c.into_iter().map(Curve::Circle).collect(), p),
         Q::Ellipses(c) => (c.into_iter().map(Curve::Ellipse).collect(), Vec::new()),
         Q::Parabolas(c) => (c.into_iter().map(Curve::Parabola).collect(), Vec::new()),
         Q::Hyperbolas(c) => (c.into_iter().map(Curve::Hyperbola).collect(), Vec::new()),
@@ -6905,7 +6932,7 @@ fn elementary_intersection(s1: &Surface, s2: &Surface, tolerance: f64) -> Option
             }
             (curves, Vec::new())
         }
-    })
+    }))
 }
 
 /// A curve through points along where two surfaces meet, moved exactly onto both, with

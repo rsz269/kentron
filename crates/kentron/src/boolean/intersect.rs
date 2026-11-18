@@ -1868,7 +1868,7 @@ fn sections(fa: &Face, fb: &Face, crossings: &[Point]) -> Vec<Section> {
                 Section::Open(Curve::Line(l), lo, hi)
             })
             .collect(),
-        QuadricIntersection::Circles(cs) => cs.into_iter().map(|c| Section::Closed(Curve::Circle(c), Default::default())).collect(),
+        QuadricIntersection::Circles(cs) | QuadricIntersection::CirclesAndPoints(cs, _) => cs.into_iter().map(|c| Section::Closed(Curve::Circle(c), Default::default())).collect(),
         QuadricIntersection::Ellipses(es) => es.into_iter().map(|e| Section::Closed(Curve::Ellipse(e), Default::default())).collect(),
         QuadricIntersection::NotAnalytic => {
             // Parametrize on a cylinder, else a cone, by angle around its axis.

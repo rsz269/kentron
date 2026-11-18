@@ -491,7 +491,6 @@ tests/bugs/modalg_7/bug23838
 tests/bugs/modalg_7/bug25023
 tests/bugs/modalg_7/bug25968
 tests/bugs/modalg_7/bug25983_2
-tests/bugs/modalg_7/bug25994
 tests/bugs/modalg_7/bug26563
 tests/bugs/modalg_7/bug26795
 tests/bugs/modalg_7/bug27087
@@ -743,7 +742,6 @@ tests/chamfer/equal_dist_complex/B4
 tests/chamfer/equal_dist_sequence/C1
 tests/cr/bugs/bug33170
 tests/draft/angle/F1
-tests/draft/angle/F6
 tests/draft/angle/F9
 tests/draft/angle/H6
 tests/draft/angle/H7
@@ -851,16 +849,8 @@ tests/lowalgos/extcc/bug29712_34
 tests/lowalgos/extcc/bug29712_35
 tests/lowalgos/extcc/bug29858_03
 tests/lowalgos/extcc/bug29858_04
-tests/lowalgos/intss/buc60623_3
-tests/lowalgos/intss/bug139
 tests/lowalgos/intss/bug20766
-tests/lowalgos/intss/bug21494_1
-tests/lowalgos/intss/bug21494_2
-tests/lowalgos/intss/bug22766
-tests/lowalgos/intss/bug23178
 tests/lowalgos/intss/bug23948_1
-tests/lowalgos/intss/bug24648
-tests/lowalgos/intss/bug24772
 tests/lowalgos/intss/bug25890
 tests/lowalgos/intss/bug26509_1
 tests/lowalgos/intss/bug26509_2
@@ -876,13 +866,7 @@ tests/lowalgos/intss/bug27227
 tests/lowalgos/intss/bug27431
 tests/lowalgos/intss/bug27780
 tests/lowalgos/intss/bug27937_2
-tests/lowalgos/intss/bug28222_1
-tests/lowalgos/intss/bug28222_2
 tests/lowalgos/intss/bug29807_i1001
-tests/lowalgos/intss/bug29807_i1002
-tests/lowalgos/intss/bug29807_i1003
-tests/lowalgos/intss/bug29807_i1004
-tests/lowalgos/intss/bug29807_i1005
 tests/lowalgos/intss/bug29807_i1006
 tests/lowalgos/intss/bug29807_i2001
 tests/lowalgos/intss/bug29807_i2002
@@ -891,10 +875,7 @@ tests/lowalgos/intss/bug29807_i2004
 tests/lowalgos/intss/bug29807_i2005
 tests/lowalgos/intss/bug29807_i2006
 tests/lowalgos/intss/bug29807_i3001
-tests/lowalgos/intss/bug29807_i3002
 tests/lowalgos/intss/bug29807_i3003
-tests/lowalgos/intss/bug29807_i3004
-tests/lowalgos/intss/bug29807_i3005
 tests/lowalgos/intss/bug29807_i4001
 tests/lowalgos/intss/bug29807_i4002
 tests/lowalgos/intss/bug29807_i4003
@@ -906,7 +887,6 @@ tests/lowalgos/intss/bug29972_2
 tests/lowalgos/intss/bug29972_3
 tests/lowalgos/intss/bug30082_1
 tests/lowalgos/intss/bug30082_2
-tests/lowalgos/intss/bug31552
 tests/lowalgos/intss/bug32849
 tests/lowalgos/intss/bug333
 tests/lowalgos/intss/bug565

@@ -8,7 +8,8 @@ puts ""
 
 dsetsignal 1
 
-set GoodNbCurv 4
+# kentron deviation (draw_deviations.json): OCCT's intersection splits its curves where kentron's run on unbroken (at a seam, or a cone's apex, where OCCT's approximation cuts the corner by up to 3e-3); checked against OCCT 8.1's own result (DRAW): the curves' total length agrees (11.18784 kentron, 11.18782 OCCT), 2 kentron curve(s) for OCCT's 4.
+set GoodNbCurv 2
 
 foreach c [directory result*] {
   unset $c

@@ -21,7 +21,8 @@ if { ${Toler} > 0.002} {
    puts "Error: bad tolerance of result"
 }
 
-if {$NbCurv != 2} {
+# kentron deviation (draw_deviations.json): OCCT's intersection splits its curves where kentron's run on unbroken (at a seam, or a cone's apex, where OCCT's approximation cuts the corner by up to 3e-3); checked against OCCT 8.1's own result (DRAW): the curves' total length agrees (9.14007 kentron, 9.13784 OCCT), 1 kentron curve(s) for OCCT's 2.
+if {$NbCurv != 1} {
   puts "Error: Please check NbCurves for intersector"
 }
 
