@@ -1002,7 +1002,6 @@ tests/de/step_1/E7
 tests/de/step_1/F6
 tests/de/step_1/G5
 tests/de/step_1/G8
-tests/de/step_1/G9
 tests/de/step_1/P8
 tests/de/step_1/S3
 tests/de/step_1/T2
@@ -1018,12 +1017,10 @@ tests/de/step_1/V6
 tests/de/step_1/V8
 tests/de/step_1/W1
 tests/de/step_1/W2
-tests/de/step_1/W3
 tests/de/step_1/W5
 tests/de/step_1/W7
 tests/de/step_1/W9
 tests/de/step_1/X1
-tests/de/step_1/X2
 tests/de/step_1/X3
 tests/de/step_1/X4
 tests/de/step_1/X5
@@ -1062,14 +1059,12 @@ tests/de/step_1/ZT1
 tests/de/step_1/ZT5
 tests/de/step_1/ZU2
 tests/de/step_1/ZV1
-tests/de/step_1/ZX5
 tests/de/step_1/ZY4
 tests/de/step_2/C5
 tests/de/step_2/C8
 tests/de/step_2/E6
 tests/de/step_2/Q2
 tests/de/step_2/R7
-tests/de/step_2/S5
 tests/de/step_2/S9
 tests/de/step_2/T9
 tests/de/step_2/U8

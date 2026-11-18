@@ -846,6 +846,7 @@ impl<'a> Reader<'a> {
                 let pcurve = self.coedge_pcurve(&made, surface_id, &surface, 0).map_err(|e| invalid(format!("curve-bounded surface #{id}: {e}")))?;
                 coedges.push((made.id, along, pcurve, made.first, made.last));
             }
+            let mut coedges = split_at_poles(self.model, &mut self.gaps, coedges, &surface)?;
             align_periods(&mut coedges, &surface);
             loops.push((outer, coedges));
         }

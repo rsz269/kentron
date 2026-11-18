@@ -607,9 +607,13 @@ pub(crate) fn loop_area_in_parameters(model: &Model, coedges: &[CoEdgeId], orien
         }
         ends.push((pcurve.point(a), pcurve.point(b)));
     }
-    // (Closing in the parameters: back where it began, not a period away.)
+    // (Closing in the parameters: back where it began, not a period away (or the range of
+    // a parameter closed but not periodic, a closed B-spline surface's).)
     let (start, end) = (ends.first()?.0, ends.last()?.1);
-    for (d, period) in [(end.x - start.x).abs(), (end.y - start.y).abs()].into_iter().zip([surface.u_period(), surface.v_period()]) {
+    let (u0, u1, v0, v1) = surface.bounds();
+    let range = |closed: bool, lo: f64, hi: f64| (closed && lo.is_finite() && hi.is_finite() && hi > lo).then_some(hi - lo);
+    let periods = [surface.u_period().or(range(surface.is_u_closed(), u0, u1)), surface.v_period().or(range(surface.is_v_closed(), v0, v1))];
+    for (d, period) in [(end.x - start.x).abs(), (end.y - start.y).abs()].into_iter().zip(periods) {
         if period.is_some_and(|p| d > 0.5 * p) {
             return None;
         }

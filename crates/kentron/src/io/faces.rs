@@ -253,7 +253,12 @@ fn orientation(loops: &[(bool, Vec<Coedge>)], surface: &Surface, same_sense: boo
             // by a pole, says nothing of its side: the file's word for it then.)
             Some(axis) if paired(loops, surface, axis) => loops.iter().map(|(_, c)| band_area(c, axis)).sum::<f64>() < 0.0,
             Some(_) => !same_sense,
-            None => areas[i] < -1e-9 * scale.max(1e-300),
+            // (A band round a surface closed but not periodic (a closed B-spline's): by its
+            // loops' areas round that range, as a periodic band's.)
+            None => match closed_band(loops, surface) {
+                Some(axis) => loops.iter().map(|(_, c)| band_area(c, axis)).sum::<f64>() < 0.0,
+                None => areas[i] < -1e-9 * scale.max(1e-300),
+            },
         }
     });
     (outer, open, clockwise)
@@ -300,27 +305,25 @@ pub(crate) fn split_at_poles(model: &mut Model, gaps: &mut Gaps, coedges: Vec<Co
     let tolerance = 1e-9 * (1.0 + r + (center - Point::ORIGIN).length());
     let mut out = Vec::with_capacity(coedges.len());
     for c in coedges {
-        let Some((Curve::Circle(circle), _, _)) = model.edge_curve(Shape::from(c.0)) else {
+        let Some((curve, _, _)) = model.edge_curve(Shape::from(c.0)) else {
             out.push(c);
             continue;
         };
-        let curve = Curve::Circle(circle);
         let (lo, hi) = (c.3.min(c.4), c.3.max(c.4));
         // (A great circle: centred on the sphere's, of its radius; the latitude then moves as
-        // the circle's angle does. Where it passes a pole within the edge, or both.)
-        let great = circle.center().distance(center) <= tolerance && (circle.radius() - r).abs() <= tolerance;
-        let mut at: Vec<f64> = if great {
-            poles
-                .iter()
-                .filter_map(|&pole| {
-                    let foot = crate::geometry::extrema::nearest_on_curve(pole, &curve, lo, hi);
-                    let inside = foot.parameter - lo > 1e-9 * (hi - lo) && hi - foot.parameter > 1e-9 * (hi - lo);
-                    (foot.distance <= tolerance && inside).then_some(foot.parameter)
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
+        // the circle's angle does. Another curve (a circle written as a rational B-spline)
+        // split too where it passes a pole, its pieces projected.)
+        let great = matches!(&curve, Curve::Circle(circle) if circle.center().distance(center) <= tolerance && (circle.radius() - r).abs() <= tolerance);
+        // (Within the tolerance a file's B-spline keeps to the sphere.)
+        let near = if great { tolerance } else { 1e-6 * (1.0 + r) };
+        let mut at: Vec<f64> = poles
+            .iter()
+            .filter_map(|&pole| {
+                let foot = crate::geometry::extrema::nearest_on_curve(pole, &curve, lo, hi);
+                let inside = foot.parameter - lo > 1e-9 * (hi - lo) && hi - foot.parameter > 1e-9 * (hi - lo);
+                (foot.distance <= near && inside).then_some(foot.parameter)
+            })
+            .collect();
         at.sort_by(f64::total_cmp);
         // The pieces between, each a meridian's arc: its pcurve the line of its longitude.
         let meridian = |a: f64, b: f64| -> Option<Curve2> {
@@ -332,7 +335,11 @@ pub(crate) fn split_at_poles(model: &mut Model, gaps: &mut Gaps, coedges: Vec<Co
             along.then(|| Curve2::Line(crate::geometry::curve2::Line2::new(Point2::new(u, va - sense * a), crate::math::Direction2::new(0.0, sense))))
         };
         let bounds: Vec<f64> = std::iter::once(lo).chain(at.iter().copied()).chain(std::iter::once(hi)).collect();
-        let pcurves: Option<Vec<Curve2>> = bounds.windows(2).map(|w| meridian(w[0], w[1])).collect();
+        let pcurves: Option<Vec<Curve2>> = if great {
+            bounds.windows(2).map(|w| meridian(w[0], w[1])).collect()
+        } else {
+            bounds.windows(2).map(|w| project(&CurveSpan { curve: &curve, first: w[0], last: w[1] }, surface, false).ok()).collect()
+        };
         let (Some(pcurves), false) = (pcurves, at.is_empty()) else {
             out.push(c);
             continue;
@@ -584,7 +591,23 @@ pub(crate) fn align_periods(coedges: &mut [(EdgeId, bool, Curve2, f64, f64)], su
             .flat_map(|d| [d, -d])
             .collect();
         let gap = |d: crate::math::Vector2| (start + d).distance(previous).min((end + d).distance(next));
-        if let Some(d) = shifts.into_iter().min_by(|a, b| gap(*a).total_cmp(&gap(*b))) {
+        // (First the way that closes the loop (its end where it starts, those after following
+        // it): round a pole the seam's two uses run the latitudes' period one way and the
+        // pole's edge the other; then the way that meets the neighbours better.)
+        let closure = |d: crate::math::Vector2| {
+            use crate::math::Transformable2;
+            let mut trial = coedges.to_vec();
+            trial[i].2 = trial[i].2.transformed(&crate::math::Transform2::translation(d));
+            for k in i + 1..n {
+                follow(&mut trial, k);
+            }
+            ends(&trial[0]).0.distance(ends(&trial[n - 1]).1)
+        };
+        let scored: Vec<(crate::math::Vector2, f64, f64)> = shifts.into_iter().map(|d| (d, closure(d), gap(d))).collect();
+        if let Some(&(d, _, _)) = scored.iter().min_by(|a, b| {
+            let close = |c: f64| (c * 1e6).round();
+            close(a.1).total_cmp(&close(b.1)).then(a.2.total_cmp(&b.2))
+        }) {
             use crate::math::Transformable2;
             coedges[i].2 = coedges[i].2.transformed(&crate::math::Transform2::translation(d));
             // (Those after it following it there.)
@@ -875,10 +898,28 @@ fn round_period(loops: &[(bool, Vec<Coedge>)], surface: &Surface) -> Option<usiz
     (open.len() == 1).then(|| open[0])
 }
 
+/// The period of a parameter, or for one closed but not periodic (a closed B-spline
+/// surface's) its range: what a loop going round the surface that way spans.
+fn closure_period(surface: &Surface, axis: usize) -> Option<f64> {
+    let (u0, u1, v0, v1) = surface.bounds();
+    let (period, closed, lo, hi) = if axis == 0 { (surface.u_period(), surface.is_u_closed(), u0, u1) } else { (surface.v_period(), surface.is_v_closed(), v0, v1) };
+    period.or_else(|| (closed && lo.is_finite() && hi.is_finite() && hi > lo).then_some(hi - lo))
+}
+
+/// The parameter, closed but not periodic, that two of the loops go round opposite ways
+/// (a band), if one is.
+fn closed_band(loops: &[(bool, Vec<Coedge>)], surface: &Surface) -> Option<usize> {
+    (0..2).find(|&axis| {
+        let periodic = if axis == 0 { surface.u_period() } else { surface.v_period() };
+        let Some(range) = closure_period(surface, axis).filter(|_| periodic.is_none()) else { return false };
+        let turns: Vec<f64> = loops.iter().map(|(_, c)| (component(loop_shift(c), axis) / range).round()).filter(|t| *t != 0.0).collect();
+        turns.len() >= 2 && turns.iter().sum::<f64>() == 0.0
+    })
+}
+
 /// True if the loops going round the period along `axis` go round it as often each way.
 fn paired(loops: &[(bool, Vec<Coedge>)], surface: &Surface, axis: usize) -> bool {
-    let period = if axis == 0 { surface.u_period() } else { surface.v_period() };
-    let Some(period) = period else { return false };
+    let Some(period) = closure_period(surface, axis) else { return false };
     let turns: f64 = loops.iter().map(|(_, c)| (component(loop_shift(c), axis) / period).round()).sum();
     turns == 0.0
 }
@@ -910,7 +951,21 @@ fn band_area(coedges: &[Coedge], axis: usize) -> f64 {
 /// the joined loop's index.
 fn add_missing_seam(model: &mut Model, gaps: &mut Gaps, loops: &mut Vec<(bool, Vec<Coedge>)>, surface: &Surface, axis: usize) -> Result<Option<usize>> {
     let Some(period) = (if axis == 0 { surface.u_period() } else { surface.v_period() }) else { return Ok(None) };
-    let open: Vec<usize> = (0..loops.len()).filter(|&i| component(loop_shift(&loops[i].1), axis).abs() > 0.5 * period).collect();
+    let mut open: Vec<usize> = (0..loops.len()).filter(|&i| component(loop_shift(&loops[i].1), axis).abs() > 0.5 * period).collect();
+    // One loop round a sphere's period (a cap with its pole inside): as FixMissingSeam, the
+    // second loop made, a degenerate edge at the pole the loop's way round faces (north for
+    // a loop running u up), running the period back; the two then joined as a band's are.
+    if let ([i], Surface::Sphere(sphere), 0) = (&open[..], surface, axis) {
+        let sign = component(loop_shift(&loops[*i].1), 0).signum();
+        let start = coedge_ends(&loops[*i].1[0]).0;
+        let after = start.x + sign * period;
+        let v = sign * std::f64::consts::FRAC_PI_2;
+        let vertex = model.add_vertex(sphere.point(after, v), crate::tolerance::LINEAR);
+        let edge = model.add_edge(vertex, vertex, crate::tolerance::LINEAR)?;
+        let pcurve = Curve2::BSpline(BSplineCurve2::new(vec![Point2::new(after, v), Point2::new(after - sign * period, v)], vec![0.0, 1.0], vec![2, 2], 1));
+        loops.push((false, vec![(edge, true, pcurve, 0.0, 1.0)]));
+        open.push(loops.len() - 1);
+    }
     let [i, j] = open[..] else { return Ok(None) };
     let (sa, sb) = (loop_shift(&loops[i].1), loop_shift(&loops[j].1));
     if component(sa, axis) * component(sb, axis) >= 0.0 {
