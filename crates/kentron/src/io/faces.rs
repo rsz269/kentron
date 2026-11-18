@@ -436,27 +436,24 @@ pub(crate) fn follows(pcurve: &Curve2, edge: &CurveSpan, surface: &Surface) -> b
 
 
 /// The edge's curve projected onto the surface (`has_pcurve`: the file gives a pcurve to fall
-/// back on).
+/// back on). An edge off the surface is projected all the same, as OCCT's readers do, its
+/// tolerance then covering the gap.
 pub(crate) fn project(edge: &CurveSpan, surface: &Surface, has_pcurve: bool) -> Result<Curve2> {
-    project_within(edge, surface, has_pcurve, 0.0)
-}
-
-/// [`project`], for a file declaring its distances accurate to `accuracy`: an edge off the
-/// surface by no more is on it, however short.
-pub(crate) fn project_within(edge: &CurveSpan, surface: &Surface, has_pcurve: bool, accuracy: f64) -> Result<Curve2> {
     use crate::geometry::project as pr;
     // (An edge running its curve backwards: the pcurve over the range the other way round, at
     // the same parameters.)
     if edge.first > edge.last {
-        return project_within(&CurveSpan { curve: edge.curve, first: edge.last, last: edge.first }, surface, has_pcurve, accuracy);
+        return project(&CurveSpan { curve: edge.curve, first: edge.last, last: edge.first }, surface, has_pcurve);
     }
     if let Some(pc) = pr::analytic_pcurve(edge.curve, surface) {
         return Ok(pc);
     }
-    // An edge well off the surface (bad data) fails at once, before costly fitting. (Each
-    // point's foot from the one before, the whole surface searched only to confirm one off.)
-    // (The first point's foot, from the whole surface, starts the fitting too.)
+    // An edge well off the surface (bad data, which OCCT reads with tolerances to cover the
+    // gap) goes straight to the fit at the gap, before costly fitting. (Each point's foot from
+    // the one before, the whole surface searched only to confirm one off.) (The first point's
+    // foot, from the whole surface, starts the fitting too.)
     let mut first_foot = None;
+    let mut far = false;
     if surface.parameters(edge.curve.point(edge.first)).is_none() {
         use crate::geometry::extrema::{nearest_on_surface, newton_on_surface};
         use crate::geometry::ParametricSurface;
@@ -473,7 +470,8 @@ pub(crate) fn project_within(edge: &CurveSpan, surface: &Surface, has_pcurve: bo
                 first_foot = start;
             }
             if d > 1e-2 {
-                return Err(invalid("an edge that does not project onto its face".into()));
+                far = true;
+                break;
             }
         }
     }
@@ -492,30 +490,22 @@ pub(crate) fn project_within(edge: &CurveSpan, surface: &Surface, has_pcurve: bo
         })
     };
     // Last, for an edge off its face by more than the fits allow (files accurate to a
-    // hundredth or so, which OCCT reads with tolerances to match): fitted at the gap measured,
-    // the edge's tolerance then covering it. (Not for one off by a tenth of its length: no
-    // edge of the face; unless within the accuracy the file declares, as a short edge on a
-    // small fillet's corner may be.)
+    // hundredth or so, or worse, which OCCT reads with tolerances to match): fitted at the
+    // gap measured, the edge's tolerance then covering it.
     let at_gap = || {
         if has_pcurve {
             return None;
         }
         let gap = gap_to(edge, surface, first_foot)?;
-        let length = (0..16)
-            .map(|i| {
-                let t = |k: f64| edge.first + (edge.last - edge.first) * k / 16.0;
-                edge.curve.point(t(i as f64)).distance(edge.curve.point(t(i as f64 + 1.0)))
-            })
-            .sum::<f64>();
-        if gap > 0.1 * length && gap > accuracy {
-            return None;
-        }
         let tolerance = 1.5 * gap + 1e-7;
         pr::pcurve_on_range_from(edge.curve, surface, edge.first, edge.last, &[tolerance], first_foot)
             .or_else(|| pr::polyline_pcurve_on_range(edge.curve, surface, edge.first, edge.last, tolerance))
     };
-    pr::pcurve_on_range_from(edge.curve, surface, edge.first, edge.last, tiers, first_foot)
-        .or_else(|| if freeform || (has_pcurve && off_surface()) { None } else { pr::polyline_pcurve_on_range(edge.curve, surface, edge.first, edge.last, 1e-6) })
+    let fitted = if far { None } else {
+        pr::pcurve_on_range_from(edge.curve, surface, edge.first, edge.last, tiers, first_foot)
+            .or_else(|| if freeform || (has_pcurve && off_surface()) { None } else { pr::polyline_pcurve_on_range(edge.curve, surface, edge.first, edge.last, 1e-6) })
+    };
+    fitted
         .or_else(at_gap)
         .map(Curve2::BSpline)
         .ok_or_else(|| invalid("an edge that does not project onto its face".into()))
@@ -1030,15 +1020,13 @@ mod tests {
     use crate::math::{Direction, Frame};
 
     /// A short edge (0.1 long) off a small torus by 0.011 to 0.013, more than a tenth of its
-    /// length: no edge of the face, unless the file declares its distances accurate only to
-    /// as much (0.02 here, as a file from Onshape does), which covers the gap.
+    /// length: projected all the same (as OCCT does), its tolerance to cover the gap.
     #[test]
-    fn a_short_edge_off_its_face_within_the_accuracy_declared() {
+    fn a_short_edge_well_off_its_face() {
         let torus = Surface::Torus(Torus::new(Frame::new(Point::ORIGIN, Direction::new(0.0, 0.0, 1.0), Direction::new(1.0, 0.0, 0.0)), 0.755, 0.663));
         let line = Curve::Line(Line::new(Point::new(1.429, 0.0, -0.05), Direction::new(0.0, 0.0, 1.0)));
         let edge = CurveSpan { curve: &line, first: 0.0, last: 0.1 };
-        assert!(project(&edge, &torus, false).is_err());
-        let pcurve = project_within(&edge, &torus, false, 0.02).unwrap();
+        let pcurve = project(&edge, &torus, false).unwrap();
         // (Along the tube's meridian at the outer equator: u 0, v about 0, in whichever
         // period, rising across it.)
         let (a, b) = (pcurve.point(0.0), pcurve.point(0.1));

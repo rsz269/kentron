@@ -407,6 +407,42 @@ impl TrimmedSurface {
         Self { basis: Box::new(basis), u1, u2, v1, v2 }
     }
 
+    /// As OCCT's `Geom_RectangularTrimmedSurface::SetTrim` with senses (as STEP's
+    /// `RECTANGULAR_TRIMMED_SURFACE` gives them): in a periodic direction the range brought
+    /// into the basis' first period (`ElCLib::AdjustPeriodic`), the surface reversed there
+    /// unless `sense`; in another, the range ordered, the surface reversed where the order
+    /// and `sense` disagree. `None` for an empty range or one outside the basis' domain.
+    #[doc(alias = "Geom_RectangularTrimmedSurface::SetTrim")]
+    pub fn with_senses(basis: Surface, u1: f64, u2: f64, v1: f64, v2: f64, u_sense: bool, v_sense: bool) -> Option<Self> {
+        use super::ParametricSurface;
+        const P_CONFUSION: f64 = 1e-9;
+        let (bu1, bu2, bv1, bv2) = basis.bounds();
+        let direction = |periodic: bool, t1: f64, t2: f64, first: f64, last: f64, sense: bool| -> Option<(f64, f64, bool)> {
+            if t1 == t2 {
+                return None;
+            }
+            if periodic {
+                let (t1, t2) = super::adaptor::adjust_periodic(first, last, ((t2 - t1).abs() / 2.0).min(P_CONFUSION), t1, t2);
+                return Some((t1, t2, sense));
+            }
+            let (same, t1, t2) = if t1 < t2 { (sense, t1, t2) } else { (!sense, t2, t1) };
+            if first - t1 > P_CONFUSION || t2 - last > P_CONFUSION {
+                return None;
+            }
+            Some((t1, t2, same))
+        };
+        let (u1, u2, u_same) = direction(basis.is_u_periodic(), u1, u2, bu1, bu2, u_sense)?;
+        let (v1, v2, v_same) = direction(basis.is_v_periodic(), v1, v2, bv1, bv2, v_sense)?;
+        let mut trimmed = Self { basis: Box::new(basis), u1, u2, v1, v2 };
+        if !u_same {
+            trimmed.u_reverse();
+        }
+        if !v_same {
+            trimmed.v_reverse();
+        }
+        Some(trimmed)
+    }
+
     /// One direction's range, normalized (reversing the basis if needed).
     fn range(basis: &mut Surface, u: bool, t1: f64, t2: f64, first: f64, last: f64) -> (f64, f64) {
         use super::ParametricSurface;
@@ -566,9 +602,25 @@ impl Torus {
     #[doc(alias = "ElSLib::Parameters")]
     pub fn parameters(&self, p: Point) -> (f64, f64) {
         let (x, y, z) = local_coordinates(&self.frame, p);
-        let radial = x.hypot(y);
-        let u = if radial > 0.0 { angle_in_period(y.atan2(x)) } else { 0.0 };
-        (u, angle_in_period(z.atan2(radial - self.major_radius)))
+        let (major, minor) = (self.major_radius, self.minor_radius);
+        let mut u = y.atan2(x);
+        // On a spindle torus (minor radius larger), the point may lie on the tube of the
+        // opposite longitude: the one whose circle of centres it is nearer the radius from.
+        if major < minor {
+            let (s, c) = u.sin_cos();
+            let off = |sign: f64| {
+                let (dx, dy) = (x - sign * major * c, y - sign * major * s);
+                (dx * dx + dy * dy + z * z - minor * minor).abs()
+            };
+            if off(-1.0) < off(1.0) {
+                u += std::f64::consts::PI;
+            }
+        }
+        let u = angle_in_period(u);
+        let (s, c) = u.sin_cos();
+        let (a, z) = (x * c + y * s - major, z);
+        let v = if (a * a + z * z).sqrt() <= f64::MIN_POSITIVE { 0.0 } else { angle_in_period(z.atan2(a)) };
+        (u, v)
     }
 
 

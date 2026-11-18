@@ -210,7 +210,10 @@ fn surface_distance(surface: &Surface, p: Point) -> Option<f64> {
             let d = p - torus.frame().origin();
             let height = d.dot(Vector::from(torus.frame().z()));
             let radial = (d - Vector::from(torus.frame().z()) * height).length();
-            ((radial - torus.major_radius()).hypot(height) - torus.minor_radius()).abs()
+            let (major, minor) = (torus.major_radius(), torus.minor_radius());
+            let near = ((radial - major).hypot(height) - minor).abs();
+            // (A spindle torus' tubes reach across the axis: the far side's tube too.)
+            if major < minor { near.min(((radial + major).hypot(height) - minor).abs()) } else { near }
         }
         _ => return None,
     })

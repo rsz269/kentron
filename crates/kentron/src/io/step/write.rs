@@ -421,15 +421,14 @@ impl<'a> Writer<'a> {
             out.push((self.add(format!("SHELL_BASED_SURFACE_MODEL('',({list}))")), true));
         }
         if out.is_empty() && model.explore(shape, NodeKind::Face).next().is_some() {
-            // Loose faces: an open shell of them.
+            // Loose faces: each an open shell of its own in a model of its own, as OCCT's
+            // TopoDSToStep_MakeShellBasedSurfaceModel writes a face.
             let faces: Vec<Shape> = model.explore(shape, NodeKind::Face).collect();
-            let mut ids = Vec::new();
             for f in faces {
-                ids.push(self.face(f)?);
+                let face = self.face(f)?;
+                let shell = self.add(format!("OPEN_SHELL('',(#{face}))"));
+                out.push((self.add(format!("SHELL_BASED_SURFACE_MODEL('',(#{shell}))")), true));
             }
-            let list = ids.iter().map(|v| format!("#{v}")).collect::<Vec<_>>().join(",");
-            let shell = self.add(format!("OPEN_SHELL('',({list}))"));
-            out.push((self.add(format!("SHELL_BASED_SURFACE_MODEL('',(#{shell}))")), true));
         }
         if out.is_empty() && model.explore(shape, NodeKind::Edge).next().is_some() {
             // Loose edges: a set of their curves, each trimmed to the edge (at its ends'

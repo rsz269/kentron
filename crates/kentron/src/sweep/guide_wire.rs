@@ -18,7 +18,7 @@
 use std::f64::consts::{FRAC_PI_2, PI};
 
 use crate::error::{Error, Result};
-use crate::geometry::adaptor::{epsilon, in_period, CurveAdaptor, CurveKind, GeomAdaptor};
+use crate::geometry::adaptor::{adjust_periodic, in_period, CurveAdaptor, CurveKind, GeomAdaptor};
 use crate::geometry::curve::Curve;
 use crate::geometry::ext_pc::{ext_pc_other, ExtPCPoint};
 use crate::geometry::{Continuity, ParametricCurve};
@@ -96,27 +96,6 @@ pub(crate) fn compute_acr(wire: &EdgeWire, length: &dyn Fn(&GeomAdaptor) -> f64)
         acr[nb_edges] = 1.0;
     }
     acr
-}
-
-/// `ElCLib::AdjustPeriodic(UFirst, ULast, Preci, U1, U2)`: `u1` into `[first, last)`, `u2`
-/// into `(u1, u1 + period]`.
-fn adjust_periodic(first: f64, last: f64, preci: f64, u1: f64, u2: f64) -> (f64, f64) {
-    if is_infinite(first) || is_infinite(last) {
-        return (first, last);
-    }
-    let period = last - first;
-    if period < epsilon(last) {
-        return (first, last);
-    }
-    let mut u1 = u1 - ((u1 - first) / period).floor() * period;
-    if last - u1 < preci {
-        u1 -= period;
-    }
-    let mut u2 = u2 - ((u2 - u1) / period).floor() * period;
-    if u2 - u1 < preci {
-        u2 += period;
-    }
-    (u1, u2)
 }
 
 /// A new vertex (`BRep_Builder::MakeVertex(V, P, Tol)`).

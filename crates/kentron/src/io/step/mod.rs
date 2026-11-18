@@ -27,7 +27,7 @@ use crate::geometry::ParametricCurve;
 use crate::math::{Axis, Direction, Direction2, Frame, Frame2, Point, Point2, Transform, Vector, Vector2};
 use crate::topology::{EdgeId, Model, NodeKind, Shape, VertexId};
 
-use super::faces::{align_periods, finish_face, fits, follows, project_within, split_at_poles, CurveSpan, Gaps};
+use super::faces::{align_periods, finish_face, fits, follows, project, split_at_poles, CurveSpan, Gaps};
 
 pub mod binstep;
 pub use parse::{parse, Exchange, Instance, Value};
@@ -248,8 +248,6 @@ struct Reader<'a> {
     length: f64,
     /// Radians per angle unit of the file.
     angle: f64,
-    /// The distance accuracy the file declares (its uncertainty), in millimetres; 0 if none.
-    accuracy: f64,
     vertices: HashMap<usize, VertexId>,
     /// Vertices made at the ends of boundary curves (which the file gives no vertices),
     /// shared by position.
@@ -279,7 +277,6 @@ impl<'a> Reader<'a> {
             model,
             length,
             angle,
-            accuracy: accuracy(x),
             vertices: HashMap::default(),
             point_vertices: Vec::new(),
             edges: HashMap::default(),
@@ -588,9 +585,32 @@ impl<'a> Reader<'a> {
         if let Some(p) = inst.record("SPHERICAL_SURFACE") {
             return Ok(Surface::Sphere(Sphere::new(self.frame(Self::reference(&p[1])?)?, self.real(&p[2])? * l)));
         }
-        if let Some(p) = inst.record("TOROIDAL_SURFACE") {
+        // (A degenerate torus, its flag choosing a spindle torus' inner or outer part, read as
+        // the torus, as OCCT does: StepGeom_DegenerateToroidalSurface is a ToroidalSurface.)
+        if let Some(p) = inst.record("TOROIDAL_SURFACE").or(inst.record("DEGENERATE_TOROIDAL_SURFACE")) {
             let frame = self.frame(Self::reference(&p[1])?)?;
             return Ok(Surface::Torus(Torus::new(frame, self.real(&p[2])? * l, self.real(&p[3])? * l)));
+        }
+        if let Some(p) = inst.record("RECTANGULAR_TRIMMED_SURFACE") {
+            // As OCCT's StepToGeom::MakeRectangularTrimmedSurface: the trims in the basis'
+            // parameters, scaled by its kind of parameter (angles, lengths, along a cone's
+            // generatrix).
+            let p = p.to_vec();
+            let basis = self.surface(Self::reference(&p[1])?)?;
+            let a = self.angle;
+            let (u_factor, v_factor) = match &basis {
+                Surface::Sphere(_) | Surface::Torus(_) => (a, a),
+                Surface::Cylinder(_) => (a, l),
+                Surface::Revolution(_) => (a, 1.0),
+                Surface::Cone(c) => (a, l / c.semi_angle().cos()),
+                Surface::Plane(_) => (l, l),
+                _ => (1.0, 1.0),
+            };
+            let (u1, u2, v1, v2) = (self.real(&p[2])? * u_factor, self.real(&p[3])? * u_factor, self.real(&p[4])? * v_factor, self.real(&p[5])? * v_factor);
+            let (u_sense, v_sense) = (p[6].as_bool().unwrap_or(true), p[7].as_bool().unwrap_or(true));
+            return crate::geometry::surface::TrimmedSurface::with_senses(basis, u1, u2, v1, v2, u_sense, v_sense)
+                .map(Surface::Trimmed)
+                .ok_or_else(|| invalid(format!("#{id}: a trim outside its surface")));
         }
         if let Some(p) = inst.record("SURFACE_OF_LINEAR_EXTRUSION") {
             let (curve, _) = self.curve(Self::reference(&p[1])?)?;
@@ -832,11 +852,20 @@ impl<'a> Reader<'a> {
         if let Some(p) = inst.record("TRIMMED_CURVE") {
             // Each trim a parameter value (else a point, found on the curve).
             let trim = |v: &Value| -> Result<f64> {
+                // (A conic's parameter is an angle, in the file's angle unit.)
+                let unit = if matches!(curve, Curve::Circle(_) | Curve::Ellipse(_)) { self.angle } else { scale };
                 for item in self.list(v)? {
                     if let Some(("PARAMETER_VALUE", _)) = self.x.typed(item) {
-                        // (A conic's parameter is an angle, in the file's angle unit.)
-                        let unit = if matches!(curve, Curve::Circle(_) | Curve::Ellipse(_)) { self.angle } else { scale };
                         return Ok(self.real(item)? * unit);
+                    }
+                }
+                // (A bare number, as some files write it: a parameter value too, as OCCT
+                // reads it.)
+                for item in self.list(v)? {
+                    if item.as_reference().is_none() && self.x.typed(item).is_none() {
+                        if let Ok(t) = self.real(item) {
+                            return Ok(t * unit);
+                        }
                     }
                 }
                 for item in self.list(v)? {
@@ -889,7 +918,7 @@ impl<'a> Reader<'a> {
             // Parametrized otherwise but along the edge on a free-form surface (where
             // projecting is costly): kept, the tolerances covering the difference.
             Some(pc) if !matches!(surface, Surface::Plane(_) | Surface::Cylinder(_) | Surface::Cone(_) | Surface::Sphere(_) | Surface::Torus(_)) && follows(&pc, &made.span(), surface) => pc,
-            given => match (project_within(&made.span(), surface, given.is_some(), self.accuracy), given) {
+            given => match (project(&made.span(), surface, given.is_some()), given) {
                 (Ok(pc), _) => pc,
                 (Err(_), Some(pc)) => pc,
                 (Err(e), None) => return Err(e),
@@ -1156,22 +1185,27 @@ impl<'a> Reader<'a> {
     /// of several, the shells of bodies (a surface model's), faces and edges).
     #[allow(clippy::type_complexity)]
     fn attributes(&mut self, bodies: &[(usize, Shape)]) -> Result<(Option<Shape>, Option<[f64; 3]>, Option<f64>, Option<String>, Vec<Subshape>)> {
-        let colors: Vec<Option<[f64; 4]>> = bodies.iter().map(|(item, _)| self.colors.get(item).copied()).collect();
+        // (A body that is a shell, as a surface model of one shell reads: what the file gives
+        // the shell is the body's, as OCCT puts a styled shape's colour on the shape's label.)
+        let shell_of = |body: Shape| self.shell_instances.get(&body.node).copied();
+        let body_color = |item: usize, body: Shape| self.colors.get(&item).or_else(|| shell_of(body).and_then(|i| self.colors.get(&i))).copied();
+        let body_layer = |item: usize, body: Shape| self.layers.get(&item).or_else(|| shell_of(body).and_then(|i| self.layers.get(&i))).cloned();
+        let colors: Vec<Option<[f64; 4]>> = bodies.iter().map(|&(item, body)| body_color(item, body)).collect();
         let shared = match colors.first() {
             Some(&Some(c)) if colors.iter().all(|&k| k == Some(c)) => Some(c),
             _ => None,
         };
         let (color, alpha) = (shared.map(|[r, g, b, _]| [r, g, b]), shared.map(|c| c[3]).filter(|&a| a < 1.0));
         let layer = match bodies {
-            [(item, _)] => self.layers.get(item).cloned(),
+            [(item, body)] => body_layer(*item, *body),
             _ => None,
         };
         let forward = |s: Shape| Shape { orientation: crate::topology::Orientation::Forward, ..s };
         let mut subshapes = Vec::new();
         if bodies.len() > 1 {
             for &(item, body) in bodies {
-                let color = self.colors.get(&item).copied();
-                let layer = self.layers.get(&item).cloned();
+                let color = body_color(item, body);
+                let layer = body_layer(item, body);
                 if color.is_some() || layer.is_some() {
                     subshapes.push(Subshape { shape: forward(body), name: None, color, layer });
                 }
@@ -1268,19 +1302,6 @@ fn units(x: &Exchange) -> (f64, f64) {
     (length, angle)
 }
 
-/// The distance accuracy the file's geometric context declares
-/// (`UNCERTAINTY_MEASURE_WITH_UNIT`, a `DISTANCE_ACCURACY_VALUE`), in millimetres; 0 if none.
-fn accuracy(x: &Exchange) -> f64 {
-    let mut found: f64 = 0.0;
-    for (_, inst) in x.of_type("UNCERTAINTY_MEASURE_WITH_UNIT") {
-        let Some(p) = inst.record("UNCERTAINTY_MEASURE_WITH_UNIT") else { continue };
-        let (Some(value), Some(unit)) = (p.first().and_then(|v| x.real(v)), p.get(1).and_then(Value::as_reference).and_then(|r| x.get(r).ok())) else { continue };
-        if unit.has("LENGTH_UNIT") && value.is_finite() && value > 0.0 {
-            found = found.max(value * unit_factor(x, &unit, true));
-        }
-    }
-    found
-}
 
 /// Millimetres (lengths) or radians (angles) per unit.
 fn unit_factor(x: &Exchange, u: &Instance, is_length: bool) -> f64 {

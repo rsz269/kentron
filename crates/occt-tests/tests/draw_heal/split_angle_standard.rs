@@ -415,15 +415,12 @@ fn f4() -> DrawResult<()> {
 
 /// `tests/heal/split_angle_standard/F5`
 #[test]
-#[should_panic]
-fn f5() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.restore(&[data_file("cts17785-part.rle").as_str(), "a"])?;
-        d.DT_SplitAngle(&["result", "a"])?;
-        d.checkshape(&["result"])?;
-        Ok(())
-    })
+fn f5() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.restore(&[data_file("cts17785-part.rle").as_str(), "a"])?;
+    d.DT_SplitAngle(&["result", "a"])?;
+    d.checkshape(&["result"])?;
+    Ok(())
 }
 
 /// `tests/heal/split_angle_standard/F6`

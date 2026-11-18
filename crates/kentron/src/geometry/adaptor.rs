@@ -87,6 +87,29 @@ pub(crate) fn in_period(u: f64, first: f64, last: f64) -> f64 {
     first.max(u + period * ((first - u) / period).ceil())
 }
 
+/// `ElCLib::AdjustPeriodic(UFirst, ULast, Preci, U1, U2)`: `u1` into `[first, last)`, `u2`
+/// into `(u1, u1 + period]`.
+pub(crate) fn adjust_periodic(first: f64, last: f64, preci: f64, u1: f64, u2: f64) -> (f64, f64) {
+    // (Precision::IsInfinite.)
+    let infinite = |x: f64| x.abs() >= 0.5 * 2e100;
+    if infinite(first) || infinite(last) {
+        return (first, last);
+    }
+    let period = last - first;
+    if period < epsilon(last) {
+        return (first, last);
+    }
+    let mut u1 = u1 - ((u1 - first) / period).floor() * period;
+    if last - u1 < preci {
+        u1 -= period;
+    }
+    let mut u2 = u2 - ((u2 - u1) / period).floor() * period;
+    if u2 - u1 < preci {
+        u2 += period;
+    }
+    (u1, u2)
+}
+
 /// `BSplCLib::Hunt`: 1-based, `0` below the first value and `len + 1` above the last.
 pub(crate) fn hunt(values: &[f64], x: f64) -> usize {
     if values[0] > x {

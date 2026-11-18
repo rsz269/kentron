@@ -52,7 +52,6 @@ tests/blend/tolblend_simple/F7
 tests/blend/tolblend_simple/F8
 tests/boolean/bcommon_2d/N2
 tests/boolean/bcut_complex/E3
-tests/boolean/bcut_complex/F1
 tests/boolean/bcut_complex/F2
 tests/boolean/bcut_complex/F7
 tests/boolean/bcut_complex/O5
@@ -70,7 +69,6 @@ tests/boolean/bopcut_complex/E5
 tests/boolean/bopcut_complex/H8
 tests/boolean/bopcut_complex/I8
 tests/boolean/bopcut_complex/K9
-tests/boolean/bopcut_complex/L6
 tests/boolean/bopfuse_complex/D4
 tests/boolean/bopfuse_complex/D5
 tests/boolean/bopfuse_complex/H1
@@ -812,7 +810,6 @@ tests/heal/same_parameter_locked/A6
 tests/heal/split_angle/D7
 tests/heal/split_angle_advanced/S8
 tests/heal/split_angle_advanced/ZA2
-tests/heal/split_angle_standard/F5
 tests/heal/split_angle_standard/ZR7
 tests/heal/split_angle_standard/ZV7
 tests/heal/split_closed_faces/C9
@@ -913,7 +910,6 @@ tests/lowalgos/intss/bug31552
 tests/lowalgos/intss/bug32849
 tests/lowalgos/intss/bug333
 tests/lowalgos/intss/bug565
-tests/mesh/standard_incmesh/A5
 tests/mesh/standard_incmesh/J8
 tests/mesh/standard_incmesh/L2
 tests/mesh/standard_incmesh/L3
@@ -928,7 +924,6 @@ tests/mesh/standard_incmesh/U8
 tests/mesh/standard_incmesh/U9
 tests/mesh/standard_incmesh/V5
 tests/mesh/standard_incmesh/W7
-tests/mesh/standard_incmesh_parallel/A5
 tests/mesh/standard_incmesh_parallel/J8
 tests/mesh/standard_incmesh_parallel/L2
 tests/mesh/standard_incmesh_parallel/L3
@@ -943,7 +938,6 @@ tests/mesh/standard_incmesh_parallel/U8
 tests/mesh/standard_incmesh_parallel/U9
 tests/mesh/standard_incmesh_parallel/V5
 tests/mesh/standard_incmesh_parallel/W7
-tests/mesh/standard_shading/A5
 tests/mesh/standard_shading/L6
 tests/mesh/standard_shading/M8
 tests/mesh/standard_shading/P2
@@ -1015,11 +1009,9 @@ tests/de/step_1/G4
 tests/de/step_1/G5
 tests/de/step_1/G8
 tests/de/step_1/G9
-tests/de/step_1/K5
 tests/de/step_1/P8
 tests/de/step_1/S3
 tests/de/step_1/T2
-tests/de/step_1/T3
 tests/de/step_1/T5
 tests/de/step_1/U2
 tests/de/step_1/U3
@@ -1090,9 +1082,7 @@ tests/de/step_1/ZL1
 tests/de/step_1/ZM5
 tests/de/step_1/ZN1
 tests/de/step_1/ZN2
-tests/de/step_1/ZN3
 tests/de/step_1/ZO8
-tests/de/step_1/ZP1
 tests/de/step_1/ZP3
 tests/de/step_1/ZP8
 tests/de/step_1/ZP9
@@ -1113,7 +1103,6 @@ tests/de/step_1/ZU8
 tests/de/step_1/ZU9
 tests/de/step_1/ZV1
 tests/de/step_1/ZV4
-tests/de/step_1/ZV5
 tests/de/step_1/ZV6
 tests/de/step_1/ZV8
 tests/de/step_1/ZX5
@@ -1128,7 +1117,6 @@ tests/de/step_2/R7
 tests/de/step_2/S5
 tests/de/step_2/S9
 tests/de/step_2/T9
-tests/de/step_2/U4
 tests/de/step_2/U8
 tests/de/step_2/V2
 tests/de/step_3/D7
