@@ -7,7 +7,6 @@ tests/blend/bfuseblend/A8
 tests/blend/bfuseblend/A9
 tests/blend/bfuseblend/B6
 tests/blend/buildevol/J3
-tests/blend/buildevol/J9
 tests/blend/buildevol/K2
 tests/blend/buildevol/K8
 tests/blend/complex/A1
@@ -220,7 +219,6 @@ tests/bugs/modalg_1/bug10435_1
 tests/bugs/modalg_1/bug10435_2
 tests/bugs/modalg_1/bug108
 tests/bugs/modalg_1/bug12213
-tests/bugs/modalg_1/bug12918
 tests/bugs/modalg_1/bug13211_2
 tests/bugs/modalg_1/bug13211_3
 tests/bugs/modalg_1/bug13211_4
