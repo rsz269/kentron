@@ -2752,5 +2752,40 @@
       "to": "set che [whatis res_2]\nset ind [string first \"3d curve\" $che]\nif {${ind} >= 0} {\n  puts \"Error: a second curve\"",
       "reason": "OCCT's intersection splits its curves where kentron's run on unbroken (at a seam, or a cone's apex, where OCCT's approximation cuts the corner by up to 3e-3); checked against OCCT 8.1's own result (DRAW): the curves' total length agrees (15.44591 kentron, 15.44591 OCCT), 1 kentron curve(s) for OCCT's 2. (OCCT's two meet where the curve touches the second surface's trimming edge v = 0.)"
     }
+  ],
+  "tests/lowalgos/intss/bug27937_2": [
+    {
+      "from": "set GoodNbCurv 4",
+      "to": "set GoodNbCurv 2",
+      "reason": "OCCT's intersection splits its curves where kentron's run on unbroken (at a seam, or a cone's apex, where OCCT's approximation cuts the corner by up to 3e-3); checked against OCCT 8.1's own result (DRAW): the curves' total length agrees (3.13532 kentron, 3.1353 OCCT), 2 kentron curve(s) for OCCT's 4."
+    }
+  ],
+  "tests/lowalgos/intss/bug26576_4": [
+    {
+      "from": "set GoodNbCurv 2",
+      "to": "set GoodNbCurv 1",
+      "reason": "OCCT's intersection splits its curves where kentron's run on unbroken (at a seam, or a cone's apex, where OCCT's approximation cuts the corner by up to 3e-3); checked against OCCT 8.1's own result (DRAW): the curves' total length agrees (1.570796 kentron, 1.570796 OCCT), 1 kentron curve(s) for OCCT's 2."
+    }
+  ],
+  "tests/lowalgos/intss/bug30082_2": [
+    {
+      "from": "set GoodNbCurves 4",
+      "to": "set GoodNbCurves 2",
+      "reason": "OCCT's intersection splits its curves where kentron's run on unbroken (at a seam, or a cone's apex, where OCCT's approximation cuts the corner by up to 3e-3); checked against OCCT 8.1's own result (DRAW): the curves' total length agrees (7.578565 kentron, 7.578540 OCCT), 2 kentron curve(s) for OCCT's 4."
+    }
+  ],
+  "tests/lowalgos/intss/bug29807_i5001": [
+    {
+      "from": "checknbshapes result -edge 2 -vertex 2",
+      "to": "checknbshapes result -edge 4 -vertex 4",
+      "reason": "OCCT's intersection splits its curves otherwise than kentron's: checked against OCCT 8.1's own result (DRAW): the curves' total length agrees (1230.5077 kentron, 1230.508 OCCT), 4 kentron curves for OCCT's 2, built into as many edges: counts kentron's, edge 4 (OCCT 2), vertex 4 (OCCT 2)."
+    }
+  ],
+  "tests/lowalgos/intss/bug333": [
+    {
+      "from": "set GoodNbCurv 14",
+      "to": "set GoodNbCurv 3",
+      "reason": "The intersection crosses itself at four points; OCCT's splits its curves there into 14 pieces, four meeting at each crossing, where kentron's 3 closed loops run through unbroken. Checked against OCCT 8.1's own result (DRAW): the loops pass through OCCT's pieces' ends and the total length agrees (86.1021 kentron, 86.1158 OCCT, its approximations differing near the crossings)."
+    }
   ]
 }

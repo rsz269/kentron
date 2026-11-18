@@ -144,6 +144,7 @@ pub fn dispatch(d: &mut Draw, name: &str, args: &[&str]) -> Option<DrawResult> {
         "checklength" => d.checklength(args),
         "checkmaxtol" => d.checkmaxtol(args),
         "checknbshapes" => d.checknbshapes(args),
+        "checkoverlapedges" => d.checkoverlapedges(args),
         "checkprops" => d.checkprops(args),
         "checkreal" => d.checkreal(args),
         "checksection" => d.checksection(args),

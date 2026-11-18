@@ -4074,6 +4074,66 @@ impl Draw {
             None => chain_curve(&self.model, chain),
         }
     }
+    /// DRAW command `checkoverlapedges`: whether two edges overlap, as OCCT's
+    /// ShapeAnalysis_Edge::CheckOverlapping.
+    ///
+    /// Example: `checkoverlapedges e1 e2 5.0e-5`
+    pub fn checkoverlapedges(&mut self, args: &[&str]) -> DrawResult {
+        // `checkoverlapedges edge1 edge2 [tolerance [domain]]`: the shorter edge's points,
+        // every quarter of its length, all within `tolerance` of the other edge (overlapping
+        // completely); else, with `domain`, those of a stretch that long about where the
+        // edges come nearest.
+        need(args, 2, "checkoverlapedges edge1 edge2 [tolerance [domain]]")?;
+        let (e1, e2) = (self.shape_var(args[0])?, self.shape_var(args[1])?);
+        if e1.kind() != NodeKind::Edge || e2.kind() != NodeKind::Edge {
+            return Err(DrawError::Failed("Invalid type of arguments".into()));
+        }
+        let tolerance = match args.get(2) { Some(t) => self.number(t)?, None => 1e-7 };
+        let domain = match args.get(3) { Some(t) => self.number(t)?, None => 0.0 };
+        let curve = |d: &Self, e: Shape| d.model.edge_curve(e).ok_or_else(|| DrawError::Failed(format!("{} is degenerated", args[0])));
+        let (c1, c2) = (curve(self, e1)?, curve(self, e2)?);
+        use kentron::geometry::measure::{length_between, parameter_at_length};
+        let (l1, l2) = (length_between(&c1.0, c1.1, c1.2), length_between(&c2.0, c2.1, c2.2));
+        // (The shorter edge's points against the longer edge.)
+        let (first, second, first_shape, second_shape) = if l1 >= l2 { (c2, c1, e2, e1) } else { (c1, c2, e1, e2) };
+        let length = l1.min(l2);
+        // IsOverlapPartEdges: the points at every half step from `start` to `end`.
+        let overlap_part = |step: f64, start: f64, end: f64| {
+            let mut s = start;
+            while s <= end {
+                let p = if s <= 1e-7 { first.0.point(first.1) } else { first.0.point(parameter_at_length(&first.0, first.1, s)) };
+                if kentron::geometry::extrema::nearest_on_curve(p, &second.0, second.1, second.2).distance >= tolerance {
+                    return false;
+                }
+                s += step / 2.0;
+            }
+            true
+        };
+        if overlap_part(length / 2.0, 0.0, length) {
+            return Ok("Edges are overlapping completely\n".into());
+        }
+        if domain > 0.0 {
+            let span = domain.min(length);
+            let nearest = kentron::distance::distance(&mut self.model, first_shape, second_shape)?;
+            if nearest.value < tolerance {
+                let at = kentron::geometry::extrema::nearest_on_curve(nearest.on_first, &first.0, first.1, first.2).parameter;
+                let along = length_between(&first.0, first.1, at);
+                let (mut start, mut end) = (along - span / 2.0, along + span / 2.0);
+                if start < 0.0 {
+                    start = 0.0;
+                }
+                if end > length {
+                    end = length;
+                    start = end - span;
+                }
+                if overlap_part((end - start) / 5.0, start, end) {
+                    return Ok(format!("Edges are overlapped\nwith tolerance = {}\non segment length = {domain}\n", format_real(tolerance)));
+                }
+            }
+        }
+        let _ = second_shape;
+        Ok("Edges are not overlapped\n".into())
+    }
     /// DRAW command `invert`: 8 uses in 8 converted scripts.
     ///
     /// Example: `invert b`

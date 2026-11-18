@@ -2228,10 +2228,64 @@ fn sliced(base: &Face, other: &Face, crossings: &[Point]) -> Vec<Section> {
             (at(u0, u1, iu), at(u0, u1, ju), at(v0, v1, iv), at(v0, v1, jv))
         }
     };
+    // (On a base straight along v, a surface of extrusion or a cylinder, v at a point is its
+    // distance along the direction from the base's curve or origin: only the heights the
+    // other face's box spans across that direction can be near it, exactly, however large
+    // the box is the other ways (a thin cylinder crossing a long extrusion, the sampled
+    // window above as wide as the box is long).)
+    let unclipped_v = (v0, v1);
+    let (v0, v1) = {
+        let along = match s {
+            Surface::Extrusion(e) if v_periodic.is_none() => {
+                let b = crate::geometry::bounds::curve(e.basis(), 0.0);
+                Some((Vector::from(e.direction()), (b.min, b.max)))
+            }
+            Surface::Cylinder(c) if v_periodic.is_none() => Some((Vector::from(c.frame().z()), (c.frame().origin(), c.frame().origin()))),
+            _ => None,
+        };
+        let finite = |p: Point| p.x.is_finite() && p.y.is_finite() && p.z.is_finite();
+        match along {
+            // (Not against an unbounded face: its box is too.)
+            Some(_) if !(finite(other.extent.0) && finite(other.extent.1)) => (v0, v1),
+            Some((d, (cmin, cmax))) => {
+                let span = |lo: Point, hi: Point| {
+                    let ts = (0..8).map(|i| {
+                        let corner = Point::new(if i & 1 == 0 { lo.x } else { hi.x }, if i & 2 == 0 { lo.y } else { hi.y }, if i & 4 == 0 { lo.z } else { hi.z });
+                        (corner - Point::ORIGIN).dot(d)
+                    });
+                    ts.fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), t| (a.min(t), b.max(t)))
+                };
+                // (The other face's surface over its ranges, bounded tightly: its boxes are
+                // widened by its grid's spacing, as wide as it is long.)
+                let tight = crate::geometry::bounds::surface_within(q, other.u_range.0, other.u_range.1, other.v_range.0, other.v_range.1, 0.0);
+                let (olo, ohi) = if finite(tight.min) && finite(tight.max) { span(tight.min, tight.max) } else { (f64::NEG_INFINITY, f64::INFINITY) };
+                let (clo, chi) = span(cmin, cmax);
+                let (lo, hi) = (olo - chi, ohi - clo);
+                // (Widened a little, as the window above: sections are traced a way past.)
+                let margin = 0.1 * (hi - lo) + 1e3 * on_tol();
+                let (lo, hi) = (lo - margin, hi + margin);
+                if !(lo.is_finite() && hi.is_finite() && lo < hi) {
+                    (v0, v1)
+                } else if hi <= v0 || lo >= v1 {
+                    return Vec::new();
+                } else {
+                    (v0.max(lo), v1.min(hi))
+                }
+            }
+            None => (v0, v1),
+        }
+    };
     // Traced by marching along the curves, where that is done: seeds sought on the grid's
     // lattice, steps no longer than its cells.
     let marched = || {
-        let spacing = base.samples.get().map_or(0.0, |s| s.1);
+        let mut spacing = base.samples.get().map_or(0.0, |s| s.1);
+        // (Over the heights clipped to above, the spacing of samples there: those over the
+        // whole face, as far apart as it is long, would make the steps as long.)
+        if (v0, v1) != unclipped_v {
+            const N: usize = 16;
+            let at = |i: usize, j: usize| s.point(u0 + (u1 - u0) * i as f64 / N as f64, v0 + (v1 - v0) * j as f64 / N as f64);
+            spacing = (0..N).flat_map(|i| (0..N).map(move |j| (i, j))).map(|(i, j)| at(i, j).distance(at(i + 1, j)).max(at(i, j).distance(at(i, j + 1)))).fold(0.0, f64::max) * N as f64 / 64.0;
+        }
         let range = super::march::Range { u: (u0, u1), v: (v0, v1), u_period: if periodic { base.u_period } else { None }, v_period: v_periodic, u_wrap: base.u_period, v_wrap: base.v_period };
         // (On a surface of extrusion, as many columns along its curve as make the lattice's
         // cells no longer that way than four times across, but as many as a B-spline curve's

@@ -3,7 +3,8 @@ puts "OCC333: Superimposed curves during intersection two surfaces "
 puts "================"
 puts ""
 
-set GoodNbCurv 14
+# kentron deviation (draw_deviations.json): The intersection crosses itself at four points; OCCT's splits its curves there into 14 pieces, four meeting at each crossing, where kentron's 3 closed loops run through unbroken. Checked against OCCT 8.1's own result (DRAW): the loops pass through OCCT's pieces' ends and the total length agrees (86.1021 kentron, 86.1158 OCCT, its approximations differing near the crossings).
+set GoodNbCurv 3
 
 restore [locate_data_file OCC333a.draw] s1 
 restore [locate_data_file OCC333b.draw] s2

@@ -6,7 +6,8 @@ puts ""
 foreach a [directory res*] {unset $a}
 
 set aTol 1.0e-4
-set GoodNbCurves 4
+# kentron deviation (draw_deviations.json): OCCT's intersection splits its curves where kentron's run on unbroken (at a seam, or a cone's apex, where OCCT's approximation cuts the corner by up to 3e-3); checked against OCCT 8.1's own result (DRAW): the curves' total length agrees (7.578565 kentron, 7.578540 OCCT), 2 kentron curve(s) for OCCT's 4.
+set GoodNbCurves 2
 
 cylinder s1 -106.471129473161 -64.3442185874231 -19.25 1 0 0 0 0 -1 0.25
 cylinder s2 -124.971129473161 -67.0942185874231 -20.5 0 0 1 1 0 -0 3
