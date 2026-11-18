@@ -337,6 +337,35 @@ impl<'a> Reader<'a> {
         Ok(Point::new(c[0] * s, c.get(1).copied().unwrap_or(0.0) * s, c.get(2).copied().unwrap_or(0.0) * s))
     }
 
+    /// Whether the geometry of `id` is in 3D: no point it is built on has other than three
+    /// coordinates (OCCT's StepToGeom makes nothing of a 2D point, nor of what is built on
+    /// one).
+    fn three_d(&self, id: usize) -> bool {
+        let mut stack = vec![id];
+        let mut seen: crate::hashing::FastSet<usize> = Default::default();
+        while let Some(i) = stack.pop() {
+            if !seen.insert(i) || seen.len() > 10_000 {
+                continue;
+            }
+            let Ok(inst) = self.get(i) else { continue };
+            if inst.has("CARTESIAN_POINT") {
+                if self.coordinates(i).map_or(true, |c| c.len() != 3) {
+                    return false;
+                }
+                continue;
+            }
+            let mut values: Vec<&Value> = inst.records().flat_map(|(_, v)| v.iter()).collect();
+            while let Some(v) = values.pop() {
+                match v {
+                    Value::Reference(r) => stack.push(*r),
+                    Value::List(_) => values.extend(self.x.list(v).unwrap_or(&[])),
+                    _ => {}
+                }
+            }
+        }
+        true
+    }
+
     fn point2(&self, id: usize) -> Result<Point2> {
         // Parameter space: no unit.
         let c = self.coordinates(id)?;
@@ -993,28 +1022,55 @@ impl<'a> Reader<'a> {
                 c
             }
         } else if let Some(p) = inst.record("GEOMETRIC_SET").or(inst.record("GEOMETRIC_CURVE_SET")) {
-            // Its surfaces as faces (points left out): bounded ones whole, those bounded by
-            // curves on them by those; its trimmed curves as edges.
+            // As OCCT's StepToTopoDS_Builder::Init for a geometric set, element by element:
+            // a composite curve as its segments' edges, another curve as an edge over its
+            // range (an unbounded one left out), a point as a vertex, a curve-bounded surface
+            // as its face, another bounded one as a face over its bounds, any other item as
+            // the shape it reads as.
             let c = self.model.new_empty(NodeKind::Compound);
             let mut any = false;
             for item in self.list(&p[1])?.to_vec() {
                 let item = Self::reference(&item)?;
                 let it = self.get(item)?;
-                let face = if it.has("TRIMMED_CURVE") {
-                    // (A curve trimmed: an edge of it.)
-                    let (curve, scale) = self.curve(item)?;
-                    let (a, b) = self.trim_range(item, &curve, scale)?;
-                    crate::make::edge_from_curve_range(self.model, curve, a, b)?
+                let element = if let Some(cp) = it.record("COMPOSITE_CURVE").map(<[Value]>::to_vec) {
+                    let segments = self.model.new_empty(NodeKind::Compound);
+                    for segment in self.list(&cp[1])?.to_vec() {
+                        let sp = self.get(Self::reference(&segment)?)?.record("COMPOSITE_CURVE_SEGMENT").ok_or_else(|| invalid("a composite curve's segment".into()))?.to_vec();
+                        let made = self.segment_edge(Self::reference(&sp[2])?)?;
+                        self.model.add(segments, Shape::from(made.id))?;
+                    }
+                    Some(segments)
+                } else if (is_curve(&it) || it.has("CARTESIAN_POINT")) && !self.three_d(item) {
+                    None
+                } else if is_curve(&it) {
+                    match self.curve(item).and_then(|(curve, scale)| Ok((self.trim_range(item, &curve, scale)?, curve))) {
+                        // (An unbounded curve (Precision::IsInfinite) left out: OCCT makes an
+                        // infinite edge of it, kentron none.)
+                        Ok(((a, b), _)) if a.abs() >= 1e100 || b.abs() >= 1e100 => None,
+                        Ok(((a, b), curve)) => match crate::make::edge_from_curve_range(self.model, curve, a, b) {
+                            Ok(edge) => {
+                                // (The curve's styles and layers are the edge's.)
+                                self.edge_instances.insert(edge.node, item);
+                                Some(edge)
+                            }
+                            Err(_) => None,
+                        },
+                        Err(_) => None,
+                    }
+                } else if it.has("CARTESIAN_POINT") {
+                    Some(crate::make::vertex(self.model, self.point(item)?))
                 } else if it.has("CURVE_BOUNDED_SURFACE") {
-                    self.curve_bounded_face(item)?
+                    Some(self.curve_bounded_face(item)?)
                 } else if it.has("B_SPLINE_SURFACE") || it.has("B_SPLINE_SURFACE_WITH_KNOTS") || it.has("RECTANGULAR_TRIMMED_SURFACE") || it.has("BEZIER_SURFACE") {
                     let surface = self.surface(item)?;
-                    crate::make::face_on_surface(self.model, surface)?
+                    Some(crate::make::face_on_surface(self.model, surface)?)
                 } else {
-                    continue;
+                    self.body(item)?
                 };
-                self.model.add(c, face)?;
-                any = true;
+                if let Some(element) = element {
+                    self.model.add(c, element)?;
+                    any = true;
+                }
             }
             if !any {
                 return Ok(None);
@@ -1079,7 +1135,11 @@ impl<'a> Reader<'a> {
             let (from, to) = (self.frame(Self::reference(&items[2])?)?, self.frame(Self::reference(&items[3])?)?);
             placement_of.insert(occurrence, Transform::frame_to_frame(&from, &to));
         }
-        let definitions: Vec<usize> = x.of_type("PRODUCT_DEFINITION").map(|(id, _)| id).collect();
+        // (With its subtype AP203 writes, as OCCT's StepBasic_ProductDefinitionWithAssociated-
+        // Documents is a product definition.)
+        let mut definitions: Vec<usize> = x.of_type("PRODUCT_DEFINITION").chain(x.of_type("PRODUCT_DEFINITION_WITH_ASSOCIATED_DOCUMENTS")).map(|(id, _)| id).collect();
+        definitions.sort_unstable();
+        definitions.dedup();
         let roots: Vec<usize> = definitions.iter().copied().filter(|d| !is_child.contains(d)).collect();
         let mut nodes = Vec::new();
         for root in roots {
@@ -1258,6 +1318,11 @@ impl<'a> Reader<'a> {
 
 /// Whether `inst` is a B-spline curve: with knots, or of one of the types leaving them
 /// implicit (uniform, quasi-uniform, Bézier).
+/// Whether an instance is a curve `Reader::curve` reads.
+fn is_curve(inst: &Instance) -> bool {
+    ["LINE", "CIRCLE", "ELLIPSE", "HYPERBOLA", "PARABOLA", "TRIMMED_CURVE", "SURFACE_CURVE", "SEAM_CURVE", "INTERSECTION_CURVE"].iter().any(|t| inst.has(t)) || is_bspline_curve(inst)
+}
+
 fn is_bspline_curve(inst: &Instance) -> bool {
     ["B_SPLINE_CURVE_WITH_KNOTS", "B_SPLINE_CURVE", "UNIFORM_CURVE", "QUASI_UNIFORM_CURVE", "BEZIER_CURVE"].iter().any(|t| inst.has(t))
 }

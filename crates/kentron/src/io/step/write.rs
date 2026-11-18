@@ -420,23 +420,33 @@ impl<'a> Writer<'a> {
             let list = shells.iter().map(|v| format!("#{v}")).collect::<Vec<_>>().join(",");
             out.push((self.add(format!("SHELL_BASED_SURFACE_MODEL('',({list}))")), true));
         }
-        if out.is_empty() && model.explore(shape, NodeKind::Face).next().is_some() {
-            // Loose faces: each an open shell of its own in a model of its own, as OCCT's
-            // TopoDSToStep_MakeShellBasedSurfaceModel writes a face.
-            let faces: Vec<Shape> = model.explore(shape, NodeKind::Face).collect();
+        // Loose faces (outside shells, beside them or not): each an open shell of its own in a
+        // model of its own, as OCCT's TopoDSToStep_MakeShellBasedSurfaceModel writes a face.
+        let in_shells: crate::hashing::FastSet<NodeId> = model.explore(shape, NodeKind::Shell).flat_map(|s| model.explore(s, NodeKind::Face).map(|f| f.node).collect::<Vec<_>>()).collect();
+        let loose_faces: Vec<Shape> = model.explore(shape, NodeKind::Face).filter(|f| !in_shells.contains(&f.node)).collect();
+        if !loose_faces.is_empty() {
+            let faces = loose_faces;
             for f in faces {
                 let face = self.face(f)?;
                 let shell = self.add(format!("OPEN_SHELL('',(#{face}))"));
                 out.push((self.add(format!("SHELL_BASED_SURFACE_MODEL('',(#{shell}))")), true));
             }
         }
-        if out.is_empty() && model.explore(shape, NodeKind::Edge).next().is_some() {
-            // Loose edges: a set of their curves, each trimmed to the edge (at its ends'
-            // points, as well as parameters), named as the edges are (the set as the first).
+        // Loose edges (outside faces, beside them or not): a set of their curves, each trimmed
+        // to the edge (at its ends' points, as well as parameters), named as the edges are
+        // (the set as the first).
+        let mut loose_edges: Vec<Shape> = Vec::new();
+        let in_faces: crate::hashing::FastSet<NodeId> = model.explore(shape, NodeKind::Face).flat_map(|f| model.explore(f, NodeKind::Edge).map(|e| e.node).collect::<Vec<_>>()).collect();
+        for e in model.explore(shape, NodeKind::Edge) {
+            if !in_faces.contains(&e.node) && !loose_edges.iter().any(|l| l.node == e.node) {
+                loose_edges.push(e);
+            }
+        }
+        if !loose_edges.is_empty() {
             let mut ids = Vec::new();
             let mut set_name = String::new();
             let compound = shape.node;
-            for e in model.unique_subshapes(shape, NodeKind::Edge) {
+            for e in loose_edges {
                 let Some((curve, first, last)) = model.edge_curve(Shape { orientation: Orientation::Forward, ..e }) else { continue };
                 let basis = self.curve(&curve, first, last)?;
                 let mark = self.marks.get(&e.node).cloned().unwrap_or_default();
@@ -459,7 +469,16 @@ impl<'a> Writer<'a> {
                 } else {
                     format!("(#{a}),(#{b})")
                 };
-                ids.push(self.add(format!("TRIMMED_CURVE('{name}',#{basis},{trims},.T.,.CARTESIAN.)")));
+                let trimmed = self.add(format!("TRIMMED_CURVE('{name}',#{basis},{trims},.T.,.CARTESIAN.)"));
+                // (The edge's colour and layer on its curve, as on an edge of a face.)
+                if let Some([r, g, b, a]) = mark.color {
+                    let styled = self.style(trimmed, [r, g, b], Some(a));
+                    self.face_styles.push(styled);
+                }
+                if let Some(layer) = &mark.layer {
+                    self.layer(layer, trimmed);
+                }
+                ids.push(trimmed);
             }
             if !ids.is_empty() {
                 let list = ids.iter().map(|v| format!("#{v}")).collect::<Vec<_>>().join(",");
