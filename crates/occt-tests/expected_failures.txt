@@ -1045,7 +1045,6 @@ tests/de/step_1/ZI6
 tests/de/step_1/ZL1
 tests/de/step_1/ZN2
 tests/de/step_1/ZQ2
-tests/de/step_1/ZQ3
 tests/de/step_1/ZS3
 tests/de/step_1/ZS6
 tests/de/step_1/ZS9

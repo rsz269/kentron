@@ -245,6 +245,15 @@ fn document(model: &Model, nodes: &[Node], s: &mut Stats) {
                 levels[1] += 1;
                 named += !child.name.is_empty() as usize;
                 count_props(&child.occurrence_validation);
+                // (A component's own colour, on its label.)
+                if let Some(c) = child.occurrence_color {
+                    coloured += 1;
+                    add_color([c[0], c[1], c[2]]);
+                }
+                if let Some(l) = &child.occurrence_layer {
+                    layered += 1;
+                    add_layer(l);
+                }
             }
         } else {
             // (OCCT labels the parts with colours or layers; a name alone makes none.)

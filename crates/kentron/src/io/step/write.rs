@@ -84,6 +84,8 @@ struct Writer<'a> {
     /// Products written (their definitions and representations), by the definition they
     /// were read from: each written once, however often it occurs.
     products: HashMap<usize, (usize, usize)>,
+    /// Each shape representation written's body items (to style an occurrence of it).
+    bodies_of: HashMap<usize, Vec<usize>>,
     /// Styles of the product being written's faces.
     face_styles: Vec<usize>,
     /// Layers and the items on each, in the order met.
@@ -114,6 +116,7 @@ impl<'a> Writer<'a> {
             marks: HashMap::default(),
             body_marks: HashMap::default(),
             products: HashMap::default(),
+            bodies_of: HashMap::default(),
             face_styles: Vec::new(),
             layers: Vec::new(),
             vertices: HashMap::default(),
@@ -269,6 +272,7 @@ impl<'a> Writer<'a> {
         let list = items.iter().map(|i| format!("#{i}")).collect::<Vec<_>>().join(",");
         let kind = if node.shape.is_some() && !has_shells && node.children.is_empty() { "ADVANCED_BREP_SHAPE_REPRESENTATION" } else { "SHAPE_REPRESENTATION" };
         let representation = self.add(format!("{kind}('',({list}),#{context})"));
+        self.bodies_of.insert(representation, items[1..items.len() - child_axes.len()].to_vec());
         self.add(format!("SHAPE_DEFINITION_REPRESENTATION(#{definition_shape},#{representation})"));
         if !styled.is_empty() {
             let list = styled.iter().map(|i| format!("#{i}")).collect::<Vec<_>>().join(",");
@@ -285,6 +289,23 @@ impl<'a> Writer<'a> {
             let placement = self.add(format!("PRODUCT_DEFINITION_SHAPE('Placement','Placement of an item',#{usage})"));
             self.add(format!("CONTEXT_DEPENDENT_SHAPE_REPRESENTATION(#{relationship},#{placement})"));
             self.validation(&child.occurrence_validation, placement);
+            // The occurrence's own colour: its bodies styled in the context of a shape
+            // representation of the occurrence, as OCCT's STEPCAFControl_Writer writes a
+            // component's colour.
+            if let Some([r, g, b, a]) = child.occurrence_color {
+                let own = self.add(format!("SHAPE_REPRESENTATION('',(#{origin}),#{context})"));
+                self.add(format!("SHAPE_DEFINITION_REPRESENTATION(#{placement},#{own})"));
+                let mut styles = Vec::new();
+                for item in self.bodies_of.get(&child_representation).cloned().unwrap_or_default() {
+                    let usage = self.surface_usage([r, g, b], Some(a));
+                    let by_context = self.add(format!("PRESENTATION_STYLE_BY_CONTEXT((#{usage}),#{own})"));
+                    styles.push(self.add(format!("STYLED_ITEM('overriding color',(#{by_context}),#{item})")));
+                }
+                if !styles.is_empty() {
+                    let list = styles.iter().map(|i| format!("#{i}")).collect::<Vec<_>>().join(",");
+                    self.add(format!("MECHANICAL_DESIGN_GEOMETRIC_PRESENTATION_REPRESENTATION('',({list}),#{context})"));
+                }
+            }
         }
         if let Some(d) = node.definition {
             self.products.insert(d, (definition, representation));
@@ -295,6 +316,13 @@ impl<'a> Writer<'a> {
     /// A colour on an item, with its opacity where it is not opaque (written as the
     /// rendering's transparency).
     fn style(&mut self, item: usize, rgb: [f64; 3], alpha: Option<f64>) -> usize {
+        let usage = self.surface_usage(rgb, alpha);
+        let assignment = self.add(format!("PRESENTATION_STYLE_ASSIGNMENT((#{usage}))"));
+        self.add(format!("STYLED_ITEM('color',(#{assignment}),#{item})"))
+    }
+
+    /// A surface style usage of a colour, with its opacity where it is not opaque.
+    fn surface_usage(&mut self, rgb: [f64; 3], alpha: Option<f64>) -> usize {
         let colour = self.colour(rgb);
         let fill_colour = self.add(format!("FILL_AREA_STYLE_COLOUR('',#{colour})"));
         let fill = self.add(format!("FILL_AREA_STYLE('',(#{fill_colour}))"));
@@ -307,9 +335,7 @@ impl<'a> Writer<'a> {
             }
             None => self.add(format!("SURFACE_SIDE_STYLE('',(#{area}))")),
         };
-        let usage = self.add(format!("SURFACE_STYLE_USAGE(.BOTH.,#{side})"));
-        let assignment = self.add(format!("PRESENTATION_STYLE_ASSIGNMENT((#{usage}))"));
-        self.add(format!("STYLED_ITEM('color',(#{assignment}),#{item})"))
+        self.add(format!("SURFACE_STYLE_USAGE(.BOTH.,#{side})"))
     }
 
     /// A colour: one of the predefined ones by its name where it is exactly that (as OCCT

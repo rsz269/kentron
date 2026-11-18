@@ -61,6 +61,11 @@ pub struct Node {
     pub occurrence_validation: Validation,
     /// The file of the external reference the file gives the product, by name (not read).
     pub external: Option<String>,
+    /// This occurrence's own colour (red, green, blue, opacity), over the product's: a style
+    /// the file gives it in the context of its parent.
+    pub occurrence_color: Option<[f64; 4]>,
+    /// This occurrence's own layer, if the file puts it on one.
+    pub occurrence_layer: Option<String>,
     /// The file's product definition this node is an occurrence of (its entity number): the
     /// same for every occurrence of one product. `None` for shapes read without products, and
     /// for nodes made otherwise than by reading.
@@ -278,6 +283,10 @@ struct Reader<'a> {
     item_instances: HashMap<crate::topology::NodeId, usize>,
     /// External references: product definition -> the referenced file's name.
     externals: HashMap<usize, String>,
+    /// Occurrences' own colours (styles by context, or on an occurrence's mapped item).
+    occurrence_colors: HashMap<usize, [f64; 4]>,
+    /// Occurrences' own layers (those of an occurrence's mapped item).
+    occurrence_layers: HashMap<usize, String>,
     /// Tolerances needed to cover the gaps between the file's curves, pcurves and points.
     gaps: Gaps,
 }
@@ -304,11 +313,25 @@ impl<'a> Reader<'a> {
             shell_instances: HashMap::default(),
             item_instances: HashMap::default(),
             externals: HashMap::default(),
+            occurrence_colors: HashMap::default(),
+            occurrence_layers: HashMap::default(),
             gaps: Gaps::default(),
         };
         reader.colors = colors(x);
         reader.externals = external_references(x);
+        reader.occurrence_colors = occurrence_colors(x);
         reader.layers = layers(x);
+        // (An occurrence shaped by a representation of its own holding the mapped item that
+        // places its product: what the file gives that item is the occurrence's, as OCCT
+        // puts it on the component's label.)
+        for (item, occurrence) in occurrence_items(x) {
+            if let Some(&c) = reader.colors.get(&item) {
+                reader.occurrence_colors.entry(occurrence).or_insert(c);
+            }
+            if let Some(l) = reader.layers.get(&item) {
+                reader.occurrence_layers.entry(occurrence).or_insert_with(|| l.clone());
+            }
+        }
         reader.materials = materials(x);
         reader.validations = validations(x, length);
         Ok(reader)
@@ -1291,6 +1314,8 @@ impl<'a> Reader<'a> {
             let at = placement_of.get(&occurrence).copied().unwrap_or(Transform::IDENTITY);
             let mut kid = self.node(child, child_name, at, reps_of, linked, children, placement_of, depth + 1)?;
             kid.occurrence_validation = self.validations.get(&occurrence).copied().unwrap_or_default();
+            kid.occurrence_color = self.occurrence_colors.get(&occurrence).copied();
+            kid.occurrence_layer = self.occurrence_layers.get(&occurrence).cloned();
             kids.push(kid);
         }
         let validation = self.validations.get(&definition).copied().unwrap_or_default();
@@ -1300,7 +1325,7 @@ impl<'a> Reader<'a> {
         // one only for a compound.)
         let compound = shape.is_none_or(|s| s.kind() == NodeKind::Compound);
         let external = self.externals.get(&definition).filter(|_| compound && reps_of.contains_key(&definition)).cloned();
-        Ok(Node { name, shape, color, alpha, placement, children: kids, subshapes, material, layer, validation, occurrence_validation: Validation::default(), definition: Some(definition), external })
+        Ok(Node { name, shape, color, alpha, placement, children: kids, subshapes, material, layer, validation, occurrence_validation: Validation::default(), definition: Some(definition), external, occurrence_color: None, occurrence_layer: None })
     }
 
     /// The shape of `bodies` (each with the item it is made of: a compound of several) and
@@ -1465,6 +1490,79 @@ fn unit_factor(x: &Exchange, u: &Instance, is_length: bool) -> f64 {
 /// styles and the like give none).
 fn colors(x: &Exchange) -> HashMap<usize, [f64; 4]> {
     let mut out = HashMap::default();
+    // (Over-riding styled items too: the same, with the style they override after. Styles
+    // by context are an occurrence's: `occurrence_colors`.)
+    for (_, inst) in x.of_type("STYLED_ITEM").chain(x.of_type("OVER_RIDING_STYLED_ITEM")) {
+        let Some(p) = inst.record("STYLED_ITEM").or(inst.record("OVER_RIDING_STYLED_ITEM")) else { continue };
+        let Some(item) = p.get(2).and_then(Value::as_reference) else { continue };
+        let assignments: Vec<Value> = x.list(&p[1]).map(<[Value]>::to_vec).unwrap_or_default();
+        let plain: Vec<Value> = assignments.into_iter().filter(|a| a.as_reference().and_then(|r| x.get(r).ok()).is_some_and(|i| i.has("PRESENTATION_STYLE_ASSIGNMENT") && !i.has("PRESENTATION_STYLE_BY_CONTEXT"))).collect();
+        if let Some(c) = style_colour(x, &plain) {
+            out.entry(item).or_insert(c);
+        }
+    }
+    out
+}
+
+/// The mapped items of occurrences' own shape representations: item -> the occurrence (a
+/// next assembly usage) whose product definition shape the representation is the shape of.
+fn occurrence_items(x: &Exchange) -> Vec<(usize, usize)> {
+    let mut out = Vec::new();
+    for (_, inst) in x.of_type("SHAPE_DEFINITION_REPRESENTATION") {
+        let p = inst.params();
+        let (Some(pds), Some(rep)) = (p.first().and_then(Value::as_reference), p.get(1).and_then(Value::as_reference)) else { continue };
+        let Some(definition) = x.get(pds).ok().and_then(|i| i.record("PRODUCT_DEFINITION_SHAPE").and_then(|d| d.get(2).and_then(Value::as_reference))) else { continue };
+        if !x.get(definition).is_ok_and(|d| d.has("NEXT_ASSEMBLY_USAGE_OCCURRENCE")) {
+            continue;
+        }
+        let Some(items) = x.get(rep).ok().and_then(|r| r.records().find_map(|(_, v)| v.get(1).and_then(|l| x.list(l)).map(<[Value]>::to_vec))) else { continue };
+        for item in items.iter().filter_map(Value::as_reference) {
+            if x.get(item).is_ok_and(|i| i.has("MAPPED_ITEM")) {
+                out.push((item, definition));
+            }
+        }
+    }
+    out
+}
+
+/// The colours styles by context give occurrences: the occurrence (a next assembly usage)
+/// whose product definition shape the context's shape representation is the shape of ->
+/// RGB and opacity, as OCCT reads a component's colour.
+fn occurrence_colors(x: &Exchange) -> HashMap<usize, [f64; 4]> {
+    let mut out = HashMap::default();
+    // Shape representation -> the occurrence it is a shape of.
+    let mut occurrence_of: HashMap<usize, usize> = HashMap::default();
+    for (_, inst) in x.of_type("SHAPE_DEFINITION_REPRESENTATION") {
+        let p = inst.params();
+        let (Some(pds), Some(rep)) = (p.first().and_then(Value::as_reference), p.get(1).and_then(Value::as_reference)) else { continue };
+        let Some(definition) = x.get(pds).ok().and_then(|i| i.record("PRODUCT_DEFINITION_SHAPE").and_then(|d| d.get(2).and_then(Value::as_reference))) else { continue };
+        if x.get(definition).is_ok_and(|d| d.has("NEXT_ASSEMBLY_USAGE_OCCURRENCE")) {
+            occurrence_of.insert(rep, definition);
+        }
+    }
+    if occurrence_of.is_empty() {
+        return out;
+    }
+    for (_, inst) in x.of_type("STYLED_ITEM").chain(x.of_type("OVER_RIDING_STYLED_ITEM")) {
+        let Some(p) = inst.record("STYLED_ITEM").or(inst.record("OVER_RIDING_STYLED_ITEM")) else { continue };
+        for a in x.list(&p[1]).unwrap_or(&[]) {
+            let Some(psbc) = a.as_reference().and_then(|r| x.get(r).ok()).and_then(|i| i.record("PRESENTATION_STYLE_BY_CONTEXT").map(<[Value]>::to_vec)) else { continue };
+            let Some(&occurrence) = psbc.get(1).and_then(Value::as_reference).and_then(|c| occurrence_of.get(&c)) else { continue };
+            if let Some(c) = style_colour(x, std::slice::from_ref(a)) {
+                out.entry(occurrence).or_insert(c);
+            }
+        }
+    }
+    out
+}
+
+/// The colour a styled item's presentation style assignments give, as OCCT's
+/// STEPConstruct_Styles::GetColors reads them and STEPCAFControl_Reader applies them: of
+/// each, a surface style usage's fill colour, its rendering's colour (and transparency) over
+/// it, and its boundary's curve colour; a curve style's colour. kentron keeps one colour an
+/// item: the surface's, else the boundary's or curve's (parameter-line styles and the like
+/// give none).
+fn style_colour(x: &Exchange, assignments: &[Value]) -> Option<[f64; 4]> {
     let get = |v: &Value| v.as_reference().and_then(|r| x.get(r).ok());
     let list = |v: &Value| -> Vec<Value> { x.list(v).map(<[Value]>::to_vec).unwrap_or_default() };
     // A colour entity's components.
@@ -1478,52 +1576,45 @@ fn colors(x: &Exchange) -> HashMap<usize, [f64; 4]> {
         }
         None
     };
-    // (Over-riding styled items too: the same, with the style they override after.)
-    for (_, inst) in x.of_type("STYLED_ITEM").chain(x.of_type("OVER_RIDING_STYLED_ITEM")) {
-        let Some(p) = inst.record("STYLED_ITEM").or(inst.record("OVER_RIDING_STYLED_ITEM")) else { continue };
-        let Some(item) = p.get(2).and_then(Value::as_reference) else { continue };
-        let (mut surface, mut boundary, mut curve, mut rendering) = (None, None, None, None);
-        let mut transparency: Option<f64> = None;
-        for psa in list(&p[1]) {
-            let Some(psa) = get(&psa) else { continue };
-            let Some(styles) = psa.record("PRESENTATION_STYLE_ASSIGNMENT").or(psa.record("PRESENTATION_STYLE_BY_CONTEXT")).and_then(|r| r.first().cloned()) else { continue };
-            for select in list(&styles) {
-                let Some(style) = get(&select) else { continue };
-                if let Some(usage) = style.record("SURFACE_STYLE_USAGE") {
-                    let Some(side) = usage.get(1).and_then(get) else { continue };
-                    let Some(elements) = side.record("SURFACE_SIDE_STYLE").and_then(|r| r.get(1).cloned()) else { continue };
-                    for element in list(&elements) {
-                        let Some(e) = get(&element) else { continue };
-                        if let Some(fill) = e.record("SURFACE_STYLE_FILL_AREA") {
-                            // FILL_AREA_STYLE(name, (FILL_AREA_STYLE_COLOUR(name, colour), ...))
-                            let fas = fill.first().and_then(get);
-                            let found = fas.and_then(|f| f.record("FILL_AREA_STYLE").and_then(|r| r.get(1).cloned())).map(|fs| {
-                                list(&fs).iter().filter_map(get).find_map(|c| c.record("FILL_AREA_STYLE_COLOUR").and_then(|r| r.get(1).and_then(colour)))
-                            });
-                            surface = surface.or(found.flatten());
-                        } else if let Some(b) = e.record("SURFACE_STYLE_BOUNDARY") {
-                            boundary = boundary.or(b.first().and_then(get).and_then(|cs| cs.record("CURVE_STYLE").and_then(|r| r.get(3).and_then(colour))));
-                        } else if let Some(r) = e.record("SURFACE_STYLE_RENDERING_WITH_PROPERTIES").or(e.record("SURFACE_STYLE_RENDERING")) {
-                            rendering = rendering.or(r.get(1).and_then(colour));
-                            if let Some(props) = r.get(2) {
-                                for prop in list(props) {
-                                    if let Some(t) = get(&prop).and_then(|t| t.record("SURFACE_STYLE_TRANSPARENT").and_then(|v| v.first().and_then(|v| x.real(v)))) {
-                                        transparency = transparency.or(Some(t));
-                                    }
+    let (mut surface, mut boundary, mut curve, mut rendering) = (None, None, None, None);
+    let mut transparency: Option<f64> = None;
+    for psa in assignments {
+        let Some(psa) = get(psa) else { continue };
+        let Some(styles) = psa.record("PRESENTATION_STYLE_ASSIGNMENT").or(psa.record("PRESENTATION_STYLE_BY_CONTEXT")).and_then(|r| r.first().cloned()) else { continue };
+        for select in list(&styles) {
+            let Some(style) = get(&select) else { continue };
+            if let Some(usage) = style.record("SURFACE_STYLE_USAGE") {
+                let Some(side) = usage.get(1).and_then(get) else { continue };
+                let Some(elements) = side.record("SURFACE_SIDE_STYLE").and_then(|r| r.get(1).cloned()) else { continue };
+                for element in list(&elements) {
+                    let Some(e) = get(&element) else { continue };
+                    if let Some(fill) = e.record("SURFACE_STYLE_FILL_AREA") {
+                        // FILL_AREA_STYLE(name, (FILL_AREA_STYLE_COLOUR(name, colour), ...))
+                        let fas = fill.first().and_then(get);
+                        let found = fas.and_then(|f| f.record("FILL_AREA_STYLE").and_then(|r| r.get(1).cloned())).map(|fs| {
+                            list(&fs).iter().filter_map(get).find_map(|c| c.record("FILL_AREA_STYLE_COLOUR").and_then(|r| r.get(1).and_then(colour)))
+                        });
+                        surface = surface.or(found.flatten());
+                    } else if let Some(b) = e.record("SURFACE_STYLE_BOUNDARY") {
+                        boundary = boundary.or(b.first().and_then(get).and_then(|cs| cs.record("CURVE_STYLE").and_then(|r| r.get(3).and_then(colour))));
+                    } else if let Some(r) = e.record("SURFACE_STYLE_RENDERING_WITH_PROPERTIES").or(e.record("SURFACE_STYLE_RENDERING")) {
+                        rendering = rendering.or(r.get(1).and_then(colour));
+                        if let Some(props) = r.get(2) {
+                            for prop in list(props) {
+                                if let Some(t) = get(&prop).and_then(|t| t.record("SURFACE_STYLE_TRANSPARENT").and_then(|v| v.first().and_then(|v| x.real(v)))) {
+                                    transparency = transparency.or(Some(t));
                                 }
                             }
                         }
                     }
-                } else if let Some(cs) = style.record("CURVE_STYLE") {
-                    curve = curve.or(cs.get(3).and_then(colour));
                 }
+            } else if let Some(cs) = style.record("CURVE_STYLE") {
+                curve = curve.or(cs.get(3).and_then(colour));
             }
         }
-        if let Some([r, g, b]) = rendering.or(surface).or(boundary).or(curve) {
-            out.entry(item).or_insert([r, g, b, 1.0 - transparency.unwrap_or(0.0).clamp(0.0, 1.0)]);
-        }
     }
-    out
+    let [r, g, b] = rendering.or(surface).or(boundary).or(curve)?;
+    Some([r, g, b, 1.0 - transparency.unwrap_or(0.0).clamp(0.0, 1.0)])
 }
 
 /// The external references of product definitions: definition -> the referenced file's name,
