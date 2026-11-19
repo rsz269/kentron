@@ -987,13 +987,10 @@ tests/de/step_1/U3
 tests/de/step_1/U7
 tests/de/step_1/V3
 tests/de/step_1/V4
-tests/de/step_1/V6
 tests/de/step_1/V8
-tests/de/step_1/W1
 tests/de/step_1/W2
 tests/de/step_1/W5
 tests/de/step_1/W7
-tests/de/step_1/W9
 tests/de/step_1/X1
 tests/de/step_1/X3
 tests/de/step_1/X4
@@ -1001,7 +998,6 @@ tests/de/step_1/X5
 tests/de/step_1/X6
 tests/de/step_1/X8
 tests/de/step_1/X9
-tests/de/step_1/Y1
 tests/de/step_1/Y5
 tests/de/step_1/Y9
 tests/de/step_1/Z4

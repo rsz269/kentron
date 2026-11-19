@@ -261,6 +261,8 @@ struct Reader<'a> {
     length: f64,
     /// Radians per angle unit of the file.
     angle: f64,
+    /// The file's distance uncertainty, in millimetres (OCCT's reading precision).
+    precision: f64,
     vertices: HashMap<usize, VertexId>,
     /// Vertices made at the ends of boundary curves (which the file gives no vertices),
     /// shared by position.
@@ -299,6 +301,7 @@ impl<'a> Reader<'a> {
             model,
             length,
             angle,
+            precision: uncertainty(x),
             vertices: HashMap::default(),
             point_vertices: Vec::new(),
             edges: HashMap::default(),
@@ -851,7 +854,7 @@ impl<'a> Reader<'a> {
                     c.1 = !c.1;
                 }
             }
-            let mut coedges = split_at_poles(self.model, &mut self.gaps, coedges, &surface)?;
+            let mut coedges = split_at_poles(self.model, &mut self.gaps, coedges, &surface, self.precision)?;
             align_periods(&mut coedges, &surface);
             loops.push((outer, coedges));
         }
@@ -890,7 +893,7 @@ impl<'a> Reader<'a> {
                 let pcurve = self.coedge_pcurve(&made, surface_id, &surface, 0).map_err(|e| invalid(format!("curve-bounded surface #{id}: {e}")))?;
                 coedges.push((made.id, along, pcurve, made.first, made.last));
             }
-            let mut coedges = split_at_poles(self.model, &mut self.gaps, coedges, &surface)?;
+            let mut coedges = split_at_poles(self.model, &mut self.gaps, coedges, &surface, self.precision)?;
             align_periods(&mut coedges, &surface);
             loops.push((outer, coedges));
         }
@@ -1002,7 +1005,7 @@ impl<'a> Reader<'a> {
             // Parametrized otherwise but along the edge on a free-form surface (where
             // projecting is costly): kept, the tolerances covering the difference.
             Some(pc) if !matches!(surface, Surface::Plane(_) | Surface::Cylinder(_) | Surface::Cone(_) | Surface::Sphere(_) | Surface::Torus(_)) && follows(&pc, &made.span(), surface) => pc,
-            given => match (project(&made.span(), surface, given.is_some()), given) {
+            given => match (project(&made.span(), surface, given.is_some(), self.precision), given) {
                 (Ok(pc), _) => pc,
                 (Err(_), Some(pc)) => pc,
                 (Err(e), None) => return Err(e),
@@ -1456,6 +1459,25 @@ fn units(x: &Exchange) -> (f64, f64) {
     (length, angle)
 }
 
+
+/// The file's distance uncertainty in millimetres, OCCT's reading precision
+/// (`STEPControl_ActorRead::PrepareUnits`, `read.precision.mode` "File"): the global
+/// uncertainty's length measure, else `read.precision.val` (1e-4).
+fn uncertainty(x: &Exchange) -> f64 {
+    for (_, inst) in x.of_type("GLOBAL_UNCERTAINTY_ASSIGNED_CONTEXT") {
+        let Some(list) = inst.record("GLOBAL_UNCERTAINTY_ASSIGNED_CONTEXT").and_then(|p| x.list(&p[0])) else { continue };
+        for u in list.iter().filter_map(Value::as_reference) {
+            let Ok(m) = x.get(u) else { continue };
+            let Some(mw) = m.record("UNCERTAINTY_MEASURE_WITH_UNIT") else { continue };
+            let Some(value) = x.real(&mw[0]) else { continue };
+            let factor = mw[1].as_reference().and_then(|r| x.get(r).ok()).map_or(1.0, |unit| unit_factor(x, &unit, true));
+            if value > 0.0 {
+                return value * factor;
+            }
+        }
+    }
+    1e-4
+}
 
 /// Millimetres (lengths) or radians (angles) per unit.
 fn unit_factor(x: &Exchange, u: &Instance, is_length: bool) -> f64 {

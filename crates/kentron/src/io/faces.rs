@@ -297,7 +297,7 @@ fn agreement(model: &Model, gaps: &Gaps, loops: &[(bool, Vec<Coedge>)], surface:
 /// pole, its longitude jumping there. Each half is a meridian's arc, its pcurve a line of
 /// fixed longitude; [`close_at_poles`] then joins the halves round the pole. Files leave
 /// such edges whole (a corner of rounds meeting at a sphere's pole).
-pub(crate) fn split_at_poles(model: &mut Model, gaps: &mut Gaps, coedges: Vec<Coedge>, surface: &Surface) -> Result<Vec<Coedge>> {
+pub(crate) fn split_at_poles(model: &mut Model, gaps: &mut Gaps, coedges: Vec<Coedge>, surface: &Surface, precision: f64) -> Result<Vec<Coedge>> {
     let Surface::Sphere(sphere) = surface else { return Ok(coedges) };
     let (center, r) = (sphere.frame().origin(), sphere.radius());
     let z = crate::math::Vector::from(sphere.frame().z());
@@ -338,7 +338,7 @@ pub(crate) fn split_at_poles(model: &mut Model, gaps: &mut Gaps, coedges: Vec<Co
         let pcurves: Option<Vec<Curve2>> = if great {
             bounds.windows(2).map(|w| meridian(w[0], w[1])).collect()
         } else {
-            bounds.windows(2).map(|w| project(&CurveSpan { curve: &curve, first: w[0], last: w[1] }, surface, false).ok()).collect()
+            bounds.windows(2).map(|w| project(&CurveSpan { curve: &curve, first: w[0], last: w[1] }, surface, false, precision).ok()).collect()
         };
         let (Some(pcurves), false) = (pcurves, at.is_empty()) else {
             out.push(c);
@@ -451,14 +451,36 @@ pub(crate) fn follows(pcurve: &Curve2, edge: &CurveSpan, surface: &Surface) -> b
 
 
 /// The edge's curve projected onto the surface (`has_pcurve`: the file gives a pcurve to fall
-/// back on). An edge off the surface is projected all the same, as OCCT's readers do, its
-/// tolerance then covering the gap.
-pub(crate) fn project(edge: &CurveSpan, surface: &Surface, has_pcurve: bool) -> Result<Curve2> {
-    use crate::geometry::project as pr;
+/// back on), `precision` the file's (OCCT's reading precision). An edge off the surface is
+/// projected all the same, as OCCT's readers do, its tolerance then covering the gap.
+///
+/// Off planes, as OCCT's readers add pcurves (`ShapeFix_Edge::FixAddPCurve`): by its
+/// `ShapeConstruct_ProjectCurveOnSurface`, ported, the edge's vertices' tolerances the
+/// precision; then remade where it strays from the curve at the same parameters
+/// ([`same_parameter`](crate::geometry::same_parameter::same_parameter)).
+pub(crate) fn project(edge: &CurveSpan, surface: &Surface, has_pcurve: bool, precision: f64) -> Result<Curve2> {
     // (An edge running its curve backwards: the pcurve over the range the other way round, at
     // the same parameters.)
     if edge.first > edge.last {
-        return project(&CurveSpan { curve: edge.curve, first: edge.last, last: edge.first }, surface, has_pcurve);
+        return project(&CurveSpan { curve: edge.curve, first: edge.last, last: edge.first }, surface, has_pcurve, precision);
+    }
+    if !matches!(surface, Surface::Plane(_)) {
+        let mut projector = crate::geometry::pcurve_projection::PCurveProjector::new(surface, precision);
+        let pcurve = projector.perform(edge.curve, edge.first, edge.last, precision, precision).ok_or_else(|| invalid("an edge that does not project onto its face".into()))?;
+        // (Then made to follow the curve parameter for parameter, where OCCT's readers run
+        // `ShapeFix_Edge::FixSameParameter`: kentron's own way.)
+        return Ok(crate::geometry::same_parameter::same_parameter(edge.curve, edge.first, edge.last, surface, &pcurve, crate::tolerance::LINEAR).0);
+    }
+    project_fitted(edge, surface, has_pcurve)
+}
+
+/// The edge's curve projected onto the surface by kentron's own fitting: in closed form
+/// where it can be, else fitted to the projected points within tolerances tried in turn
+/// (`has_pcurve`: the file gives a pcurve to fall back on).
+pub(crate) fn project_fitted(edge: &CurveSpan, surface: &Surface, has_pcurve: bool) -> Result<Curve2> {
+    use crate::geometry::project as pr;
+    if edge.first > edge.last {
+        return project_fitted(&CurveSpan { curve: edge.curve, first: edge.last, last: edge.first }, surface, has_pcurve);
     }
     // (On a sphere, a meridian's arc on the half of its great circle its range lies on.)
     if let Some(pc) = pr::analytic_pcurve_on_range(edge.curve, surface, edge.first, edge.last).or_else(|| pr::analytic_pcurve(edge.curve, surface)) {
@@ -1103,7 +1125,7 @@ mod tests {
         let torus = Surface::Torus(Torus::new(Frame::new(Point::ORIGIN, Direction::new(0.0, 0.0, 1.0), Direction::new(1.0, 0.0, 0.0)), 0.755, 0.663));
         let line = Curve::Line(Line::new(Point::new(1.429, 0.0, -0.05), Direction::new(0.0, 0.0, 1.0)));
         let edge = CurveSpan { curve: &line, first: 0.0, last: 0.1 };
-        let pcurve = project(&edge, &torus, false).unwrap();
+        let pcurve = project(&edge, &torus, false, 1e-4).unwrap();
         // (Along the tube's meridian at the outer equator: u 0, v about 0, in whichever
         // period, rising across it.)
         let (a, b) = (pcurve.point(0.0), pcurve.point(0.1));

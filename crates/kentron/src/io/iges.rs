@@ -727,7 +727,7 @@ impl Reader<'_> {
                 return Ok(pc.clone());
             }
         }
-        if let Ok(pc) = project(&span, surface, given.is_some()) {
+        if let Ok(pc) = project(&span, surface, given.is_some(), self.file.resolution * self.file.millimetres) {
             return Ok(pc);
         }
         if let Some(pc) = given {

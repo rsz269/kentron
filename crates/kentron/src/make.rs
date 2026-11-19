@@ -101,7 +101,7 @@ pub fn edge_on_face(model: &mut Model, face: Shape, profile: Shape) -> Result<Sh
 /// placed across seams and poles, the outer boundary run counter-clockwise.
 #[doc(alias = "BRepBuilderAPI_MakeFace")]
 pub fn face_bounded_on(model: &mut Model, surface: Surface, wires: &[Shape]) -> Result<Shape> {
-    use crate::io::faces::{align_periods, finish_face, project, CurveSpan, Gaps};
+    use crate::io::faces::{align_periods, finish_face, project_fitted, CurveSpan, Gaps};
     let face = model.new_empty(NodeKind::Face);
     model.set_face_surface(face, surface.clone(), tolerance::LINEAR)?;
     let mut loops = Vec::with_capacity(wires.len());
@@ -116,7 +116,7 @@ pub fn face_bounded_on(model: &mut Model, surface: Surface, wires: &[Shape]) -> 
             let forward = model[id].orientation.compose(c.orientation).compose(w.orientation) == Orientation::Forward;
             let edge = model[id].edge;
             let (curve, first, last) = model.edge_curve(Shape { placement: w.placement, ..Shape::from(edge) }).ok_or_else(|| Error::InvalidInput("an edge without a curve".into()))?;
-            let pcurve = project(&CurveSpan { curve: &curve, first, last }, &surface, false)?;
+            let pcurve = project_fitted(&CurveSpan { curve: &curve, first, last }, &surface, false)?;
             coedges.push((edge, forward, pcurve, first, last));
         }
         align_periods(&mut coedges, &surface);
