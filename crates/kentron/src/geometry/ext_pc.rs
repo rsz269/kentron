@@ -92,7 +92,7 @@ const MAX_ORDER: u32 = 3;
 /// reads it.
 #[doc(alias = "Extrema_GFuncExtPC")]
 #[doc(alias = "Extrema_PCFOfEPCOfExtPC")]
-struct DistanceFunction<'a> {
+pub(super) struct DistanceFunction<'a> {
     /// `myC`.
     curve: &'a dyn CurveAdaptor,
     /// `myP`.
@@ -104,7 +104,7 @@ struct DistanceFunction<'a> {
     /// `myD1f`.
     d1f: f64,
     /// `mySqDist`, `myIsMin`, `myPoint`.
-    extrema: Vec<ExtPCPoint>,
+    pub(super) extrema: Vec<ExtPCPoint>,
     /// `myTol`.
     tol: f64,
     /// `myMaxDerivOrder`.
@@ -117,8 +117,8 @@ struct DistanceFunction<'a> {
 
 impl<'a> DistanceFunction<'a> {
     /// The default constructor followed by `Initialize(C)` for a curve of type
-    /// `GeomAbs_OtherCurve`.
-    fn new(curve: &'a dyn CurveAdaptor) -> Self {
+    /// `GeomAbs_OtherCurve` (the same for Bézier, B-spline and offset curves).
+    pub(super) fn new(curve: &'a dyn CurveAdaptor) -> Self {
         let mut function = DistanceFunction {
             curve,
             point: Point::ORIGIN,
@@ -139,7 +139,7 @@ impl<'a> DistanceFunction<'a> {
     }
 
     /// `SetPoint`.
-    fn set_point(&mut self, point: Point) {
+    pub(super) fn set_point(&mut self, point: Point) {
         self.point = point;
         self.extrema.clear();
     }
