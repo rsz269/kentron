@@ -759,7 +759,6 @@ tests/feat/featprism/K9
 tests/feat/featprism/L6
 tests/feat/featprism/M1
 tests/feat/featprism/M2
-tests/feat/featprism/M9
 tests/feat/featprism/N6
 tests/feat/featprism/O1
 tests/feat/featprism/O5

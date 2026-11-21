@@ -1117,29 +1117,13 @@ fn revolution_tool(model: &mut Model, _base: Shape, profile: Shape, center: Poin
     Ok(tool)
 }
 
-/// Whether `p` (on or near `face`'s surface) is inside the face: its parameters within the
-/// face's loops (an even-odd count of crossings of their sampled pcurves).
+/// Whether `p` (on or near `face`'s surface) is inside the face.
 fn inside_face(model: &Model, face: Shape, surface: &Surface, p: Point) -> bool {
-    use crate::geometry::ParametricCurve as _;
+    // (On the surface first, then classified against the face's bounds, as OCCT's
+    // BRepClass_FaceClassifier does: also where the face's parameters are singular, at a pole.)
     let (u, v, _) = crate::geometry::extrema::nearest_on_surface(p, surface, None);
-    let mut crossings = 0usize;
-    for coedge in model.unique_subshapes(face, NodeKind::CoEdge) {
-        let Ok(id) = crate::topology::CoEdgeId::try_from(coedge.node) else { continue };
-        let Some((pcurve, first, last)) = model.effective_pcurve(id) else { continue };
-        const N: usize = 64;
-        let points: Vec<crate::math::Point2> = (0..=N).map(|i| pcurve.point(first + (last - first) * i as f64 / N as f64)).collect();
-        for w in points.windows(2) {
-            let (a, b) = (w[0], w[1]);
-            // A ray from (u, v) along +u.
-            if (a.y > v) != (b.y > v) {
-                let x = a.x + (v - a.y) / (b.y - a.y) * (b.x - a.x);
-                if x > u {
-                    crossings += 1;
-                }
-            }
-        }
-    }
-    crossings % 2 == 1
+    let on = surface.point(u, v);
+    crate::boolean::PointClassifier::new(model, face).is_ok_and(|c| c.locate(on) == crate::boolean::PointLocation::Boundary)
 }
 
 #[cfg(test)]
@@ -1163,6 +1147,35 @@ mod tests {
             .build(model)
             .map(|b| face_at_z(model, b, z))
             .unwrap()
+    }
+
+    /// A post on the floor of a closed dome's cavity, up to the dome's inside (a hemisphere,
+    /// which the post's centre line meets at its pole): the post's side up to the sphere and
+    /// its top the sphere's cap (brep-bench's feature/post-up-to-dome).
+    #[test]
+    fn a_post_up_to_a_dome_through_its_pole() {
+        use crate::math::Frame;
+        use crate::primitives::{Cylinder, Sphere};
+        use std::f64::consts::{FRAC_PI_2, PI};
+        let mut model = Model::new();
+        let plate = Cylinder::new(20.0, 2.0).with_frame(Frame::new(Point::new(0.0, 0.0, -2.0), Direction::new(0.0, 0.0, 1.0), Direction::new(1.0, 0.0, 0.0))).build(&mut model).unwrap();
+        let outer = Sphere::new(20.0).with_latitudes(0.0, FRAC_PI_2).build(&mut model).unwrap();
+        let inner = Sphere::new(18.0).with_latitudes(0.0, FRAC_PI_2).build(&mut model).unwrap();
+        let shell = crate::boolean::difference(&mut model, outer, inner).unwrap();
+        let dome = crate::boolean::union(&mut model, plate, shell).unwrap();
+        let inside = model
+            .unique_subshapes(dome, NodeKind::Face)
+            .into_iter()
+            .find(|&f| matches!(model.surface(f), Some(Surface::Sphere(s)) if (s.radius() - 18.0).abs() < 1e-9))
+            .unwrap();
+        let circle = Curve::Circle(crate::geometry::curve::Circle::new(Frame::WORLD, 3.0));
+        let edge = crate::make::edge_from_curve(&mut model, circle).unwrap();
+        let disc = crate::make::wire(&mut model, &[edge]).unwrap();
+        let made = feature(&mut model, dome, disc, FeatureSweep::Prism(Direction::new(0.0, 0.0, 1.0)), FeatureMode::Add, FeatureExtent::Until(inside)).unwrap();
+        let q = 315f64.sqrt();
+        let expected = PI * 400.0 * 2.0 + 2.0 / 3.0 * PI * (8000.0 - 5832.0) + 2.0 / 3.0 * PI * (5832.0 - q * q * q);
+        let v = volume(&model, made).mass;
+        assert!((v - expected).abs() <= 1e-6 * expected, "volume {v}, expected {expected}");
     }
 
     #[test]
