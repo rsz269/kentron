@@ -501,9 +501,9 @@ impl<'a> Writer<'a> {
                 // (Parameters too where the curve is written on its own (not interpolated
                 // anew, over a range of its own).)
                 let own = match &curve {
-                    Curve::Trimmed(t) => !matches!(t.basis(), Curve::BSpline(b) if b.is_periodic()) && matches!(t.basis(), Curve::Line(_) | Curve::Circle(_) | Curve::Ellipse(_) | Curve::BSpline(_)),
+                    Curve::Trimmed(t) => !matches!(t.basis(), Curve::BSpline(b) if b.is_periodic() && !within_period(b, first, last)) && matches!(t.basis(), Curve::Line(_) | Curve::Circle(_) | Curve::Ellipse(_) | Curve::BSpline(_)),
                     Curve::Line(_) | Curve::Circle(_) | Curve::Ellipse(_) => true,
-                    Curve::BSpline(b) => !b.is_periodic(),
+                    Curve::BSpline(b) => !b.is_periodic() || within_period(b, first, last),
                     _ => false,
                 };
                 let trims = if own {
@@ -582,7 +582,10 @@ impl<'a> Writer<'a> {
             let list = oriented.iter().map(|v| format!("#{v}")).collect::<Vec<_>>().join(",");
             let lp = self.add(format!("EDGE_LOOP('',({list}))"));
             let kind = if i == 0 { "FACE_OUTER_BOUND" } else { "FACE_BOUND" };
-            bounds.push(self.add(format!("{kind}('',#{lp},.T.)")));
+            // (The loop runs anticlockwise about the surface's normal as the model has it; ISO
+            // 10303-42 has loops anticlockwise about the face's normal, so on a face used
+            // reversed the bound is taken against its loop, as OCCT writes it.)
+            bounds.push(self.add(format!("{kind}('',#{lp},{})", if forward { ".T." } else { ".F." })));
         }
         let list = bounds.iter().map(|v| format!("#{v}")).collect::<Vec<_>>().join(",");
         // The face's sense against its written surface: the model's (forward or reversed),
@@ -679,9 +682,16 @@ impl<'a> Writer<'a> {
                 let s = b.to_bspline();
                 self.bspline_curve(s.degree(), s.poles(), s.weights(), s.knots(), s.multiplicities())
             }
+            // (A periodic one as the same curve made non-periodic, where the edge keeps within
+            // one period: STEP's knots clamp.)
+            Curve::BSpline(b) if within_period(b, first, last) => {
+                let mut b = b.clone();
+                b.set_not_periodic();
+                self.bspline_curve(b.degree(), b.poles(), b.weights(), b.knots(), b.multiplicities())
+            }
             Curve::Trimmed(t) => self.curve(t.basis(), first, last)?,
-            // Others (parabolas, hyperbolas, offsets, periodic B-splines): interpolated through
-            // points of the edge.
+            // Others (parabolas, hyperbolas, offsets, periodic B-splines over their origin):
+            // interpolated through points of the edge.
             other => {
                 let n = 64;
                 let points: Vec<Point> = (0..=n).map(|i| other.point(first + (last - first) * i as f64 / n as f64)).collect();
@@ -822,10 +832,118 @@ impl<'a> Writer<'a> {
     }
 }
 
+/// Whether `[first, last]` keeps within the knots of the periodic B-spline `b` (so that the
+/// curve made non-periodic has the edge at the same parameters).
+fn within_period(b: &crate::geometry::curve::BSplineCurve, first: f64, last: f64) -> bool {
+    let knots = b.knots();
+    let (lo, hi) = (knots[0], knots[knots.len() - 1]);
+    let slack = 1e-12 * (hi - lo).abs().max(1.0);
+    b.is_periodic() && first.min(last) >= lo - slack && first.max(last) <= hi + slack
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::primitives::{Cuboid, Cylinder};
+
+    /// Every face's loops run anticlockwise about the face's normal (its surface's turned by
+    /// `same_sense`), as ISO 10303-42 directs, and the normals point out of the solid: a cube's
+    /// planes, read from the file by hand.
+    #[test]
+    fn loops_anticlockwise_about_face_normals() {
+        let mut model = Model::new();
+        let cube = Cuboid::new(2.0, 3.0, 4.0).build(&mut model).unwrap();
+        loops_checked(&model, cube, true);
+        // (And a face used reversed: the square z = 0 seen from below.)
+        let corners = [Point::new(0.0, 0.0, 0.0), Point::new(1.0, 0.0, 0.0), Point::new(1.0, 1.0, 0.0), Point::new(0.0, 1.0, 0.0)];
+        let sides: Vec<Shape> = (0..4).map(|i| crate::make::edge_between(&mut model, corners[i], corners[(i + 1) % 4]).unwrap()).collect();
+        let square = crate::make::wire(&mut model, &sides).unwrap();
+        let face = crate::make::planar_face(&mut model, square).unwrap();
+        let below = Shape { orientation: Orientation::Reversed, ..face };
+        loops_checked(&model, below, false);
+        loops_checked(&model, face, false);
+    }
+
+    /// The loops of `shape`'s faces, written and read from the file by hand, anticlockwise
+    /// about the faces' normals (and, `solid`, those pointing out of the cube about (1, 1.5, 2)).
+    fn loops_checked(model: &Model, shape: Shape, solid: bool) {
+        let mut bytes = Vec::new();
+        write(model, shape, "cube", None, &mut bytes).unwrap();
+        let text = String::from_utf8(bytes).unwrap().replace('\n', "");
+        let entities: HashMap<usize, String> = text
+            .split(';')
+            .filter_map(|e| {
+                let (id, body) = e.trim().strip_prefix('#')?.split_once('=')?;
+                Some((id.trim().parse().ok()?, body.trim().to_string()))
+            })
+            .collect();
+        let refs = |id: usize| -> Vec<usize> { entities[&id].split('#').skip(1).map(|r| r.chars().take_while(char::is_ascii_digit).collect::<String>().parse().unwrap()).collect() };
+        let flag = |id: usize| entities[&id].trim_end_matches(')').ends_with(".T.");
+        let numbers = |id: usize| -> Vec<f64> {
+            let body = &entities[&id];
+            let inner = &body[body.rfind('(').unwrap() + 1..body.find(')').unwrap()];
+            inner.split(',').map(|x| x.trim().parse().unwrap()).collect()
+        };
+        let point = |vertex: usize| { let c = numbers(refs(vertex)[0]); Point::new(c[0], c[1], c[2]) };
+        let centre = Point::new(1.0, 1.5, 2.0);
+        let mut faces = 0;
+        for (&id, body) in &entities {
+            if !body.starts_with("ADVANCED_FACE") {
+                continue;
+            }
+            faces += 1;
+            let r = refs(id);
+            let (bounds, plane) = (&r[..r.len() - 1], r[r.len() - 1]);
+            let axis = refs(refs(plane)[0]);
+            let z = numbers(axis[1]);
+            let sense = if flag(id) { 1.0 } else { -1.0 };
+            let normal = Vector::new(z[0], z[1], z[2]) * sense;
+            for &b in bounds {
+                let mut points = Vec::new();
+                for oe in refs(refs(b)[0]) {
+                    let ec = refs(oe)[0];
+                    let (start, end) = (refs(ec)[0], refs(ec)[1]);
+                    points.push(point(if flag(oe) { start } else { end }));
+                }
+                if !flag(b) {
+                    points.reverse();
+                }
+                // (The loop's turning about the normal: its vector area.)
+                let mut area = Vector::new(0.0, 0.0, 0.0);
+                for i in 0..points.len() {
+                    area = area + (points[i] - centre).cross(points[(i + 1) % points.len()] - centre);
+                }
+                assert!(area.dot(normal) > 0.0, "face #{id}: its loop runs clockwise about its normal");
+                assert!(!solid || (points[0] - centre).dot(normal) > 0.0, "face #{id}: its normal points into the cube");
+            }
+        }
+        assert_eq!(faces, if solid { 6 } else { 1 });
+    }
+
+    /// A periodic B-spline curve is written as itself, made non-periodic (not fitted anew).
+    #[test]
+    fn periodic_curves_written_exactly() {
+        use crate::geometry::curve::BSplineCurve;
+        let mut model = Model::new();
+        let poles = [(14.0, 0.0), (12.0, 8.0), (4.0, 6.0), (0.0, -2.625), (-4.0, 6.0), (-12.0, 8.0), (-14.0, 0.0), (-12.0, -8.0), (-4.0, -6.0), (0.0, 2.625), (4.0, -6.0), (12.0, -8.0)];
+        let curve = BSplineCurve::try_new_periodic(poles.iter().map(|&(x, y)| Point::new(x, y, 0.0)).collect(), (0..=12).map(f64::from).collect(), vec![1; 13], 3).unwrap();
+        let rim = crate::make::edge_from_curve(&mut model, Curve::BSpline(curve.clone())).unwrap();
+        let rim = crate::make::wire(&mut model, &[rim]).unwrap();
+        let face = crate::make::planar_face(&mut model, rim).unwrap();
+        let mut bytes = Vec::new();
+        write(&model, face, "peanut", None, &mut bytes).unwrap();
+        let mut read_model = Model::new();
+        let read = super::super::read(&mut read_model, &mut bytes.as_slice()).unwrap();
+        let edge = read_model.unique_subshapes(read, NodeKind::Edge)[0];
+        let (written, first, last) = read_model.edge_curve(edge).unwrap();
+        let Curve::BSpline(b) = &written else { panic!("a B-spline: {written:?}") };
+        assert_eq!(b.poles().len(), 15, "the twelve poles, three repeated where it closes");
+        for i in 0..=48 {
+            let t = first + (last - first) * f64::from(i) / 48.0;
+            assert!(written.point(t).distance(curve.point(t)) <= 1e-12, "at {t}");
+        }
+    }
 
     /// A unit box written as inches or metres reads back (in millimetres) scaled to match;
     /// the file declares the unit.
