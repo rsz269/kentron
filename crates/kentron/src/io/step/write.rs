@@ -677,6 +677,17 @@ impl<'a> Writer<'a> {
                 let a = self.axis(e.frame());
                 self.add(format!("ELLIPSE('',#{a},{},{})", real(e.major_radius()), real(e.minor_radius())))
             }
+            // (A parabola and a hyperbola as themselves: STEP's are kentron's, a parabola's
+            // parameter only scaled (λ(u) = C + f(u²·x + 2u·y)), which nothing written here
+            // gives.)
+            Curve::Parabola(p) if p.focal() > 0.0 => {
+                let a = self.axis(p.frame());
+                self.add(format!("PARABOLA('',#{a},{})", real(p.focal())))
+            }
+            Curve::Hyperbola(h) => {
+                let a = self.axis(h.frame());
+                self.add(format!("HYPERBOLA('',#{a},{},{})", real(h.major_radius()), real(h.minor_radius())))
+            }
             Curve::BSpline(b) if !b.is_periodic() => self.bspline_curve(b.degree(), b.poles(), b.weights(), b.knots(), b.multiplicities()),
             Curve::Bezier(b) => {
                 let s = b.to_bspline();
@@ -690,7 +701,7 @@ impl<'a> Writer<'a> {
                 self.bspline_curve(b.degree(), b.poles(), b.weights(), b.knots(), b.multiplicities())
             }
             Curve::Trimmed(t) => self.curve(t.basis(), first, last)?,
-            // Others (parabolas, hyperbolas, offsets, periodic B-splines over their origin):
+            // Others (degenerate parabolas, offsets, periodic B-splines over their origin):
             // interpolated through points of the edge.
             other => {
                 let n = 64;
@@ -943,6 +954,32 @@ mod tests {
             let t = first + (last - first) * f64::from(i) / 48.0;
             assert!(written.point(t).distance(curve.point(t)) <= 1e-12, "at {t}");
         }
+    }
+
+    /// A paraboloid of revolution (a parabola turned about its axis, the basis trimmed to the
+    /// edge) is written on the parabola itself, its frame and focal length, not on points of
+    /// it fitted anew (which strayed from the tip, a ten-thousandth of the way up a parabola
+    /// running on 8 high, by more than its height): the surface and the edge, both on it.
+    #[test]
+    fn parabolas_written_exactly() {
+        use crate::geometry::curve::Parabola;
+        let mut model = Model::new();
+        let frame = Frame::new(Point::new(0.0, 0.0, 0.0), Direction::Y, Direction::Z);
+        let rim = 8f64.sqrt() * 1e-2;
+        let side = crate::make::edge_from_curve_range(&mut model, Curve::Parabola(Parabola::new(frame, 2.0)), 0.0, rim).unwrap();
+        let top = crate::make::edge_between(&mut model, Point::new(rim, 0.0, 1e-4), Point::new(0.0, 0.0, 1e-4)).unwrap();
+        let axis = crate::make::edge_between(&mut model, Point::new(0.0, 0.0, 1e-4), Point::new(0.0, 0.0, 0.0)).unwrap();
+        let wire = crate::make::wire(&mut model, &[side, top, axis]).unwrap();
+        let section = crate::make::planar_face(&mut model, wire).unwrap();
+        let tip = crate::sweep::revolve(&mut model, section, crate::math::Axis::Z, std::f64::consts::TAU).unwrap().shape;
+        let mut bytes = Vec::new();
+        write(&model, tip, "tip", None, &mut bytes).unwrap();
+        let text = String::from_utf8(bytes).unwrap();
+        assert!(!text.contains("B_SPLINE_CURVE"), "no curve fitted anew");
+        let parabola = text.lines().find(|l| l.contains("PARABOLA(")).expect("a parabola");
+        assert!(parabola.trim_end().ends_with(",2.);"), "{parabola}");
+        let id = parabola.trim().split(' ').next().unwrap();
+        assert!(text.lines().any(|l| l.contains("SURFACE_OF_REVOLUTION('',") && l.contains(&format!("{id},"))), "the surface on it");
     }
 
     /// A unit box written as inches or metres reads back (in millimetres) scaled to match;
