@@ -448,6 +448,23 @@ impl Piper<'_> {
         Ok(copy)
     }
 
+    /// The flux of the motion's velocity as it sets off through the planar profile `face` (as
+    /// `orientation` turns it), at its start: `None` for a profile on another surface, or one
+    /// the motion sets off along.
+    fn start_flux(&self, face: FaceId, orientation: Orientation) -> Option<f64> {
+        let Some(crate::geometry::surface::Surface::Plane(plane)) = self.model.face_surface(face) else { return None };
+        let [t0, t1] = [self.motions.first()?.transforms.first()?, self.motions.first()?.transforms.get(1)?];
+        let shape = Shape::from(face);
+        let props = properties::area(self.model, shape);
+        let sign = if orientation == Orientation::Reversed { -1.0 } else { 1.0 };
+        let normal = crate::math::Vector::from(plane.normal()).transformed(t0) * sign;
+        let centroid = props.center_of_mass;
+        let velocity = centroid.transformed(t1) - centroid.transformed(t0);
+        let flux = props.mass * normal.dot(velocity);
+        // (Setting off along the profile's plane: no way round to tell.)
+        (flux.abs() > 1e-9 * props.mass * velocity.length()).then_some(flux)
+    }
+
     /// The solid swept by a face used with `orientation`: closed by the face's copies at
     /// the start and the end (none along a closed spine).
     fn face_solid(&mut self, face: FaceId, orientation: Orientation) -> Result<Shape> {
@@ -478,9 +495,16 @@ impl Piper<'_> {
                 self.ends.push((face.into(), start, end));
             }
         }
-        let volume = properties::closed_shell_volume(self.model, shell);
+        // The shell's way round: its start, the profile facing as the shell has it, faces back
+        // against the way the profile sets off (for a planar profile, the flux of the motion's
+        // velocity through it, its area times the normal's part of the velocity at its centroid,
+        // the velocity being affine; else the volume the shell bounds, by its sign).
+        let inside_out = match self.start_flux(face, orientation) {
+            Some(flux) => flux > 0.0,
+            None => properties::closed_shell_volume(self.model, shell) < 0.0,
+        };
         let solid = self.model.new_empty(NodeKind::Solid);
-        self.model.add(solid, if volume < 0.0 { shell.reversed() } else { shell })?;
+        self.model.add(solid, if inside_out { shell.reversed() } else { shell })?;
         self.record(face, solid);
         Ok(solid)
     }
