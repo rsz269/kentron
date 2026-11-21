@@ -98,6 +98,7 @@ impl Surface {
             Surface::Torus(s) => s.parameters(p),
             Surface::Revolution(s) => s.parameters(p),
             Surface::Extrusion(s) => s.parameters(p),
+            Surface::Offset(s) => return s.turned_tube_parameters(p),
             _ => return None,
         })
     }
@@ -1025,9 +1026,10 @@ impl OffsetSurface {
         }
     }
 
-    /// The equivalent surface, kept.
+    /// The equivalent surface, kept: where it is parametrized like the offset (not a torus
+    /// moved through its tube's middle circle).
     fn equivalent(&self) -> Option<&Surface> {
-        self.equivalent.get(|| self.equivalent_surface())
+        self.equivalent.get(|| if self.turned_tube().is_some() { None } else { self.equivalent_surface() })
     }
 
     pub fn basis(&self) -> &Surface {
@@ -1036,6 +1038,28 @@ impl OffsetSurface {
 
     pub fn offset(&self) -> f64 {
         self.offset
+    }
+
+    /// The parameters of `p` on (or near) a torus moved through its tube's middle circle,
+    /// short of its axis (the offset no torus is parametrized like, see
+    /// [`Self::equivalent_surface`]): the torus of the tube's size, its tube's angle half a turn
+    /// on. `None` for other offsets.
+    pub fn turned_tube_parameters(&self, p: Point) -> Option<(f64, f64)> {
+        let (u, v) = self.turned_tube()?.parameters(p);
+        Some((u, (v + std::f64::consts::PI) % std::f64::consts::TAU))
+    }
+
+    /// For a torus moved through its tube's middle circle, short of its axis: the torus its
+    /// points lie on (each at the parameters of the point it comes from, the tube's angle
+    /// turned half a turn). `None` for other offsets.
+    fn turned_tube(&self) -> Option<Torus> {
+        use super::ParametricSurface;
+        let Surface::Torus(t) = &*self.basis else { return None };
+        let f = t.frame();
+        let (q, du, dv) = self.basis.d1(0.0, 0.0);
+        let middle = f.origin() + Vector::from(f.x()) * t.major_radius();
+        let minor = t.minor_radius() + if du.cross(dv).dot(q - middle) > 0.0 { self.offset } else { -self.offset };
+        (minor < -crate::tolerance::LINEAR && -minor < t.major_radius()).then(|| Torus::new(*f, t.major_radius(), -minor))
     }
 
     pub fn set_offset(&mut self, offset: f64) {
@@ -1102,6 +1126,13 @@ impl OffsetSurface {
                 let f = t.frame();
                 let centre = f.origin() + Vector::from(f.x()) * t.major_radius();
                 let minor = usable(t.minor_radius() + if n.dot(p - centre) > 0.0 { d } else { -d })?;
+                // Past the axis, none (as OCCT's `Geom_OffsetSurface::Surface`): the tube
+                // crosses itself there. (Through the tube's middle circle, the torus of the
+                // tube's size: the same points, but each half a turn round the tube from where
+                // the same parameters put it, see `turned_tube`.)
+                if minor.abs() > t.major_radius() {
+                    return None;
+                }
                 Surface::Torus(Torus::new(*f, t.major_radius(), minor.abs()))
             }
             Surface::Cone(c) => {

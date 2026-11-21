@@ -465,9 +465,26 @@ fn offset_faces(model: &mut Model, shape: Shape, distance: f64, own: &[(NodeId, 
         }
         own.iter().find(|(n, _)| *n == node).map_or(distance, |(_, d)| *d)
     };
+    // (Faces of tori whose tubes, moved, reach their axis within the faces' bounds: the
+    // moved face would close on the axis there and pass through itself.)
+    let mut across_axis: Vec<NodeId> = Vec::new();
+    for face in model.unique_subshapes(shape, NodeKind::Face) {
+        let Some(surface) = model.surface(face) else { continue };
+        let d = distance_of(face.node);
+        let along = if face.orientation == Orientation::Reversed { -d } else { d };
+        if let Some((minor, major)) = moved_tube(surface, along) {
+            let (_, _, v0, v1) = model.face_uv_bounds(Shape { orientation: Orientation::Forward, ..face });
+            if d != 0.0 && reaches_axis(major, minor, v0, v1) {
+                across_axis.push(face.node);
+            }
+        }
+    }
     let new_surface = |face: Shape, surface: &Surface| -> Result<Surface> {
         let d = distance_of(face.node);
         let along = if face.orientation == Orientation::Reversed { -d } else { d };
+        if across_axis.contains(&face.node) {
+            return Err(Error::InvalidInput("an offset carrying a face of a torus across its axis".into()));
+        }
         if d == 0.0 { Ok(surface.clone()) } else { offset_surface(surface, along) }
     };
     // Joined by arcs, faces whose offsets part (at convex edges going out, concave ones going
@@ -838,11 +855,71 @@ fn offset_surface(surface: &Surface, distance: f64) -> Result<Surface> {
         Surface::Trimmed(t) => analytic(t.basis()),
         s => analytic(s),
     };
+    // A torus moved through its tube's middle circle, short of its axis: the general offset,
+    // as OCCT's `BRepOffset::Surface` makes for a reversed torus (no torus is parametrized
+    // like it). Moved onto or past its axis, its points meet there, as a cylinder's do.
+    if tube_turned_inside_out(surface, distance) {
+        return Ok(Surface::Offset(offset));
+    }
     match offset.equivalent_surface() {
         Some(s) => Ok(s),
+        None if spindle(surface, distance).is_some() => Ok(spindle(surface, distance).expect("a spindle torus")),
         None if elementary => Err(Error::InvalidInput("an offset collapsing a face to its axis".into())),
         None => Ok(Surface::Offset(offset)),
     }
+}
+
+/// `surface` (a torus, or one trimmed) moved `distance` along its normal `∂u × ∂v` where its
+/// tube grows past its axis: the spindle torus (as OCCT's `BRepOffset::Surface` keeps it,
+/// though `Geom_OffsetSurface::Surface` gives none), parametrized like the offset.
+fn spindle(surface: &Surface, distance: f64) -> Option<Surface> {
+    match surface {
+        Surface::Trimmed(t) => {
+            let (u1, u2, v1, v2) = t.bounds();
+            Some(Surface::Trimmed(crate::geometry::surface::TrimmedSurface::new(spindle(t.basis(), distance)?, u1, u2, v1, v2)))
+        }
+        Surface::Torus(t) => {
+            let (minor, major) = moved_tube(surface, distance)?;
+            (minor > major).then(|| Surface::Torus(crate::geometry::surface::Torus::new(*t.frame(), major, minor)))
+        }
+        _ => None,
+    }
+}
+
+/// Whether a torus's tube of (signed) radius `minor` about its middle circle of radius
+/// `major` reaches the axis between the tube's angles `v0` and `v1`: its circles' radii,
+/// `major + minor cos v`, vanish or turn negative there.
+fn reaches_axis(major: f64, minor: f64, v0: f64, v1: f64) -> bool {
+    let pi = std::f64::consts::PI;
+    let mut angles = vec![v0, v1];
+    let mut k = (v0 / pi).ceil();
+    while k * pi < v1 {
+        angles.push(k * pi);
+        k += 1.0;
+    }
+    angles.iter().any(|&v| major + minor * v.cos() <= crate::tolerance::LINEAR)
+}
+
+/// Whether `surface` (a torus, or one trimmed) moved `distance` along its normal `∂u × ∂v`
+/// passes through its tube's middle circle and stops short of its axis: the tube's radius,
+/// signed, between minus the middle circle's radius and nothing.
+fn tube_turned_inside_out(surface: &Surface, distance: f64) -> bool {
+    moved_tube(surface, distance).is_some_and(|(minor, major)| minor < -crate::tolerance::LINEAR && -minor < major - crate::tolerance::LINEAR)
+}
+
+/// For a torus (or one trimmed) moved `distance` along its normal `∂u × ∂v`: its tube's radius,
+/// signed (negative past the tube's middle circle), and its middle circle's.
+pub(super) fn moved_tube(surface: &Surface, distance: f64) -> Option<(f64, f64)> {
+    let basis = match surface {
+        Surface::Trimmed(t) => t.basis(),
+        s => s,
+    };
+    let Surface::Torus(t) = basis else { return None };
+    let (p, du, dv) = basis.d1(0.0, 0.0);
+    let f = t.frame();
+    let middle = f.origin() + Vector::from(f.x()) * t.major_radius();
+    let minor = t.minor_radius() + if du.cross(dv).dot(p - middle) > 0.0 { distance } else { -distance };
+    Some((minor, t.major_radius()))
 }
 
 /// The point of `surface` nearest `p`, by Gauss-Newton steps from `uv`: its parameters, the
@@ -1896,5 +1973,23 @@ mod tests {
         let dimple = 2.0 * pi * (d * rho * rho / 2.0 - rho / 2.0 * (rho * q + d * d * (rho / d).asin()) + (d.powi(3) - q.powi(3)) / 3.0);
         let v = volume(&model, grown).mass;
         assert!((v - (v0 - 2.0 * dimple)).abs() < 1e-6 * v, "{v}");
+    }
+
+    /// A torus (tube 2 about a circle of radius 4) grown by 3: the grown tube, of radius 5,
+    /// crosses the axis, and the solid is the apple within 5 of the middle circle (not the
+    /// self-crossing torus, which would be inside out where it crosses).
+    #[test]
+    fn a_torus_grown_past_its_hole_is_an_apple() {
+        let mut model = Model::new();
+        let torus = crate::primitives::Torus::new(4.0, 2.0).build(&mut model).unwrap();
+        let grown = shape(&mut model, torus, 3.0, Join::Arc).unwrap();
+        valid(&model, grown);
+        let (r, s) = (4.0f64, 5.0f64);
+        let c = (s * s - r * r).sqrt();
+        let phi = (r / s).acos();
+        let pi = std::f64::consts::PI;
+        let expected = 2.0 * pi * (pi * r * s * s + 2.0 * c.powi(3) / 3.0 - r * (s * s * phi - r * c));
+        let v = volume(&model, grown).mass;
+        assert!((v - expected).abs() < 1e-6 * expected, "{v}, not {expected}");
     }
 }

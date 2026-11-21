@@ -151,6 +151,9 @@ fn focus(model: &Model, face: Shape, distance: f64) -> Result<Option<Focus>> {
         return Ok(None);
     }
     match basis {
+        // (A torus moved through its tube's middle circle, or past its axis: no torus, but not
+        // collapsing unless its tube vanishes.)
+        Surface::Torus(_) if super::shape::moved_tube(&basis, along).is_some_and(|(minor, _)| minor.abs() > crate::tolerance::LINEAR) => Ok(None),
         Surface::Sphere(s) => Ok(Some(Focus::Centre(s.frame().origin()))),
         Surface::Cylinder(c) => Ok(Some(Focus::Axis(c.frame().origin(), Vector::from(c.frame().z())))),
         _ => Err(Error::InvalidInput("a thickening collapsing a face onto a circle or point other than a sphere's centre or a cylinder's axis".into())),
@@ -820,4 +823,34 @@ mod tests {
         let empty = model.new_empty(NodeKind::Shell);
         assert!(thicken(&mut model, empty, 1.0, Join::Arc).is_err());
     }
+
+    /// A cup of revolution about the z axis (the floor out to radius `c`, a quarter torus of
+    /// radius `r` bending up to the wall of radius `c + r`, the wall up to `h`), its faces
+    /// tangent.
+    fn cup(model: &mut Model, c: f64, r: f64, h: f64) -> Shape {
+        let floor = crate::make::edge_between(model, point(0.0, 0.0, 0.0), point(c, 0.0, 0.0)).unwrap();
+        let frame = Frame::new(point(c, 0.0, r), Direction::try_from_vector(Vector::new(0.0, -1.0, 0.0)).unwrap(), Direction::try_from_vector(Vector::new(0.0, 0.0, -1.0)).unwrap());
+        let bend = crate::make::edge_from_curve_range(model, Curve::Circle(Circle::new(frame, r)), 0.0, FRAC_PI_2).unwrap();
+        let wall = crate::make::edge_between(model, point(c + r, 0.0, r), point(c + r, 0.0, h)).unwrap();
+        let profile = crate::make::wire(model, &[floor, bend, wall]).unwrap();
+        crate::sweep::revolve(model, profile, crate::math::Axis::new(Point::ORIGIN, Direction::Z), TAU).unwrap().shape
+    }
+
+    /// Cups thickened inside by more than their bends' radii (by 3 past a bend of 2, 4 past 2, 3
+    /// past 1): the bend's offset turns inside out through its tube's middle circle (a torus
+    /// moved so is no torus with its parameters, but the offset surface), the moved floor and
+    /// wall meet in a concave edge, and the bend fills the quarter disk behind it.
+    #[test]
+    fn cups_thickened_inside_past_their_bends() {
+        for (c, r, h, t) in [(4.0, 2.0, 10.0, 3.0), (3.0, 2.0, 10.0, 4.0), (5.0, 1.0, 8.0, 3.0)] {
+            let mut model = Model::new();
+            let sheet = cup(&mut model, c, r, h);
+            let solid = thicken(&mut model, sheet, -t, Join::Arc).unwrap();
+            let (big, w) = (c + r, c + r - t);
+            let volume = PI * c * c * t + PI * (big * big - w * w) * (h - r) - PI * (c * c - w * w) * (t - r) + PI * PI * r * r / 2.0 * (c + 4.0 * r / (3.0 * PI));
+            let area = PI * c * c + PI * PI * r * (c + 2.0 * r / PI) + 2.0 * PI * big * (h - r) + PI * w * w + 2.0 * PI * w * (h - t) + PI * (big * big - w * w);
+            assert_measures(&model, solid, volume, area);
+        }
+    }
+
 }
