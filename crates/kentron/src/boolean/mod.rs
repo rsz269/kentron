@@ -641,7 +641,7 @@ fn classified(model: &Model, graph: &mut Graph) -> (Vec<split::Piece>, Vec<Vec<s
         let at = |uv: geom::Uv| {
             let p = geom::surface_point(&face.surface, uv);
             let outward = geom::normal_at(&face.surface, uv) * face.outward;
-            graph.classify_on(p, outward, 1 - face.operand, face.drift, Some(&face.surface))
+            graph.classify_on(p, outward, 1 - face.operand, face.drift, Some(*fi))
         };
         let state = at(region.interior);
         if !matches!(state, State::OnSame | State::OnOpposite) {
@@ -3003,5 +3003,76 @@ mod tests {
         let result = intersection(&mut model, first, second).unwrap();
         let thickness: f64 = 2.0 * r - d;
         measures(&model, result, PI * (4.0 * r + d) * thickness * thickness / 12.0, 4.0 * PI * r * (r - 0.5 * d), 1e-6);
+    }
+
+    /// A ball-end mill's raster: a plate (−10, −10, −20) … (20, 10, 0) less a cylinder of
+    /// radius 3 ending at c = (0, 0, −1) at slope s1, a ball of radius 3 about c, and a
+    /// cylinder of radius 3 starting at c at slope s2. Each cylinder is tangent to the ball
+    /// along a great circle; the two circles cross where the three surfaces touch, and the
+    /// cylinders meet past them within a millionth of each other: there a sliver of the
+    /// first, inside the second, was taken as lying on it (the result had a void outside
+    /// any solid), and the lune of the ball left between the circles, its boundary's
+    /// pcurve swinging round near the pole, was found inside out. The volume against the
+    /// tools' union integrated along x (exact on each line, from the cylinders' and the
+    /// ball's equations) over an 800 × 400 grid in z and θ, y = 3 sin θ: within 10⁻⁴ of a
+    /// grid ten times finer.
+    #[test]
+    fn a_ball_between_cylinders_tangent_to_it_along_crossing_circles() {
+        // The x-interval of a cylinder (start o, unit axis (ax, 0, az), length l, radius 3)
+        // on the line along x through (y, z): |ax ζ − az wx| ≤ √(9 − wy²), 0 ≤ ax wx + az ζ ≤ l.
+        let cylinder = |o: [f64; 3], ax: f64, az: f64, l: f64, y: f64, z: f64| -> Option<(f64, f64)> {
+            let (wy, zeta) = (y - o[1], z - o[2]);
+            let h = (9.0 - wy * wy).max(0.0).sqrt();
+            let (a, b) = ((zeta * ax - h) / az, (zeta * ax + h) / az);
+            let (a, b) = if az > 0.0 { (a, b) } else { (b, a) };
+            let (lo, hi) = (a.max(-zeta * az / ax), b.min((l - zeta * az) / ax));
+            (lo < hi).then_some((lo + o[0], hi + o[0]))
+        };
+        let reference = |s1: f64, s2: f64| {
+            let (n1, n2) = ((1.0 + s1 * s1).sqrt(), (1.0 + s2 * s2).sqrt());
+            let (nz, nt, z0) = (800, 400, -4.5);
+            let mut removed = 0.0;
+            for i in 0..nz {
+                let z = z0 * (1.0 - (i as f64 + 0.5) / nz as f64);
+                for j in 0..nt {
+                    let theta = PI * ((j as f64 + 0.5) / nt as f64 - 0.5);
+                    let y = 3.0 * theta.sin();
+                    let mut runs: Vec<(f64, f64)> = Vec::new();
+                    let r = 9.0 - y * y - (z + 1.0) * (z + 1.0);
+                    if r > 0.0 {
+                        runs.push((-r.sqrt(), r.sqrt()));
+                    }
+                    runs.extend(cylinder([-5.0, 0.0, -1.0 - 5.0 * s1], 1.0 / n1, s1 / n1, 5.0 * n1, y, z));
+                    runs.extend(cylinder([0.0, 0.0, -1.0], 1.0 / n2, s2 / n2, 5.0, y, z));
+                    runs.sort_by(|a, b| a.0.total_cmp(&b.0));
+                    let (mut length, mut end) = (0.0, f64::NEG_INFINITY);
+                    for (a, b) in runs {
+                        if b > a.max(end) {
+                            length += b - a.max(end);
+                            end = b;
+                        }
+                    }
+                    removed += length * 3.0 * theta.cos() * (PI / nt as f64) * (-z0 / nz as f64);
+                }
+            }
+            30.0 * 20.0 * 20.0 - removed
+        };
+        for (s1, s2) in [(-0.03, -0.025), (-0.01, -0.005), (0.01, 0.015), (-0.02, -0.005)] {
+            let mut model = Model::new();
+            let plate = Cuboid::from_corners(Point::new(-10.0, -10.0, -20.0), Point::new(20.0, 10.0, 0.0)).build(&mut model).unwrap();
+            let c = Point::new(0.0, 0.0, -1.0);
+            let from = Point::new(-5.0, 0.0, -1.0 - 5.0 * s1);
+            let first = Cylinder::new(3.0, from.distance(c)).with_frame(Frame::from_z(from, Direction::new(5.0, 0.0, 5.0 * s1))).build(&mut model).unwrap();
+            let ball = Sphere::new(3.0).with_frame(Frame::from_z(c, Direction::Z)).build(&mut model).unwrap();
+            let second = Cylinder::new(3.0, 5.0).with_frame(Frame::from_z(c, Direction::new(5.0, 0.0, 5.0 * s2))).build(&mut model).unwrap();
+            let mut body = plate;
+            for tool in [first, ball, second] {
+                body = difference(&mut model, body, tool).unwrap();
+            }
+            let report = validity::check(&model, body);
+            assert!(report.is_valid(), "{s1} {s2}: {report:?}");
+            let (v, expected) = (properties::volume(&model, body).mass, reference(s1, s2));
+            assert!((v - expected).abs() <= 1e-3, "{s1} {s2}: volume {v} != {expected}");
+        }
     }
 }

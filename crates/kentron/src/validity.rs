@@ -575,13 +575,34 @@ fn signed_area_in_parameters(model: &Model, loops: &[(Vec<CoEdgeId>, Orientation
     Some((signed, size))
 }
 
+/// The knots of a B-spline pcurve (trimmed or not) strictly between `lo` and `hi`, a
+/// periodic one's repeated a period apart.
+fn knots_within(pcurve: &Curve2, lo: f64, hi: f64) -> Vec<f64> {
+    let spline = match pcurve {
+        Curve2::BSpline(s) => s,
+        Curve2::Trimmed(t) => match t.basis() {
+            Curve2::BSpline(s) => s,
+            _ => return Vec::new(),
+        },
+        _ => return Vec::new(),
+    };
+    let knots = spline.knots();
+    let (first, last) = (knots[0], knots[knots.len() - 1]);
+    let period = last - first;
+    let shifts = if spline.is_periodic() && period > 0.0 { ((lo - first) / period).floor() as i64..=((hi - first) / period).floor() as i64 } else { 0..=0 };
+    shifts.flat_map(|k| knots.iter().map(move |&t| t + k as f64 * period)).filter(|&t| t > lo && t < hi).collect()
+}
+
 /// The area one loop of a face encloses in its surface's parameters, signed (positive
 /// counter-clockwise), its coedges run as its wire's `orientation` in the face has them;
 /// `None` as for [`signed_area_in_parameters`].
 pub(crate) fn loop_area_in_parameters(model: &Model, coedges: &[CoEdgeId], orientation: Orientation, surface: &Surface) -> Option<f64> {
     // Half the integral of x dy - y dx along each coedge's pcurve (Gauss-Legendre over
     // stretches of it: exact for lines, and for arcs however long, where a polygon through a
-    // few samples falls short of a circle by more than a narrow ring's whole area), and
+    // few samples falls short of a circle by more than a narrow ring's whole area; a
+    // B-spline's broken at its knots too, exact on its polynomial spans, where a sharp turn
+    // within one stretch (a great circle's pcurve passing near a sphere's pole, its u
+    // swinging round in a few spans) is integrated as wrongly as the turn is sharp), and
     // along the chords closing gaps between one coedge's end and the next one's start.
     const NODES: [(f64, f64); 5] = [
         (0.0, 0.568_888_888_888_888_9),
@@ -597,12 +618,14 @@ pub(crate) fn loop_area_in_parameters(model: &Model, coedges: &[CoEdgeId], orien
         let (pcurve, first, last) = model.effective_pcurve(c)?;
         let reversed = model.get(c)?.orientation == Orientation::Reversed;
         let (a, b) = if reversed { (last, first) } else { (first, last) };
-        let step = (b - a) / STRETCHES as f64;
-        for k in 0..STRETCHES {
-            let middle = a + step * (k as f64 + 0.5);
+        let mut breaks: Vec<f64> = (0..=STRETCHES).map(|k| a + (b - a) * k as f64 / STRETCHES as f64).collect();
+        breaks.extend(knots_within(&pcurve, a.min(b), a.max(b)));
+        breaks.sort_by(|x, y| if a <= b { x.total_cmp(y) } else { y.total_cmp(x) });
+        for span in breaks.windows(2) {
+            let (middle, half) = (0.5 * (span[0] + span[1]), 0.5 * (span[1] - span[0]));
             for (x, w) in NODES {
-                let (p, d) = pcurve.d1(middle + 0.5 * step * x);
-                twice += w * 0.5 * step * (p.x * d.y - p.y * d.x);
+                let (p, d) = pcurve.d1(middle + half * x);
+                twice += w * half * (p.x * d.y - p.y * d.x);
             }
         }
         ends.push((pcurve.point(a), pcurve.point(b)));

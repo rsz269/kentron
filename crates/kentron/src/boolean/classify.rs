@@ -37,24 +37,40 @@ impl Graph {
         self.classify_on(p, outward, operand, drift, None)
     }
 
-    /// [`Graph::classify`], for a point of a face on `own` surface: not on a face of the
-    /// other operand that surface cannot lie on (a plane and a quadric only touch, along a
-    /// line or at a point, and two spheres not one sphere meet along a circle; a point near
-    /// where they touch is only near it).
-    pub fn classify_on(&self, p: Point, outward: Vector, operand: usize, drift: f64, own: Option<&Surface>) -> State {
+    /// [`Graph::classify`], for a point of face `own`: not on a face of the other operand
+    /// its surface cannot lie on (a plane and a quadric only touch, along a line or at a
+    /// point, two spheres not one sphere meet along a circle, and two quadric faces with a
+    /// section edge in common cross there, not one surface; a point near where they touch
+    /// or cross is only near it).
+    pub fn classify_on(&self, p: Point, outward: Vector, operand: usize, drift: f64, own: Option<usize>) -> State {
         let quadric = |s: &Surface| matches!(s, Surface::Cylinder(_) | Surface::Cone(_) | Surface::Sphere(_) | Surface::Torus(_));
         let other_spheres = |a: &Surface, b: &Surface| match (a, b) {
             (Surface::Sphere(a), Surface::Sphere(b)) => a.frame().origin().distance(b.frame().origin()) > on_tol() || (a.radius() - b.radius()).abs() > on_tol(),
             _ => false,
         };
-        let only_touching = |other: &Surface| {
-            own.is_some_and(|own| (matches!(own, Surface::Plane(_)) && quadric(other)) || (quadric(own) && matches!(other, Surface::Plane(_))) || other_spheres(own, other))
+        // (Two quadric faces whose sections were found crossing, as cylinders on axes a
+        // small angle apart past where they meet a ball they are both tangent to: a sliver
+        // of one beyond their section lies within the classifying distance of the other,
+        // and inside or outside it all the same. Faces taken as one surface have no section
+        // in common.)
+        let crossing = |own: &super::graph::Face, other: &super::graph::Face| {
+            use crate::geometry::intersect::{quadrics, QuadricIntersection};
+            quadric(&own.surface)
+                && quadric(&other.surface)
+                && own.sections.iter().any(|e| other.sections.contains(e))
+                && !matches!(quadrics(&own.surface, &other.surface, on_tol()), QuadricIntersection::Same)
+        };
+        let only_touching = |other: &super::graph::Face| {
+            own.map(|f| &self.faces[f]).is_some_and(|own| {
+                let (s, t) = (&own.surface, &other.surface);
+                (matches!(s, Surface::Plane(_)) && quadric(t)) || (quadric(s) && matches!(t, Surface::Plane(_))) || other_spheres(s, t) || crossing(own, other)
+            })
         };
         let faces = self.faces_of(operand);
         let mut touching = false;
         for g in self.index().faces_containing(operand, p) {
             let face = &self.faces[g];
-            if only_touching(&face.surface) {
+            if only_touching(face) {
                 touching |= geom::signed_distance(&face.surface, p).abs() <= on_tol() && face.locate(p, &self.edges, &self.vertices) != Location::Outside;
                 continue;
             }
