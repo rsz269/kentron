@@ -75,6 +75,13 @@ pub fn remove_faces(model: &mut Model, shape: Shape, faces: &[Shape]) -> Result<
             let Some(p) = crate::boolean::point_inside(model, cell)? else { continue };
             let locations: Vec<crate::boolean::PointLocation> = classifiers.iter().map(|c| c.locate(p)).collect();
             if let Some(k) = locations.iter().position(|&l| l == crate::boolean::PointLocation::Inside) {
+                // (A gap inside the solid is part of it, never the whole of it: a cell holding
+                // as much is the solid's own body, which faces carried on all round (a sphere
+                // or a torus whole, a cylinder round its axis) enclose too.)
+                let whole = crate::properties::volume(model, solids[k]).mass;
+                if crate::properties::volume(model, cell).mass >= whole * (1.0 - 1e-9) {
+                    continue;
+                }
                 cut[k].push(cell);
                 found = true;
             } else if locations.iter().all(|&l| l == crate::boolean::PointLocation::Outside) {
@@ -411,4 +418,61 @@ fn on_carrier(model: &Model, p: Point, edge: Shape) -> bool {
 /// Whether `node` is one of `solid`'s own (kept as it was).
 fn in_result_before(model: &Model, solid: Shape, node: NodeId) -> bool {
     model.unique_subshapes(solid, node.kind).iter().any(|s| s.node == node)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::primitives::{Cuboid, Cylinder, Sphere};
+    use std::f64::consts::PI;
+
+    /// The faces of `shape` on planes.
+    fn flats(model: &Model, shape: Shape) -> Vec<Shape> {
+        model.unique_subshapes(shape, NodeKind::Face).into_iter().filter(|&f| matches!(model.surface(f), Some(Surface::Plane(_)))).collect()
+    }
+
+    fn check(model: &Model, shape: Shape, volume: f64) {
+        let report = crate::validity::check(model, shape);
+        assert!(report.is_valid(), "{report:?}");
+        let v = crate::properties::volume(model, shape).mass;
+        assert!((v - volume).abs() <= 1e-9 * volume, "volume {v}, expected {volume}");
+    }
+
+    /// A ball with a flat milled on it, the flat deleted: the sphere carried on over it is the
+    /// ball again (not the cut-off cap, the sphere whole bounding the ball's own body too).
+    #[test]
+    fn a_balls_flat_deleted() {
+        let mut model = Model::new();
+        let ball = Sphere::new(5.0).build(&mut model).unwrap();
+        let above = Cuboid::from_corners(Point::new(-10.0, -10.0, 3.0), Point::new(10.0, 10.0, 10.0)).build(&mut model).unwrap();
+        let milled = crate::boolean::difference(&mut model, ball, above).unwrap();
+        let flat = flats(&model, milled);
+        let removed = remove_faces(&mut model, milled, &flat).unwrap();
+        check(&model, removed.shape, 4.0 / 3.0 * PI * 125.0);
+    }
+
+    /// A shaft with two flats milled on opposite sides, both deleted: the shaft again.
+    #[test]
+    fn a_shafts_two_flats_deleted() {
+        let mut model = Model::new();
+        let shaft = Cylinder::new(5.0, 20.0).build(&mut model).unwrap();
+        let a = Cuboid::from_corners(Point::new(4.0, -10.0, 5.0), Point::new(10.0, 10.0, 15.0)).build(&mut model).unwrap();
+        let b = Cuboid::from_corners(Point::new(-10.0, -10.0, 5.0), Point::new(-4.0, 10.0, 15.0)).build(&mut model).unwrap();
+        let milled = crate::boolean::difference(&mut model, shaft, a).unwrap();
+        let milled = crate::boolean::difference(&mut model, milled, b).unwrap();
+        let sides: Vec<Shape> = flats(&model, milled)
+            .into_iter()
+            .filter(|&f| matches!(model.surface(f), Some(Surface::Plane(p)) if p.normal().z().abs() < 0.5))
+            .collect();
+        let ledges: Vec<Shape> = flats(&model, milled)
+            .into_iter()
+            .filter(|&f| {
+                let c = crate::properties::area(&model, f).center_of_mass;
+                (c.z - 5.0).abs() < 1e-9 || (c.z - 15.0).abs() < 1e-9
+            })
+            .collect();
+        let feature: Vec<Shape> = sides.into_iter().chain(ledges).collect();
+        let removed = remove_faces(&mut model, milled, &feature).unwrap();
+        check(&model, removed.shape, PI * 25.0 * 20.0);
+    }
 }
