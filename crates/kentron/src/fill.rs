@@ -7,6 +7,9 @@
 //! B-spline whose parameters are the plane's own coordinates, so that each edge's curve on
 //! it is the edge projected onto the plane. The loop must project onto the plane as a simple
 //! loop (the face a graph over it).
+//!
+//! A loop of four edges may be filled instead by their Coons patch ([`coons`]), the B-spline
+//! surface blending opposite edges linearly, as OCCT's `GeomFill_BSplineCurves` makes it.
 
 use crate::error::{Error, Result};
 use crate::geometry::curve2::Curve2;
@@ -260,6 +263,197 @@ pub(crate) fn face_on_loop(model: &mut Model, runs: &[(crate::topology::EdgeId, 
     Ok(if flipped { face.reversed() } else { face })
 }
 
+/// The bilinearly blended Coons patch of the four `edges` (or the edges of a wire) closing a
+/// loop, in any order and direction: a face on its surface, bounded by copies of the edges.
+///
+/// With u running along the first edge and v along the second, from the first's end, the
+/// surface is the blend of the first and third edges (by 1 − v and v) plus the blend of the
+/// fourth and second (by 1 − u and u) less the bilinear blend of the four corners, as OCCT's
+/// `GeomFill_BSplineCurves` makes it in `GeomFill_StretchStyle` (see [`coons_surface`]).
+#[doc(alias = "GeomFill_BSplineCurves")]
+#[doc(alias = "GeomFill_StretchStyle")]
+pub fn coons(model: &mut Model, edges: &[Shape]) -> Result<Shape> {
+    let given: Vec<Shape> = edges.iter().flat_map(|&e| if e.kind() == NodeKind::Wire { model.explore(e, NodeKind::Edge).collect() } else { vec![e] }).collect();
+    let [a, b, c, d] = given[..] else {
+        return Err(Error::InvalidInput(format!("a Coons patch has four edges, not {}", given.len())));
+    };
+    let mut curves = Vec::with_capacity(4);
+    for edge in [a, b, c, d] {
+        let forward = Shape { orientation: Orientation::Forward, ..edge };
+        let (curve, first, last) = model.edge_curve(forward).ok_or_else(|| Error::InvalidInput("a degenerate edge in a Coons patch's loop".into()))?;
+        let trimmed = crate::geometry::curve::Curve::Trimmed(crate::geometry::curve::TrimmedCurve::new(curve, first, last));
+        let spline = crate::geometry::convert::curve_to_bspline(&trimmed).ok_or_else(|| Error::InvalidInput("an edge of a Coons patch has no B-spline form".into()))?;
+        curves.push(spline.clamped());
+    }
+    let surface = coons_surface(&curves)?;
+    let loop_edges = ordered(model, &given)?;
+    let wire = crate::make::wire_within(model, &loop_edges, 1e-5)?;
+    crate::make::face_bounded_on(model, Surface::BSpline(surface), &[wire])
+}
+
+/// The bilinearly blended Coons patch of four B-spline curves closing a loop, as OCCT's
+/// `GeomFill_BSplineCurves` with `GeomFill_StretchStyle` makes it: the curves put end to end
+/// (the first kept, each next one the one starting, else ending, where the last ends, a closed
+/// one first), the third and fourth reversed to run the way of the first and second; each
+/// opposite pair raised to the same degree and given the same knots (the shorter range
+/// stretched over the longer, the knots of each inserted into the other); and the poles
+/// blended as `GeomFill_Stretch` blends them, pole (i, j) of the n × m net the sum of the
+/// first and third curves' poles i by 1 − j/(m − 1) and j/(m − 1) and of the fourth and
+/// second's poles j by 1 − i/(n − 1) and i/(n − 1), less the corners' bilinear blend.
+///
+/// On curves of a single span (Bézier curves) that is exactly the bilinearly blended Coons
+/// patch, its blending functions linear; on curves with inner knots OCCT's net is taken as it
+/// is (blended by the poles' positions in the net, not their Greville abscissae).
+#[doc(alias = "GeomFill_BSplineCurves")]
+#[doc(alias = "GeomFill_Stretch")]
+pub fn coons_surface(curves: &[crate::geometry::curve::BSplineCurve]) -> Result<BSplineSurface> {
+    use crate::geometry::curve::BSplineCurve;
+    let [c1, c2, c3, c4] = curves else {
+        return Err(Error::InvalidInput(format!("a Coons patch has four curves, not {}", curves.len())));
+    };
+    // Arrange: end to end from the first, within OCCT's confusion.
+    let tolerance = crate::tolerance::LINEAR;
+    let ends = |c: &BSplineCurve| (c.point(c.first_parameter()), c.point(c.last_parameter()));
+    let reversed = |c: &BSplineCurve| {
+        let mut r = c.clone();
+        r.reverse_as_occt();
+        r
+    };
+    let mut arranged: Vec<BSplineCurve> = vec![c1.clone(), c2.clone(), c3.clone(), c4.clone()];
+    for i in 1..=3 {
+        let tip = ends(&arranged[i - 1]).1;
+        // (A closed curve starting where the last ends first, then one starting there, else
+        // one ending there, reversed.)
+        let mut found = (i..=3).find(|&j| {
+            let (s, e) = ends(&arranged[j]);
+            s.distance(e) < tolerance && s.distance(tip) < tolerance
+        });
+        if found.is_none() {
+            for j in i..=3 {
+                let (s, e) = ends(&arranged[j]);
+                if s.distance(tip) < tolerance {
+                    found = Some(j);
+                    break;
+                }
+                if e.distance(tip) < tolerance {
+                    arranged[j] = reversed(&arranged[j]);
+                    found = Some(j);
+                    break;
+                }
+            }
+        }
+        let Some(j) = found else {
+            return Err(Error::InvalidInput("the curves of a Coons patch do not join end to end".into()));
+        };
+        arranged.swap(i, j);
+    }
+    let mut cc1 = arranged[0].clone();
+    let mut cc2 = arranged[1].clone();
+    let mut cc3 = reversed(&arranged[2]);
+    let mut cc4 = reversed(&arranged[3]);
+    // The same degree across each pair.
+    let degree_u = cc1.degree().max(cc3.degree());
+    let degree_v = cc2.degree().max(cc4.degree());
+    cc1.increase_degree(degree_u);
+    cc3.increase_degree(degree_u);
+    cc2.increase_degree(degree_v);
+    cc4.increase_degree(degree_v);
+    same_distribution(&mut cc1, &mut cc3)?;
+    same_distribution(&mut cc2, &mut cc4)?;
+    let (p1, p2, p3, p4) = (cc1.poles(), cc2.poles(), cc3.poles(), cc4.poles());
+    let (n, m) = (p1.len(), p2.len());
+    let rational = [&cc1, &cc2, &cc3, &cc4].iter().any(|c| c.is_rational());
+    // GeomFill_Stretch: the boundaries as they are, the inner poles blended.
+    let mut poles = vec![vec![Point::ORIGIN; m]; n];
+    for i in 0..n {
+        poles[i][0] = p1[i];
+        poles[i][m - 1] = p3[i];
+    }
+    let (nu, nv) = ((n - 1) as f64, (m - 1) as f64);
+    let blend = |terms: &[(f64, Point)]| {
+        let (x, y, z) = terms.iter().fold((0.0, 0.0, 0.0), |(x, y, z), (w, p)| (x + w * p.x, y + w * p.y, z + w * p.z));
+        Point::new(x, y, z)
+    };
+    for j in 1..m - 1 {
+        let (pv, pv1) = (j as f64 / nv, 1.0 - j as f64 / nv);
+        poles[0][j] = p4[j];
+        poles[n - 1][j] = p2[j];
+        for i in 1..n - 1 {
+            let (pu, pu1) = (i as f64 / nu, 1.0 - i as f64 / nu);
+            poles[i][j] = blend(&[
+                (pv1, p1[i]),
+                (pv, p3[i]),
+                (pu, p2[j]),
+                (pu1, p4[j]),
+                (-pu1 * pv1, p1[0]),
+                (-pu * pv1, p2[0]),
+                (-pu * pv, p3[n - 1]),
+                (-pu1 * pv, p4[m - 1]),
+            ]);
+        }
+    }
+    let knots = |c: &BSplineCurve| KnotVector::new(c.knots().to_vec(), c.multiplicities().to_vec(), c.degree());
+    let surface = BSplineSurface::try_new(poles, knots(&cc1), knots(&cc2))?;
+    if !rational {
+        return Ok(surface);
+    }
+    let weight_list = |c: &BSplineCurve| (0..c.poles().len()).map(|i| c.weight(i)).collect::<Vec<f64>>();
+    let (w1, w2, w3, w4) = (weight_list(&cc1), weight_list(&cc2), weight_list(&cc3), weight_list(&cc4));
+    let mut weights = vec![vec![1.0; m]; n];
+    for i in 0..n {
+        weights[i][0] = w1[i];
+        weights[i][m - 1] = w3[i];
+    }
+    for j in 1..m - 1 {
+        let (pv, pv1) = (j as f64 / nv, 1.0 - j as f64 / nv);
+        weights[0][j] = w4[j];
+        weights[n - 1][j] = w2[j];
+        for i in 1..n - 1 {
+            let (pu, pu1) = (i as f64 / nu, 1.0 - i as f64 / nu);
+            weights[i][j] = pv1 * w1[i] + pv * w3[i] + pu * w2[j] + pu1 * w4[j] - (pu1 * pv1 * w1[0] + pu * pv1 * w2[0] + pu * pv * w3[n - 1] + pu1 * pv * w4[m - 1]);
+        }
+    }
+    Ok(surface.with_weights(weights))
+}
+
+/// Two curves of the same degree given the same knots, as OCCT's `SetSameDistribution` (in
+/// `GeomFill_BSplineCurves`) gives them: the one of shorter range stretched over the other's
+/// (the second where they are as long), then each one's knots inserted into the other, to the
+/// greater multiplicity.
+fn same_distribution(c1: &mut crate::geometry::curve::BSplineCurve, c2: &mut crate::geometry::curve::BSplineCurve) -> Result<()> {
+    let reparametrized = |c: &crate::geometry::curve::BSplineCurve, (lo, hi): (f64, f64)| -> Result<crate::geometry::curve::BSplineCurve> {
+        // BSplCLib::Reparametrize: the knots mapped linearly onto [lo, hi].
+        let k = c.knots();
+        let (k0, k1) = (k[0], k[k.len() - 1]);
+        let mut knots: Vec<f64> = k.iter().map(|&x| lo + (x - k0) * (hi - lo) / (k1 - k0)).collect();
+        let last = knots.len() - 1;
+        knots[0] = lo;
+        knots[last] = hi;
+        let moved = crate::geometry::curve::BSplineCurve::try_new(c.poles().to_vec(), knots, c.multiplicities().to_vec(), c.degree())?;
+        Ok(match c.weights() {
+            Some(w) => moved.with_weights(w.to_vec()),
+            None => moved,
+        })
+    };
+    let range = |c: &crate::geometry::curve::BSplineCurve| (c.knots()[0], c.knots()[c.knots().len() - 1]);
+    let ((k11, k12), (k21, k22)) = (range(c1), range(c2));
+    if k12 - k11 > k22 - k21 {
+        *c2 = reparametrized(c2, (k11, k12))?;
+    } else if k12 - k11 < k22 - k21 {
+        *c1 = reparametrized(c1, (k21, k22))?;
+    } else if (k12 - k11).abs() > crate::tolerance::PARAMETRIC {
+        *c2 = reparametrized(c2, (k11, k12))?;
+    }
+    let of = |c: &crate::geometry::curve::BSplineCurve| -> Vec<(f64, usize)> { c.knots().iter().copied().zip(c.multiplicities().iter().copied()).collect() };
+    let (from1, from2) = (of(c1), of(c2));
+    c1.insert_knots(&from2);
+    c2.insert_knots(&from1);
+    if c1.poles().len() != c2.poles().len() {
+        return Err(Error::Failed("the opposite curves of a Coons patch took different knots".into()));
+    }
+    Ok(())
+}
+
 /// Copies of `edges` (each placed where it is: the face's own, joined at their ends without
 /// changing the edges given, which other faces may share) in order end to end, by their end
 /// points.
@@ -508,5 +702,74 @@ mod tests {
         assert!(d < 1e-4, "{d} at {u} {v}");
         // The edges lie on it, within the face's tolerance.
         assert!(model.tolerance(face) < 1e-4, "{}", model.tolerance(face));
+    }
+
+    /// The Coons patch of four straight edges closing a skew quadrilateral, from (0, 0, 5) to
+    /// (10, 0, 5), (10, 10, 15) and (0, 10, 5), given out of order and one the other way
+    /// round: the hyperbolic paraboloid z = 5 + xy/10, its area over the square
+    /// 100 (√3/3 + (2/3) ln(2 + √3) − π/18).
+    #[test]
+    fn coons_patch_of_four_lines_is_the_saddle() {
+        let mut model = Model::new();
+        let corners = [Point::new(0.0, 0.0, 5.0), Point::new(10.0, 0.0, 5.0), Point::new(10.0, 10.0, 15.0), Point::new(0.0, 10.0, 5.0)];
+        let edges: Vec<Shape> = [(0, 1), (2, 3), (2, 1), (3, 0)].iter().map(|&(i, j)| crate::make::edge_between(&mut model, corners[i], corners[j]).unwrap()).collect();
+        let face = coons(&mut model, &edges).unwrap();
+        assert!(crate::validity::check(&model, face).is_valid(), "{:?}", crate::validity::check(&model, face));
+        let surface = model.surface(face).unwrap().clone();
+        for (u, v) in [(0.25, 0.5), (0.7, 0.1), (0.5, 0.5)] {
+            let p = surface.point(u * 10.0, v * 10.0);
+            assert!((p.z - (5.0 + p.x * p.y / 10.0)).abs() < 1e-12, "{p:?}");
+        }
+        let exact = 100.0 * (3f64.sqrt() / 3.0 + (2.0 / 3.0) * (2.0 + 3f64.sqrt()).ln() - std::f64::consts::PI / 18.0);
+        let area = crate::properties::area(&model, face).mass;
+        assert!((area - exact).abs() < 1e-9 * exact, "{area} against {exact}");
+    }
+
+    /// The Coons patch of four parabolic arcs (quadratic Bézier curves) over the square from
+    /// (0, 0) to (10, 10): the saddle of height 10 + 8u(1 − u)(1 − 2v) + 8v(1 − v)(1 − 2u) at
+    /// (10u, 10v), and the block it caps down to z = 0 of volume 1000 (its rise and fall
+    /// cancel).
+    #[test]
+    fn coons_patch_of_four_parabolas_caps_a_block() {
+        use crate::geometry::curve::{BezierCurve, Curve};
+        let mut model = Model::new();
+        let p = Point::new;
+        let arcs = [
+            [p(0.0, 0.0, 10.0), p(5.0, 0.0, 14.0), p(10.0, 0.0, 10.0)],
+            [p(10.0, 0.0, 10.0), p(10.0, 5.0, 6.0), p(10.0, 10.0, 10.0)],
+            [p(10.0, 10.0, 10.0), p(5.0, 10.0, 6.0), p(0.0, 10.0, 10.0)],
+            [p(0.0, 10.0, 10.0), p(0.0, 5.0, 14.0), p(0.0, 0.0, 10.0)],
+        ];
+        let edges: Vec<Shape> = arcs.iter().map(|a| crate::make::edge_from_curve(&mut model, Curve::Bezier(BezierCurve::new(a.to_vec()))).unwrap()).collect();
+        let top = coons(&mut model, &edges).unwrap();
+        let surface = model.surface(top).unwrap().clone();
+        for (u, v) in [(0.25, 0.5), (0.7, 0.1), (0.5, 0.5), (0.9, 0.3)] {
+            let q = surface.point(u, v);
+            let height = 10.0 + 8.0 * u * (1.0 - u) * (1.0 - 2.0 * v) + 8.0 * v * (1.0 - v) * (1.0 - 2.0 * u);
+            assert!(q.distance(p(10.0 * u, 10.0 * v, height)) < 1e-12, "{q:?}");
+        }
+        // The four sides under the arcs and the floor, sewn with the patch.
+        let mut faces = vec![top];
+        for a in &arcs {
+            let (start, end) = (a[0], a[2]);
+            let (end_low, start_low) = (p(end.x, end.y, 0.0), p(start.x, start.y, 0.0));
+            let arc = crate::make::edge_from_curve(&mut model, Curve::Bezier(BezierCurve::new(a.to_vec()))).unwrap();
+            let rest: Vec<Shape> = [(end, end_low), (end_low, start_low), (start_low, start)].iter().map(|&(x, y)| crate::make::edge_between(&mut model, x, y).unwrap()).collect();
+            let wire = crate::make::wire(&mut model, &[arc, rest[0], rest[1], rest[2]]).unwrap();
+            faces.push(crate::make::planar_face(&mut model, wire).unwrap());
+        }
+        let floor: Vec<Shape> = (0..4).map(|i| {
+            let c = [p(0.0, 0.0, 0.0), p(10.0, 0.0, 0.0), p(10.0, 10.0, 0.0), p(0.0, 10.0, 0.0)];
+            crate::make::edge_between(&mut model, c[i], c[(i + 1) % 4]).unwrap()
+        }).collect();
+        let wire = crate::make::wire(&mut model, &floor).unwrap();
+        faces.push(crate::make::planar_face(&mut model, wire).unwrap());
+        let sewn = crate::sew::sew(&mut model, &faces, &crate::sew::SewOptions { tolerance: 1e-6, ..Default::default() }).unwrap();
+        let shells = model.unique_subshapes(sewn, NodeKind::Shell);
+        assert_eq!(shells.len(), 1);
+        let solid = model.new_empty(NodeKind::Solid);
+        model.add(solid, shells[0]).unwrap();
+        let volume = crate::properties::volume(&model, solid).mass.abs();
+        assert!((volume - 1000.0).abs() < 1e-9 * 1000.0, "{volume}");
     }
 }
