@@ -3374,6 +3374,135 @@ fn crosses_itself(model: &Model, shape: Shape) -> bool {
     crate::validity::check_unmeasured(model, shape).errors().any(|p| p.kind == crate::validity::ProblemKind::SelfIntersection)
 }
 
+/// An edge to chamfer by distances varying along it: `first` along `face` (one of the two
+/// faces at the edge; either if `None`) and `second` along the other, each through `(u, d)`
+/// pairs, `u` the position along the edge (rescaled so that the first and last pairs are at
+/// its ends, by length, from its start as its curve runs) and the distance linear between
+/// them (one pair gives a constant distance).
+#[derive(Debug, Clone, PartialEq)]
+pub struct EvolvingChamfer {
+    pub edge: Shape,
+    pub face: Option<Shape>,
+    pub first: Vec<(f64, f64)>,
+    pub second: Vec<(f64, f64)>,
+}
+
+/// `shape` with edges bevelled by distances varying along each (see [`EvolvingChamfer`]):
+/// section by section along the edge, as [`chamfer_edges`] bevels edges between faces of
+/// other kinds than planes, cylinders, cones, spheres and tori, each section square to the
+/// edge the straight line between the faces' points at its distances from the edge (chords,
+/// in that section). The chamfer is the surface ruled by those lines.
+///
+/// (OCCT has no such chamfer: `BRepFilletAPI_MakeChamfer` takes distances constant along
+/// each edge.)
+pub fn chamfer_evolving(model: &mut Model, shape: Shape, edges: &[EvolvingChamfer]) -> Result<Shape> {
+    if edges.is_empty() {
+        return Err(Error::InvalidInput("no edges to chamfer".into()));
+    }
+    let reach = edges.iter().flat_map(|e| e.first.iter().chain(&e.second).map(|&(_, d)| d)).fold(0.0, f64::max);
+    on_solids(model, shape, reach, |model, shape, found| {
+        let edges: Option<Vec<EvolvingChamfer>> = edges
+            .iter()
+            .map(|e| found(model, shape, e.edge).and_then(|c| (c == e.edge || e.face.is_none()).then(|| EvolvingChamfer { edge: c, ..e.clone() })))
+            .collect();
+        let edges = edges.ok_or_else(|| Error::Failed("an edge to chamfer not found again on the shell made solid".into()))?;
+        chamfer_solid_evolving(model, shape, &edges)
+    })
+}
+
+/// [`chamfer_evolving`] of a shape with solids: the edges all together (meeting in mitres
+/// and corners), else one after another, in the order given and then in reverse; each way
+/// taken only where it leaves the shape as sound as it was.
+fn chamfer_solid_evolving(model: &mut Model, shape: Shape, edges: &[EvolvingChamfer]) -> Result<Shape> {
+    // (On the shape unplaced, in its own units, the result placed as the shape is.)
+    let placement = shape.placement;
+    if edges.iter().any(|e| e.edge.placement != placement) {
+        todo!("chamfers of edges placed apart from their shape, varying along them");
+    }
+    let unscale = 1.0 / placement.scale_factor().abs();
+    let shape = Shape { placement: Transform::IDENTITY, ..shape };
+    let laws: Vec<[DistanceLaw; 2]> = edges.iter().map(|e| Ok([DistanceLaw::new(&e.first)?, DistanceLaw::new(&e.second)?])).collect::<Result<_>>()?;
+    let distances: Vec<[Box<dyn Fn(f64) -> f64 + '_>; 2]> = laws.iter().map(|[a, b]| [Box::new(move |s: f64| a.at(s) * unscale) as Box<dyn Fn(f64) -> f64>, Box::new(move |s: f64| b.at(s) * unscale) as Box<dyn Fn(f64) -> f64>]).collect();
+    let profile = |k: usize| ball::Profile::ChamferLaw { first: edges[k].face.map(|f| f.node), distances: [distances[k][0].as_ref(), distances[k][1].as_ref()] };
+    let mut wanted = Vec::with_capacity(edges.len());
+    for e in edges {
+        let edge = Shape { placement: Transform::IDENTITY, orientation: Orientation::Forward, ..e.edge };
+        let (curve, first, last) = model.edge_curve(edge).ok_or_else(|| Error::InvalidInput("a degenerate edge has no chamfer".into()))?;
+        wanted.push((curve, first, last));
+    }
+    let before = fault_kinds(model, shape);
+    let together: Vec<(Shape, ball::Profile)> = edges.iter().enumerate().map(|(k, e)| (Shape { placement: Transform::IDENTITY, ..e.edge }, profile(k))).collect();
+    let all = match together.as_slice() {
+        [(edge, profile)] => ball::rolling_chamfer(model, shape, *edge, profile),
+        _ => ball::blend_network(model, shape, &together),
+    };
+    let mut failure = match all.and_then(|done| sound(model, &before, done)) {
+        Ok(done) => return Ok(done.moved(&placement)),
+        Err(e) => e,
+    };
+    if edges.len() == 1 {
+        return Err(failure);
+    }
+    'orders: for reverse in [false, true] {
+        let mut order: Vec<usize> = (0..edges.len()).collect();
+        if reverse {
+            order.reverse();
+        }
+        let mut result = shape;
+        for k in order {
+            let (curve, first, last) = &wanted[k];
+            let Some(edge) = find_edge(model, result, curve, *first, *last) else {
+                failure = Error::Failed("a chamfered edge was lost by another chamfer".into());
+                continue 'orders;
+            };
+            match ball::rolling_chamfer(model, result, edge, &profile(k)) {
+                Ok(done) => result = done,
+                Err(e) => {
+                    failure = e;
+                    continue 'orders;
+                }
+            }
+        }
+        match sound(model, &before, result) {
+            Ok(result) => return Ok(result.moved(&placement)),
+            Err(e) => failure = e,
+        }
+    }
+    Err(failure)
+}
+
+/// A distance along an edge: linear between `(s, d)` pairs (`s` from 0 to 1), and on past
+/// the first and last pairs as between them and their neighbours.
+struct DistanceLaw {
+    s: Vec<f64>,
+    d: Vec<f64>,
+}
+
+impl DistanceLaw {
+    fn new(pairs: &[(f64, f64)]) -> Result<DistanceLaw> {
+        let (first, last) = match pairs {
+            [] => return Err(Error::InvalidInput("a distance law needs at least one value".into())),
+            [(_, d)] => return Ok(DistanceLaw { s: vec![0.0, 1.0], d: vec![*d, *d] }),
+            [f, .., l] => (f.0, l.0),
+        };
+        if !(last > first) {
+            return Err(Error::InvalidInput("distance law parameters must increase".into()));
+        }
+        let s: Vec<f64> = pairs.iter().map(|p| (p.0 - first) / (last - first)).collect();
+        let d: Vec<f64> = pairs.iter().map(|p| p.1).collect();
+        if s.windows(2).any(|w| !(w[0] < w[1])) || d.iter().any(|&d| !(d > 0.0)) {
+            return Err(Error::InvalidInput("distance law parameters must increase and distances be positive".into()));
+        }
+        Ok(DistanceLaw { s, d })
+    }
+
+    fn at(&self, s: f64) -> f64 {
+        let k = self.s.partition_point(|&x| x <= s).clamp(1, self.s.len() - 1);
+        let (s0, s1, d0, d1) = (self.s[k - 1], self.s[k], self.d[k - 1], self.d[k]);
+        d0 + (d1 - d0) * (s - s0) / (s1 - s0)
+    }
+}
+
 /// A radius along an edge: the B-spline through `(s, r)` pairs (`s` from 0 to 1) as OCCT's
 /// `Law_Interpol` makes it (cubic, its inner knots at the pairs but the second and the last
 /// but one), or, along a closed edge, the periodic cubic spline (OCCT's periodic
@@ -6252,5 +6381,97 @@ mod radius_law_tests {
         for (u, r) in pairs {
             assert!((law.at(u / 5.0) - r).abs() < 1e-12, "{u}: {}", law.at(u / 5.0));
         }
+    }
+}
+
+#[cfg(test)]
+mod evolving_chamfer_tests {
+    use super::*;
+    use crate::geometry::ParametricCurve;
+    use crate::primitives::{Cuboid, Cylinder};
+    use crate::{properties, validity};
+    use std::f64::consts::PI;
+
+    /// The edge of `shape` through `p`.
+    fn edge_through(model: &Model, shape: Shape, p: Point) -> Shape {
+        model
+            .unique_subshapes(shape, NodeKind::Edge)
+            .into_iter()
+            .find(|&e| {
+                let (curve, first, last) = model.edge_curve(e).unwrap();
+                (0..=64).any(|k| curve.point(first + (last - first) * k as f64 / 64.0).distance(p) < 1e-9)
+            })
+            .unwrap()
+    }
+
+    /// The face of `shape` whose surface passes through `p` with normal along `normal`.
+    fn plane_face(model: &Model, shape: Shape, p: Point, normal: Vector) -> Shape {
+        model
+            .unique_subshapes(shape, NodeKind::Face)
+            .into_iter()
+            .find(|&f| matches!(model.surface(f), Some(Surface::Plane(plane)) if plane.distance(p) < 1e-9 && Vector::from(plane.normal()).cross(normal).length() < 1e-9))
+            .unwrap()
+    }
+
+    /// A cube of side 10, its edge where x = 10 and y = 10 meet chamfered by d₁ = 1 + z/5 on
+    /// the face x = 10 and 2 on the face y = 10: a hyperbolic paraboloid, the volume
+    /// 1000 − ∫ d₁d₂/2 dz = 980, the area 556 plus the chamfer's
+    /// ∫∫√(d₁² + d₂² + d₂²d₁′²(1 − s)²) ds dz = 28.681813375305474.
+    #[test]
+    fn a_cube_edge_chamfered_by_a_distance_growing_along_it() {
+        let mut model = Model::new();
+        let cube = Cuboid::from_corners(Point::ORIGIN, Point::new(10.0, 10.0, 10.0)).build(&mut model).unwrap();
+        let edge = edge_through(&model, cube, Point::new(10.0, 10.0, 5.0));
+        let face = plane_face(&model, cube, Point::new(10.0, 0.0, 0.0), Vector::new(1.0, 0.0, 0.0));
+        // (The law from the edge's start as its curve runs.)
+        let (curve, first, _) = model.edge_curve(edge).unwrap();
+        let law = if curve.point(first).z < 5.0 { vec![(0.0, 1.0), (1.0, 3.0)] } else { vec![(0.0, 3.0), (1.0, 1.0)] };
+        let chamfered = chamfer_evolving(&mut model, cube, &[EvolvingChamfer { edge, face: Some(face), first: law, second: vec![(0.0, 2.0)] }]).unwrap();
+        let report = validity::check(&model, chamfered);
+        assert!(report.problems.is_empty(), "{report:?}");
+        let v = properties::volume(&model, chamfered).mass;
+        assert!((v - 980.0).abs() < 1e-8 * v, "{v}");
+        let a = properties::area(&model, chamfered).mass;
+        let exact = 556.0 + 28.681813375305474;
+        assert!((a - exact).abs() < 1e-7 * a, "{a} against {exact}");
+    }
+
+    /// The half of the cylinder of radius 5 and height 6 on the side x ≥ 0, its curved rim
+    /// chamfered by d = 3/2 + φ/π on both faces (1 to 2 round it): each section's area d²/2,
+    /// its moment about the side d³/6, so by Pappus the volume
+    /// 75π − ∫(5d²/2 − d³/6) dφ = 75π − 35π/6 + 5π/8; the area the flat faces' and the
+    /// side's, 60 − 5/2 + ½∫(5 − d)² dφ + ∫5(6 − d) dφ + 25π/2, and the chamfer's, ruled
+    /// between a spiral of Archimedes and a helix, 28.178752964207046 (by quadrature).
+    #[test]
+    fn a_semicircular_rim_chamfered_by_a_distance_growing_round_it() {
+        let mut model = Model::new();
+        let frame = Frame::new(Point::ORIGIN, Direction::Z, Direction::from_vector(Vector::new(0.0, -1.0, 0.0)));
+        let half = Cylinder::new(5.0, 6.0).with_frame(frame).with_angle(PI).build(&mut model).unwrap();
+        let rim = edge_through(&model, half, Point::new(5.0, 0.0, 6.0));
+        let (curve, first, _) = model.edge_curve(rim).unwrap();
+        let law = if curve.point(first).y < 0.0 { vec![(0.0, 1.0), (1.0, 2.0)] } else { vec![(0.0, 2.0), (1.0, 1.0)] };
+        let chamfered = chamfer_evolving(&mut model, half, &[EvolvingChamfer { edge: rim, face: None, first: law.clone(), second: law }]).unwrap();
+        let report = validity::check(&model, chamfered);
+        assert!(report.problems.is_empty(), "{report:?}");
+        let v = properties::volume(&model, chamfered).mass;
+        let exact = 75.0 * PI - 35.0 * PI / 6.0 + 5.0 * PI / 8.0;
+        assert!((v - exact).abs() < 1e-7 * exact, "{v} against {exact}");
+        // (d runs linearly with φ, dφ = π dd: each integral by its antiderivative in d.)
+        let d = |phi: f64| 1.5 + phi / PI;
+        let integral = |f: &dyn Fn(f64) -> f64| PI * (f(d(PI / 2.0)) - f(d(-PI / 2.0)));
+        let flat_top = 0.5 * integral(&|x: f64| -(5.0 - x).powi(3) / 3.0);
+        let side = 5.0 * integral(&|x: f64| -(6.0 - x).powi(2) / 2.0);
+        let exact = 60.0 - 2.5 + flat_top + side + 12.5 * PI + 28.178752964207046;
+        let a = properties::area(&model, chamfered).mass;
+        assert!((a - exact).abs() < 1e-7 * exact, "{a} against {exact}");
+    }
+
+    #[test]
+    fn distance_laws_are_linear_between_their_pairs_and_beyond() {
+        let law = DistanceLaw::new(&[(2.0, 1.0), (4.0, 2.0), (6.0, 4.0)]).unwrap();
+        for (s, d) in [(0.0, 1.0), (0.25, 1.5), (0.5, 2.0), (0.75, 3.0), (1.0, 4.0), (-0.5, 0.0), (1.25, 5.0)] {
+            assert!((law.at(s) - d).abs() < 1e-15, "{s}: {}", law.at(s));
+        }
+        assert!(DistanceLaw::new(&[(0.0, 1.0), (1.0, -1.0)]).is_err());
     }
 }

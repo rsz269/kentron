@@ -241,10 +241,14 @@ struct Section {
 /// What runs along the edge: a ball of radius `law(s)` (`s` the fraction of the edge's
 /// length from its start), or a chamfer cutting back `distance` along the first face
 /// (`first`, else the first side found) and along the second the other distance, or as far
-/// as a cut at `angle` (radians) to the first face reaches.
+/// as a cut at `angle` (radians) to the first face reaches; or a chamfer whose two distances
+/// vary along the edge, `distances[0](s)` along the first face and `distances[1](s)` along the
+/// second (`s` the fraction of the edge's length from its start, below 0 and above 1 past its
+/// ends).
 pub(super) enum Profile<'a> {
     Ball(&'a dyn Fn(f64) -> f64),
     Chamfer { first: Option<crate::topology::NodeId>, distance: f64, second: ChamferSecond },
+    ChamferLaw { first: Option<crate::topology::NodeId>, distances: [&'a dyn Fn(f64) -> f64; 2] },
 }
 
 /// How far a chamfer cuts back along its second face.
@@ -289,6 +293,7 @@ fn rolling_on(model: &Model, shape: Shape, edge: Shape, profile: &Profile, far: 
         Profile::Ball(law) => (0..=8).map(|i| law(i as f64 / 8.0)).fold(0.0, f64::max),
         Profile::Chamfer { distance, second: ChamferSecond::Distance(d), .. } => distance.max(*d),
         Profile::Chamfer { distance, .. } => 2.0 * distance,
+        Profile::ChamferLaw { distances, .. } => (0..=8).map(|i| distances[0](i as f64 / 8.0).max(distances[1](i as f64 / 8.0))).fold(0.0, f64::max),
     };
     let sides = sides_of(model, shape, id, carry.then_some((4 * far + 1) as f64 * size))?;
     // The fraction of the edge's length from its start, for the radius law.
@@ -307,6 +312,19 @@ fn rolling_on(model: &Model, shape: Shape, edge: Shape, profile: &Profile, far: 
         let k = (x.floor() as usize).min(lengths.len() - 2);
         let l = lengths[k] + (lengths[k + 1] - lengths[k]) * (x - k as f64);
         l / lengths[lengths.len() - 1]
+    };
+    // (Past the ends too, for a chamfer's distance laws: below 0 before the start and above 1
+    // after the end, by the length along the edge's curve carried on.)
+    let fraction_past = |t: f64| {
+        let total = lengths[lengths.len() - 1];
+        let past_end = |end: f64| (0..16).map(|k| curve.point(end + (t - end) * k as f64 / 16.0).distance(curve.point(end + (t - end) * (k + 1) as f64 / 16.0))).sum::<f64>() / total;
+        if (t - t0) * (t1 - t0) < 0.0 {
+            -past_end(t0)
+        } else if (t - t1) * (t1 - t0) > 0.0 {
+            1.0 + past_end(t1)
+        } else {
+            fraction(t)
+        }
     };
 
     // Convex where the material lies between the faces: the ball rolls inside it (at
@@ -334,7 +352,7 @@ fn rolling_on(model: &Model, shape: Shape, edge: Shape, profile: &Profile, far: 
     // A chamfer's distances along the two sides (the second from the angle in the faces'
     // cross-section at the edge's middle, by the sines' law in its triangle).
     let chamfer: Option<[f64; 2]> = match profile {
-        Profile::Ball(_) => None,
+        Profile::Ball(_) | Profile::ChamferLaw { .. } => None,
         Profile::Chamfer { first, distance, second } => {
             let swapped = first.is_some_and(|f| sides[1].face.node == f);
             let (a, b) = if swapped { (1, 0) } else { (0, 1) };
@@ -358,10 +376,24 @@ fn rolling_on(model: &Model, shape: Shape, edge: Shape, profile: &Profile, far: 
         Profile::Chamfer { first, second: ChamferSecond::Angle(angle), .. } => Some((if first.is_some_and(|f| sides[1].face.node == f) { 1 } else { 0 }, *angle)),
         _ => None,
     };
+    // (A chamfer's distances varying along the edge: each section's along the two sides,
+    // at its fraction of the edge's length.)
+    let chamfer_at = |t: f64| -> Option<[f64; 2]> {
+        match profile {
+            Profile::ChamferLaw { first, distances } => {
+                let s = fraction_past(t);
+                let (a, b) = (distances[0](s), distances[1](s));
+                Some(if first.is_some_and(|f| sides[1].face.node == f) { [b, a] } else { [a, b] })
+            }
+            _ => chamfer,
+        }
+    };
+    let is_chamfer = !matches!(profile, Profile::Ball(_));
     let chamfer_size = chamfer.map(|d| d[0].max(d[1]));
     let ball_law = |s: f64| match profile {
         Profile::Ball(law) => law(s),
         Profile::Chamfer { .. } => chamfer_size.expect("a chamfer's size"),
+        Profile::ChamferLaw { distances, .. } => distances[0](s).max(distances[1](s)),
     };
     let radius: &dyn Fn(f64) -> f64 = &ball_law;
 
@@ -400,7 +432,10 @@ fn rolling_on(model: &Model, shape: Shape, edge: Shape, profile: &Profile, far: 
             return Err(Error::InvalidInput(format!("fillet radius must be positive, got {r}")));
         }
         let (o, tangent) = spine_at(t)?;
-        if let Some(distances) = chamfer {
+        if let Some(distances) = chamfer_at(t) {
+            if !(distances[0] > crate::tolerance::LINEAR && distances[1] > crate::tolerance::LINEAR) {
+                return Err(Error::InvalidInput(format!("chamfer distances must be positive, got {distances:?}")));
+            }
             let near = last_contacts.get();
             let on_edge = (t0.min(t1)..=t0.max(t1)).contains(&t);
             let s = chamfer_section(&sides, o, tangent, distances, cut_angle, near, on_edge).or_else(|e| match near {
@@ -705,8 +740,8 @@ fn rolling_on(model: &Model, shape: Shape, edge: Shape, profile: &Profile, far: 
         sweep_with(true).map(|(s, c, k, _)| (s, c, k))
     };
     let (sections, contacts, scan) = match sweep() {
-        Ok(swept) if chamfer.is_some() || !folds(&swept.0) => swept,
-        Err(e) if chamfer.is_some() => return Err(e),
+        Ok(swept) if is_chamfer || !folds(&swept.0) => swept,
+        Err(e) if is_chamfer => return Err(e),
         first => {
             characteristic.set(true);
             match sweep() {
