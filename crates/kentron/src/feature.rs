@@ -930,7 +930,7 @@ fn swept(model: &mut Model, profile: Shape, d: Vector, a: f64, b: f64, draft: Op
         })
         .map(|face| crate::draft::DraftedFace { face, angle, neutral })
         .collect();
-    crate::draft::draft(model, solid, direction, &sides)
+    crate::draft::drafted(model, solid, direction, &sides, false)
 }
 
 /// How far `shape` reaches along unit `d` from `origin`: the least and greatest

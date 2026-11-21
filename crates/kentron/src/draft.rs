@@ -31,6 +31,14 @@ pub struct DraftedFace {
 #[doc(alias = "BRepOffsetAPI_DraftAngle")]
 #[doc(alias = "depouille")]
 pub fn draft(model: &mut Model, shape: Shape, direction: Direction, faces: &[DraftedFace]) -> Result<Shape> {
+    drafted(model, shape, direction, faces, true)
+}
+
+/// `draft`; `ordered`: a straight edge the draft turns round (its faces' new planes meeting
+/// past its ends, as where drafted sides close over a face) fails it, as it fails OCCT's
+/// Draft_Modification (Draft_EdgeRecomputation). A drafted prism, longer than the part of it
+/// a feature keeps, lets its far end turn round.
+pub(crate) fn drafted(model: &mut Model, shape: Shape, direction: Direction, faces: &[DraftedFace], ordered: bool) -> Result<Shape> {
     // Each face to draft (by node), with its settings: the given faces, then those tangent
     // to them.
     let mut drafted: HashMap<NodeId, (f64, Plane)> = HashMap::new();
@@ -62,7 +70,7 @@ pub fn draft(model: &mut Model, shape: Shape, direction: Direction, faces: &[Dra
             }
         }
     };
-    let drafted = crate::offset::shape::with_surfaces(model, shape, &new_surface)?;
+    let drafted = crate::offset::shape::with_surfaces(model, shape, &new_surface, ordered)?;
     // (A loop the draft moves over a seam: the seam moved off it.)
     crate::heal::move_crossed_seams(model, drafted)?;
     Ok(drafted)
@@ -329,6 +337,61 @@ mod tests {
         // (OCCT: 2018.64.)
         let area = crate::properties::area(&model, drafted).mass;
         assert!((area - 2018.64).abs() < 1e-3 * 2018.64, "{area}");
+    }
+
+    /// The outline through `corners` in the plane z = 0 extruded `h` up, its sides drafted
+    /// `degrees` about its floor, inward as they rise.
+    fn sides_drafted(model: &mut Model, corners: &[(f64, f64)], h: f64, degrees: f64) -> Result<Shape> {
+        let n = corners.len();
+        let edges: Vec<Shape> = (0..n)
+            .map(|i| {
+                let ((x0, y0), (x1, y1)) = (corners[i], corners[(i + 1) % n]);
+                crate::make::edge_between(model, Point::new(x0, y0, 0.0), Point::new(x1, y1, 0.0)).unwrap()
+            })
+            .collect();
+        let wire = crate::make::wire(model, &edges).unwrap();
+        let floor = crate::make::planar_face(model, wire).unwrap();
+        let block = crate::sweep::extrude(model, floor, Vector::new(0.0, 0.0, h)).unwrap().shape;
+        let bottom = Plane::new(Point::ORIGIN, Direction::Z);
+        let sides: Vec<DraftedFace> = model
+            .unique_subshapes(block, NodeKind::Face)
+            .into_iter()
+            .filter(|&f| matches!(model.surface(f), Some(Surface::Plane(p)) if p.normal().z().abs() < 0.5))
+            .map(|face| DraftedFace { face, angle: degrees.to_radians(), neutral: bottom })
+            .collect();
+        assert_eq!(sides.len(), n);
+        draft(model, block, Direction::Z, &sides)
+    }
+
+    /// A box's sides drafted until its top is nearly gone: the long sides meet at 5√3, just
+    /// above the top at 8; the section at height z is (a − 2zt)(b − 2zt), t = tan 30°.
+    #[test]
+    fn a_box_drafted_to_a_narrow_top() {
+        let mut model = Model::new();
+        let (a, b, h) = (30.0, 10.0, 8.0);
+        let drafted = sides_drafted(&mut model, &[(0.0, 0.0), (a, 0.0), (a, b), (0.0, b)], h, 30.0).unwrap();
+        valid(&model, drafted);
+        let t = 30f64.to_radians().tan();
+        let expected = a * b * h - (a + b) * t * h * h + 4.0 * t * t * h * h * h / 3.0;
+        assert!((volume(&model, drafted).mass - expected).abs() < 1e-6 * expected, "{}", volume(&model, drafted).mass);
+    }
+
+    /// The same box 10 high: its long sides meet at 5√3, below the top, whose short edges the
+    /// draft would turn round. OCCT fails it (Draft_EdgeRecomputation), and so does kentron,
+    /// where keeping the topology would make a solid inside out at the top.
+    #[test]
+    fn a_box_drafted_until_its_top_is_gone_is_refused() {
+        let mut model = Model::new();
+        assert!(sides_drafted(&mut model, &[(0.0, 0.0), (30.0, 0.0), (30.0, 10.0), (0.0, 10.0)], 10.0, 30.0).is_err());
+    }
+
+    /// An L-block 8 high, its arms 5 wide, its sides drafted 30°: they close over each arm at
+    /// 2.5/tan 30° ≈ 4.33, below the top. OCCT fails it; kentron made a wrong solid.
+    #[test]
+    fn an_l_block_drafted_until_its_arms_close_is_refused() {
+        let mut model = Model::new();
+        let outline = [(0.0, 0.0), (20.0, 0.0), (20.0, 5.0), (5.0, 5.0), (5.0, 15.0), (0.0, 15.0)];
+        assert!(sides_drafted(&mut model, &outline, 8.0, 30.0).is_err());
     }
 
     #[test]

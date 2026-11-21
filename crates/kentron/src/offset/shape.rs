@@ -488,7 +488,7 @@ fn offset_faces(model: &mut Model, shape: Shape, distance: f64, own: &[(NodeId, 
         Ok(())
     };
     let scale = own.iter().map(|(_, d)| d.abs()).fold(distance.abs(), f64::max);
-    let mut moved = replace_surfaces(model, shape, &new_surface, &check, scale)?;
+    let mut moved = replace_surfaces(model, shape, &new_surface, &check, scale, false)?;
     moved.parting = parting.into_inner();
     Ok(moved)
 }
@@ -549,21 +549,24 @@ fn round_parting(model: &mut Model, shape: Shape, moved: &Moved, radius: f64) ->
 
 /// `shape` with its faces' surfaces replaced by `new_surface` (given each face as the shape
 /// uses it and its surface, placed), keeping the topology: the vertices and edges found
-/// again where the new surfaces meet.
-pub(crate) fn with_surfaces(model: &mut Model, shape: Shape, new_surface: &dyn Fn(Shape, &Surface) -> Result<Surface>) -> Result<Shape> {
-    let moved = replace_surfaces(model, shape, new_surface, &|_, _| Ok(()), 0.0)?;
+/// again where the new surfaces meet. `ordered`: a straight edge whose new vertices come in
+/// the other order fails it.
+pub(crate) fn with_surfaces(model: &mut Model, shape: Shape, new_surface: &dyn Fn(Shape, &Surface) -> Result<Surface>, ordered: bool) -> Result<Shape> {
+    let moved = replace_surfaces(model, shape, new_surface, &|_, _| Ok(()), 0.0, ordered)?;
     rebuild(model, shape, &moved.faces, &moved.new_faces)
 }
 
 /// The faces of `shape` on the surfaces `new_surface` gives them, with the same topology:
 /// `check` sees the faces and edges before anything is built; `scale` is a length the
-/// tolerances grow with (beside the shape's size).
+/// tolerances grow with (beside the shape's size); `ordered`: a straight edge whose new
+/// vertices come in the other order fails it (as Draft_Modification fails it).
 fn replace_surfaces(
     model: &mut Model,
     shape: Shape,
     new_surface: &dyn Fn(Shape, &Surface) -> Result<Surface>,
     check: &dyn Fn(&[OldFace], &[OldEdge]) -> Result<()>,
     scale: f64,
+    ordered: bool,
 ) -> Result<Moved> {
     // Faces and their new surfaces.
     let mut faces: Vec<OldFace> = Vec::new();
@@ -682,7 +685,7 @@ fn replace_surfaces(
     // The new edges, with their pcurves on the faces using them.
     let mut new_edges: Vec<(EdgeId, Vec<(Curve2, f64, f64)>)> = Vec::with_capacity(edges.len());
     for edge in &edges {
-        new_edges.push(trace_edge(model, &faces, edge, &new_points, &new_vertices, tolerance)?);
+        new_edges.push(trace_edge(model, &faces, edge, &new_points, &new_vertices, tolerance, ordered)?);
         // (Each new face and edge from the one it replaces, for the history.)
         crate::boolean::record(model.uid(), edge.shape.node, new_edges[new_edges.len() - 1].0.into());
     }
@@ -1011,6 +1014,7 @@ fn trace_edge(
     points: &[Point],
     vertices: &[VertexId],
     tolerance: f64,
+    ordered: bool,
 ) -> Result<(EdgeId, Vec<(Curve2, f64, f64)>)> {
     let (a, b) = (points[edge.start], points[edge.end]);
     let id = model.add_edge(vertices[edge.start], vertices[edge.end], tolerance)?;
@@ -1212,6 +1216,13 @@ fn trace_edge(
         } else {
             conic = None;
         }
+    }
+    // A straight edge whose new vertices come in the other order along it than the old ones
+    // (its faces' new planes meet past each other, as where a draft closes over a face): the
+    // edge turned round. Draft_Modification fails it (Draft_EdgeRecomputation): its new line
+    // runs the old edge's way, and the parameters of its vertices on it do not increase.
+    if ordered && n == 1 && (b - a).dot(curve.d1(edge.first).1) <= 0.0 {
+        return Err(Error::InvalidInput("an edge turned round (its faces' new surfaces meet past its ends)".into()));
     }
     let curve3 = if n == 1 {
         Curve::Line(Line { origin: a, direction: Direction::try_from_vector(b - a).ok_or_else(|| Error::InvalidInput("an offset edge of no length".into()))? })
