@@ -2989,4 +2989,19 @@ mod tests {
         let result = intersection(&mut model, cube, above).unwrap();
         measures(&model, result, 125.0 * s, 50.0 + 50.0 * (1.0 + s * s).sqrt() + 75.0 * s, 1e-7);
     }
+
+    /// Two balls of radius 5 whose centres are d = 10 − 10⁻⁶ apart: their lens, a millionth
+    /// thick, lies everywhere within the classifying distance of the other ball, but two
+    /// spheres not one meet only along a circle: π(4r + d)(2r − d)²/12, its area
+    /// 4πr(r − d/2).
+    #[test]
+    fn a_lens_a_millionth_thick() {
+        let mut model = Model::new();
+        let (r, d) = (5.0, 9.999999);
+        let first = Sphere::new(r).build(&mut model).unwrap();
+        let second = Sphere::new(r).with_frame(Frame::from_z(Point::new(d, 0.0, 0.0), Direction::Z)).build(&mut model).unwrap();
+        let result = intersection(&mut model, first, second).unwrap();
+        let thickness: f64 = 2.0 * r - d;
+        measures(&model, result, PI * (4.0 * r + d) * thickness * thickness / 12.0, 4.0 * PI * r * (r - 0.5 * d), 1e-6);
+    }
 }
