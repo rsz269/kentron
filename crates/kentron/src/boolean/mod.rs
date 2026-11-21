@@ -2919,4 +2919,58 @@ mod tests {
         let volume = properties::volume(&model, result).mass;
         assert!((volume - 355415.434).abs() < 1e-2, "{volume}");
     }
+
+    /// The solid paraboloid x² + y² ≤ 8z, z ≤ `height`: the parabola of the xz plane from its
+    /// vertex at the origin to the top's rim, closed by the top's radius and the axis, turned
+    /// a whole turn about the z axis.
+    fn paraboloid(model: &mut Model, height: f64) -> Shape {
+        use crate::geometry::curve::{Curve, Parabola};
+        let frame = Frame::new(Point::new(0.0, 0.0, 0.0), Direction::Y, Direction::Z);
+        let rim = (8.0 * height).sqrt();
+        let side = crate::make::edge_from_curve_range(model, Curve::Parabola(Parabola::new(frame, 2.0)), 0.0, rim).unwrap();
+        let top = crate::make::edge_between(model, Point::new(rim, 0.0, height), Point::new(0.0, 0.0, height)).unwrap();
+        let axis = crate::make::edge_between(model, Point::new(0.0, 0.0, height), Point::new(0.0, 0.0, 0.0)).unwrap();
+        let wire = crate::make::wire(model, &[side, top, axis]).unwrap();
+        let section = crate::make::planar_face(model, wire).unwrap();
+        crate::sweep::revolve(model, section, crate::math::Axis::Z, 2.0 * PI).unwrap().shape
+    }
+
+    /// Checks the result is valid, with the expected volume and area to `relative`.
+    fn measures(model: &Model, shape: Shape, volume: f64, area: f64, relative: f64) {
+        let report = validity::check(model, shape);
+        assert!(report.is_valid(), "{report:?}");
+        let v = properties::volume(model, shape).mass;
+        let a = properties::area(model, shape).mass;
+        assert!((v - volume).abs() <= relative * volume, "volume {v} != {volume}");
+        assert!((a - area).abs() <= relative * area, "area {a} != {area}");
+    }
+
+    /// A block (−10, −10, 0) … (10, 10, 10) united with the paraboloid x² + y² ≤ 8z, z ≤ 12.5,
+    /// its vertex on the block's bottom face from inside, standing out of its top. The
+    /// parabola runs on across the axis past its vertex: turned, the surface's parameters of
+    /// a point of the paraboloid were found on either half, half a turn apart, and the side
+    /// was lost; with the basis trimmed to the edge (as OCCT's) the union is whole:
+    /// 4000 + 225π, its area 1600 + 20π + (4π/3)(29√29 − 48√6).
+    #[test]
+    fn a_paraboloid_tip_on_a_face_united() {
+        let mut model = Model::new();
+        let block = Cuboid::from_corners(Point::new(-10.0, -10.0, 0.0), Point::new(10.0, 10.0, 10.0)).build(&mut model).unwrap();
+        let solid = paraboloid(&mut model, 12.5);
+        let result = union(&mut model, block, solid).unwrap();
+        let area = 1600.0 + 20.0 * PI + 4.0 * PI / 3.0 * (29.0 * 29f64.sqrt() - 48.0 * 6f64.sqrt());
+        measures(&model, result, 4000.0 + 225.0 * PI, area, 1e-7);
+    }
+
+    /// The paraboloid x² + y² ≤ 8z, z ≤ 8, common with a block below the plane z = h = 10⁻⁴:
+    /// its tip, 4πh², its area 8πh + (32π/3)((1 + h/2)^{3/2} − 1).
+    #[test]
+    fn a_paraboloid_tip_a_ten_thousandth_high() {
+        let mut model = Model::new();
+        let solid = paraboloid(&mut model, 8.0);
+        let h = 1e-4;
+        let below = Cuboid::from_corners(Point::new(-10.0, -10.0, -1.0), Point::new(10.0, 10.0, h)).build(&mut model).unwrap();
+        let result = intersection(&mut model, solid, below).unwrap();
+        let area = 8.0 * PI * h + 32.0 * PI / 3.0 * ((1.0 + 0.5 * h).powf(1.5) - 1.0);
+        measures(&model, result, 4.0 * PI * h * h, area, 1e-7);
+    }
 }

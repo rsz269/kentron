@@ -32,7 +32,7 @@ use std::collections::HashMap;
 use std::f64::consts::{FRAC_PI_2, TAU};
 
 use crate::error::{Error, Result};
-use crate::geometry::curve::{Circle, Curve, Line};
+use crate::geometry::curve::{Circle, Curve, Line, TrimmedCurve};
 use crate::geometry::curve2::{Curve2, Line2};
 use crate::geometry::project;
 use crate::geometry::surface::{Cone, Cylinder, ExtrusionSurface, Plane, RevolutionSurface, Sphere, Surface, Torus};
@@ -806,8 +806,17 @@ impl Revolver<'_> {
     fn swept_surface(&self, curve: &Curve, first: f64, last: f64) -> SweptSurface {
         let z = Vector::from(self.axis.direction);
         let tol = self.tolerance();
+        // (An unbounded basis (a parabola, a hyperbola, a line askew of the axis) trimmed to
+        // the edge's range, as OCCT's BRepSweep_Rotation trims the basis it turns: a curve
+        // running on across the axis, as a parabola turned about its own axis does past its
+        // vertex, turned half a turn passes through the same points again, and the surface's
+        // parameters (and so the side its normal points to) would be found on either half.)
+        let unbounded = curve.first_parameter() <= -tolerance::INFINITE || curve.last_parameter() >= tolerance::INFINITE;
         let general = || SweptSurface::Ruled {
-            surface: Surface::Revolution(RevolutionSurface::new(curve.clone(), self.axis)),
+            surface: Surface::Revolution(RevolutionSurface::new(
+                if unbounded { Curve::Trimmed(TrimmedCurve::new(curve.clone(), first, last)) } else { curve.clone() },
+                self.axis,
+            )),
             v0: 0.0,
             sigma: 1.0,
         };
