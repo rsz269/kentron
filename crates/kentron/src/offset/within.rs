@@ -238,8 +238,9 @@ pub(super) fn offset(model: &mut Model, solid: Shape, distance: f64, made: Made)
                 if r.abs() <= 1e-9 * size {
                     continue;
                 }
-                let moved = Surface::Torus(Torus::new(*torus.frame(), torus.major_radius(), r.abs()));
-                crate::make::face_on_domain(model, moved, 0.0, std::f64::consts::TAU, 0.0, std::f64::consts::TAU)?
+                let moved = Torus::new(*torus.frame(), torus.major_radius(), r.abs());
+                sheets.extend(torus_sheets(model, moved, 0.0, std::f64::consts::TAU, 0.0, std::f64::consts::TAU)?);
+                continue;
             }
             _ => return Ok(None),
         };
@@ -292,8 +293,7 @@ pub(super) fn offset(model: &mut Model, solid: Shape, distance: f64, made: Made)
                 sweep += std::f64::consts::TAU;
             }
             let (v0, v1) = if sweep >= 0.0 { (vx, vx + sweep) } else { (vx + sweep, vx) };
-            let torus = Surface::Torus(Torus::new(*f, circle.radius(), d));
-            sheets.push(crate::make::face_on_domain(model, torus, c0.min(c1), c0.max(c1), v0, v1)?);
+            sheets.extend(torus_sheets(model, Torus::new(*f, circle.radius(), d), c0.min(c1), c0.max(c1), v0, v1)?);
             if length > 1e-9 * size {
                 for p in [a, b] {
                     match ends.iter_mut().find(|(q, _)| q.distance(p) <= 1e-9 * size) {
@@ -462,6 +462,34 @@ fn strips(model: &mut Model, solid: Shape, faces: &mut [Bounded], removed: &[Nod
     }
     let openings = (0..faces.len()).filter(|&i| removed.contains(&faces[i].shape.node) && !angled.contains(&i)).collect();
     Ok((out, all_tangent, openings))
+}
+
+/// The faces of `torus` over its parameters' box, split where its tube crosses its axis (a
+/// tube wider than its middle circle): there each circle of the box's u range closes on one
+/// point, which a face may have on its boundary (as a pole) but not inside it.
+fn torus_sheets(model: &mut Model, torus: Torus, u0: f64, u1: f64, v0: f64, v1: f64) -> Result<Vec<Shape>> {
+    let mut cuts = vec![v0];
+    let (big, small) = (torus.major_radius(), torus.minor_radius());
+    if small > big {
+        // (The tube's angles there, R + r cos v = 0, in every turn the range meets.)
+        let crossing = (-big / small).acos();
+        let tau = std::f64::consts::TAU;
+        for turn in ((v0 / tau).floor() as i64 - 1)..=((v1 / tau).ceil() as i64 + 1) {
+            for v in [crossing, tau - crossing] {
+                let v = v + turn as f64 * tau;
+                if v > v0 + 1e-9 && v < v1 - 1e-9 {
+                    cuts.push(v);
+                }
+            }
+        }
+    }
+    cuts.sort_by(f64::total_cmp);
+    cuts.push(v1);
+    let mut faces = Vec::with_capacity(cuts.len() - 1);
+    for w in cuts.windows(2) {
+        faces.push(crate::make::face_on_domain(model, Surface::Torus(torus), u0, u1, w[0], w[1])?);
+    }
+    Ok(faces)
 }
 
 /// +1 where a surface's own normal (∂u × ∂v) points away from its axis or centre (a cylinder,

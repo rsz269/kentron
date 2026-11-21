@@ -1292,6 +1292,11 @@ impl ParametricSurface for Torus {
         let (sv, cv) = v.sin_cos();
         let radius = self.major_radius() + self.minor_radius() * cv;
         let origin = f.origin() + Vector::from(f.z()) * (self.minor_radius() * sv);
+        // (On a spindle torus's inner part, where the radius would be negative, the circle of
+        // its size with x and y reversed (OCCT's `ElSLib::TorusVIso`): the same points.)
+        if radius < 0.0 {
+            return Curve::Circle(Circle::new(Frame::from_axes_unchecked(origin, -f.x(), -f.y(), f.z()), -radius));
+        }
         Curve::Circle(Circle::new(Frame::from_axes_unchecked(origin, f.x(), f.y(), f.z()), radius))
     }
     fn u_reversed_parameter(&self, u: f64) -> f64 {

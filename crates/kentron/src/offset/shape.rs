@@ -1875,4 +1875,26 @@ mod tests {
         let v = volume(&model, hollow).mass;
         assert!((v - 16810.0553).abs() < 1e-2, "{v}");
     }
+
+    /// The plate from (-10, -10, 0) to (10, 10, 4) drilled through by a hole of radius 3 on the
+    /// z axis, grown by 4, past the hole's radius: the hole fills, and over each end the grown
+    /// face dips in the inner part of a spindle torus (a tube of 4 about the rim, crossing the
+    /// axis), whose tube's circles past the axis have negative radii. The closed form: the box
+    /// grown, less the two dimples.
+    #[test]
+    fn a_drilled_plate_grown_past_its_hole_dips_over_it() {
+        let mut model = Model::new();
+        let plate = crate::primitives::Cuboid::from_corners(Point::new(-10.0, -10.0, 0.0), Point::new(10.0, 10.0, 4.0)).build(&mut model).unwrap();
+        let drill = Cylinder::new(3.0, 6.0).with_frame(crate::math::Frame::from_z(Point::new(0.0, 0.0, -1.0), crate::math::Direction::Z)).build(&mut model).unwrap();
+        let drilled = crate::boolean::difference(&mut model, plate, drill).unwrap();
+        let grown = shape(&mut model, drilled, 4.0, Join::Arc).unwrap();
+        valid(&model, grown);
+        let (a, b, c, rho, d) = (20.0f64, 20.0f64, 4.0f64, 3.0f64, 4.0f64);
+        let q = (d * d - rho * rho).sqrt();
+        let pi = std::f64::consts::PI;
+        let v0 = a * b * c + 2.0 * (a * b + b * c + c * a) * d + pi * (a + b + c) * d * d + 4.0 * pi * d.powi(3) / 3.0;
+        let dimple = 2.0 * pi * (d * rho * rho / 2.0 - rho / 2.0 * (rho * q + d * d * (rho / d).asin()) + (d.powi(3) - q.powi(3)) / 3.0);
+        let v = volume(&model, grown).mass;
+        assert!((v - (v0 - 2.0 * dimple)).abs() < 1e-6 * v, "{v}");
+    }
 }
