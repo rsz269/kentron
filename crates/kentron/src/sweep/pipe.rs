@@ -49,6 +49,10 @@ impl SpinePiece {
 pub(super) struct PieceMotion {
     pub params: Vec<f64>,
     pub transforms: Vec<Transform>,
+    /// Where the motion is known in closed form: the first and second derivatives (in the
+    /// fraction) of the point the profile's `p` is moved to at fraction `s`, so that each
+    /// point's path is the quintic matching them at the samples, not the cubic through them.
+    pub rates: Option<Box<dyn Fn(f64, Point) -> (Vector, Vector) + Sync>>,
 }
 
 /// How the frames carrying a pipe's profile turn about the spine: OCCT's trihedron laws,
@@ -134,7 +138,7 @@ pub(super) fn motions(pieces: &[SpinePiece], samples: usize, anchor: (usize, f64
     let mut out = Vec::with_capacity(pieces.len());
     let mut halves = Vec::with_capacity(pieces.len());
     for (params, frames, half) in sampled {
-        out.push(PieceMotion { params, transforms: frames.iter().map(to).collect() });
+        out.push(PieceMotion { params, transforms: frames.iter().map(to).collect(), rates: None });
         halves.push(half.iter().map(to).collect());
     }
     Ok((out, halves))
@@ -170,9 +174,30 @@ impl Correction {
 
 /// The cubic through the moved copies of `p` at the samples, parametrized by the fraction
 /// along the piece.
-fn path(motion: &PieceMotion, p: Point) -> Result<BSplineCurve> {
+pub(super) fn path(motion: &PieceMotion, p: Point) -> Result<BSplineCurve> {
     let points: Vec<Point> = motion.transforms.iter().map(|t| p.transformed(t)).collect();
-    crate::geometry::fit::interpolate_with_parameters(&points, &motion.params)
+    let Some(rates) = &motion.rates else {
+        return crate::geometry::fit::interpolate_with_parameters(&points, &motion.params);
+    };
+    // The quintic Hermite pieces between the samples, as Bézier pieces end to end (their joins
+    // knots of multiplicity five: smooth to second order by the derivatives they match).
+    let n = points.len() - 1;
+    let mut poles = Vec::with_capacity(5 * n + 1);
+    poles.push(points[0]);
+    for i in 0..n {
+        let h = motion.params[i + 1] - motion.params[i];
+        let ((d0, a0), (d1, a1)) = (rates(motion.params[i], p), rates(motion.params[i + 1], p));
+        let (p0, p1) = (points[i], points[i + 1]);
+        poles.push(p0 + d0 * (h / 5.0));
+        poles.push(p0 + d0 * (2.0 * h / 5.0) + a0 * (h * h / 20.0));
+        poles.push(p1 - d1 * (2.0 * h / 5.0) + a1 * (h * h / 20.0));
+        poles.push(p1 - d1 * (h / 5.0));
+        poles.push(p1);
+    }
+    let mut multiplicities = vec![5; n + 1];
+    multiplicities[0] = 6;
+    multiplicities[n] = 6;
+    BSplineCurve::try_new(poles, motion.params.clone(), multiplicities, 5)
 }
 
 /// The state of one pipe: the copies of the profile at the spine's junctions (the start,
@@ -506,6 +531,21 @@ pub(super) fn pipe_along(model: &mut Model, profile: Shape, pieces: &[SpinePiece
         let same = first.rows().iter().flatten().zip(last.rows().iter().flatten()).all(|(a, b)| (a - b).abs() <= 1e-7 * (1.0 + a.abs()));
         start.distance(end) <= tolerance::LINEAR && t0.dot(t1) >= 1.0 - 1e-9 && same
     };
+    let sweep = sweep_by_motions(model, profile, motions, closed)?;
+    // (Where the spine's edges meet only within their shared vertices' tolerances, the
+    // pieces' sweeps meet as closely: the tolerances raised to cover that.)
+    if pieces.iter().any(|p| p.gap > 1e3 * tolerance::LINEAR) {
+        cover_gaps(model, sweep.shape)?;
+    }
+    Ok(sweep)
+}
+
+/// Sweeps `profile` (unplaced) through the rigid `motions`, one after another (each starting
+/// where the one before ends): its vertices sweep the cubics through their moved copies,
+/// its edges the surfaces through their poles' paths, its faces solids closed by their
+/// copies at the start and the end (none if `closed`, the motion coming back to where it
+/// started).
+pub(super) fn sweep_by_motions(model: &mut Model, profile: Shape, motions: Vec<PieceMotion>, closed: bool) -> Result<Sweep> {
     let mut piper = Piper {
         model,
         motions,
@@ -590,11 +630,6 @@ pub(super) fn pipe_along(model: &mut Model, profile: Shape, pieces: &[SpinePiece
         }
         kind => return Err(Error::InvalidInput(format!("a pipe of a {kind:?}"))),
     };
-    // (Where the spine's edges meet only within their shared vertices' tolerances, the
-    // pieces' sweeps meet as closely: the tolerances raised to cover that.)
-    if pieces.iter().any(|p| p.gap > 1e3 * tolerance::LINEAR) {
-        cover_gaps(piper.model, shape)?;
-    }
     let generated = std::mem::take(&mut piper.generated);
     let ends = std::mem::take(&mut piper.ends);
     Ok(Sweep { shape, generated, ends, copies: Vec::new() })

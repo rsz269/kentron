@@ -1,6 +1,8 @@
 //! Sweeping a profile through space: extrusion, revolution and pipes.
 //!
 //! The dimension goes up by one: a vertex sweeps an edge, an edge a face, a face a solid.
+//! [`cut_by_motion`] sweeps a solid: a blank less everything a tool passes through as it moves
+//! rigidly.
 
 mod corner;
 mod corrected;
@@ -12,7 +14,10 @@ mod evolved;
 pub use evolved::{evolved, EvolvedOptions};
 pub use draft::extrude_drafted;
 mod middle;
+mod motion;
+pub use motion::{cut_by_motion, screw_extrude, Blank, MeridianPiece, Motion, MotionStep, Tool};
 mod pipe;
+mod section;
 pub use middle::middle_path;
 mod pipe_shell;
 // (For the guide-plane trihedron, not wired in yet.)
