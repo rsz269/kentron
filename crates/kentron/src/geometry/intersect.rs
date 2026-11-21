@@ -418,8 +418,11 @@ pub fn quadrics(a: &Surface, b: &Surface, tolerance: f64) -> QuadricIntersection
     let parallel = |u: Vector, v: Vector| u.cross(v).length() <= ANGULAR.sqrt();
     match (a, b) {
         (Surface::Plane(p1), Surface::Plane(p2)) => {
+            // (Parallel only within OCCT's angle for two planes, IntTools_FaceFace's 1e-8 for
+            // IntAna_QuadQuadGeo: planes a millionth of a radian apart still meet in a line,
+            // a wedge between them that thin a millionth of the way along it.)
             let (n1, n2) = (Vector::from(p1.normal()), Vector::from(p2.normal()));
-            if parallel(n1, n2) {
+            if n1.cross(n2).length() <= 1e-8 {
                 return if p1.distance(p2.origin()) <= tol { Q::Same } else { Q::Empty };
             }
             let n = n1.cross(n2);

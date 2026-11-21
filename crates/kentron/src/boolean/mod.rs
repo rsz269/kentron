@@ -2973,4 +2973,20 @@ mod tests {
         let area = 8.0 * PI * h + 32.0 * PI / 3.0 * ((1.0 + 0.5 * h).powf(1.5) - 1.0);
         measures(&model, result, 4.0 * PI * h * h, area, 1e-7);
     }
+
+    /// A cube (−5, −5, −10) … (5, 5, 0) common with the half-space above z = s·y, s = 10⁻⁶:
+    /// the planes meet in the x axis, a millionth of a radian apart (parallel only within
+    /// OCCT's 10⁻⁸), and what is common is a wedge 10 · 5 · 5s / 2 under the half of the top
+    /// face where y < 0, its area 50 + 50√(1 + s²) + 50s + 25s.
+    #[test]
+    fn a_wedge_a_millionth_steep() {
+        let mut model = Model::new();
+        let s = 1e-6;
+        let cube = Cuboid::from_corners(Point::new(-5.0, -5.0, -10.0), Point::new(5.0, 5.0, 0.0)).build(&mut model).unwrap();
+        let plane = crate::geometry::surface::Surface::Plane(crate::geometry::surface::Plane::new(Point::new(0.0, 0.0, 0.0), Direction::new(0.0, -s, 1.0)));
+        let face = crate::make::face_on_domain(&mut model, plane, -1000.0, 1000.0, -1000.0, 1000.0).unwrap();
+        let above = crate::primitives::half_space(&mut model, face, Point::new(0.0, 0.0, 1.0)).unwrap();
+        let result = intersection(&mut model, cube, above).unwrap();
+        measures(&model, result, 125.0 * s, 50.0 + 50.0 * (1.0 + s * s).sqrt() + 75.0 * s, 1e-7);
+    }
 }
