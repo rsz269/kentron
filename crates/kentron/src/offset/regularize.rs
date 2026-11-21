@@ -163,7 +163,7 @@ fn simple_pieces(model: &mut Model, face: Shape) -> Result<Vec<(Shape, i32)>> {
 /// Whether the closed polygons' sides cross or touch (other than where neighbours meet):
 /// loops running along one another (as a rim's outline and the hole cut out of it do where
 /// the face's neighbours were not moved) bound pieces they wind round no times.
-fn crosses_itself(polygons: &[Vec<Point2>]) -> bool {
+pub(super) fn crosses_itself(polygons: &[Vec<Point2>]) -> bool {
     let sides: Vec<(usize, usize, Point2, Point2)> = polygons
         .iter()
         .enumerate()
@@ -208,7 +208,7 @@ fn crosses_itself(polygons: &[Vec<Point2>]) -> bool {
 }
 
 /// The polygon's area, positive where it runs anticlockwise.
-fn signed_area(p: &[Point2]) -> f64 {
+pub(super) fn signed_area(p: &[Point2]) -> f64 {
     0.5 * (0..p.len()).map(|i| {
         let (a, b) = (p[i], p[(i + 1) % p.len()]);
         a.x * b.y - b.x * a.y

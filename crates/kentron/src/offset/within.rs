@@ -44,6 +44,11 @@ struct Bounded {
     /// face tangentially: the wall ends square to the edge there, see `strips`).
     edge_nodes: Vec<NodeId>,
     measured: Vec<bool>,
+    /// Whether each edge is one the face meets a removed face along at an angle: an opening's
+    /// edge, past which the wall's inside runs on along the face's offset until it meets the
+    /// opening (as OCCT's moved faces do), so that a point beyond it is as far from the face as
+    /// from its surface.
+    opening: Vec<bool>,
     u_period: Option<f64>,
     v_period: Option<f64>,
 }
@@ -74,7 +79,17 @@ impl Bounded {
         if on {
             return self.surface.point(q.x, q.y).distance(p);
         }
-        self.edges.iter().zip(&self.measured).filter(|(_, &m)| m).map(|((c, a, b), _)| crate::geometry::extrema::nearest_on_curve(p, c, *a, *b).distance).fold(f64::INFINITY, f64::min)
+        let (mut nearest, mut across_opening) = (f64::INFINITY, false);
+        for (i, (c, a, b)) in self.edges.iter().enumerate().filter(|&(i, _)| self.measured[i]) {
+            let found = crate::geometry::extrema::nearest_on_curve(p, c, *a, *b).distance;
+            if found < nearest {
+                (nearest, across_opening) = (found, self.opening[i]);
+            }
+        }
+        if across_opening {
+            return self.surface.point(q.x, q.y).distance(p);
+        }
+        nearest
     }
 
     /// The face's outward normal at `p` (on it).
@@ -125,8 +140,9 @@ pub(super) fn offset(model: &mut Model, solid: Shape, distance: f64, made: Made)
             edge_nodes.push(edge.node);
         }
         let measured = vec![true; edges.len()];
+        let opening = vec![false; edges.len()];
         let (u_period, v_period) = (surface.u_period(), surface.v_period());
-        faces.push(Bounded { shape: face, surface, reversed: face.orientation == Orientation::Reversed, loops, edges, edge_nodes, measured, u_period, v_period });
+        faces.push(Bounded { shape: face, surface, reversed: face.orientation == Orientation::Reversed, loops, edges, edge_nodes, measured, opening, u_period, v_period });
     }
     let kept: Vec<usize> = (0..faces.len()).filter(|&i| !removed.contains(&faces[i].shape.node)).collect();
     let (strips, all_tangent, openings) = strips(model, solid, &mut faces, removed, distance.abs())?;
@@ -432,6 +448,9 @@ fn strips(model: &mut Model, solid: Shape, faces: &mut [Bounded], removed: &[Nod
         if nk.cross(nr).length() > 1e-6 {
             all_tangent = false;
             angled.push(r);
+            if let Some(i) = faces[k].edge_nodes.iter().position(|&e| e == edge.node) {
+                faces[k].opening[i] = true;
+            }
             continue;
         }
         let Some(n) = Direction::try_from_vector(nr) else { continue };

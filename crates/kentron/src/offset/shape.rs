@@ -311,6 +311,20 @@ fn smooth_everywhere(model: &Model, shape: Shape) -> bool {
 /// `kept` where they are), and the edges where they part rounded.
 fn hollowed(model: &mut Model, shape: Shape, kept: &[NodeId], thickness: f64, join: Join) -> Result<(Shape, bool)> {
     let moved = offset_faces(model, shape, thickness, &[], kept, join)?;
+    // (A removed face whose outline, where its neighbours' offsets meet it, crosses itself
+    // (where its own does not) or winds the other way round from its own: those offsets close on one another before they
+    // reach it, and no rim is there. Suspect.)
+    let mut strained = moved.strained;
+    for (i, face) in moved.faces.iter().enumerate().filter(|(_, f)| kept.contains(&f.shape.node)) {
+        let outline = |model: &Model, f: Shape| -> Option<Vec<Vec<Point2>>> {
+            let loops = crate::heal::face_loops(model, Shape { orientation: Orientation::Forward, ..f })?;
+            Some(loops.iter().map(|l| l.iter().flat_map(|u| (0..32).map(move |k| u.at(k as f64 / 32.0))).collect()).collect())
+        };
+        let (Some(old), Some(new)) = (outline(model, face.shape), outline(model, moved.new_faces[i])) else { continue };
+        let area = |loops: &[Vec<Point2>]| loops.iter().map(|l| super::regularize::signed_area(l)).sum::<f64>();
+        let crosses = |loops: &[Vec<Point2>]| super::regularize::crosses_itself(loops);
+        strained |= (crosses(&new) && !crosses(&old)) || (area(&old) > 0.0) != (area(&new) > 0.0);
+    }
     let outwards = thickness > 0.0;
     let shell = model.new_empty(NodeKind::Shell);
     // (With no face removed, the walls' insides bound a cavity: a shell of their own.)
@@ -345,7 +359,7 @@ fn hollowed(model: &mut Model, shape: Shape, kept: &[NodeId], thickness: f64, jo
         model.add(solid, cavity)?;
     }
     let solid = round_parting(model, solid, &moved, thickness.abs())?;
-    Ok((super::regularize::regularized(model, solid)?, moved.strained))
+    Ok((super::regularize::regularized(model, solid)?, strained))
 }
 
 /// `rounded` (an offset of `shape`, its faces moved and the edges where they part rounded)
@@ -1992,4 +2006,38 @@ mod tests {
         let v = volume(&model, grown).mass;
         assert!((v - expected).abs() < 1e-6 * expected, "{v}, not {expected}");
     }
+
+    /// A frustum (radius 6 at z = 0 to 3 at z = 4) shelled 2.7 inwards, open at its top: the
+    /// moved side closes to its apex at z = 3.5, below the top, so the cavity is the cone from
+    /// the moved base (z = 2.7, radius 0.6) to that apex, sealed, and the top stays.
+    #[test]
+    fn a_frustum_shelled_past_its_apex_is_sealed_below_its_opening() {
+        let mut model = Model::new();
+        let frustum = Cone::new(6.0, 3.0, 4.0).build(&mut model).unwrap();
+        let top = face_at_height(&model, frustum, 4.0);
+        let hollow = thick_solid(&mut model, frustum, &[top], -2.7, Join::Arc).unwrap();
+        valid(&model, hollow);
+        let pi = std::f64::consts::PI;
+        let expected = pi * 4.0 * (36.0 + 18.0 + 9.0) / 3.0 - pi * 0.36 * 0.8 / 3.0;
+        let v = volume(&model, hollow).mass;
+        assert!((v - expected).abs() < 1e-6 * expected, "{v}, not {expected}");
+    }
+
+    /// The frustum bored through by a hole of radius 1, shelled 1 inwards, open at its top:
+    /// the moved side and bore meet at z = 11/3, below the top, and the cavity is the ring of
+    /// section (2, 1), (4, 1), (2, 11/3), sealed.
+    #[test]
+    fn a_bored_frustum_shelled_inwards_is_sealed_below_its_opening() {
+        let mut model = Model::new();
+        let frustum = Cone::new(6.0, 3.0, 4.0).build(&mut model).unwrap();
+        let drill = Cylinder::new(1.0, 6.0).with_frame(crate::math::Frame::from_z(Point::new(0.0, 0.0, -1.0), crate::math::Direction::Z)).build(&mut model).unwrap();
+        let bored = crate::boolean::difference(&mut model, frustum, drill).unwrap();
+        let top = face_at_height(&model, bored, 4.0);
+        let hollow = thick_solid(&mut model, bored, &[top], -1.0, Join::Arc).unwrap();
+        valid(&model, hollow);
+        let expected = 592.0 * std::f64::consts::PI / 9.0;
+        let v = volume(&model, hollow).mass;
+        assert!((v - expected).abs() < 1e-6 * expected, "{v}, not {expected}");
+    }
+
 }
