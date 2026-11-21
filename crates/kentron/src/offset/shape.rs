@@ -236,8 +236,8 @@ fn stepped(model: &mut Model, shape: Shape, distance: f64, own: &[(NodeId, f64)]
 }
 
 /// [`shape_with_faces`] by its faces moved one by one, and the edges where they part
-/// rounded.
-fn moved_and_rounded(model: &mut Model, shape: Shape, distance: f64, own: &[(NodeId, f64)], join: Join) -> Result<(Shape, bool)> {
+/// rounded; with whether that is suspect (strained, a face turned inside out).
+pub(super) fn moved_and_rounded(model: &mut Model, shape: Shape, distance: f64, own: &[(NodeId, f64)], join: Join) -> Result<(Shape, bool)> {
     let moved = offset_faces(model, shape, distance, own, &[], join)?;
     let result = rebuild(model, shape, &moved.faces, &moved.new_faces)?;
     let radius = moved.parting.first().map_or(0.0, |&(a, _)| own.iter().find(|(n, _)| *n == moved.faces[a].shape.node).map_or(distance, |(_, d)| *d).abs());
@@ -515,9 +515,16 @@ fn round_parting(model: &mut Model, shape: Shape, moved: &Moved, radius: f64) ->
         return Ok(shape);
     }
     // Closed shells outside solids are rounded as the solids they bound (the fillets cut
-    // and add material), and given back as shells.
+    // and add material), and given back as shells; an open shell alone as the solid it
+    // bounds with its offset back (the rounds ending at its free edges, as a sheet's).
+    let shells = model.unique_subshapes(shape, NodeKind::Shell);
+    let closed = |s: Shape| crate::topology::ShellId::try_from(s.node).is_ok_and(|id| model.is_closed_shell(id));
+    if let ([shell], true) = (&shells[..], model.unique_subshapes(shape, NodeKind::Solid).is_empty()) {
+        if !closed(*shell) {
+            return crate::blend::fillet_all_on_open_shell(model, *shell, &edges, radius);
+        }
+    }
     if model.unique_subshapes(shape, NodeKind::Solid).is_empty() {
-        let shells = model.unique_subshapes(shape, NodeKind::Shell);
         let compound = model.new_empty(NodeKind::Compound);
         for shell in shells {
             let solid = model.new_empty(NodeKind::Solid);
@@ -636,13 +643,17 @@ fn replace_surfaces(
     let scale = vertices.iter().map(|(_, p)| p.distance(vertices[0].1)).fold(scale, f64::max);
     let new_points: Vec<Point> = (0..vertices.len())
         .map(|v| {
-            // A vertex of a cone face alone (its apex) goes to the offset cone's apex.
+            // A vertex of a cone face alone at its apex goes to the offset cone's apex (a
+            // vertex of the face alone elsewhere, on a frustum's rim where its seam starts,
+            // moves with the face like any other).
             let mut on: Vec<usize> = around[v].iter().map(|&(f, _)| f).collect();
             on.dedup();
-            if let ([f], Surface::Cone(c)) = (&on[..], &faces[around[v][0].0].offset) {
+            let apex = |c: &crate::geometry::surface::Cone| c.frame().origin() + Vector::from(c.frame().z()) * (-c.radius() / c.semi_angle().tan());
+            if let ([f], Surface::Cone(old), Surface::Cone(c)) = (&on[..], &faces[around[v][0].0].surface, &faces[around[v][0].0].offset) {
                 let _ = f;
-                let (frame, angle) = (c.frame(), c.semi_angle());
-                return Ok(frame.origin() + Vector::from(frame.z()) * (-c.radius() / angle.tan()));
+                if vertices[v].1.distance(apex(old)) <= 1e-9 * scale.max(1.0) {
+                    return Ok(apex(c));
+                }
             }
             // A pole of a face of revolution alone (its meridian meeting the axis at an angle):
             // where the offset's meridian meets the axis, short of the old pole where the
@@ -714,6 +725,15 @@ fn replace_surfaces(
             model.add(new, new_wire.into())?;
         }
         new_faces.push(new);
+    }
+    // (A face moved past its centre of curvature turns inside out: its offset is still the
+    // image of its points, the parameters running back along it, but no longer bounds what
+    // the faces round it bound. Suspect too.)
+    for face in &faces {
+        let (u0, u1, v0, v1) = model.face_uv_bounds(Shape { orientation: Orientation::Forward, ..face.shape });
+        let (u, v) = (0.5 * (u0 + u1), 0.5 * (v0 + v1));
+        let ((_, du, dv), (_, offset_du, offset_dv)) = (face.surface.d1(u, v), face.offset.d1(u, v));
+        strained |= du.dot(offset_du) < 0.0 || dv.dot(offset_dv) < 0.0;
     }
     Ok(Moved { faces, new_faces, parting: Vec::new(), strained })
 }
@@ -846,7 +866,17 @@ fn foot_on(surface: &Surface, p: Point, mut uv: Point2, nappe: f64) -> (Point2, 
             Some(t) => x + ((previous - x) / t).round() * t,
             None => x,
         };
-        uv = Point2::new(near(u, uv.x, surface.u_period()), near(v, uv.y, surface.v_period()));
+        let found = Point2::new(near(u, uv.x, surface.u_period()), near(v, uv.y, surface.v_period()));
+        // (At a pole, where one parameter does not move the point, that one kept as it was:
+        // the closed form's is any, by the rounding of the point's place about the axis.)
+        let (_, du, dv) = surface.d1(found.x, found.y);
+        uv = if du.length() <= 1e-9 * dv.length() {
+            Point2::new(uv.x, found.y)
+        } else if dv.length() <= 1e-9 * du.length() {
+            Point2::new(found.x, uv.y)
+        } else {
+            found
+        };
     }
     uv = keep(uv);
     for _ in 0..50 {
@@ -1017,12 +1047,31 @@ fn trace_edge(
     let (t0, t1) = if edge.start == edge.end {
         (edge.first, edge.last)
     } else {
-        // Near the old end: within a few times the distance moved, in parameter (a closed
-        // curve comes back to the point a period away).
+        // Near the old end: the foot of the perpendicular from the new vertex on the old
+        // curve, found by Newton steps from the old end, within a few times the distance
+        // moved, in parameter (a closed curve comes back to the point a period away). (Not
+        // the nearest point there: an edge moved past its centre of curvature, a bend's
+        // offset turned inside out, lies nearest the far side of the old curve, while its
+        // vertices stand over the old ones.)
         let near = |p: Point, t: f64| {
             let speed = curve.d1(t).1.length().max(1e-300);
             let reach = 4.0 * p.distance(curve.point(t)) / speed + 1e-9 * (1.0 + t.abs());
-            nearest_on_curve(p, curve, t - reach, t + reach).parameter
+            let mut s = t;
+            for _ in 0..50 {
+                let (q, d1, d2) = curve.d2(s);
+                let slope = d1.dot(d1) + (q - p).dot(d2);
+                if slope.abs() <= 1e-300 {
+                    break;
+                }
+                let step = (q - p).dot(d1) / slope;
+                let next = (s - step).clamp(t - reach, t + reach);
+                let moved = (next - s).abs();
+                s = next;
+                if moved <= 1e-15 * (1.0 + s.abs()) {
+                    break;
+                }
+            }
+            s
         };
         (near(a, edge.first), near(b, edge.last))
     };
@@ -1048,6 +1097,19 @@ fn trace_edge(
             let j = edge.uses.iter().position(|u| u.face == distinct[1]).expect("use");
             let (fi, fj) = (&faces[distinct[0]].offset, &faces[distinct[1]].offset);
             let (p, d) = curve.d1(t);
+            // Faces tangent along the edge: their offsets touch along it moved along the
+            // common normal, the point of either offset at the old parameters (which they
+            // keep). (Their sections there are singular: steps towards them stray, the more
+            // where an offset has passed its centre of curvature.)
+            let normal = |f: &OldFace, uv: Point2| {
+                let (_, du, dv) = f.surface.d1(uv.x, uv.y);
+                du.cross(dv) * if f.shape.orientation == Orientation::Reversed { -1.0 } else { 1.0 }
+            };
+            let (ni, nj) = (normal(&faces[distinct[0]], on[i]), normal(&faces[distinct[1]], on[j]));
+            if ni.cross(nj).length() <= 1e-9 * ni.length() * nj.length() && ni.dot(nj) > 0.0 {
+                let x = fi.point(on[i].x, on[i].y);
+                return (x, on);
+            }
             match intersect(fi, fj, on[i], on[j], p, d) {
                 Some((x, ui, uj)) => {
                     (on[i], on[j]) = (ui, uj);
@@ -1113,7 +1175,7 @@ fn trace_edge(
     // Between two elementary surfaces, the conic they meet in, where it runs through both new
     // vertices: exact, where the samples taken along the old edge may miss part of the new
     // one (a hyperbola turning back past the old edge's end).
-    let mut conic = if n > 1 && distinct.len() == 2 && coaxial_circle(curve, &xs).is_none() {
+    let mut conic = if n > 1 && distinct.len() == 2 && coaxial_circle(curve, &xs, &ts).is_none() {
         exact_section(&faces[distinct[0]].offset, &faces[distinct[1]].offset, a, b, xs[n / 2])
     } else {
         None
@@ -1153,7 +1215,7 @@ fn trace_edge(
     }
     let curve3 = if n == 1 {
         Curve::Line(Line { origin: a, direction: Direction::try_from_vector(b - a).ok_or_else(|| Error::InvalidInput("an offset edge of no length".into()))? })
-    } else if let Some(circle) = coaxial_circle(curve, &xs) {
+    } else if let Some(circle) = coaxial_circle(curve, &xs, &ts) {
         // (A circle between surfaces about its axis moves to a circle about it, at the same
         // angles.)
         Curve::Circle(circle)
@@ -1286,10 +1348,11 @@ fn exact_section(s1: &Surface, s2: &Surface, a: Point, b: Point, middle: Point) 
     None
 }
 
-/// The circle about the axis of `curve` (a circle) through `points`, if they all lie at one
-/// height along it and one distance from it; its X axis is the old circle's, so that
-/// points keep their angles.
-fn coaxial_circle(curve: &Curve, points: &[Point]) -> Option<crate::geometry::curve::Circle> {
+/// The circle about the axis of `curve` (a circle) through `points` (at the old circle's
+/// parameters `params`), if they all lie at one height along it and one distance from it;
+/// its X axis is the old circle's, so that points keep their angles, or turned half round
+/// where every point has crossed the axis (a bend's offset turned inside out).
+fn coaxial_circle(curve: &Curve, points: &[Point], params: &[f64]) -> Option<crate::geometry::curve::Circle> {
     let Curve::Circle(c) = curve else { return None };
     let frame = c.frame();
     let (o, z) = (frame.origin(), Vector::from(frame.z()));
@@ -1307,8 +1370,14 @@ fn coaxial_circle(curve: &Curve, points: &[Point]) -> Option<crate::geometry::cu
     if !(radii[0] > tol) || !same(&heights) || !same(&radii) {
         return None;
     }
-    let new = crate::math::Frame::new(o + z * heights[0], frame.z(), frame.x());
-    Some(crate::geometry::curve::Circle::new(new, radii[0]))
+    let keeps_angles = |circle: &crate::geometry::curve::Circle| points.iter().zip(params).all(|(&p, &t)| circle.point(t).distance(p) <= 1e-6 * size);
+    for x in [frame.x(), -frame.x()] {
+        let circle = crate::geometry::curve::Circle::new(crate::math::Frame::new(o + z * heights[0], frame.z(), x), radii[0]);
+        if keeps_angles(&circle) {
+            return Some(circle);
+        }
+    }
+    None
 }
 
 fn segment2(a: Point2, b: Point2, t0: f64, t1: f64) -> Curve2 {

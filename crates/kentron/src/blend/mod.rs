@@ -110,6 +110,20 @@ pub(crate) fn fillet_all(model: &mut Model, shape: Shape, edges: &[Shape], radiu
     })
 }
 
+/// [`fillet_all`] on an open shell (alone) as the solid it bounds with its offset back by twice
+/// `radius` and walls between the two's free edges, the faces of the offset and the walls then
+/// left out (see [`on_solids`]): the rounds made on the shell's side and ending at its free
+/// edges, with no faces of their own there (the tools' ends merged into the walls). (Cut by
+/// their tools as it is, the open shell keeps what lies inside them at its free edges and
+/// corners: the tools' faces there, past the rounds' ends.)
+pub(crate) fn fillet_all_on_open_shell(model: &mut Model, shell: Shape, edges: &[Shape], radius: f64) -> Result<Shape> {
+    let edges: Vec<(Shape, f64)> = edges.iter().map(|&e| (e, radius)).collect();
+    on_open_shell(model, shell, 2.0 * radius, |model, shape, found| {
+        let edges = remapped(model, shape, &edges, |e| e.0, |e, c| Some((c, e.1)), found)?;
+        each_solid(model, shape, &edges, |e| e.0, |e, c| Some((c, e.1)), fillet_solid_edges)
+    })
+}
+
 /// `op` on each solid of `shape` with the edges of `edges` it has (by node and placement:
 /// one solid placed twice has the same edges twice, each pair apart), the solids without
 /// any left as they are; `op` on `shape` itself where it has one solid, or more than solids.
