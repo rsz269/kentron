@@ -157,7 +157,12 @@ pub(super) fn trace(base: &Surface, other: &Surface, range: Range, (nu, nv): (us
     let mut chains: Vec<(Vec<Both>, bool)> = Vec::new();
     // (Branches followed but left out, where the surfaces only touch.)
     let mut touching: Vec<(Vec<Both>, bool)> = Vec::new();
-    let traced = |chains: &[(Vec<Both>, bool)], touching: &[(Vec<Both>, bool)], p: Point| chains.iter().chain(touching).any(|(points, closed)| near_polyline(points, *closed, p, 0.75 * leaf));
+    // (Seeds tested against the branches by a grid of their segments, filed as they are traced.)
+    let mut filed = Filed::new(0.75 * leaf);
+    let mut traced = |chains: &[(Vec<Both>, bool)], touching: &[(Vec<Both>, bool)], p: Point| {
+        filed.file(chains, touching);
+        filed.near(p)
+    };
     for (k, seed) in seeds.into_iter().enumerate() {
         // (Seeds on a branch traced already are passed over.)
         if traced(&chains, &touching, seed.p) {
@@ -547,6 +552,74 @@ fn unwrapped(points: impl Iterator<Item = (f64, f64)>, range: Range) -> Vec<(f64
         out.push((u, v));
     }
     out
+}
+
+/// The segments of the branches traced so far (which only grow while seeds are tested),
+/// filed by the cells of a grid in space (cells twice `reach` across) near them: whether a
+/// point lies within `reach` of one of them, as [`near_polyline`] tells, by those filed in its
+/// own cell only. (Each segment is filed in the cells round points along it at most `reach`
+/// apart: a point within `reach` of it is within 1.5 `reach` of one of those, so in a cell next
+/// to that one's.)
+struct Filed {
+    reach: f64,
+    cells: crate::hashing::FastMap<(i64, i64, i64), Vec<(Point, Point)>>,
+    /// How many of the branches and of the touching ones are filed.
+    filed: (usize, usize),
+}
+
+impl Filed {
+    fn new(reach: f64) -> Filed {
+        Filed { reach, cells: Default::default(), filed: (0, 0) }
+    }
+
+    fn cell(&self, x: f64) -> i64 {
+        (x / (2.0 * self.reach)).floor() as i64
+    }
+
+    /// Files the branches traced since last time.
+    fn file(&mut self, chains: &[(Vec<Both>, bool)], touching: &[(Vec<Both>, bool)]) {
+        let new: Vec<(Vec<Both>, bool)> = chains[self.filed.0..].iter().chain(&touching[self.filed.1..]).cloned().collect();
+        self.filed = (chains.len(), touching.len());
+        for (points, closed) in new {
+            let n = points.len();
+            let segments: Vec<(Point, Point)> = match n {
+                0 => Vec::new(),
+                1 => vec![(points[0].p, points[0].p)],
+                _ => (0..if closed { n } else { n - 1 }).map(|i| (points[i].p, points[(i + 1) % n].p)).collect(),
+            };
+            for (a, b) in segments {
+                let steps = (a.distance(b) / self.reach).ceil().max(1.0) as usize;
+                let mut cells: Vec<(i64, i64, i64)> = Vec::new();
+                for step in 0..=steps {
+                    let q = a + (b - a) * (step as f64 / steps as f64);
+                    let (i, j, k) = (self.cell(q.x), self.cell(q.y), self.cell(q.z));
+                    for di in -1..=1 {
+                        for dj in -1..=1 {
+                            for dk in -1..=1 {
+                                cells.push((i + di, j + dj, k + dk));
+                            }
+                        }
+                    }
+                }
+                cells.sort_unstable();
+                cells.dedup();
+                for cell in cells {
+                    self.cells.entry(cell).or_default().push((a, b));
+                }
+            }
+        }
+    }
+
+    /// Whether `p` lies within the reach of a filed segment.
+    fn near(&self, p: Point) -> bool {
+        let Some(segments) = self.cells.get(&(self.cell(p.x), self.cell(p.y), self.cell(p.z))) else { return false };
+        segments.iter().any(|&(a, b)| {
+            let d = b - a;
+            let len2 = d.dot(d);
+            let s = if len2 > 0.0 { ((p - a).dot(d) / len2).clamp(0.0, 1.0) } else { 0.0 };
+            (a + d * s).distance(p) <= self.reach
+        })
+    }
 }
 
 /// Whether `p` lies within `reach` of the polyline through `points` (closed or not).
