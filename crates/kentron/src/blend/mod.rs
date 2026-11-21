@@ -2288,15 +2288,10 @@ fn chamfer_solid_edges(model: &mut Model, shape: Shape, edges: &[ChamferedEdge])
         let (d1, d2) = match wanted.size {
             ChamferSize::Distances(a, b) => (a, b),
             ChamferSize::DistanceAngle(d, angle) => {
-                // In the cross-section's triangle (the faces' tangents there): the angle at
-                // the edge between the faces, `angle` at the point along the face, the sines'
-                // law gives the distance along the other.
-                let between = corner.into[0].dot(corner.into[1]).clamp(-1.0, 1.0).acos();
-                let opposite = (between + angle).sin();
-                if !(opposite > tolerance::ANGULAR) {
-                    return Err(Error::InvalidInput(format!("a chamfer at {angle} rad does not meet the other face")));
-                }
-                (d, d * angle.sin() / opposite)
+                // The chamfer cut from the point `d` along the chosen face at `angle` to it
+                // there, to where it meets the other face: that point's chord from the edge.
+                let first = usize::from(first_on_second);
+                (d, corner.angle_foot(first, d, angle)?.distance(corner.origin))
             }
         };
         corners.push((corner, if first_on_second { [d2, d1] } else { [d1, d2] }));
@@ -3978,24 +3973,80 @@ impl Corner {
 impl Corner {
     /// The cross-section of a chamfer's tool at `origin`: bounded by the faces' traces from
     /// the edge to the points `distances` along them, and the segment between those points.
+    /// The point of face `i`'s trace in the cross-section a straight `d` from the edge, setting
+    /// off into the face: a chamfer's distance is that chord, as OCCT measures it (on a face
+    /// round in the cross-section, not the arc).
+    fn chamfer_foot(&self, i: usize, d: f64) -> Result<Point> {
+        let (o, w) = (self.origin, self.into[i].normalized());
+        Ok(match self.traces[i] {
+            Trace::Line => o + w * d,
+            Trace::Circle { center, radius: rho } => {
+                // (The chord `d` turns 2 asin(d / 2ρ) about the circle's centre from `o`.)
+                if d >= 2.0 * rho {
+                    return Err(Error::InvalidInput(format!("chamfer distance {d} too large for a face of radius {rho}")));
+                }
+                let (r, t) = (o - center, w * rho);
+                let angle = 2.0 * (0.5 * d / rho).asin();
+                center + r * angle.cos() + t * angle.sin()
+            }
+        })
+    }
+
+    /// For a chamfer `d` along face `first` at `angle` to it: where the chamfer, cut from
+    /// that face's point at `angle` to the face there (back towards the edge), meets the other
+    /// face's trace in the cross-section.
+    fn angle_foot(&self, first: usize, d: f64, angle: f64) -> Result<Point> {
+        let o = self.origin;
+        let other = 1 - first;
+        let from = self.chamfer_foot(first, d)?;
+        let n = self.into[0].cross(self.into[1]);
+        if !(n.length() > tolerance::ANGULAR) {
+            return Err(Error::InvalidInput("the faces at a chamfered edge are tangent".into()));
+        }
+        let n = n.normalized();
+        // The way the angle is taken from, back towards the edge: the face's tangent at the
+        // point in the cross-section (OCCT's BlendFunc_ChAsym), but on a cylinder beside a
+        // plane along its straight edge the cylinder's tangent at the edge carried to the
+        // point (OCCT's ChFiKPart_ComputeData_ChAsymPlnCyl, the angle added to the chord's
+        // from the cylinder there).
+        let along_edge_tangent = matches!((&self.faces[first].1, &self.faces[other].1), (Surface::Cylinder(_), Surface::Plane(_)));
+        let back = match self.traces[first] {
+            Trace::Line => -self.into[first].normalized(),
+            Trace::Circle { .. } if along_edge_tangent => -self.into[first].normalized(),
+            Trace::Circle { center, .. } => n.cross(from - center).normalized(),
+        };
+        let back = if back.dot(o - from) >= 0.0 { back } else { -back };
+        // Turned by the angle towards the other face.
+        let turned = |a: f64| back * a.cos() + n.cross(back) * a.sin();
+        let towards = self.into[other].normalized();
+        let way = [turned(angle), turned(-angle)].into_iter().max_by(|x, y| x.dot(towards).total_cmp(&y.dot(towards))).expect("two ways");
+        let w = self.into[other].normalized();
+        let s = match self.traces[other] {
+            Trace::Line => {
+                // from + s way = o + u w, in the cross-section's plane.
+                let denominator = way.cross(w).dot(n);
+                if denominator.abs() <= tolerance::ANGULAR {
+                    return Err(Error::InvalidInput(format!("a chamfer at {angle} rad does not meet the other face")));
+                }
+                Some((o - from).cross(w).dot(n) / denominator)
+            }
+            Trace::Circle { center, radius } => {
+                // |from + s way − center| = radius: the first crossing ahead.
+                let q = from - center;
+                let (b, c) = (q.dot(way), q.dot(q) - radius * radius);
+                let disc = b * b - c;
+                (disc >= 0.0).then(|| [-b - disc.sqrt(), -b + disc.sqrt()]).and_then(|roots| roots.into_iter().filter(|&s| s > tolerance::LINEAR && (from + way * s - o).dot(w) > 0.0).reduce(f64::min))
+            }
+        };
+        match s {
+            Some(s) if s > 0.0 && (from + way * s - o).dot(w) > 0.0 => Ok(from + way * s),
+            _ => Err(Error::InvalidInput(format!("a chamfer at {angle} rad does not meet the other face"))),
+        }
+    }
+
     fn bevel_section(&self, model: &mut Model, distances: [f64; 2]) -> Result<Shape> {
         let o = self.origin;
-        let foot = |i: usize| -> Result<Point> {
-            let (w, d) = (self.into[i], distances[i]);
-            Ok(match self.traces[i] {
-                Trace::Line => o + w * d,
-                Trace::Circle { center, radius: rho } => {
-                    // `d` along the circle from `o`, setting off along `w`.
-                    if d >= std::f64::consts::PI * rho {
-                        return Err(Error::InvalidInput(format!("chamfer distance {d} too large for a face of radius {rho}")));
-                    }
-                    let (r, t) = (o - center, w.normalized() * rho);
-                    let angle = d / rho;
-                    center + r * angle.cos() + t * angle.sin()
-                }
-            })
-        };
-        let (t1, t2) = (foot(0)?, foot(1)?);
+        let (t1, t2) = (self.chamfer_foot(0, distances[0])?, self.chamfer_foot(1, distances[1])?);
         let leg = |model: &mut Model, i: usize, from: Point, to: Point| match self.traces[i] {
             Trace::Line => make::edge_between(model, from, to),
             Trace::Circle { center, .. } => arc(model, center, from, to),
@@ -4922,6 +4973,22 @@ mod tests {
         let lopsided = chamfer_edges(&mut model, cube, &edges).unwrap();
         let frustum = 0.1 / 3.0 * (1.0 + 0.36 + 0.6);
         check_volume(&model, lopsided, 1.0 - 0.1 + frustum);
+    }
+
+    /// A hemisphere's rim chamfered, its distances straight from the edge (the chord on the
+    /// ball, as OCCT measures them, not the arc): 2 on the flat face and 1 on the ball, and 1
+    /// on the flat face at 45 degrees to it, to where that line meets the ball (brep-bench's
+    /// chamfer/hemisphere-rim-two-distances and -distance-1-angle-45, OCCT's volumes).
+    #[test]
+    fn hemisphere_rim_chamfered_by_chords_and_at_an_angle() {
+        let mut model = Model::new();
+        let hemisphere = crate::primitives::Sphere::new(5.0).with_latitudes(0.0, PI / 2.0).build(&mut model).unwrap();
+        let rim = edges_at(&model, hemisphere, 0.0);
+        let flat = model.unique_subshapes(hemisphere, NodeKind::Face).into_iter().find(|&f| matches!(model.surface(f), Some(Surface::Plane(_)))).unwrap();
+        let two = chamfer_edges(&mut model, hemisphere, &[ChamferedEdge { edge: rim[0], size: ChamferSize::Distances(2.0, 1.0), face: Some(flat) }]).unwrap();
+        check_volume(&model, two, 234.39614467902140);
+        let angled = chamfer_edges(&mut model, hemisphere, &[ChamferedEdge { edge: rim[0], size: ChamferSize::DistanceAngle(1.0, PI / 4.0), face: Some(flat) }]).unwrap();
+        check_volume(&model, angled, 248.05368192979512);
     }
 
     #[test]
