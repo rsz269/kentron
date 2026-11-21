@@ -191,6 +191,9 @@ fn compute(model: &Model, face: Shape, output: Surface) -> Option<Arc<FaceData>>
         }
         // A torus computed as the revolution of its meridian circle.
         Surface::Revolution(r) if matches!(r.basis(), Curve::Circle(_)) => Some(BoundingBox::new(sample.extent.0, sample.extent.1)),
+        // A line, a circle or an ellipse slid along a direction: straight along it, and
+        // across it curved no more than a cylinder is round its circle.
+        Surface::Extrusion(e) if matches!(e.basis(), Curve::Line(_) | Curve::Circle(_) | Curve::Ellipse(_)) => Some(BoundingBox::new(sample.extent.0, sample.extent.1)),
         Surface::BSpline(_) | Surface::Bezier(_) => crate::properties::control_box(&surface),
         _ => None,
     };
