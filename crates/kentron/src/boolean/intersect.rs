@@ -4146,11 +4146,21 @@ fn section_crossings(a: &Section, b: &Section) -> Vec<Point> {
         let (lo, hi) = a.range();
         let n = 720;
         let step = (hi - lo) / n as f64;
+        // (An open section on a curve other than a line or a circle is projected onto by its
+        // samples: found once for all the points projected onto it here.)
+        let open_samples = match b {
+            Section::Open(c, first, last) if !matches!(c, Curve::Line(_) | Curve::Circle(_)) => Some(geom::projection_samples(c, *first, *last)),
+            _ => None,
+        };
+        let project_b = |q: Point| match (b, &open_samples) {
+            (Section::Open(c, first, last), Some(samples)) => geom::project_among(c, *first, *last, Some(samples), q),
+            _ => b.project(q),
+        };
         // Distances from samples of `a`, with the feet on `b`.
         let samples: Vec<(f64, f64, f64)> = (0..=n + 1)
             .map(|i| {
                 let t = lo + (hi - lo) * i as f64 / n as f64;
-                let (s, d) = b.project(a.point(t));
+                let (s, d) = project_b(a.point(t));
                 (t, s, d)
             })
             .collect();
