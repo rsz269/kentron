@@ -245,6 +245,37 @@ pub(super) fn trace(base: &Surface, other: &Surface, range: Range, (nu, nv): (us
                     })
                 })
             };
+            // (Or where it crosses that one there, leaving it within a step on either side
+            // and on either side of it on the base: another branch, through a point where the
+            // surfaces touch (where alone two branches meet), at a slight angle to that one (a
+            // tube's side touching a ball at the end of its ruling on the ball's equator, the
+            // ball's equator the other branch), not that one again.)
+            let crosses_over = |points: &[Both], i: usize, j: usize| {
+                if i == 0 || j + 1 >= points.len() {
+                    return false;
+                }
+                // (The nearest segment of the branches traced: its chain, its start, how far.)
+                let nearest = |b: &Both| {
+                    chains
+                        .iter()
+                        .enumerate()
+                        .flat_map(|(c, (old, closed))| {
+                            let n = old.len();
+                            let segments = if *closed { n } else { n.saturating_sub(1) };
+                            (0..segments).map(move |k| (c, k, segment_distance(&(&old[k], &old[(k + 1) % n]), b)))
+                        })
+                        .min_by(|x, y| x.2.total_cmp(&y.2))
+                };
+                let side = |b: &Both| {
+                    let (c, k, d) = nearest(b)?;
+                    let (old, _) = &chains[c];
+                    let (a, e) = (&old[k], &old[(k + 1) % old.len()]);
+                    let (du, dv) = (apart_signed(e.u, a.u, base.u_period()), apart_signed(e.v, a.v, base.v_period()));
+                    let (eu, ev) = (apart_signed(b.u, a.u, base.u_period()), apart_signed(b.v, a.v, base.v_period()));
+                    (d <= leaf).then_some((c, du * ev - dv * eu))
+                };
+                matches!((side(&points[i - 1]), side(&points[j + 1])), (Some((c, x)), Some((d, y))) if c == d && x * y < 0.0)
+            };
             let mut keep: Vec<bool> = chain.0.iter().map(|b| !over(b)).collect();
             // (Only where it runs over that one for a while, not where it merely meets it.)
             let mut i = 0;
@@ -258,7 +289,7 @@ pub(super) fn trace(base: &Surface, other: &Surface, range: Range, (nu, nv): (us
                     j += 1;
                 }
                 let length: f64 = chain.0[i..=j].windows(2).map(|w| w[0].p.distance(w[1].p)).sum();
-                if length < 2.0 * leaf {
+                if length < 2.0 * leaf || crosses_over(&chain.0, i, j) {
                     keep[i..=j].iter_mut().for_each(|k| *k = true);
                 }
                 i = j + 1;
@@ -315,7 +346,12 @@ pub(super) fn trace(base: &Surface, other: &Surface, range: Range, (nu, nv): (us
                     }
                 }
             }
-            if crossing.iter().all(|&c| !c) {
+            // (Only touching all along: every point nearly tangent. A chain crossing clearly
+            // elsewhere and only touching at points between, as where it passes through a
+            // point the surfaces touch at and another branch crosses it (a tube's side
+            // touching a ball where its end circle lies on the ball's equator), keeps its
+            // crossing stretches, below.)
+            if tangent.len() == n && crossing.iter().all(|&c| !c) {
                 touching.push(chain);
                 continue;
             }
@@ -471,6 +507,20 @@ pub(super) fn trace(base: &Surface, other: &Surface, range: Range, (nu, nv): (us
             })
             .collect(),
     )
+}
+
+/// How far `b` is from the segment from `a` to `c` (in space).
+fn segment_distance((a, c): &(&Both, &Both), b: &Both) -> f64 {
+    let d = c.p - a.p;
+    let len2 = d.dot(d);
+    let w = if len2 > 0.0 { ((b.p - a.p).dot(d) / len2).clamp(0.0, 1.0) } else { 0.0 };
+    (a.p + d * w).distance(b.p)
+}
+
+/// `x - y`, brought within half a period of 0 where the parameter is periodic.
+fn apart_signed(x: f64, y: f64, period: Option<f64>) -> f64 {
+    let d = x - y;
+    period.map_or(d, |w| d - (d / w).round() * w)
 }
 
 /// `points` without those nearer than `spacing` to the one kept before them (the last kept

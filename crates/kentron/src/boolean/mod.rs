@@ -3075,4 +3075,88 @@ mod tests {
             assert!((v - expected).abs() <= 1e-3, "{s1} {s2}: volume {v} != {expected}");
         }
     }
+
+    /// A ball-end mill's move from (75, 20, −6) to (80, 20, −5.8) (its ball's centre), as a
+    /// raster builds it: a plate (70, y0, −15) … (90, 30, 0) less the ball and the shank (the
+    /// cylinder up from its centre) where it ends, and the front half of the shank's side slid
+    /// along the move. That slid face's bottom, the half circle at the start slid along the
+    /// move, ends on the ball's equator: the two meet along it and along a curve through the
+    /// points where the slid circle's ends touch the ball, the equator crossing it there.
+    /// That curve was dropped as only touching for its one point nearly tangent, and on one
+    /// side cut where it passes over the equator, taken for it traced again; the plate's side
+    /// y = y0 met no line of the slid face, its half circle from −π/2 to π/2 searched only
+    /// from 0. With the slid face alone the removed volume is 5 (y-width) ∫ min(1, (z + 6)/0.2)
+    /// dz over [−6, 0], 5.9 × 5 × the width; with all three, against the tools' union
+    /// integrated along x (exact on each line) over a 1600 × 800 grid in z (split at the
+    /// shank's bottom) and θ, y = 20 + 3 sin θ: within 2 × 10⁻⁴ of a grid four times finer.
+    #[test]
+    fn a_ball_end_mill_slid_shank_ending_on_its_ball() {
+        use crate::geometry::surface::{Cylinder as CylinderSurface, Surface};
+        use std::f64::consts::FRAC_PI_2;
+        let h = 0.2;
+        let zc = -6.0 + h;
+        let reference = |y0: f64, all: bool| {
+            let (za, zb) = (zc - 3.0, 0.0);
+            let (t0, t1) = (((y0 - 20.0) / 3.0).max(-1.0).asin(), FRAC_PI_2);
+            let (nz, nt) = (1600, 800);
+            let mut removed = 0.0;
+            for (lo, hi) in [(za, zc), (zc, zb)] {
+                let n = ((hi - lo) / (zb - za) * nz as f64).ceil() as usize;
+                for i in 0..n {
+                    let z = lo + (hi - lo) * (i as f64 + 0.5) / n as f64;
+                    for j in 0..nt {
+                        let theta = t0 + (t1 - t0) * (j as f64 + 0.5) / nt as f64;
+                        let (y, w) = (20.0 + 3.0 * theta.sin(), 3.0 * theta.cos());
+                        let mut runs: Vec<(f64, f64)> = Vec::new();
+                        let r = 9.0 - (y - 20.0).powi(2) - (z - zc).powi(2);
+                        if all && r > 0.0 {
+                            runs.push((80.0 - r.sqrt(), 80.0 + r.sqrt()));
+                        }
+                        if all && z >= zc {
+                            runs.push((80.0 - w, 80.0 + w));
+                        }
+                        // (The slid face's point at height z − hs, s along the move.)
+                        let (s0, s1) = (((z - 21.0) / h).max(0.0), ((z + 6.0) / h).min(1.0));
+                        if s0 < s1 {
+                            runs.push((75.0 + w + 5.0 * s0, 75.0 + w + 5.0 * s1));
+                        }
+                        runs.sort_by(|a, b| a.0.total_cmp(&b.0));
+                        let (mut length, mut end) = (0.0, f64::NEG_INFINITY);
+                        for (a, b) in runs {
+                            if b > a.max(end) {
+                                length += b - a.max(end);
+                                end = b;
+                            }
+                        }
+                        removed += length * w * (t1 - t0) / nt as f64 * (hi - lo) / n as f64;
+                    }
+                }
+            }
+            20.0 * (30.0 - y0) * 15.0 - removed
+        };
+        for (y0, all) in [(10.0, true), (18.0, true), (10.0, false), (18.0, false)] {
+            let mut model = Model::new();
+            let mut body = Cuboid::from_corners(Point::new(70.0, y0, -15.0), Point::new(90.0, 30.0, 0.0)).build(&mut model).unwrap();
+            let (from, to) = (Point::new(75.0, 20.0, -6.0), Point::new(80.0, 20.0, zc));
+            let side = Surface::Cylinder(CylinderSurface::new(Frame::new(from, Direction::Z, Direction::X), 3.0));
+            let half = crate::make::face_on_domain(&mut model, side, -FRAC_PI_2, FRAC_PI_2, 0.0, 27.0).unwrap();
+            let slid = crate::sweep::extrude(&mut model, half, to - from).unwrap().shape;
+            let slid = model.explore(slid, NodeKind::Solid).next().unwrap();
+            let mut tools = vec![slid];
+            if all {
+                let ball = Sphere::new(3.0).with_frame(Frame::from_z(to, Direction::Z)).build(&mut model).unwrap();
+                let shank = Cylinder::new(3.0, 30.0).with_frame(Frame::from_z(to, Direction::Z)).build(&mut model).unwrap();
+                tools = vec![ball, shank, slid];
+            }
+            for tool in tools {
+                body = difference(&mut model, body, tool).unwrap();
+            }
+            let report = validity::check(&model, body);
+            assert!(report.is_valid(), "{y0} {all}: {report:?}");
+            let v = properties::volume(&model, body).mass;
+            let expected = if all { reference(y0, true) } else { 20.0 * (30.0 - y0) * 15.0 - 5.0 * (23.0 - y0.max(17.0)) * 5.9 };
+            assert!((expected - reference(y0, all)).abs() <= 1e-3, "{y0} {all}: the reference {} != {expected}", reference(y0, all));
+            assert!((v - expected).abs() <= 1e-3, "{y0} {all}: volume {v} != {expected}");
+        }
+    }
 }

@@ -655,11 +655,7 @@ fn plane_along_extrusion(fa: &Face, fb: &Face) -> Option<Vec<Section>> {
         return None;
     }
     let curve = extrusion.basis();
-    let (b0, b1) = (curve.first_parameter(), curve.last_parameter());
-    // (Over the extruded face's range, a little beyond it, within the curve's.)
-    let (u0, u1) = extruded.u_range;
-    let span = u1 - u0;
-    let (t0, t1) = ((u0 - 0.05 * span).max(b0), (u1 + 0.05 * span).min(b1));
+    let (t0, t1) = swept_range(curve, extruded.u_range);
     if !(t1 > t0) {
         return Some(Vec::new());
     }
@@ -676,6 +672,19 @@ fn plane_along_extrusion(fa: &Face, fb: &Face) -> Option<Vec<Section>> {
     }
     let boxes = [&fa.bbox, &fb.bbox];
     Some(height_roots(&height, &slope, &ts, &hs, &ds).into_iter().map(|t| line_across(curve.point(t) - n * height(t), extrusion.direction(), boxes)).collect())
+}
+
+/// The range of an extrusion's curve swept over a face's `u` range: a little beyond it, within
+/// the curve's own range, unless the curve is periodic (a circle), whose face may lie
+/// across its start (a half-circle from −π/2 to π/2): then the face's range as it is, at
+/// most a period.
+fn swept_range(curve: &Curve, (u0, u1): (f64, f64)) -> (f64, f64) {
+    let span = u1 - u0;
+    match curve.period() {
+        Some(period) if 1.1 * span >= period => (u0, u0 + period),
+        Some(_) => (u0 - 0.05 * span, u1 + 0.05 * span),
+        None => ((u0 - 0.05 * span).max(curve.first_parameter()), (u1 + 0.05 * span).min(curve.last_parameter())),
+    }
 }
 
 /// The roots of `height` over the samples `ts` (with its values `hs` and slopes `ds`
@@ -768,10 +777,7 @@ fn extrusions_along(fa: &Face, fb: &Face) -> Option<Vec<Section>> {
         }
     }
     let curve = extrusion.basis();
-    let (b0, b1) = (curve.first_parameter(), curve.last_parameter());
-    let (u0, u1) = extruded.u_range;
-    let span = u1 - u0;
-    let (t0, t1) = ((u0 - 0.05 * span).max(b0), (u1 + 0.05 * span).min(b1));
+    let (t0, t1) = swept_range(curve, extruded.u_range);
     if !(t1 > t0) {
         return Some(Vec::new());
     }
