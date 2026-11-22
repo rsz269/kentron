@@ -67,6 +67,13 @@ def scene_rounded(cq, kernel):
     return {"rounded": [(box.edges().fillet(1).val(), lambda face: BODY if face.geomType() == "PLANE" else FIRST)], "box": [(box.val(), BODY)]}
 
 
+def scene_overround(cq, kernel):
+    """A box 8 by 8 by 3.4, its upright edges rounded by 0.41, then its top loop by 0.69."""
+    prism = cq.Workplane().rect(8, 8).extrude(3.4).edges("|Z").fillet(0.41)
+    rounded = prism.faces(">Z").edges().fillet(0.69)
+    return {"rounded": [(rounded.val(), lambda face: BODY if face.geomType() == "PLANE" else FIRST)]}
+
+
 def scene_twisted(cq, kernel):
     """After knurl() of mryndzionek's cadquery_plaground (util.py): height 10, radius 26.75,
     cut angle 120, depth 0.5, twist 40, 12 prisms a set."""
@@ -941,6 +948,21 @@ def figure_rounded(rebuild):
     figure.panel(COLUMNS[1], TOP, MAIN, height, silhouette, "kentron", "defeature::remove_faces", ("bad", "no faces are left"))
     figure.text(COLUMNS[1] + MAIN / 2, TOP + height - 16, "nothing: the box's place, dashed", "note small halo", "middle")
     figure.panel(COLUMNS[2], TOP, MAIN, height, render([box], larger), "Expected", "as SMLib, OCCT and sampling give", ("good", "the box: 6 faces, volume %.0f" % box["info"][0]["volume"]))
+    return figure
+
+
+def figure_overround(rebuild):
+    kentron, cadquery = (scene("overround", k, rebuild)["rounded"] for k in ("kentron", "cadquery"))
+    height = 280
+    figure = Figure(WIDTH, TOP + height + 40, "A top loop filleted by more than the upright rounds it runs over: at each corner kentron's two straight fillets meet in a crease above a short torus; CadQuery's (OCCT's) corner is one smooth face.")
+    whole = View((0.7, -1, 0.8), (0, 0, 1.7), 11, SIDE, height)
+    corner = View((0.7, -1, 0.8), (3.6, -3.6, 3.0), 1.6, MAIN, height)
+    figure.panel(COLUMNS[0], TOP, SIDE, height, render([kentron], whole), "Rounded box", "uprights 0.41, then the top loop 0.69")
+    for x, mesh, title, verdict in (
+            (COLUMNS[1], kentron, "kentron", ("bad", "the straight fillets cross in a crease")),
+            (COLUMNS[2], cadquery, "CadQuery", ("good", "one corner face, tangent all round"))):
+        info = mesh["info"][0]
+        figure.panel(x, TOP, MAIN, height, render([mesh], corner), title, "%d faces, volume %.3f" % (info["faces"], info["volume"]), verdict)
     return figure
 
 

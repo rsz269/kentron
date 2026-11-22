@@ -42,6 +42,40 @@ the same all along (planes; a cylinder or a cone on a plane square to its axis: 
   test expects 73604.1, and OCCT 8.1's DRAW gives 73670.6.) `_21` (a NURBS cone) is off
   by 4.4 in 446 298.
 
+### A top loop filleted by more than the rounds it runs over
+
+*Found 2026-11-22.*
+
+![A box's top loop rounded by more than its upright rounds: kentron's corner beside CadQuery's](known-gaps/overround.svg)
+
+A prism whose outline has rounded corners of radius ρ, its top loop (one tangent chain of
+lines and arcs) filleted by r > ρ: no ball of radius r rolls round an arc of radius ρ
+square to it. kentron rounds the straight runs as cylinders and each corner arc as a short
+surface of revolution, and the two cylinders at a corner run on past it and cross: a crease
+along the corner's diagonal (0.06 to 0.56 rad), with no tangent plane along it, which
+`fillet` must not leave. OCCT's corner is smooth (its worst turn between neighbouring
+normals, 0.047 rad, stays put as the spacing goes from 0.017 to 0.002: an approximation's
+kink, not a crease).
+
+- **Repro:** the figure's script, or the conformance suite's
+  `fillets/top-loop-bigger-than-corner-rounds` (2 of its 20 cases pass; the others fail
+  its no-crease check, by 5–8 creases or by 8–16 of about 400 scan points landing on the
+  crease edges, with no normal).
+- **Evidence:** on its case `227a…` (a pentagon, ρ 0.842, r 1.720) OCCT 8.1 gives volume
+  564.896, area 404.868, one B-spline face at each corner from the top down to h − r; kentron
+  565.150, 405.320. Under gdb, OCCT's `blend` there runs `PerformSetOfKPart` (the lines'
+  cylinders by `ChFiKPart`, truncated by `Trunc` short of the arcs) and then
+  `PerformSetOfKGen`, walking the five corners (`PerformSetOfSurfOnElSpine`); none of the
+  corner routines (`PerformOneCorner`, `PerformTwoCorner`, `PerformIntersectionAtEnd`)
+  runs.
+- **Needed:** OCCT's guideline over each corner: `ChFi3d_PerformElSpine` joins the spine's
+  edges between the truncated cylinders into one B-spline, smoothed to C2 where it is not
+  (`ChFi3d_ApproxByC2`: 101 points, `GeomAPI_PointsToBSpline` of degree 3 to 8), and the
+  ball rolls along that curve, in its normal planes, between the top and the faces round
+  the corner (`BRepBlend_ConstRad` walked across the faces' boundaries). kentron's rolling
+  takes its sections square to an edge; this needs it along a guideline of its own, with
+  `Trunc`'s extents for the cylinders. A few days' work.
+
 ## Offsets and shells
 
 ### A revolved profile's offset cut along its seam plane

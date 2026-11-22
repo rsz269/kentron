@@ -613,6 +613,15 @@ fn fillet_solid_edges_inner(model: &mut Model, shape: Shape, edges: &[(Shape, f6
     // fillet's end).
     // (Rounded at once, where that was tried first: what is returned if staging fails too,
     // not made again.)
+    // Where three convex edges of radii not all the same meet at a corner, the pivot's
+    // fillet first, then the other two with the corner blend between them (OCCT's
+    // three-fillet corner).
+    if let Some(stages) = unequal_corner_stages(model, shape, edges) {
+        let before = fault_kinds(model, shape);
+        if let Ok(rounded) = unequal_corners_staged(model, shape, &stages).and_then(|r| sound(model, &before, r)) {
+            return Ok(rounded);
+        }
+    }
     let mut at_once: Option<Result<Shape>> = None;
     if let Some((first, then, probed)) = mixed_corner_stages(model, shape, edges) {
         let before = fault_kinds(model, shape);
@@ -808,6 +817,134 @@ fn mixed_corner_stages(model: &Model, shape: Shape, edges: &[(Shape, f64)]) -> O
     // (Whether a turn at a corner staged was found only by probing.)
     let probed = odd.iter().chain(&paired).any(|&i| of_corner[i].is_none());
     Some((first, then, probed))
+}
+
+/// The stages of rounding corners where three convex edges of radii not all the same meet
+/// ([`unequal_corner_stages`]): the edges rounded first (each corner's pivot, and every edge
+/// not at such a corner), then the others found again by their curves and ranges, with their
+/// radii, and each corner's two such edges (indices into `then`).
+struct UnequalStages {
+    first: Vec<(Shape, f64)>,
+    then: Vec<(Curve, f64, f64, f64)>,
+    corners: Vec<[usize; 2]>,
+}
+
+/// OCCT's corner of three fillets of radii not all the same (`ChFi3d_FilBuilder::
+/// PerformThreeCorner`), where three convex straight edges between planes meet: the pivot
+/// is the fillet whose contacts the other two cross farthest from the vertex on the faces
+/// it shares with them (`SearchPivot`: the largest radius, the first of equal ones). The two
+/// others stop at their sections through those crossings, and a ball rolls between the face
+/// they share and the pivot's fillet, round the circle (`ChFi3d_CircularSpine`) whose normal
+/// planes hold the line where their end sections' planes meet, its radius going from the one
+/// fillet's to the other's by `Law_S` (the cubic flat at both ends; `ChFiKPart`'s torus where
+/// the two are the same). Where the two others are square to the pivot that line is the
+/// pivot's axis, the circle's normal planes those through it square to the face the two
+/// share, and the corner blend is the fillet, so varying, of the edge the pivot's fillet
+/// leaves on that face: the pivot rounded first, then the two others and that edge as one
+/// chain. Other corners of this kind (the two not square to the pivot, whose blend's
+/// sections OCCT takes on planes not square to that edge) are not staged here. `None` where
+/// there is no such corner, or an edge would be the pivot at one corner and not at another.
+fn unequal_corner_stages(model: &Model, shape: Shape, edges: &[(Shape, f64)]) -> Option<UnequalStages> {
+    let edges = tangent_chains(model, shape, edges, 0.0);
+    let mut at: Vec<(NodeId, Vec<usize>)> = Vec::new();
+    for (i, &(edge, _)) in edges.iter().enumerate() {
+        let (a, b) = model.edge_vertices(edge);
+        if a.node == b.node {
+            continue;
+        }
+        for v in [a.node, b.node] {
+            match at.iter_mut().find(|(w, _)| *w == v) {
+                Some((_, here)) => here.push(i),
+                None => at.push((v, vec![i])),
+            }
+        }
+    }
+    let mut pivots: Vec<usize> = Vec::new();
+    let mut pairs: Vec<[usize; 2]> = Vec::new();
+    for (_, here) in &at {
+        let Ok(three) = <[usize; 3]>::try_from(here.clone()) else { continue };
+        let radii = three.map(|i| edges[i].1);
+        if radii.iter().all(|r| (r - radii[0]).abs() <= tolerance::LINEAR) {
+            continue;
+        }
+        let corners: Vec<Corner> = three.iter().filter_map(|&i| Corner::of(model, shape, edges[i].0, false).ok().flatten()).collect();
+        if corners.len() != 3 || !corners.iter().all(|c| c.convex && matches!(c.path, Path::Line { .. }) && c.faces.iter().all(|f| matches!(f.1, Surface::Plane(_)))) {
+            continue;
+        }
+        let mut faces: Vec<NodeId> = corners.iter().flat_map(|c| c.faces.iter().map(|f| f.0)).collect();
+        faces.sort_unstable();
+        faces.dedup();
+        if faces.len() != 3 {
+            continue;
+        }
+        // (SearchPivot: on each other fillet the crossing with the pivot's contact no nearer
+        // the vertex than the crossing with the third's, which between planes square to one
+        // another lie their radii from it.)
+        let Some(p) = (0..3).find(|&p| (0..3).all(|j| radii[p] >= radii[j] - tolerance::LINEAR)) else { continue };
+        let others = [(p + 1) % 3, (p + 2) % 3];
+        let square = |j: usize| {
+            let (a, b) = (corners[p].tangent, corners[j].tangent);
+            a.dot(b).abs() <= tolerance::ANGULAR * a.length() * b.length()
+        };
+        if !others.iter().all(|&j| square(j)) {
+            return None;
+        }
+        pivots.push(three[p]);
+        pairs.push(others.map(|j| three[j]));
+    }
+    if pairs.is_empty() || pairs.iter().flatten().any(|i| pivots.contains(i)) {
+        return None;
+    }
+    let mut later: Vec<usize> = pairs.iter().flatten().copied().collect();
+    later.sort_unstable();
+    later.dedup();
+    let first = (0..edges.len()).filter(|i| !later.contains(i)).map(|i| edges[i]).collect();
+    let mut then = Vec::with_capacity(later.len());
+    for &i in &later {
+        let (curve, a, b) = model.edge_curve(Shape { orientation: Orientation::Forward, ..edges[i].0 })?;
+        then.push((curve, a, b, edges[i].1));
+    }
+    let corners = pairs.iter().map(|pair| pair.map(|i| later.iter().position(|&k| k == i).expect("a later edge"))).collect();
+    Some(UnequalStages { first, then, corners })
+}
+
+/// The rounding [`unequal_corner_stages`] stages: the first edges rounded, then the others
+/// with, at each corner, the edge the pivot's fillet left between them on the face they
+/// share, its radius going from the one's to the other's by OCCT's `Law_S` over its length
+/// (its circle's angle).
+fn unequal_corners_staged(model: &mut Model, shape: Shape, stages: &UnequalStages) -> Result<Shape> {
+    let rounded = fillet_solid_edges_unstaged(model, shape, &stages.first)?;
+    let mut found = Vec::with_capacity(stages.then.len());
+    for (curve, a, b, _) in &stages.then {
+        found.push(find_edge(model, rounded, curve, *a, *b).ok_or_else(|| Error::Failed("an edge at a corner was lost by the pivot's fillet".into()))?);
+    }
+    let vertices = |model: &Model, e: Shape| {
+        let (a, b) = model.edge_vertices(Shape { orientation: Orientation::Forward, ..e });
+        [a.node, b.node]
+    };
+    // (Law_S::Set(first, from, last, to): the cubic Bézier through from, from, to, to.)
+    let s_law = |from: f64, to: f64| move |s: f64| { let s = s.clamp(0.0, 1.0); from + (to - from) * s * s * (3.0 - 2.0 * s) };
+    let mut laws: Vec<Box<dyn Fn(f64) -> f64>> = stages.then.iter().map(|&(_, _, _, r)| Box::new(move |_: f64| r) as Box<dyn Fn(f64) -> f64>).collect();
+    let mut chain: Vec<Shape> = found.clone();
+    for &[d, f] in &stages.corners {
+        let (vd, vf) = (vertices(model, found[d]), vertices(model, found[f]));
+        let arc = model
+            .unique_subshapes(rounded, NodeKind::Edge)
+            .into_iter()
+            .filter(|e| !found.iter().any(|g| g.node == e.node))
+            .find(|&e| {
+                let [a, b] = vertices(model, e);
+                (vd.contains(&a) && vf.contains(&b)) || (vf.contains(&a) && vd.contains(&b))
+            })
+            .ok_or_else(|| Error::Failed("no edge left by the pivot's fillet between a corner's other two".into()))?;
+        let starts_at_first = vd.contains(&vertices(model, arc)[0]);
+        let (rd, rf) = (stages.then[d].3, stages.then[f].3);
+        let (from, to) = if starts_at_first { (rd, rf) } else { (rf, rd) };
+        chain.push(Shape { orientation: Orientation::Forward, ..arc });
+        laws.push(Box::new(s_law(from, to)));
+    }
+    let edges: Vec<(Shape, &dyn Fn(f64) -> f64)> = chain.iter().zip(&laws).map(|(&e, law)| (e, law.as_ref())).collect();
+    fillet_solid_evolving(model, rounded, &edges)
 }
 
 /// Whether `edge` of `shape` is convex (the material between its two faces), from where a
@@ -6113,6 +6250,118 @@ mod tests {
         let volume = 1000.0 - 3.0 * prism - corner;
         let v = properties::volume(&model, rounded).mass;
         assert!((v - volume).abs() < 1e-6 * volume, "{v} != {volume}");
+    }
+
+    /// The three edges at the corner (w0, w1, w2) of a box from the origin, along x, y and z.
+    fn far_corner_edges(model: &Model, block: Shape, w: [f64; 3]) -> [Shape; 3] {
+        let corner = Point::new(w[0], w[1], w[2]);
+        let at: Vec<Shape> = model
+            .unique_subshapes(block, NodeKind::Edge)
+            .into_iter()
+            .filter(|&e| {
+                let (a, b) = model.edge_vertices(e);
+                model.point(a) == corner || model.point(b) == corner
+            })
+            .collect();
+        let along = |k: usize| {
+            *at.iter()
+                .find(|&&e| {
+                    let (a, b) = model.edge_vertices(e);
+                    let d = model.point(b) - model.point(a);
+                    [d.x, d.y, d.z][k].abs() > 0.0
+                })
+                .unwrap()
+        };
+        [along(0), along(1), along(2)]
+    }
+
+    /// The largest angle between the normals of neighbours in a grid of rays cast at the
+    /// corner (w0, w1, w2) along (-1, -1, -1), `n` across a square of side `size`.
+    fn largest_turn_at_corner(model: &mut Model, shape: Shape, w: [f64; 3], size: f64, n: usize) -> f64 {
+        let d = Vector::new(-1.0, -1.0, -1.0).normalized();
+        let e1 = Vector::new(1.0, -1.0, 0.0).normalized();
+        let e2 = d.cross(e1).normalized();
+        let corner = Point::new(w[0], w[1], w[2]);
+        let caster = crate::raycast::Raycaster::new(model, shape).unwrap();
+        let mut hits = Vec::new();
+        for i in 0..=n {
+            for j in 0..=n {
+                let (a, b) = (size * (i as f64 / n as f64 - 0.5), size * (j as f64 / n as f64 - 0.5));
+                let o = corner - d * 5.0 + e1 * a + e2 * b;
+                hits.push(caster.cast(o, d).unwrap().first().map(|&t| o + d * t));
+            }
+        }
+        drop(caster);
+        let normals: Vec<Option<Vector>> = hits
+            .iter()
+            .map(|p| p.and_then(|p| properties::normals(model, shape, &[p]).unwrap()[0]).map(|n| Vector::new(n.x(), n.y(), n.z())))
+            .collect();
+        let at = |i: usize, j: usize| normals[i * (n + 1) + j];
+        let mut largest: f64 = 0.0;
+        for i in 0..=n {
+            for j in 0..=n {
+                for (a, b) in [(i + 1, j), (i, j + 1)] {
+                    if a <= n && b <= n {
+                        if let (Some(p), Some(q)) = (at(i, j), at(a, b)) {
+                            largest = largest.max(p.angle(q));
+                        }
+                    }
+                }
+            }
+        }
+        largest
+    }
+
+    /// Three edges at a box's corner, the one along x at radius 2 and the two others at 1:
+    /// OCCT's corner of fillets of two radii, the torus round the end of the x fillet
+    /// (`ChFiKPart`'s toric corner). The x fillet takes its prism along the whole edge; the
+    /// two others theirs up to where the x fillet's contacts cross them, 2 from the corner;
+    /// the torus, its section the radius-1 fillet's, swept a quarter turn round the x
+    /// fillet's axis at 2 (Pappus). No crease anywhere at the corner.
+    #[test]
+    fn three_fillets_of_two_radii_meet_in_a_torus() {
+        let mut model = Model::new();
+        let w = [10.0, 8.0, 9.0];
+        let block = Cuboid::new(w[0], w[1], w[2]).build(&mut model).unwrap();
+        let [x, y, z] = far_corner_edges(&model, block, w);
+        let (big, small) = (2.0, 1.0);
+        let rounded = fillet_edges(&mut model, block, &[(x, big), (y, small), (z, small)]).unwrap();
+        let report = validity::check(&model, rounded);
+        assert!(report.problems.is_empty(), "{report:?}");
+        let k = 1.0 - PI / 4.0;
+        let volume = w[0] * w[1] * w[2] - k * big * big * w[0] - k * small * small * (w[1] - big + w[2] - big) - torus_corner_volume(big, small, PI / 2.0);
+        let v = properties::volume(&model, rounded).mass;
+        assert!((v - volume).abs() < 1e-6 * volume, "{v} != {volume}");
+        // (Rays 1/60 apart: on a surface no more curved than the radius-1 fillet, neighbours'
+        // normals within a few hundredths of a radian; a crease turns them by tenths.)
+        let turn = largest_turn_at_corner(&mut model, rounded, w, 5.0, 300);
+        assert!(turn < 0.08, "a crease of {turn} rad at the corner");
+    }
+
+    /// Three edges at a box's corner at radii 1.3, 1.1 and 0.8: OCCT's corner of three
+    /// radii, the ball rolling round the end of the largest's fillet from the one's radius to
+    /// the other's. The result lies between the box with the three edges rounded at the
+    /// largest radius and at the smallest, each closed by its ball's octant (each edge's
+    /// prism, less the corner's cube and the octant there), and has no crease at the corner.
+    #[test]
+    fn three_fillets_of_three_radii_meet_smoothly() {
+        let mut model = Model::new();
+        let w = [10.0, 8.0, 9.0];
+        let block = Cuboid::new(w[0], w[1], w[2]).build(&mut model).unwrap();
+        let [x, y, z] = far_corner_edges(&model, block, w);
+        let rounded = fillet_edges(&mut model, block, &[(x, 1.1), (y, 1.3), (z, 0.8)]).unwrap();
+        let report = validity::check(&model, rounded);
+        assert!(report.problems.is_empty(), "{report:?}");
+        let k = 1.0 - PI / 4.0;
+        let at = |r: f64| w[0] * w[1] * w[2] - w.iter().map(|l| k * r * r * (l - r)).sum::<f64>() - r * r * r * (1.0 - PI / 6.0);
+        let v = properties::volume(&model, rounded).mass;
+        assert!(v > at(1.3) && v < at(0.8), "{v} not between {} and {}", at(1.3), at(0.8));
+        // (Away from the corner, each edge's own prism: the y fillet's at its middle.)
+        let p = Point::new(w[0] - 1.3 + 1.3 / 2f64.sqrt(), 4.0, w[2] - 1.3 + 1.3 / 2f64.sqrt());
+        let n = properties::normals(&mut model, rounded, &[p]).unwrap()[0].expect("a point of the y fillet");
+        assert!((n.x() - 0.5f64.sqrt()).abs() < 1e-6 && (n.z() - 0.5f64.sqrt()).abs() < 1e-6, "{n:?}");
+        let turn = largest_turn_at_corner(&mut model, rounded, w, 5.0, 300);
+        assert!(turn < 0.08, "a crease of {turn} rad at the corner");
     }
 
     /// Rounds `edge` of `shape` with the rolling ball and checks the result against the
