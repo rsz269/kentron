@@ -3107,12 +3107,56 @@ pub fn fillet_evolving(model: &mut Model, shape: Shape, edges: &[(Shape, Vec<(f6
     on_solids(model, shape, reach, |model, shape, found| {
         let edges: Option<Vec<(Shape, Vec<(f64, f64)>)>> = edges.iter().map(|(e, law)| found(model, shape, *e).map(|c| (c, law.clone()))).collect();
         let edges = edges.ok_or_else(|| Error::Failed("an edge to fillet not found again on the shell made solid".into()))?;
+        let laws: Vec<RadiusLaw> = edges
+            .iter()
+            .map(|(edge, law)| {
+                let (a, b) = model.edge_vertices(*edge);
+                RadiusLaw::new(law, a.node == b.node)
+            })
+            .collect::<Result<_>>()?;
+        let radii: Vec<Box<dyn Fn(f64) -> f64 + '_>> = laws.iter().map(|law| Box::new(move |s: f64| law.at(s)) as Box<dyn Fn(f64) -> f64>).collect();
+        let edges: Vec<(Shape, &dyn Fn(f64) -> f64)> = edges.iter().zip(&radii).map(|(&(e, _), radius)| (e, radius.as_ref())).collect();
         fillet_solid_evolving(model, shape, &edges)
     })
 }
 
-/// [`fillet_evolving`] of a shape with solids.
-fn fillet_solid_evolving(model: &mut Model, shape: Shape, edges: &[(Shape, Vec<(f64, f64)>)]) -> Result<Shape> {
+/// `shape` with edges rounded by a ball whose radius changes evenly with length along each:
+/// `(edge, first, last)`, the radius `first` at the edge's start (its first vertex, as
+/// `Model::edge_vertices` gives them) and `last` at its end, linear in the fraction of the edge's length between. Both radii must be
+/// positive; along a closed edge they must be the same (the radius would jump where the edge
+/// closes). Otherwise as [`fillet_evolving`], whose radius runs between two values along a
+/// cubic flat at both ends.
+///
+/// (OCCT's `Law_Linear` set on the edge's spine by `BRepFilletAPI_MakeFillet::SetLaw`, in
+/// place of the law `SetRadius` gives it: the spine's parameter is its length, so the radius
+/// is linear in length.)
+#[doc(alias = "Law_Linear")]
+#[doc(alias = "BRepFilletAPI_MakeFillet::SetLaw")]
+pub fn fillet_linear(model: &mut Model, shape: Shape, edges: &[(Shape, f64, f64)]) -> Result<Shape> {
+    for &(edge, first, last) in edges {
+        if !(first > 0.0 && last > 0.0) {
+            return Err(Error::InvalidInput("fillet radii must be positive".into()));
+        }
+        let (a, b) = model.edge_vertices(edge);
+        if a.node == b.node && first != last {
+            return Err(Error::InvalidInput("a radius changing along a closed edge would jump where the edge closes".into()));
+        }
+    }
+    let reach = edges.iter().map(|&(_, first, last)| first.max(last)).fold(0.0, f64::max);
+    on_solids(model, shape, reach, |model, shape, found| {
+        let found: Option<Vec<Shape>> = edges.iter().map(|&(e, _, _)| found(model, shape, e)).collect();
+        let found = found.ok_or_else(|| Error::Failed("an edge to fillet not found again on the shell made solid".into()))?;
+        // (Law_Linear::Value, from the start of the edge's length to its end.)
+        let radii: Vec<Box<dyn Fn(f64) -> f64 + '_>> =
+            edges.iter().map(|&(_, first, last)| Box::new(move |s: f64| first + (last - first) * s.clamp(0.0, 1.0)) as Box<dyn Fn(f64) -> f64>).collect();
+        let edges: Vec<(Shape, &dyn Fn(f64) -> f64)> = found.into_iter().zip(&radii).map(|(e, radius)| (e, radius.as_ref())).collect();
+        fillet_solid_evolving(model, shape, &edges)
+    })
+}
+
+/// [`fillet_evolving`] (or [`fillet_linear`]) of a shape with solids, each edge's radius by
+/// the fraction of the edge's length from its start.
+fn fillet_solid_evolving(model: &mut Model, shape: Shape, edges: &[(Shape, &dyn Fn(f64) -> f64)]) -> Result<Shape> {
     if edges.is_empty() {
         return Err(Error::InvalidInput("no edges to fillet".into()));
     }
@@ -3122,14 +3166,7 @@ fn fillet_solid_evolving(model: &mut Model, shape: Shape, edges: &[(Shape, Vec<(
         todo!("rolling-ball fillets of edges placed apart from their shape");
     }
     let unscale = 1.0 / placement.scale_factor().abs();
-    let laws: Vec<RadiusLaw> = edges
-        .iter()
-        .map(|(edge, law)| {
-            let (a, b) = model.edge_vertices(*edge);
-            RadiusLaw::new(law, a.node == b.node)
-        })
-        .collect::<Result<_>>()?;
-    let radii: Vec<Box<dyn Fn(f64) -> f64 + '_>> = laws.iter().map(|law| Box::new(move |s: f64| law.at(s) * unscale) as Box<dyn Fn(f64) -> f64>).collect();
+    let radii: Vec<Box<dyn Fn(f64) -> f64 + '_>> = edges.iter().map(|&(_, law)| Box::new(move |s: f64| law(s) * unscale) as Box<dyn Fn(f64) -> f64>).collect();
     // Edges meeting at their ends, in groups, rounded together (as `fillet_edges` does).
     let ends_of = |model: &Model, edge: Shape| -> Vec<Point> {
         let (a, b) = model.edge_vertices(edge);
@@ -6381,6 +6418,86 @@ mod radius_law_tests {
         for (u, r) in pairs {
             assert!((law.at(u / 5.0) - r).abs() < 1e-12, "{u}: {}", law.at(u / 5.0));
         }
+    }
+}
+
+#[cfg(test)]
+mod linear_fillet_tests {
+    use super::*;
+    use crate::primitives::Cuboid;
+    use crate::{properties, validity};
+    use std::f64::consts::PI;
+
+    /// A 10 x 20 x 30 box and its upright edge where x = 10 and y = 20, running up from
+    /// z = 0 or down from z = 30.
+    fn box_and_edge(model: &mut Model) -> (Shape, Shape, bool) {
+        let block = Cuboid::new(10.0, 20.0, 30.0).build(model).unwrap();
+        let edge = model
+            .unique_subshapes(block, NodeKind::Edge)
+            .into_iter()
+            .find(|&e| {
+                let (a, b) = model.edge_vertices(e);
+                let (p, q) = (model.point(a), model.point(b));
+                [p, q].iter().all(|v| (v.x - 10.0).abs() < 1e-9 && (v.y - 20.0).abs() < 1e-9) && (p.z - q.z).abs() > 1.0
+            })
+            .unwrap();
+        let (a, _) = model.edge_vertices(edge);
+        let up = model.point(a).z < 1e-9;
+        (block, edge, up)
+    }
+
+    /// The radius 1 at z = 0 to 2 at z = 30: between planes square to each other each
+    /// section across the edge loses (1 − π/4) r², so the box loses
+    /// (1 − π/4) ∫ r² dz = (1 − π/4) · 30 · (1 + 1·2 + 4)/3 = 70 (1 − π/4).
+    #[test]
+    fn a_box_edge_rounded_by_a_radius_growing_evenly() {
+        let mut model = Model::new();
+        let (block, edge, up) = box_and_edge(&mut model);
+        let (first, last) = if up { (1.0, 2.0) } else { (2.0, 1.0) };
+        let rounded = fillet_linear(&mut model, block, &[(edge, first, last)]).unwrap();
+        let report = validity::check(&model, rounded);
+        assert!(report.is_valid(), "{report:?}");
+        let volume = properties::volume(&model, rounded).mass;
+        let expected = 6000.0 - 70.0 * (1.0 - PI / 4.0);
+        assert!((volume - expected).abs() < 1e-3, "{volume} {expected}");
+    }
+
+    /// The same radius at both ends: the fillet `fillet` makes.
+    #[test]
+    fn equal_radii_round_as_fillet_does() {
+        let mut model = Model::new();
+        let (block, edge, _) = box_and_edge(&mut model);
+        let linear = fillet_linear(&mut model, block, &[(edge, 1.5, 1.5)]).unwrap();
+        let constant = fillet(&mut model, block, &[edge], 1.5).unwrap();
+        let (v, w) = (properties::volume(&model, linear).mass, properties::volume(&model, constant).mass);
+        assert!((v - w).abs() < 1e-6, "{v} {w}");
+        assert!((v - (6000.0 - 30.0 * 2.25 * (1.0 - PI / 4.0))).abs() < 1e-6, "{v}");
+    }
+
+    /// A ball past the width of one of the edge's faces (10): `fillet_linear` does there
+    /// what `fillet` does (rolling on over the face beyond), its radius growing into it the
+    /// same at both ends; radii that are not positive, or that change round a closed edge,
+    /// are refused.
+    #[test]
+    fn a_ball_too_big_for_a_face_as_fillet_takes_it_and_bad_radii_refused() {
+        let mut model = Model::new();
+        let (block, edge, _) = box_and_edge(&mut model);
+        let volume = |model: &Model, r: Result<Shape>| r.map(|s| properties::volume(model, s).mass).map_err(|e| e.to_string());
+        let linear = fillet_linear(&mut model, block, &[(edge, 12.0, 12.0)]);
+        let linear = volume(&model, linear);
+        let constant = fillet(&mut model, block, &[edge], 12.0);
+        let constant = volume(&model, constant);
+        match (&linear, &constant) {
+            (Ok(v), Ok(w)) => assert!((v - w).abs() < 1e-6, "{v} {w}"),
+            (Err(_), Err(_)) => {}
+            _ => panic!("{linear:?} {constant:?}"),
+        }
+        assert!(fillet_linear(&mut model, block, &[(edge, 0.0, 1.0)]).is_err());
+        assert!(fillet_linear(&mut model, block, &[(edge, 1.0, -1.0)]).is_err());
+        let cylinder = crate::primitives::Cylinder::new(3.0, 10.0).build(&mut model).unwrap();
+        let rim = model.unique_subshapes(cylinder, NodeKind::Edge).into_iter().find(|&e| matches!(model.edge_curve(e), Some((Curve::Circle(_), _, _)))).unwrap();
+        assert!(matches!(fillet_linear(&mut model, cylinder, &[(rim, 1.0, 2.0)]), Err(Error::InvalidInput(_))));
+        assert!(fillet_linear(&mut model, cylinder, &[(rim, 1.0, 1.0)]).is_ok());
     }
 }
 
