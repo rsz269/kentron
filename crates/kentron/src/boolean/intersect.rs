@@ -1346,6 +1346,18 @@ impl Section {
         self.passes_within(p, on_tol())
     }
 
+    /// How many arms of the section reach out from `p`, which it passes only near at `t`
+    /// (where the surfaces touch and cross, [`Self::passes`]): two where it runs on either
+    /// way, one where it ends there (an end as near as the point is accepted as on it, within
+    /// two samples' spacing), none on a section no longer than that.
+    fn arms_at(&self, t: f64, p: Point) -> usize {
+        let Section::Sampled(points, false, _) = self else { return 2 };
+        let n = points.len();
+        let i = (t.floor().max(0.0) as usize).min(n.saturating_sub(2));
+        let reach = 2.0 * points[i].distance(points[(i + 1).min(n - 1)]) + on_tol();
+        [points[0], points[n - 1]].iter().filter(|q| q.distance(p) > reach).count()
+    }
+
     /// [`Self::passes`], `p` within `tolerance` of the curve (on both surfaces as nearly).
     fn passes_within(&self, p: Point, tolerance: f64) -> Vec<(f64, bool)> {
         if let Section::Sampled(points, closed, traced) = self {
@@ -3385,9 +3397,15 @@ impl Graph {
                     found
                 })
                 .collect();
+            // (A point passed only near is on the sections where branches of them meet there,
+            // two arms at least: two sections ending there, or one running through it, as a
+            // branch traced across it onto the other (the steps carried on where the
+            // direction is lost there).)
             let mut near: HashMap<usize, usize> = HashMap::default();
-            for &(_, v, _) in points.iter().flatten().filter(|p| p.2) {
-                *near.entry(v).or_default() += 1;
+            for (section, found) in curves.iter().zip(&points) {
+                for &(t, v, _) in found.iter().filter(|p| p.2) {
+                    *near.entry(v).or_default() += section.arms_at(t, self.vertices.points[v]);
+                }
             }
             for (section, found) in curves.iter().zip(points) {
                 let on = found.into_iter().filter(|&(_, v, only_near)| !only_near || near[&v] >= 2).map(|(t, v, _)| (t, v)).collect();

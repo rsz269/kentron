@@ -1162,6 +1162,34 @@ mod tests {
         assert_eq!(at(&model, rest, 12.0), Some(top));
     }
 
+    /// Two struts of one radius ending at a node, square to each other, their axes meeting
+    /// there: their sides meet in halves of ellipses crossing where the sides touch, at the
+    /// ends of the struts. On the first strut's side the section runs across its seam from
+    /// one of those points to the other, traced across the second onto the other branch
+    /// (beyond the second strut's end): it ends at both, each passed only near.
+    #[test]
+    fn struts_meeting_square_at_their_ends_cross_at_the_points_their_sides_touch() {
+        use crate::geometry::ParametricCurve as _;
+        use crate::math::Point;
+        let t = 0.5 * 100.0 * 2f64.sqrt() / (1.0 + 2.0 * 2f64.sqrt());
+        let s = 100.0 / (1.0 + 2.0 * 2f64.sqrt());
+        let node = Point::new(2.0 * t, 0.0, t);
+        let mut model = Model::new();
+        let a = strut(&mut model, Point::new(2.0 * t + s, 0.0, t), node, 5.0);
+        let b = strut(&mut model, Point::new(2.0 * t, t, 0.0), node, 5.0);
+        let mut graph = operands(&model, a, b, true).unwrap();
+        classified(&model, &mut graph);
+        let side = graph.faces.iter().position(|f| f.operand == 0 && matches!(f.surface, crate::geometry::surface::Surface::BSpline(_))).unwrap();
+        let ends: Vec<Point> = graph.faces[side].sections.iter().flat_map(|&e| {
+            let (c, e) = (graph.edges[e].curve.as_ref().unwrap(), &graph.edges[e]);
+            [c.point(e.first), c.point(e.last)]
+        }).collect();
+        let h = 5.0 * std::f64::consts::FRAC_1_SQRT_2;
+        for touching in [Point::new(2.0 * t, -h, t - h), Point::new(2.0 * t, h, t + h)] {
+            assert!(ends.iter().any(|p| p.distance(touching) <= 1e-3), "no section ends at {touching:?}: {ends:?}");
+        }
+    }
+
     #[test]
     fn void_inside_a_box() {
         let mut model = Model::new();
