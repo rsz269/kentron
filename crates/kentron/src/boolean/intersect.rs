@@ -3864,17 +3864,16 @@ impl Graph {
             // classifying distance of the boundary, it lies along it unless it runs from one
             // edge of the face to another, ending off the edge its middle is near: across a
             // sliver of the face between edges meeting nearly tangent, passing near the one
-            // until it reaches the other. Then the first of its points clear of the boundary
-            // tells.)
+            // until it reaches the other, the sliver perhaps no wider than that distance.
+            // Then the side of that edge its middle is on tells, by the edge's own curve.)
             let through = |e: &Edge, v: usize| e.start == v || e.end == v || e.paves.iter().any(|&(_, w)| w == v);
+            let middle = section.point(0.5 * (t0 + t1));
             let inside = |graph: &Graph, f: usize| {
                 let face = &graph.faces[f];
-                let at = |i: usize| face.locate(section.point(t0 + (t1 - t0) * i as f64 / 8.0), &graph.edges, &graph.vertices);
-                let state = at(4);
+                let state = face.locate(middle, &graph.edges, &graph.vertices);
                 if state != Location::Boundary {
                     return state == Location::Inside;
                 }
-                let middle = section.point(0.5 * (t0 + t1));
                 let edges: Vec<&Edge> = face.boundary.iter().filter(|b| b.bounds).map(|b| &graph.edges[b.edge]).collect();
                 let near = |e: &Edge| {
                     let d = match &e.curve {
@@ -3885,9 +3884,8 @@ impl Graph {
                 };
                 let on_boundary = |v: usize| edges.iter().any(|e| through(e, v));
                 let across = on_boundary(v0) && on_boundary(v1) && edges.iter().filter(|e| near(e)).all(|e| !(through(e, v0) && through(e, v1)));
-                across && [3, 5, 2, 6, 1, 7].into_iter().map(at).find(|&l| l != Location::Boundary) == Some(Location::Inside)
+                across && face.inside_by_nearest_edge(middle, on_tol(), &graph.edges) == Some(true)
             };
-            let middle = section.point(0.5 * (t0 + t1));
             if off_surfaces(self, middle) || !(inside(self, fa) && inside(self, fb)) {
                 continue;
             }

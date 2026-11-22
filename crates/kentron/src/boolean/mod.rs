@@ -3160,65 +3160,113 @@ mod tests {
         }
     }
 
-    /// A ball-end mill's raster over the height field z = −5 + 4 sin(πx/50) sin(πy/40) (its
-    /// ball's centre 3 above it): a plate (70, 24, −20) … (92, 38, 0) less the shank (the
-    /// cylinder up from the ball's centre) at (85, 30), the move from there to (80, 30), the
-    /// ball and the shank at (80, 32), then the move on from there to (85, 32), its cylinder
-    /// tangent to the ball along the circle it starts from. The first move's end cap, cut by
-    /// the ball, is left a sliver between the arc the ball cuts and its circle, the two
-    /// meeting nearly tangent; the last move's side crosses the sliver, from the one to the
-    /// other, within the classifying distance of the arc for half the way. That piece of
-    /// their section was dropped, located by its middle on the cap's boundary, and with it
-    /// the side's region inside the plate: the move removed nothing. Its removed volume
-    /// against the move less the other tools integrated along x (exact on each line) over
-    /// an 800 × 2400 grid in z (split at the shanks' bottoms) and y (split at y = 33, where
-    /// the first move and its shank end, y = m + w sin θ on each part): within 10⁻⁵ of grids
-    /// four times finer.
-    #[test]
-    fn a_ball_end_mill_move_across_a_sliver_of_the_cap_before() {
-        let c = |x: f64, y: f64| Point::new(x, y, -2.0 + 4.0 * (PI * x / 50.0).sin() * (PI * y / 40.0).sin());
-        // The x-interval of a cylinder (start o, axis to e, radius 3) on the line along x
-        // through (y, z): |ax ζ − az wx| ≤ √(9 − wy²), 0 ≤ ax wx + az ζ ≤ l (ax > 0).
-        let cylinder = |o: Point, e: Point, y: f64, z: f64| -> Option<(f64, f64)> {
-            let d = e - o;
-            let l = d.length();
-            let (ax, az) = (d.x / l, d.z / l);
-            let (wy, zeta) = (y - o.y, z - o.z);
-            if wy * wy >= 9.0 {
-                return None;
+    /// A piece of a ball-end mill's raster over the height field z = −5 + 4 sin(πx/50)
+    /// sin(πy/40), its ball's centre 3 above it.
+    #[derive(Clone, Copy)]
+    enum Mill {
+        /// A move's cylinder, from the ball's centre over one point of the field to over
+        /// the other.
+        Along(f64, f64, f64, f64),
+        /// The ball over a point.
+        Ball(f64, f64),
+        /// The shank (the cylinder up from the ball's centre) over a point.
+        Shank(f64, f64),
+    }
+
+    /// The ball's centre over (x, y).
+    fn mill_centre(x: f64, y: f64) -> Point {
+        Point::new(x, y, -2.0 + 4.0 * (PI * x / 50.0).sin() * (PI * y / 40.0).sin())
+    }
+
+    impl Mill {
+        fn build(self, model: &mut Model) -> Shape {
+            match self {
+                Mill::Along(x0, y0, x1, y1) => {
+                    let (a, b) = (mill_centre(x0, y0), mill_centre(x1, y1));
+                    let d = b - a;
+                    Cylinder::new(3.0, d.length()).with_frame(Frame::from_z(a, Direction::new(d.x, d.y, d.z))).build(model).unwrap()
+                }
+                Mill::Ball(x, y) => Sphere::new(3.0).with_frame(Frame::from_z(mill_centre(x, y), Direction::Z)).build(model).unwrap(),
+                Mill::Shank(x, y) => Cylinder::new(3.0, 30.0).with_frame(Frame::from_z(mill_centre(x, y), Direction::Z)).build(model).unwrap(),
             }
-            let h = (9.0 - wy * wy).sqrt();
-            let (a, b) = ((zeta * ax - h) / az, (zeta * ax + h) / az);
-            let (a, b) = if az > 0.0 { (a, b) } else { (b, a) };
-            let (lo, hi) = (a.max(-zeta * az / ax), b.min((l - zeta * az) / ax));
-            (lo < hi).then_some((lo + o.x, hi + o.x))
-        };
-        let ball = |o: Point, y: f64, z: f64| {
-            let r = 9.0 - (y - o.y).powi(2) - (z - o.z).powi(2);
-            (r > 0.0).then(|| (o.x - r.sqrt(), o.x + r.sqrt()))
-        };
-        let shank = |o: Point, y: f64, z: f64| {
-            let r = 9.0 - (y - o.y).powi(2);
-            (r > 0.0 && z >= o.z).then(|| (o.x - r.sqrt(), o.x + r.sqrt()))
-        };
+        }
+
+        /// Its y about which it lies.
+        fn y(self) -> f64 {
+            match self {
+                Mill::Along(_, y, ..) | Mill::Ball(_, y) | Mill::Shank(_, y) => y,
+            }
+        }
+
+        /// Its x-interval on the line along x through (y, z), exactly. A move's (along x,
+        /// start o, axis to e, radius 3): |ax ζ − az wx| ≤ √(9 − wy²), 0 ≤ ax wx + az ζ ≤ l,
+        /// taken from its end further along x.
+        fn on_line(self, y: f64, z: f64) -> Option<(f64, f64)> {
+            match self {
+                Mill::Along(x0, y0, x1, y1) => {
+                    let (o, e) = if x0 < x1 { (mill_centre(x0, y0), mill_centre(x1, y1)) } else { (mill_centre(x1, y1), mill_centre(x0, y0)) };
+                    let d = e - o;
+                    let l = d.length();
+                    let (ax, az) = (d.x / l, d.z / l);
+                    let (wy, zeta) = (y - o.y, z - o.z);
+                    if wy * wy >= 9.0 {
+                        return None;
+                    }
+                    let h = (9.0 - wy * wy).sqrt();
+                    let (a, b) = ((zeta * ax - h) / az, (zeta * ax + h) / az);
+                    let (a, b) = if az > 0.0 { (a, b) } else { (b, a) };
+                    let (lo, hi) = (a.max(-zeta * az / ax), b.min((l - zeta * az) / ax));
+                    (lo < hi).then_some((lo + o.x, hi + o.x))
+                }
+                Mill::Ball(x, y0) => {
+                    let o = mill_centre(x, y0);
+                    let r = 9.0 - (y - o.y).powi(2) - (z - o.z).powi(2);
+                    (r > 0.0).then(|| (o.x - r.sqrt(), o.x + r.sqrt()))
+                }
+                Mill::Shank(x, y0) => {
+                    let o = mill_centre(x, y0);
+                    let r = 9.0 - (y - o.y).powi(2);
+                    (r > 0.0 && z >= o.z).then(|| (o.x - r.sqrt(), o.x + r.sqrt()))
+                }
+            }
+        }
+    }
+
+    /// A plate (x0, y0, −20) … (x1, y1, 0) less the `mills` in turn, the last a move's
+    /// cylinder: the result valid, and the volume the last removes against the move less the
+    /// others integrated along x (exact on each line) over a grid of 800 in z (split at the
+    /// shanks' bottoms) by 2400 in y (split where the others' sides end, y = m + w sin θ on
+    /// each part): within 5 × 10⁻⁵ of a grid twice as fine for the raster pieces below.
+    fn mill_raster(plate: [f64; 4], mills: &[Mill]) {
+        let (&last, others) = mills.split_last().unwrap();
+        let Mill::Along(x0, y0, x1, y1) = last else { panic!("the last a move") };
         let reference = || {
-            let (z0, z1) = (-7.6, -0.6);
-            let (nz, nt) = (800, 2400);
-            let mut cuts = vec![z0, z1, c(85.0, 30.0).z, c(80.0, 32.0).z];
-            cuts.sort_by(f64::total_cmp);
+            let (a, b) = (mill_centre(x0, y0), mill_centre(x1, y1));
+            let (z0, z1) = (a.z.min(b.z) - 3.1, a.z.max(b.z) + 3.1);
+            let (nz, ny) = (800, 2400);
+            let mut zs = vec![z0, z1];
+            zs.extend(others.iter().filter_map(|m| match *m {
+                Mill::Shank(x, y) => Some(mill_centre(x, y).z).filter(|&z| z > z0 && z < z1),
+                _ => None,
+            }));
+            zs.sort_by(f64::total_cmp);
+            let mut ys = vec![y0 - 3.0, y0 + 3.0];
+            ys.extend(others.iter().flat_map(|m| [m.y() - 3.0, m.y() + 3.0]).filter(|&y| y > y0 - 3.0 && y < y0 + 3.0));
+            ys.sort_by(f64::total_cmp);
+            ys.dedup();
             let mut removed = 0.0;
-            for (zlo, zhi) in cuts.iter().zip(&cuts[1..]) {
+            for (zlo, zhi) in zs.iter().zip(&zs[1..]) {
                 let n = ((zhi - zlo) / (z1 - z0) * nz as f64).ceil() as usize;
                 for i in 0..n {
                     let z = zlo + (zhi - zlo) * (i as f64 + 0.5) / n as f64;
-                    for (ylo, yhi) in [(29.0, 33.0), (33.0, 35.0)] {
+                    for (ylo, yhi) in ys.iter().zip(&ys[1..]) {
                         let (m, w) = (0.5 * (ylo + yhi), 0.5 * (yhi - ylo));
-                        let k = (nt as f64 * (yhi - ylo) / 6.0).round() as usize;
+                        let k = (ny as f64 * (yhi - ylo) / 6.0).round() as usize;
                         for j in 0..k {
                             let theta = PI * ((j as f64 + 0.5) / k as f64 - 0.5);
                             let y = m + w * theta.sin();
-                            let Some((t0, t1)) = cylinder(c(80.0, 32.0), c(85.0, 32.0), y, z) else { continue };
-                            let mut runs: Vec<(f64, f64)> = [shank(c(85.0, 30.0), y, z), cylinder(c(80.0, 30.0), c(85.0, 30.0), y, z), ball(c(80.0, 32.0), y, z), shank(c(80.0, 32.0), y, z)].into_iter().flatten().collect();
+                            let Some((t0, t1)) = last.on_line(y, z) else { continue };
+                            let mut runs: Vec<(f64, f64)> = others.iter().filter_map(|m| m.on_line(y, z)).collect();
                             runs.sort_by(|a, b| a.0.total_cmp(&b.0));
                             let (mut length, mut end) = (t1 - t0, t0);
                             for (a, b) in runs {
@@ -3236,27 +3284,43 @@ mod tests {
             removed
         };
         let mut model = Model::new();
-        let mut body = Cuboid::from_corners(Point::new(70.0, 24.0, -20.0), Point::new(92.0, 38.0, 0.0)).build(&mut model).unwrap();
-        let along = |model: &mut Model, a: Point, b: Point| {
-            let d = b - a;
-            Cylinder::new(3.0, d.length()).with_frame(Frame::from_z(a, Direction::new(d.x, d.y, d.z))).build(model).unwrap()
-        };
-        let up = |model: &mut Model, a: Point| Cylinder::new(3.0, 30.0).with_frame(Frame::from_z(a, Direction::Z)).build(model).unwrap();
-        let tools = [
-            up(&mut model, c(85.0, 30.0)),
-            along(&mut model, c(85.0, 30.0), c(80.0, 30.0)),
-            Sphere::new(3.0).with_frame(Frame::from_z(c(80.0, 32.0), Direction::Z)).build(&mut model).unwrap(),
-            up(&mut model, c(80.0, 32.0)),
-        ];
-        for tool in tools {
+        let mut body = Cuboid::from_corners(Point::new(plate[0], plate[1], -20.0), Point::new(plate[2], plate[3], 0.0)).build(&mut model).unwrap();
+        for m in others {
+            let tool = m.build(&mut model);
             body = difference(&mut model, body, tool).unwrap();
         }
         let before = properties::volume(&model, body).mass;
-        let tool = along(&mut model, c(80.0, 32.0), c(85.0, 32.0));
+        let tool = last.build(&mut model);
         let result = difference(&mut model, body, tool).unwrap();
         let report = validity::check(&model, result);
         assert!(report.is_valid(), "{report:?}");
         let (removed, expected) = (before - properties::volume(&model, result).mass, reference());
         assert!((removed - expected).abs() <= 1e-3, "removed {removed} != {expected}");
+    }
+
+    /// A ball-end mill's raster (see [`Mill`]): the shank at (85, 30), the move from there
+    /// to (80, 30), the ball and the shank at (80, 32), then the move on from there to
+    /// (85, 32), its cylinder tangent to the ball along the circle it starts from. The first
+    /// move's end cap, cut by the ball, is left a sliver between the arc the ball cuts and
+    /// its circle, the two meeting nearly tangent; the last move's side crosses the sliver,
+    /// from the one to the other, within the classifying distance of the arc for half the
+    /// way. That piece of their section was dropped, located by its middle on the cap's
+    /// boundary, and with it the side's region inside the plate: the move removed nothing.
+    #[test]
+    fn a_ball_end_mill_move_across_a_sliver_of_the_cap_before() {
+        use Mill::*;
+        mill_raster([70.0, 24.0, 92.0, 38.0], &[Shank(85.0, 30.0), Along(85.0, 30.0, 80.0, 30.0), Ball(80.0, 32.0), Shank(80.0, 32.0), Along(80.0, 32.0, 85.0, 32.0)]);
+    }
+
+    /// As [`a_ball_end_mill_move_across_a_sliver_of_the_cap_before`], the moves from (90, 14)
+    /// to (85, 14) and from (80, 16) to (85, 16) and the balls at their ends, the shank at
+    /// (85, 16), then the move on to (90, 16): the sliver it crosses, of the first ball
+    /// between the second and the first move's side, nowhere wider than the classifying
+    /// distance, no point of the piece across it clear of the boundary to locate it by. The
+    /// side of the arc its middle is on tells, by the arc's own curve.
+    #[test]
+    fn a_ball_end_mill_move_across_a_sliver_narrower_than_the_classifying_distance() {
+        use Mill::*;
+        mill_raster([76.0, 8.0, 98.0, 22.0], &[Along(90.0, 14.0, 85.0, 14.0), Ball(85.0, 14.0), Along(80.0, 16.0, 85.0, 16.0), Ball(85.0, 16.0), Shank(85.0, 16.0), Along(85.0, 16.0, 90.0, 16.0)]);
     }
 }
