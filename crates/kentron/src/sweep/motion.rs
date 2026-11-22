@@ -190,6 +190,20 @@ pub fn screw_extrude(model: &mut Model, profile: Shape, axis: Axis, lead: f64, h
     if !(lead != 0.0 && lead.is_finite() && height != 0.0 && height.is_finite()) {
         return Err(Error::InvalidInput(format!("a screw extrusion needs a lead and a height, got {lead} and {height}")));
     }
+    {
+        // (Told on the profile where it is defined, the axis brought there.)
+        let local = Shape { placement: Transform::IDENTITY, ..profile };
+        let local_axis = axis.transformed(&profile.placement.inverse());
+        if let Some(fault) = super::profile_fault(model, local) {
+            return Err(Error::InvalidInput(fault));
+        }
+        if super::crosses_axis(model, local, local_axis) {
+            return Err(Error::InvalidInput("a screw's profile crossing its axis".into()));
+        }
+        if height.abs() > lead.abs() + crate::tolerance::LINEAR && turns_meet(model, local, local_axis, lead) {
+            return Err(Error::InvalidInput(format!("a screw whose turns meet: its profile overlaps itself a lead of {lead} along the axis")));
+        }
+    }
     let k = lead / TAU;
     let angle = height / k;
     let along = Vector::from(axis.direction);
@@ -224,6 +238,84 @@ pub fn screw_extrude(model: &mut Model, profile: Shape, axis: Axis, lead: f64, h
         samples *= 2;
     };
     super::pipe::sweep_by_motions(model, profile, vec![motion], false)
+}
+
+/// Whether the turns of the screw of the planar face `profile` about `axis`, rising `lead` a
+/// turn, meet: the axis's direction lying in the profile's plane, a point of the profile a
+/// turn on lies where the profile moved `lead` along the axis does, so the turns meet where
+/// the profile's region and its copy moved so overlap (more than along their boundaries).
+/// They stay apart wherever the lead is at least the profile's extent along the axis. OCCT has
+/// no such check (its sweeps make a solid passing through itself); this is the definition,
+/// on the profile's loops sampled as polygons.
+fn turns_meet(model: &Model, profile: Shape, axis: Axis, lead: f64) -> bool {
+    if profile.kind() != NodeKind::Face {
+        return false;
+    }
+    let Some(Surface::Plane(plane)) = model.surface(profile).cloned() else { return false };
+    let (n, z) = (Vector::from(plane.normal()), Vector::from(axis.direction));
+    if n.dot(z).abs() > tolerance::ANGULAR {
+        return false;
+    }
+    let across = n.cross(z).normalized();
+    let Some(loops) = crate::heal::face_loops(model, profile) else { return false };
+    use crate::geometry::ParametricSurface;
+    const SAMPLES: usize = 64;
+    let polygons: Vec<Vec<Point2>> = loops
+        .iter()
+        .map(|l| {
+            l.iter()
+                .flat_map(|u| {
+                    let n = if matches!(u.pcurve, crate::geometry::curve2::Curve2::Line(_)) { 1 } else { SAMPLES };
+                    (0..n).map(move |k| u.at(k as f64 / n as f64))
+                })
+                .map(|uv| {
+                    let p = plane.point(uv.x, uv.y) - axis.origin;
+                    Point2::new(p.dot(across), p.dot(z))
+                })
+                .collect()
+        })
+        .collect();
+    let (lo, hi) = polygons.iter().flatten().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), p| (lo.min(p.y), hi.max(p.y)));
+    if !(hi - lo > lead.abs() + tolerance::LINEAR) {
+        return false;
+    }
+    let moved: Vec<Vec<Point2>> = polygons.iter().map(|p| p.iter().map(|q| Point2::new(q.x, q.y + lead)).collect()).collect();
+    let near = tolerance::LINEAR;
+    // Whether `q` lies inside the region the loops `region` bound, even-odd (`None` on them).
+    let inside = |region: &[Vec<Point2>], q: Point2| -> Option<bool> {
+        let mut crossings = 0;
+        for p in region {
+            for i in 0..p.len() {
+                let (a, b) = (p[i], p[(i + 1) % p.len()]);
+                let ab = b - a;
+                let s = ((q - a).dot(ab) / ab.dot(ab).max(1e-300)).clamp(0.0, 1.0);
+                if (q - (a + ab * s)).length() <= near {
+                    return None;
+                }
+                if (a.y > q.y) != (b.y > q.y) && a.x + (q.y - a.y) / (b.y - a.y) * (b.x - a.x) > q.x {
+                    crossings += 1;
+                }
+            }
+        }
+        Some(crossings % 2 == 1)
+    };
+    let sides = |region: &[Vec<Point2>]| -> Vec<(Point2, Point2)> { region.iter().flat_map(|p| (0..p.len()).map(move |i| (p[i], p[(i + 1) % p.len()]))).collect() };
+    let (ours, theirs) = (sides(&polygons), sides(&moved));
+    // (Two sides crossing each other properly, each's ends clear of the other's line.)
+    let side_of = |a: Point2, b: Point2, c: Point2| {
+        let ab = b - a;
+        (ab.x * (c.y - a.y) - ab.y * (c.x - a.x)) / ab.length().max(1e-300)
+    };
+    let crossing = ours.iter().any(|&(a, b)| {
+        theirs.iter().any(|&(c, d)| {
+            let (d1, d2, d3, d4) = (side_of(c, d, a), side_of(c, d, b), side_of(a, b, c), side_of(a, b, d));
+            ((d1 > near && d2 < -near) || (d1 < -near && d2 > near)) && ((d3 > near && d4 < -near) || (d3 < -near && d4 > near))
+        })
+    });
+    // (Else one region within the other in part: a corner or a side's middle of one strictly
+    // inside the other, as where a side of one lies along a side of the other.)
+    let within = |sides: &[(Point2, Point2)], region: &[Vec<Point2>]| sides.iter().any(|&(a, b)| [a, a + (b - a) * 0.5].into_iter().any(|q| inside(region, q) == Some(true)));
+    crossing || within(&theirs, &polygons) || within(&ours, &moved)
 }
 
 // ---- Small vector arithmetic, for the many evaluations the sections take.
@@ -1552,5 +1644,35 @@ mod tests {
         let tumble = MotionStep { axis: Axis::new(Point::ORIGIN, Direction::X), turn: 1.0, advance: 0.0 };
         let two = Motion { steps: vec![screw, tumble], from: -10.0, to: 10.0 };
         assert!(cut_by_motion(&mut model, &rod, &wheel, &two).is_err());
+    }
+
+    /// The face of the polygon through `points` (x, z) in the xz plane.
+    fn meridian_polygon(model: &mut Model, points: &[(f64, f64)]) -> Shape {
+        let p: Vec<Point> = points.iter().map(|&(x, z)| Point::new(x, 0.0, z)).collect();
+        let edges: Vec<Shape> = (0..p.len()).map(|i| crate::make::edge_between(model, p[i], p[(i + 1) % p.len()]).unwrap()).collect();
+        let wire = crate::make::wire(model, &edges).unwrap();
+        crate::make::planar_face(model, wire).unwrap()
+    }
+
+    /// Two turns of a screw of the rectangle 1 wide (from 3 out) and 2 high: with a lead of 2.5
+    /// the turns stay apart (volume M·angle, M = 2·(4² − 3²)/2 = 7, two turns 4π); with a lead
+    /// of 1 a turn lies half in the last, refused. A slanted band 2 high but only 0.5 thick
+    /// along the axis at each distance from it stays clear of itself a lead of 1 on, as the
+    /// screw does (M = 0.5·3.5, two turns).
+    #[test]
+    fn a_screw_whose_turns_meet_is_refused() {
+        let axis = Axis::new(Point::ORIGIN, Direction::Z);
+        let rectangle = [(3.0, 0.0), (4.0, 0.0), (4.0, 2.0), (3.0, 2.0)];
+        let band = [(3.0, 0.0), (4.0, 1.5), (4.0, 2.0), (3.0, 0.5)];
+        for (profile, lead, fits, m) in [(&rectangle, 2.5, true, 7.0), (&rectangle, 1.0, false, 7.0), (&band, 1.0, true, 1.75)] {
+            let mut model = Model::new();
+            let face = meridian_polygon(&mut model, profile);
+            let result = screw_extrude(&mut model, face, axis, lead, 2.0 * lead);
+            assert_eq!(result.is_ok(), fits, "lead {lead}: {result:?}");
+            if let Ok(s) = result {
+                let (volume, _) = measure(&model, s.shape);
+                assert!(close(volume, m * 2.0 * TAU, 1e-6), "volume {volume}");
+            }
+        }
     }
 }

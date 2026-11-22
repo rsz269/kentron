@@ -104,6 +104,9 @@ pub fn extrude(model: &mut Model, profile: Shape, v: Vector) -> Result<Sweep> {
         let sweep = extrude(model, Shape { placement: Transform::IDENTITY, ..profile }, local)?;
         return Ok(sweep.moved(&profile.placement));
     }
+    if let Some(fault) = profile_fault(model, profile) {
+        return Err(Error::InvalidInput(fault));
+    }
     let mut x = Extruder {
         model,
         v,
@@ -549,6 +552,12 @@ pub fn revolve(model: &mut Model, profile: Shape, axis: Axis, angle: f64) -> Res
         let sweep = revolve(model, Shape { placement: Transform::IDENTITY, ..profile }, local, angle)?;
         return Ok(sweep.moved(&profile.placement));
     }
+    if let Some(fault) = profile_fault(model, profile) {
+        return Err(Error::InvalidInput(fault));
+    }
+    if crosses_axis(model, profile, axis) {
+        return Err(Error::InvalidInput("a profile crossing the axis it is revolved about".into()));
+    }
     // A wire crossing the axis: each part on either side sweeps a cone of its own, the two
     // meeting at the apex (as one face, the cone's two nappes through its apex, it would
     // not be a valid face).
@@ -636,6 +645,55 @@ pub fn revolve(model: &mut Model, profile: Shape, axis: Axis, angle: f64) -> Res
     let generated = std::mem::take(&mut r.generated);
     let (ends, copies) = (std::mem::take(&mut r.ends), std::mem::take(&mut r.copies));
     Ok(Sweep { shape, generated, ends, copies })
+}
+
+/// Why `profile`, a face to sweep, has no region to sweep: its boundary crosses itself
+/// (OCCT's `BRepCheck_SelfIntersectingWire`, `BRepCheck_IntersectingWires`) or its loops are
+/// not nested as a face's must be (`BRepCheck_InvalidImbricationOfWires`, a hole outside the
+/// outer loop). `None` for a sound face and for shapes other than faces. (OCCT's sweeps take
+/// such a face as it is and make an invalid solid of it; its checker then finds the face's
+/// fault.)
+pub(crate) fn profile_fault(model: &Model, profile: Shape) -> Option<String> {
+    if profile.kind() != NodeKind::Face {
+        return None;
+    }
+    if !crate::validity::boundary_crossings(model, profile).is_empty() {
+        return Some("a profile whose loops cross themselves or each other".into());
+    }
+    if !crate::validity::misnested_loops(model, profile).is_empty() {
+        return Some("a profile whose loops are not nested as a face's (a hole outside it)".into());
+    }
+    None
+}
+
+/// Points along the edges bounding `profile`, `per_edge` intervals along each.
+pub(crate) fn boundary_points(model: &Model, profile: Shape, per_edge: usize) -> Vec<Point> {
+    let mut points = Vec::new();
+    for edge in model.unique_subshapes(profile, NodeKind::Edge) {
+        let Some((curve, first, last)) = model.edge_curve(Shape { orientation: Orientation::Forward, ..edge }) else { continue };
+        let n = if matches!(curve, Curve::Line(_)) { 1 } else { per_edge };
+        points.extend((0..=n).map(|i| curve.point(first + (last - first) * i as f64 / n as f64)));
+    }
+    points
+}
+
+/// Whether the face `profile` lies on both sides of `axis` in its plane, the axis lying in
+/// that plane: its revolution about the axis would pass through itself. (The profile of a
+/// solid of revolution lies in a half-plane the axis bounds; it may touch the axis. OCCT's
+/// `BRepPrimAPI_MakeRevol` does not look, and makes a solid passing through itself.)
+pub(crate) fn crosses_axis(model: &Model, profile: Shape, axis: Axis) -> bool {
+    if profile.kind() != NodeKind::Face {
+        return false;
+    }
+    let Some(Surface::Plane(plane)) = model.surface(profile) else { return false };
+    let (n, z) = (Vector::from(plane.normal()), Vector::from(axis.direction));
+    if n.dot(z).abs() > tolerance::ANGULAR || (axis.origin - plane.origin()).dot(n).abs() > tolerance::LINEAR {
+        return false;
+    }
+    // Across the axis within the plane.
+    let across = n.cross(z).normalized();
+    let sides = boundary_points(model, profile, 32).iter().map(|&p| (p - axis.origin).dot(across)).fold((0.0_f64, 0.0_f64), |(lo, hi), s| (lo.min(s), hi.max(s)));
+    sides.0 < -tolerance::LINEAR && sides.1 > tolerance::LINEAR
 }
 
 /// `wire` with its straight edges crossing `axis` between their ends split there (copied,
@@ -2059,5 +2117,57 @@ mod tests {
         assert!(revolve(&mut model, v, Axis::Z, 0.0).is_err());
         assert!(revolve(&mut model, v, Axis::Z, 7.0).is_err());
         assert!(revolve(&mut model, v, Axis::Z, f64::NAN).is_err());
+    }
+
+    /// A bow tie, its loop crossing itself, has no region to extrude: refused.
+    #[test]
+    fn a_profile_crossing_itself_is_refused() {
+        let mut model = Model::new();
+        let p: Vec<Point> = [(0.0, 0.0), (4.0, 0.0), (0.0, 4.0), (4.0, 4.0)].iter().map(|&(x, y)| Point::new(x, y, 0.0)).collect();
+        let edges: Vec<Shape> = (0..4).map(|i| make::edge_between(&mut model, p[i], p[(i + 1) % 4]).unwrap()).collect();
+        let wire = make::wire(&mut model, &edges).unwrap();
+        let bow = make::face_bounded_on(&mut model, Surface::Plane(Plane::new(Point::ORIGIN, Direction::Z)), &[wire]).unwrap();
+        assert!(extrude(&mut model, bow, Vector::new(0.0, 0.0, 4.0)).is_err());
+    }
+
+    /// A 4 x 4 square with a 1 x 1 hole: inside it, the plate with its hole, 15 by the height;
+    /// outside it, refused (a hole outside the profile is no hole of it).
+    #[test]
+    fn a_hole_outside_its_profile_is_refused() {
+        for (at, inside) in [(1.5, true), (6.0, false)] {
+            let mut model = Model::new();
+            let square = |model: &mut Model, lo: f64, hi: f64, ccw: bool| {
+                let mut p: Vec<Point> = [(lo, lo), (hi, lo), (hi, hi), (lo, hi)].iter().map(|&(x, y)| Point::new(x, y, 0.0)).collect();
+                if !ccw {
+                    p.reverse();
+                }
+                let edges: Vec<Shape> = (0..4).map(|i| make::edge_between(model, p[i], p[(i + 1) % 4]).unwrap()).collect();
+                make::wire(model, &edges).unwrap()
+            };
+            let outer = square(&mut model, 0.0, 4.0, true);
+            let hole = square(&mut model, at, at + 1.0, false);
+            let face = make::face_bounded_on(&mut model, Surface::Plane(Plane::new(Point::ORIGIN, Direction::Z)), &[outer, hole]).unwrap();
+            let result = extrude(&mut model, face, Vector::new(0.0, 0.0, 2.0));
+            assert_eq!(result.is_ok(), inside, "{result:?}");
+            if let Ok(s) = result {
+                assert!((properties::volume(&model, s.shape).mass - 30.0).abs() < 1e-9);
+            }
+        }
+    }
+
+    /// A rectangle 2 high from `x0` to 3 out along x, revolved about z: from the axis on, a
+    /// cylinder of radius 3 (π·9·2); reaching across the axis, refused.
+    #[test]
+    fn a_profile_across_its_axis_is_refused() {
+        for (x0, fits) in [(0.0, true), (-1.0, false)] {
+            let mut model = Model::new();
+            let face = polygon(&mut model, &[(x0, 0.0), (3.0, 0.0), (3.0, 2.0), (x0, 2.0)]);
+            let result = revolve(&mut model, face, Axis::Z, TAU);
+            assert_eq!(result.is_ok(), fits, "{result:?}");
+            if let Ok(s) = result {
+                let v = properties::volume(&model, s.shape).mass;
+                assert!((v - PI * 9.0 * 2.0).abs() < 1e-9 * v, "{v}");
+            }
+        }
     }
 }

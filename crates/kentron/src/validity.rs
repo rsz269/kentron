@@ -651,6 +651,64 @@ pub(crate) fn loop_area_in_parameters(model: &Model, coedges: &[CoEdgeId], orien
     Some(if orientation == Orientation::Reversed { -area } else { area })
 }
 
+/// The faces of `shape` on planes whose loops are not nested as a face's must be: a hole
+/// outside the outer loop, a hole inside another hole, or more than one outer loop (OCCT's
+/// `BRepCheck_InvalidImbricationOfWires`). As OCCT's `BRepCheck_Face::ClassifyWires` tells
+/// it, each loop alone bounds a region of the plane (inside an outer loop, which runs
+/// counter-clockwise; outside a hole, which runs clockwise), and every other loop must lie
+/// within that region. Loops that cross are another fault ([`boundary_crossings`]); a loop
+/// is placed here by a point of it off the other's boundary.
+pub fn misnested_loops(model: &Model, shape: Shape) -> Vec<Shape> {
+    let mut out = Vec::new();
+    for face in model.unique_subshapes(shape, NodeKind::Face) {
+        if !matches!(model.surface(face), Some(Surface::Plane(_))) {
+            continue;
+        }
+        let Some(loops) = crate::heal::face_loops(model, face) else { continue };
+        if loops.len() < 2 {
+            continue;
+        }
+        const SAMPLES: usize = 32;
+        let polygons: Vec<Vec<Point2>> = loops.iter().map(|l| l.iter().flat_map(|u| (0..SAMPLES).map(move |k| u.at(k as f64 / SAMPLES as f64))).collect()).collect();
+        let area = |p: &[Point2]| 0.5 * (0..p.len()).map(|i| p[i].x * p[(i + 1) % p.len()].y - p[(i + 1) % p.len()].x * p[i].y).sum::<f64>();
+        let outer: Vec<bool> = polygons.iter().map(|p| area(p) > 0.0).collect();
+        let size = polygons.iter().flatten().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), p| (lo.min(p.x.min(p.y)), hi.max(p.x.max(p.y))));
+        let near = 1e-9 * (size.1 - size.0).max(1.0);
+        // Whether `q` lies inside polygon `p` (`None` on its boundary).
+        let inside = |p: &[Point2], q: Point2| -> Option<bool> {
+            let mut crossings = 0;
+            for i in 0..p.len() {
+                let (a, b) = (p[i], p[(i + 1) % p.len()]);
+                let ab = b - a;
+                let s = ((q - a).dot(ab) / ab.dot(ab).max(1e-300)).clamp(0.0, 1.0);
+                if (q - (a + ab * s)).length() <= near {
+                    return None;
+                }
+                if (a.y > q.y) != (b.y > q.y) && a.x + (q.y - a.y) / (b.y - a.y) * (b.x - a.x) > q.x {
+                    crossings += 1;
+                }
+            }
+            Some(crossings % 2 == 1)
+        };
+        let mut faulty = outer.iter().filter(|&&o| o).count() > 1;
+        for i in 0..polygons.len() {
+            for j in 0..polygons.len() {
+                if i == j || faulty {
+                    continue;
+                }
+                // (A point of loop `j` off loop `i`.)
+                let Some(within) = polygons[j].iter().find_map(|&q| inside(&polygons[i], q)) else { continue };
+                // (Inside an outer loop's region, outside a hole's.)
+                faulty = within != outer[i];
+            }
+        }
+        if faulty {
+            out.push(face);
+        }
+    }
+    out
+}
+
 pub fn boundary_crossings(model: &Model, shape: Shape) -> Vec<(Shape, [Shape; 2])> {
     let mut out = Vec::new();
     for face in model.unique_subshapes(shape, NodeKind::Face) {
