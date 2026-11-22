@@ -203,7 +203,8 @@ fn pipe_framed(model: &mut Model, profile: Shape, spine: Shape, options: &PipeOp
     let framing = framing(model, spine, &pieces, options)?;
     // (Along a single line or arc, OCCT's trihedra are its Frenet frame: an extrusion or a
     // revolution.)
-    if let ([piece], pipe::Framing::Frenet(_) | pipe::Framing::Corrected(_)) = (&pieces[..], &framing) {
+    // (Not twisted: a twist turns the profile about the line or the arc as it goes.)
+    if let ([piece], pipe::Framing::Frenet(_) | pipe::Framing::Corrected(_), true) = (&pieces[..], &framing, options.twist == 0.0) {
         let (curve, first, last) = (&piece.curve, piece.first, piece.last);
         // (From the profile carried back to the spine's start from where it stands on it,
         // as the pipe carries it: by OCCT's placement an end, or another point along it.)
@@ -231,10 +232,10 @@ fn pipe_framed(model: &mut Model, profile: Shape, spine: Shape, options: &PipeOp
         let local: Vec<pipe::SpinePiece> = pieces.iter().map(|p| pipe::SpinePiece { curve: p.curve.transformed(&inverse), first: p.first, last: p.last, gap: p.gap }).collect();
         let local_options = PipeOptions { guide: options.guide.map(|g| g.moved(&inverse)), ..*options };
         let framing = self::framing(model, spine.moved(&inverse), &local, &local_options)?;
-        let sweep = pipe::pipe_along(model, Shape { placement: Transform::IDENTITY, ..profile }, &local, &framing)?;
+        let sweep = pipe::pipe_along(model, Shape { placement: Transform::IDENTITY, ..profile }, &local, &framing, options.twist)?;
         return Ok(sweep.moved(&profile.placement));
     }
-    pipe::pipe_along(model, profile, &pieces, &framing)
+    pipe::pipe_along(model, profile, &pieces, &framing, options.twist)
 }
 
 /// The frames `options` carry a profile in along the spine's `pieces`.
@@ -371,6 +372,10 @@ pub struct PipeOptions {
     pub frenet: bool,
     /// What else turns the profile (in place of `frenet`).
     pub guide: Option<Guide>,
+    /// A turn of the profile about the spine's tangent on top of its frame's, growing evenly
+    /// with arc length from none at the spine's start to this (radians, right-handed about
+    /// the tangent) at its end: kentron's own, OCCT's pipes having none. For [`pipe_with`].
+    pub twist: f64,
 }
 
 /// [`pipe`], the profile first placed on the spine as `options` say.
@@ -417,6 +422,9 @@ pub(super) fn pipe_cornered_noting(model: &mut Model, profile: Shape, spine: Sha
     if corner == Corner::Unturned {
         return Ok((pipe_with(model, profile, spine, options)?.shape, false));
     }
+    if options.twist != 0.0 {
+        return Err(Error::InvalidInput("a twisted pipe turning at its spine's corners".into()));
+    }
     let pieces = spine_pieces(model, spine)?;
     let placing = placing(model, profile, spine, &pieces, options)?;
     corner::pipe_cornered(model, profile.moved(&placing), &pieces, corner)
@@ -450,6 +458,9 @@ pub fn pipe_evolving(model: &mut Model, first: Shape, last: Shape, spine: Shape)
 /// each section edge swept (or part of one, where sections were split to match), and the
 /// first section's (as a profile face's) first and last faces, the caps of a solid.
 pub fn pipe_through_with(model: &mut Model, sections: &[(Shape, PipeOptions)], spine: Shape, solid: bool, guide: Option<Guide>) -> Result<Sweep> {
+    if sections.iter().any(|(_, o)| o.twist != 0.0) {
+        return Err(Error::InvalidInput("a twist is for a pipe of one profile".into()));
+    }
     let pieces = spine_pieces(model, spine)?;
     // (In Frenet's frame if the sections say so.)
     let frenet = sections.iter().any(|(_, o)| o.frenet);
@@ -1286,6 +1297,103 @@ mod tests {
         model.set_face_surface(face, Surface::Plane(plane), tolerance::LINEAR).unwrap();
         model.add(face, wire).unwrap();
         face
+    }
+
+    /// The square of half-width `half` in the xy plane about the origin, facing +z.
+    fn square_across_z(model: &mut Model, half: f64) -> Shape {
+        let vertices: Vec<Shape> = [(-half, -half), (half, -half), (half, half), (-half, half)]
+            .iter()
+            .map(|&(x, y)| make::vertex(model, Point::new(x, y, 0.0)))
+            .collect();
+        let edges: Vec<Shape> = (0..4).map(|i| make::edge(model, vertices[i], vertices[(i + 1) % 4]).unwrap()).collect();
+        let wire = make::wire(model, &edges).unwrap();
+        face_on_plane(model, wire, Plane::new(Point::ORIGIN, Direction::Z))
+    }
+
+    fn twisted(twist: f64) -> PipeOptions {
+        PipeOptions { guide: Some(Guide::Discrete), twist, ..Default::default() }
+    }
+
+    #[test]
+    fn a_square_twisted_along_a_line_keeps_its_volume_and_has_the_helicoids_area() {
+        // Along a line the side's element is √(|b′|² + φ′²(b·b′)²): on the side x = h, y from
+        // −h to h, √(1 + φ′²y²), integrated here numerically (Gauss on many pieces).
+        let (half, length, twist) = (1.0, 6.0, 2.5);
+        let mut model = Model::new();
+        let square = square_across_z(&mut model, half);
+        let line = Curve::Line(crate::geometry::curve::Line::new(Point::ORIGIN, Direction::Z));
+        let spine = make::edge_from_curve_range(&mut model, line, 0.0, length).unwrap();
+        let solid = pipe_with(&mut model, square, spine, &twisted(twist)).unwrap().shape;
+        let report = validity::check(&model, solid);
+        assert!(report.is_valid(), "{report:?}");
+        let rate = twist / length;
+        let pieces = 1000;
+        let side: f64 = (0..pieces)
+            .map(|i| {
+                let (a, b) = (-half + 2.0 * half * i as f64 / pieces as f64, -half + 2.0 * half * (i + 1) as f64 / pieces as f64);
+                let (m, h) = (0.5 * (a + b), 0.5 * (b - a));
+                crate::geometry::measure::GAUSS.iter().map(|&(x, w)| w * h * (1.0 + (rate * (m + h * x)).powi(2)).sqrt()).sum::<f64>()
+            })
+            .sum::<f64>()
+            * length;
+        let expected_area = 4.0 * side + 2.0 * (2.0 * half).powi(2);
+        let volume = properties::volume(&model, solid).mass;
+        let area = properties::area(&model, solid).mass;
+        let expected_volume = (2.0 * half).powi(2) * length;
+        assert!((volume - expected_volume).abs() < 1e-8 * expected_volume, "{volume} vs {expected_volume}");
+        assert!((area - expected_area).abs() < 1e-8 * expected_area, "{area} vs {expected_area}");
+        // The far end turned by the twist: its corner (h, h) at (h, h) turned.
+        let (c, s) = (twist.cos(), twist.sin());
+        let corner = Point::new(half * (c - s), half * (s + c), length);
+        let nearest = model.explore(solid, NodeKind::Vertex).map(|v| model.point(v).distance(corner)).fold(f64::INFINITY, f64::min);
+        assert!(nearest < 1e-12, "{nearest}");
+    }
+
+    #[test]
+    fn a_square_twisted_along_a_curve_keeps_its_pappus_volume() {
+        // The square centred on the cubic: volume A·ℓ whatever the twist; untwisted, the side
+        // is the square's perimeter times ℓ too.
+        use crate::geometry::curve::BezierCurve;
+        let cubic = Curve::Bezier(BezierCurve::new(vec![
+            Point::new(0.0, 0.0, 0.0),
+            Point::new(0.0, 0.0, 5.0),
+            Point::new(3.0, 0.0, 10.0),
+            Point::new(8.0, 0.0, 12.0),
+        ]));
+        for twist in [0.0, 1.3, -2.0] {
+            let mut model = Model::new();
+            let square = square_across_z(&mut model, 1.0);
+            let spine = make::edge_from_curve(&mut model, cubic.clone()).unwrap();
+            let solid = pipe_with(&mut model, square, spine, &twisted(twist)).unwrap().shape;
+            let report = validity::check(&model, solid);
+            assert!(report.is_valid(), "{twist}: {report:?}");
+            let length = properties::length(&model, spine).mass;
+            let volume = properties::volume(&model, solid).mass;
+            assert!((volume - 4.0 * length).abs() < 1e-8 * 4.0 * length, "{twist}: {volume} vs {}", 4.0 * length);
+            if twist == 0.0 {
+                let area = properties::area(&model, solid).mass;
+                let expected = 8.0 * length + 8.0;
+                assert!((area - expected).abs() < 1e-8 * expected, "{area} vs {expected}");
+            }
+        }
+    }
+
+    #[test]
+    fn only_an_untwisted_pipe_along_a_line_is_an_extrusion() {
+        let sweep = |twist: f64| {
+            let mut model = Model::new();
+            let square = square_across_z(&mut model, 1.0);
+            let line = Curve::Line(crate::geometry::curve::Line::new(Point::ORIGIN, Direction::Z));
+            let spine = make::edge_from_curve_range(&mut model, line, 0.0, 3.0).unwrap();
+            let solid = pipe_with(&mut model, square, spine, &PipeOptions { twist, ..Default::default() }).unwrap().shape;
+            (surfaces(&model, solid), properties::volume(&model, solid).mass)
+        };
+        let (flat, volume) = sweep(0.0);
+        assert_eq!(flat, vec!["plane"; 6]);
+        assert!((volume - 12.0).abs() < 1e-12, "{volume}");
+        let (turned, volume) = sweep(1.0);
+        assert_eq!(turned.iter().filter(|&&k| k == "plane").count(), 2, "{turned:?}");
+        assert!((volume - 12.0).abs() < 1e-7 * 12.0, "{volume}");
     }
 
     #[test]

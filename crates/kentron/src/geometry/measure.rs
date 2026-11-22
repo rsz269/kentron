@@ -189,6 +189,14 @@ impl LengthTable {
         *self.lengths.last().expect("a length")
     }
 
+    /// The length along `curve` (the table's) from the start to parameter `t` in the range:
+    /// from the break before it.
+    pub fn length_to(&self, curve: &Curve, t: f64) -> f64 {
+        let n = self.parameters.len();
+        let i = self.parameters.partition_point(|&p| p <= t).clamp(1, n - 1) - 1;
+        self.lengths[i] + length_between(curve, self.parameters[i], t)
+    }
+
     /// The parameter of `curve` (the table's) at `distance` along from the start: from the
     /// break before it.
     pub fn parameter_at(&self, curve: &Curve, distance: f64) -> f64 {

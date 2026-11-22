@@ -88,6 +88,39 @@ impl Framing {
     }
 }
 
+/// A turn of the frames about the tangent growing evenly with arc length along the whole
+/// spine, from none at its start to `angle` at its end (kentron's own: OCCT's pipes have no
+/// such law).
+pub(super) struct Twist {
+    angle: f64,
+    /// Each piece's lengths up to its curve's breaks (over its range, lower end first).
+    tables: Vec<crate::geometry::measure::LengthTable>,
+    /// The length of the spine before each piece, and the whole length last.
+    before: Vec<f64>,
+}
+
+impl Twist {
+    pub(super) fn new(pieces: &[SpinePiece], angle: f64) -> Result<Twist> {
+        let tables: Vec<_> = pieces.iter().map(|p| crate::geometry::measure::LengthTable::new(&p.curve, p.first.min(p.last), p.first.max(p.last))).collect();
+        let mut before = vec![0.0];
+        for table in &tables {
+            before.push(before.last().expect("a length") + table.total());
+        }
+        if !(*before.last().expect("a length") > 0.0) {
+            return Err(Error::InvalidInput("a twisted pipe along a spine of no length".into()));
+        }
+        Ok(Twist { angle, tables, before })
+    }
+
+    /// The turn at fraction `s` of piece `k`.
+    fn at(&self, pieces: &[SpinePiece], k: usize, s: f64) -> f64 {
+        let (piece, table) = (&pieces[k], &self.tables[k]);
+        let from_low = table.length_to(&piece.curve, piece.at(s));
+        let along = if piece.last < piece.first { table.total() - from_low } else { from_low };
+        self.angle * (self.before[k] + along) / self.before[self.tables.len()]
+    }
+}
+
 /// The rigid motions carrying the frame at `anchor` (piece, fraction) to the frames of
 /// `framing` at `samples` points per piece, and to the points halfway between them (to
 /// check fits). Each piece's law is set into continuity with the one before
@@ -95,6 +128,11 @@ impl Framing {
 /// does not turn at a corner of the spine), its frames turned by the turn taking its
 /// frame at its start onto the last piece's at its end.
 pub(super) fn motions(pieces: &[SpinePiece], samples: usize, anchor: (usize, f64), framing: &Framing) -> Result<(Vec<PieceMotion>, Vec<Vec<Transform>>)> {
+    twisted_motions(pieces, samples, anchor, framing, None)
+}
+
+/// [`motions`], each frame (once set into continuity) turned about its tangent by `twist`.
+fn twisted_motions(pieces: &[SpinePiece], samples: usize, anchor: (usize, f64), framing: &Framing, twist: Option<&Twist>) -> Result<(Vec<PieceMotion>, Vec<Vec<Transform>>)> {
     let frame = |p: Point, (t, r): (Vector, Vector)| -> Frame { Frame::new(p, Direction::from_vector(t), Direction::from_vector(r)) };
     let mut correction = Correction::identity();
     let mut end: Option<(Point, (Vector, Vector))> = None;
@@ -112,7 +150,15 @@ pub(super) fn motions(pieces: &[SpinePiece], samples: usize, anchor: (usize, f64
         let at = |s: f64| -> Result<Frame> {
             let (x, _) = piece.point_tangent(s)?;
             let (t, r) = framing.frame(pieces, k, s)?;
-            Ok(frame(x, correction.carry(t, r)))
+            let (t, r) = correction.carry(t, r);
+            let r = match twist {
+                Some(twist) => {
+                    let phi = twist.at(pieces, k, s);
+                    r * phi.cos() + t.cross(r) * phi.sin()
+                }
+                None => r,
+            };
+            Ok(frame(x, (t, r)))
         };
         if anchor.0 == k {
             anchor_frame = Some(at(anchor.1.clamp(0.0, 1.0))?);
@@ -511,10 +557,11 @@ impl Piper<'_> {
 }
 
 /// Sweeps `profile` (unplaced) along the spine's `pieces`, in order.
-pub(super) fn pipe_along(model: &mut Model, profile: Shape, pieces: &[SpinePiece], framing: &Framing) -> Result<Sweep> {
+pub(super) fn pipe_along(model: &mut Model, profile: Shape, pieces: &[SpinePiece], framing: &Framing, twist: f64) -> Result<Sweep> {
     if pieces.is_empty() {
         return Err(Error::InvalidInput("a pipe needs a spine".into()));
     }
+    let twist = if twist != 0.0 { Some(Twist::new(pieces, twist)?) } else { None };
     // Enough samples for the profile's farthest points to follow their paths closely.
     let size = {
         let b = properties::bounding_box(model, profile);
@@ -531,7 +578,7 @@ pub(super) fn pipe_along(model: &mut Model, profile: Shape, pieces: &[SpinePiece
     let anchor = section_placement(model, profile, pieces)?;
     let mut samples = 16;
     let motions = loop {
-        let (motions, halves) = motions(pieces, samples, anchor, framing)?;
+        let (motions, halves) = twisted_motions(pieces, samples, anchor, framing, twist.as_ref())?;
         let mut error = 0.0f64;
         for (motion, half) in motions.iter().zip(&halves) {
             for &p in &probes {

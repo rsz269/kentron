@@ -2144,7 +2144,7 @@ impl Draw {
         let guide = self.sweep_guide()?;
         let r = if let [(profile, contact, correction)] = self.sweep_profiles[..] {
             let profile = if solid && profile.kind() == NodeKind::Wire { make::planar_face(&mut self.model, profile)? } else { profile };
-            let options = kentron::sweep::PipeOptions { contact, correction, frenet, guide };
+            let options = kentron::sweep::PipeOptions { contact, correction, frenet, guide, ..Default::default() };
             kentron::sweep::pipe_with(&mut self.model, profile, spine, &options)?.shape
         } else {
             let sections: Vec<(Shape, kentron::sweep::PipeOptions)> =

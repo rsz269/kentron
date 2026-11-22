@@ -588,7 +588,7 @@ pub fn pipe(profile: Handle, spine: Handle, contact: bool, correction: bool, cor
         "round" => sweep::Corner::Rounded,
         other => return Err(pyo3::exceptions::PyValueError::new_err(format!("unknown transition {other}"))),
     };
-    let options = sweep::PipeOptions { contact, correction, frenet, guide: guide_of(aux, curvilinear, fixed, binormal, discrete)? };
+    let options = sweep::PipeOptions { contact, correction, frenet, guide: guide_of(aux, curvilinear, fixed, binormal, discrete)?, ..Default::default() };
     with_model(|m| {
         sweep::pipe_cornered(m, profile.shape, spine.shape, &options, corner)
     })
