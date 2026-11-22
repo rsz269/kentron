@@ -147,23 +147,20 @@ fn bug22793() -> DrawResult<()> {
 
 /// `tests/bugs/modalg_6/bug22794`
 #[test]
-#[should_panic]
-fn bug22794() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.restore(&[data_file("bug22793_Positive.brep").as_str(), "p"])?;
-        d.restore(&[data_file("bug22794b.brep").as_str(), "v"])?;
-        d.checkshape(&["p"])?;
-        d.tolerance(&["p"])?;
-        d.checkshape(&["v"])?;
-        d.tolerance(&["v"])?;
-        d.bop(&["p", "v"])?;
-        d.bopcut(&["result"])?;
-        d.checkprops(&["result", "-s", "1.89654e+007"])?;
-        d.checkshape(&["result"])?;
-        d.checknbshapes(&["result", "-ref", "\nNumber of shapes in result\n VERTEX    : 20\n EDGE      : 30\n WIRE      : 14\n FACE      : 14\n SHELL     : 2\n SOLID     : 2\n COMPSOLID : 0\n COMPOUND  : 1\n SHAPE     : 83\n", "-t", "-m", "Result obtained by Boolean cut operation"])?;
-        Ok(())
-    })
+fn bug22794() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.restore(&[data_file("bug22793_Positive.brep").as_str(), "p"])?;
+    d.restore(&[data_file("bug22794b.brep").as_str(), "v"])?;
+    d.checkshape(&["p"])?;
+    d.tolerance(&["p"])?;
+    d.checkshape(&["v"])?;
+    d.tolerance(&["v"])?;
+    d.bop(&["p", "v"])?;
+    d.bopcut(&["result"])?;
+    d.checkprops(&["result", "-s", "1.89654e+007"])?;
+    d.checkshape(&["result"])?;
+    d.checknbshapes(&["result", "-ref", "\nNumber of shapes in result\n VERTEX    : 20\n EDGE      : 30\n WIRE      : 14\n FACE      : 14\n SHELL     : 2\n SOLID     : 2\n COMPSOLID : 0\n COMPOUND  : 1\n SHAPE     : 83\n", "-t", "-m", "Result obtained by Boolean cut operation"])?;
+    Ok(())
 }
 
 /// `tests/bugs/modalg_6/bug23585`

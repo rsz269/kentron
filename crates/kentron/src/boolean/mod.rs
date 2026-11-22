@@ -3159,4 +3159,104 @@ mod tests {
             assert!((v - expected).abs() <= 1e-3, "{y0} {all}: volume {v} != {expected}");
         }
     }
+
+    /// A ball-end mill's raster over the height field z = −5 + 4 sin(πx/50) sin(πy/40) (its
+    /// ball's centre 3 above it): a plate (70, 24, −20) … (92, 38, 0) less the shank (the
+    /// cylinder up from the ball's centre) at (85, 30), the move from there to (80, 30), the
+    /// ball and the shank at (80, 32), then the move on from there to (85, 32), its cylinder
+    /// tangent to the ball along the circle it starts from. The first move's end cap, cut by
+    /// the ball, is left a sliver between the arc the ball cuts and its circle, the two
+    /// meeting nearly tangent; the last move's side crosses the sliver, from the one to the
+    /// other, within the classifying distance of the arc for half the way. That piece of
+    /// their section was dropped, located by its middle on the cap's boundary, and with it
+    /// the side's region inside the plate: the move removed nothing. Its removed volume
+    /// against the move less the other tools integrated along x (exact on each line) over
+    /// an 800 × 2400 grid in z (split at the shanks' bottoms) and y (split at y = 33, where
+    /// the first move and its shank end, y = m + w sin θ on each part): within 10⁻⁵ of grids
+    /// four times finer.
+    #[test]
+    fn a_ball_end_mill_move_across_a_sliver_of_the_cap_before() {
+        let c = |x: f64, y: f64| Point::new(x, y, -2.0 + 4.0 * (PI * x / 50.0).sin() * (PI * y / 40.0).sin());
+        // The x-interval of a cylinder (start o, axis to e, radius 3) on the line along x
+        // through (y, z): |ax ζ − az wx| ≤ √(9 − wy²), 0 ≤ ax wx + az ζ ≤ l (ax > 0).
+        let cylinder = |o: Point, e: Point, y: f64, z: f64| -> Option<(f64, f64)> {
+            let d = e - o;
+            let l = d.length();
+            let (ax, az) = (d.x / l, d.z / l);
+            let (wy, zeta) = (y - o.y, z - o.z);
+            if wy * wy >= 9.0 {
+                return None;
+            }
+            let h = (9.0 - wy * wy).sqrt();
+            let (a, b) = ((zeta * ax - h) / az, (zeta * ax + h) / az);
+            let (a, b) = if az > 0.0 { (a, b) } else { (b, a) };
+            let (lo, hi) = (a.max(-zeta * az / ax), b.min((l - zeta * az) / ax));
+            (lo < hi).then_some((lo + o.x, hi + o.x))
+        };
+        let ball = |o: Point, y: f64, z: f64| {
+            let r = 9.0 - (y - o.y).powi(2) - (z - o.z).powi(2);
+            (r > 0.0).then(|| (o.x - r.sqrt(), o.x + r.sqrt()))
+        };
+        let shank = |o: Point, y: f64, z: f64| {
+            let r = 9.0 - (y - o.y).powi(2);
+            (r > 0.0 && z >= o.z).then(|| (o.x - r.sqrt(), o.x + r.sqrt()))
+        };
+        let reference = || {
+            let (z0, z1) = (-7.6, -0.6);
+            let (nz, nt) = (800, 2400);
+            let mut cuts = vec![z0, z1, c(85.0, 30.0).z, c(80.0, 32.0).z];
+            cuts.sort_by(f64::total_cmp);
+            let mut removed = 0.0;
+            for (zlo, zhi) in cuts.iter().zip(&cuts[1..]) {
+                let n = ((zhi - zlo) / (z1 - z0) * nz as f64).ceil() as usize;
+                for i in 0..n {
+                    let z = zlo + (zhi - zlo) * (i as f64 + 0.5) / n as f64;
+                    for (ylo, yhi) in [(29.0, 33.0), (33.0, 35.0)] {
+                        let (m, w) = (0.5 * (ylo + yhi), 0.5 * (yhi - ylo));
+                        let k = (nt as f64 * (yhi - ylo) / 6.0).round() as usize;
+                        for j in 0..k {
+                            let theta = PI * ((j as f64 + 0.5) / k as f64 - 0.5);
+                            let y = m + w * theta.sin();
+                            let Some((t0, t1)) = cylinder(c(80.0, 32.0), c(85.0, 32.0), y, z) else { continue };
+                            let mut runs: Vec<(f64, f64)> = [shank(c(85.0, 30.0), y, z), cylinder(c(80.0, 30.0), c(85.0, 30.0), y, z), ball(c(80.0, 32.0), y, z), shank(c(80.0, 32.0), y, z)].into_iter().flatten().collect();
+                            runs.sort_by(|a, b| a.0.total_cmp(&b.0));
+                            let (mut length, mut end) = (t1 - t0, t0);
+                            for (a, b) in runs {
+                                let (a, b) = (a.max(end), b.min(t1));
+                                if b > a {
+                                    length -= b - a;
+                                    end = b;
+                                }
+                            }
+                            removed += length * w * theta.cos() * (PI / k as f64) * (zhi - zlo) / n as f64;
+                        }
+                    }
+                }
+            }
+            removed
+        };
+        let mut model = Model::new();
+        let mut body = Cuboid::from_corners(Point::new(70.0, 24.0, -20.0), Point::new(92.0, 38.0, 0.0)).build(&mut model).unwrap();
+        let along = |model: &mut Model, a: Point, b: Point| {
+            let d = b - a;
+            Cylinder::new(3.0, d.length()).with_frame(Frame::from_z(a, Direction::new(d.x, d.y, d.z))).build(model).unwrap()
+        };
+        let up = |model: &mut Model, a: Point| Cylinder::new(3.0, 30.0).with_frame(Frame::from_z(a, Direction::Z)).build(model).unwrap();
+        let tools = [
+            up(&mut model, c(85.0, 30.0)),
+            along(&mut model, c(85.0, 30.0), c(80.0, 30.0)),
+            Sphere::new(3.0).with_frame(Frame::from_z(c(80.0, 32.0), Direction::Z)).build(&mut model).unwrap(),
+            up(&mut model, c(80.0, 32.0)),
+        ];
+        for tool in tools {
+            body = difference(&mut model, body, tool).unwrap();
+        }
+        let before = properties::volume(&model, body).mass;
+        let tool = along(&mut model, c(80.0, 32.0), c(85.0, 32.0));
+        let result = difference(&mut model, body, tool).unwrap();
+        let report = validity::check(&model, result);
+        assert!(report.is_valid(), "{report:?}");
+        let (removed, expected) = (before - properties::volume(&model, result).mass, reference());
+        assert!((removed - expected).abs() <= 1e-3, "removed {removed} != {expected}");
+    }
 }

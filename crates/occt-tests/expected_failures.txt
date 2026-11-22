@@ -396,7 +396,6 @@ tests/bugs/modalg_5/bug25982
 tests/bugs/modalg_6/bug14531
 tests/bugs/modalg_6/bug21246
 tests/bugs/modalg_6/bug21727
-tests/bugs/modalg_6/bug22794
 tests/bugs/modalg_6/bug23585
 tests/bugs/modalg_6/bug24803
 tests/bugs/modalg_6/bug24932

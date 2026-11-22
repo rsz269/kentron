@@ -3859,8 +3859,36 @@ impl Graph {
                     continue;
                 }
             }
+            // (Between the points where it meets the faces' boundaries a piece lies inside a
+            // face all along, outside it, or along its boundary. Its middle within the
+            // classifying distance of the boundary, it lies along it unless it runs from one
+            // edge of the face to another, ending off the edge its middle is near: across a
+            // sliver of the face between edges meeting nearly tangent, passing near the one
+            // until it reaches the other. Then the first of its points clear of the boundary
+            // tells.)
+            let through = |e: &Edge, v: usize| e.start == v || e.end == v || e.paves.iter().any(|&(_, w)| w == v);
+            let inside = |graph: &Graph, f: usize| {
+                let face = &graph.faces[f];
+                let at = |i: usize| face.locate(section.point(t0 + (t1 - t0) * i as f64 / 8.0), &graph.edges, &graph.vertices);
+                let state = at(4);
+                if state != Location::Boundary {
+                    return state == Location::Inside;
+                }
+                let middle = section.point(0.5 * (t0 + t1));
+                let edges: Vec<&Edge> = face.boundary.iter().filter(|b| b.bounds).map(|b| &graph.edges[b.edge]).collect();
+                let near = |e: &Edge| {
+                    let d = match &e.curve {
+                        Some(c) => geom::project(c, e.first, e.last, middle).1,
+                        None => graph.vertices.points[e.start].distance(middle),
+                    };
+                    d <= on_tol()
+                };
+                let on_boundary = |v: usize| edges.iter().any(|e| through(e, v));
+                let across = on_boundary(v0) && on_boundary(v1) && edges.iter().filter(|e| near(e)).all(|e| !(through(e, v0) && through(e, v1)));
+                across && [3, 5, 2, 6, 1, 7].into_iter().map(at).find(|&l| l != Location::Boundary) == Some(Location::Inside)
+            };
             let middle = section.point(0.5 * (t0 + t1));
-            if off_surfaces(self, middle) || !inside_both(self, middle) {
+            if off_surfaces(self, middle) || !(inside(self, fa) && inside(self, fb)) {
                 continue;
             }
             if marched && self.along_boundary(fa, fb, section, (t0, v0), (t1, v1)) {
