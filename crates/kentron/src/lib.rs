@@ -50,6 +50,7 @@ pub mod geometry;
 pub mod hashing;
 pub mod heal;
 pub mod helix;
+pub mod hidden_lines;
 pub mod io;
 pub mod loft;
 pub mod make;
