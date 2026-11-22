@@ -1788,6 +1788,31 @@ mod tests {
         assert!(oriented_bounding_box(&model, c).intersects(&oriented_bounding_box(&model, c)));
     }
 
+    /// A ball on a tilted frame, whose face's wire runs reversed: its box is the cube of its
+    /// diameter round its centre, every side reached (the lowest point off its seam and
+    /// poles, inside the face), and a ball concentric with it, smaller, inside it, so that
+    /// the larger less the smaller is the shell between, `4π(R³ − r³)/3`.
+    #[test]
+    fn a_tilted_ball_has_the_cube_of_its_diameter_as_its_tight_box() {
+        let mut model = Model::new();
+        let centre = Point::new(32.988136526953326, -20.224015462858763, -38.760679396847436);
+        let away = Direction::new(0.6096592470420769, -0.7920059328798538, 0.032283196545577);
+        let x = Direction::new(-0.05287876883320897, 0.0, 0.9986009392178059);
+        let frame = crate::math::Frame::new(centre, away, x);
+        let (big, small) = (1.4534586503037226, 0.8954878197631333);
+        let outer = crate::primitives::Sphere::new(big).with_frame(frame).build(&mut model).unwrap();
+        let b = tight_bounding_box(&model, outer);
+        for (lo, hi, c) in [(b.min.x, b.max.x, centre.x), (b.min.y, b.max.y, centre.y), (b.min.z, b.max.z, centre.z)] {
+            assert!((lo - (c - big)).abs() < 1e-9 && (hi - (c + big)).abs() < 1e-9, "{b:?}");
+        }
+        let inner = crate::primitives::Sphere::new(small).with_frame(frame).build(&mut model).unwrap();
+        let shell = crate::boolean::difference(&mut model, outer, inner).unwrap();
+        let want = 4.0 / 3.0 * std::f64::consts::PI * (big.powi(3) - small.powi(3));
+        let got = volume(&model, shell).mass;
+        assert!((got - want).abs() < 1e-6 * want, "{got} against {want}");
+        assert_eq!(model.unique_subshapes(shell, NodeKind::Face).len(), 2);
+    }
+
     #[test]
     fn tight_boxes_of_tilted_cylinders_and_cones_hold_their_sides() {
         let mut model = Model::new();

@@ -2071,8 +2071,9 @@ fn mitres(corners: &[(Corner, f64)]) -> Vec<[Option<(Point, Vector)>; 2]> {
                 if di.dot(dj).abs() >= 1.0 - tolerance::ANGULAR {
                     return None;
                 }
-                // The plane both edges bound.
-                let k = corner.faces.iter().position(|f| other.faces.iter().any(|g| g.0 == f.0))?;
+                // The plane both edges bound (one face, or faces lying on one plane on the same
+                // side of it, as a union leaves a face split along its seam).
+                let k = corner.faces.iter().position(|f| other.faces.iter().any(|g| g.0 == f.0 || on_one_plane(f, g)))?;
                 let Surface::Plane(plane) = untrimmed(&corner.faces[k].1) else { return None };
                 // (Only where the corner is concave on it: the other edge leaving the vertex
                 // away from the side of this one the plane's face lies on. At a convex corner
@@ -3291,6 +3292,14 @@ fn untrimmed(surface: &Surface) -> &Surface {
         Surface::Trimmed(t) => untrimmed(t.basis()),
         s => s,
     }
+}
+
+/// Whether two faces (with their surfaces and senses, as a [`Corner`] holds them) lie on one
+/// plane with the material on the same side: the pieces of one face, split along a seam.
+fn on_one_plane(a: &(NodeId, Surface, f64), b: &(NodeId, Surface, f64)) -> bool {
+    let (Surface::Plane(p), Surface::Plane(q)) = (untrimmed(&a.1), untrimmed(&b.1)) else { return false };
+    let (n, m) = (Vector::from(p.normal()) * a.2, Vector::from(q.normal()) * b.2);
+    n.dot(m) >= 1.0 - tolerance::ANGULAR && (q.origin() - p.origin()).dot(n).abs() <= tolerance::LINEAR
 }
 
 /// True if every face at the edge's vertices is elementary (a plane, quadric or torus), so
@@ -4593,6 +4602,53 @@ mod tests {
     use super::*;
     use crate::primitives::Cuboid;
     use crate::{properties, validity};
+
+    /// An L-prism, its arms w × t and t × d and its height h, as the union of its two arm
+    /// boxes (its top, bottom and outer sides split along the seam the union leaves), every
+    /// convex edge filleted by r: the fillets along the seam's split edges run on as one, and
+    /// the two over the concave edge's ends meet in a mitre, as on the prism itself. The
+    /// solid is then the L-shaped core shrunk by r swelled by r (the swelled core's corner
+    /// over the concave edge is that mitre): `V_A + V_B − V_C − (1 − π/4)(H'r² + 4r³/3)`
+    /// with H' = h − 2r, each arm and the corner column a box rounded by r all round,
+    /// `abc + 2r(ab + bc + ca) + πr²(a + b + c) + 4πr³/3` on the box a × b × c inset by r.
+    #[test]
+    fn an_l_of_two_boxes_rounds_as_the_l_prism() {
+        let (w, t, d, h, r) = (6.75, 2.9, 7.75, 3.2, 1.2);
+        let mut model = Model::new();
+        let a = Cuboid::new(w, t, h).build(&mut model).unwrap();
+        let b = Cuboid::new(t, d, h).build(&mut model).unwrap();
+        let l = crate::boolean::union(&mut model, a, b).unwrap();
+        let outline = [[0.0, 0.0], [w, 0.0], [w, t], [t, t], [t, d], [0.0, d]];
+        let mut points = Vec::new();
+        for i in 0..6 {
+            let (p, q) = (outline[i], outline[(i + 1) % 6]);
+            let mid = [(p[0] + q[0]) / 2.0, (p[1] + q[1]) / 2.0];
+            points.push(Point::new(mid[0], mid[1], h));
+            points.push(Point::new(mid[0], mid[1], 0.0));
+            // (Not the concave edge at (t, t).)
+            if i != 3 {
+                points.push(Point::new(p[0], p[1], h / 2.0));
+            }
+        }
+        let mut edges = Vec::new();
+        for p in points {
+            let v = make::vertex(&mut model, p);
+            let near: Vec<Shape> = model
+                .unique_subshapes(l, NodeKind::Edge)
+                .into_iter()
+                .filter(|&e| crate::distance::distance(&mut model, v, e).unwrap().value < 1e-9)
+                .collect();
+            assert_eq!(near.len(), 1, "one edge at {p:?}");
+            edges.push(near[0]);
+        }
+        let rounded = fillet(&mut model, l, &edges, r).unwrap();
+        assert!(validity::check(&model, rounded).is_valid());
+        let rounded_block = |a: f64, b: f64, c: f64| a * b * c + 2.0 * r * (a * b + b * c + c * a) + PI * r * r * (a + b + c) + 4.0 / 3.0 * PI * r.powi(3);
+        let (va, vb, vc) = (rounded_block(w - 2.0 * r, t - 2.0 * r, h - 2.0 * r), rounded_block(t - 2.0 * r, d - 2.0 * r, h - 2.0 * r), rounded_block(t - 2.0 * r, t - 2.0 * r, h - 2.0 * r));
+        let want = va + vb - vc - (1.0 - PI / 4.0) * ((h - 2.0 * r) * r * r + 4.0 / 3.0 * r.powi(3));
+        let got = properties::volume(&model, rounded).mass;
+        assert!((got - want).abs() < 1e-7 * want, "{got} against {want}");
+    }
 
     /// A socket (cylinder of radius 18.86, leaning 5 degrees) with a handle (radius 10, along
     /// y) and a floor cut across them, leaning with the socket, 2 below the handle's axis:
