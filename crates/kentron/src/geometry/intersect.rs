@@ -925,7 +925,10 @@ fn plane_cylinder(plane: &Plane, cylinder: &Cylinder, tol: f64) -> QuadricInters
     }
     // Where the axis crosses the plane.
     let center = f.origin() + z * (n.dot(plane.origin() - f.origin()) / cos);
-    if (cos.abs() - 1.0).abs() <= ANGULAR.sqrt() {
+    // (A circle about the axis where the plane tilts from square to it by less than the
+    // tolerance over the radius, as IntAna_QuadQuadGeo: the circle then strays from the
+    // plane by less than the tolerance. Tilted more, however little, an ellipse.)
+    if z.cross(n).length() < tol / r {
         return Q::Circles(vec![Circle::new(Frame::new(center, f.z(), f.x()), r)]);
     }
     // The minor axis is across the cylinder's axis, the major one along the plane's

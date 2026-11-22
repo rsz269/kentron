@@ -3323,4 +3323,17 @@ mod tests {
         use Mill::*;
         mill_raster([76.0, 8.0, 98.0, 22.0], &[Along(90.0, 14.0, 85.0, 14.0), Ball(85.0, 14.0), Along(80.0, 16.0, 85.0, 16.0), Ball(85.0, 16.0), Shank(85.0, 16.0), Along(85.0, 16.0, 90.0, 16.0)]);
     }
+
+    /// A ball-end mill's raster (see [`Mill`]): the move from (80, 18) to (75, 18), the move
+    /// from (70, 20) to (75, 20), the ball and the shank there, then the move on to
+    /// (80, 20). Its end cap is square to the first move's cylinder but for 4.8 × 10⁻⁴
+    /// radians: they meet in an ellipse, not the circle about the cylinder's axis taken
+    /// for it within a thousandth of a radian (straying from the cap's plane by 1.4 × 10⁻³),
+    /// which missed the point where the move's side meets them both, ended no section on
+    /// the cap and left its side one region outside the plate.
+    #[test]
+    fn a_ball_end_mill_move_ending_on_a_cap_nearly_square_to_a_cylinder() {
+        use Mill::*;
+        mill_raster([66.0, 12.0, 88.0, 26.0], &[Along(80.0, 18.0, 75.0, 18.0), Along(70.0, 20.0, 75.0, 20.0), Ball(75.0, 20.0), Shank(75.0, 20.0), Along(75.0, 20.0, 80.0, 20.0)]);
+    }
 }
