@@ -37,6 +37,39 @@ pub fn fillet(model: &mut Model, shape: Shape, edges: &[Shape], radius: f64) -> 
     fillet_edges(model, shape, &pairs)
 }
 
+/// `shape` rounded between two of its faces, `face_a` and `face_b`, that need not share an
+/// edge: a ball of `radius` rolls touching both, and what lies outside its path between the
+/// two contacts is cut away, faces between the contacts included (a chamfer narrower than
+/// the round goes, leaving the sharp edge's round).
+///
+/// OCCT's rolling ball between faces is `BiTgte_Blend`, built on its offset algorithm's
+/// machinery, which kentron has not ported; this is built instead from the run-over fillet's
+/// (the ball rolled between the faces as bounded, the wedge beyond its contacts cut away and
+/// the lens under its arc kept). Planar faces only for now, meeting at a convex angle: the
+/// ball rolls along the line where their planes meet, as far as both faces lie beside it.
+/// Refused where the radius is not positive, the faces are the same, or the ball does not fit
+/// between them (touching either face past its rim).
+#[doc(alias = "BiTgte_Blend")]
+pub fn fillet_faces(model: &mut Model, shape: Shape, face_a: Shape, face_b: Shape, radius: f64) -> Result<Shape> {
+    runover::fillet_faces(model, shape, face_a, face_b, radius)
+}
+
+/// `shape` with its face `middle` replaced by a full round: the arc of the circle touching
+/// `middle` and the faces `side_a` and `side_b` either side of it, from one side's contact
+/// over the middle to the other's. The sides stay where they are. Between parallel sides `w`
+/// apart the round is a half cylinder of radius `w/2`; between sides closing toward the
+/// middle, the arc of the circle touching all three.
+///
+/// OCCT has no such call. It is built from the run-over fillet's machinery, by the round's
+/// definition: the wedge from the contacts out over the middle face cut away, and the lens
+/// under the arc kept within the solid. Planar faces along one direction only for now (a rib
+/// whose circle is the same all along it). Refused where the faces are not three different
+/// ones, the middle face does not share an edge with each side, or no circle touches all
+/// three within them.
+pub fn full_round(model: &mut Model, shape: Shape, side_a: Shape, middle: Shape, side_b: Shape) -> Result<Shape> {
+    runover::full_round(model, shape, side_a, middle, side_b)
+}
+
 /// [`fillet`] with a radius per edge.
 #[doc(alias = "BRepFilletAPI_MakeFillet::Add")]
 pub fn fillet_edges(model: &mut Model, shape: Shape, edges: &[(Shape, f64)]) -> Result<Shape> {

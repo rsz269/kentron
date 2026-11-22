@@ -33,7 +33,10 @@ use crate::math::{Direction, Frame, Point, Point2, Transform, Transformable, Vec
 use crate::topology::{CoEdgeId, Model, NodeKind, Orientation, Shape};
 use crate::{boolean, loft, make, sew, unify};
 
+mod faces;
 mod trim;
+
+pub(super) use faces::{fillet_faces, full_round};
 
 /// A face measured from: its surface where it is, its boundary in its parameters (to tell
 /// points on it) and its edges' curves.
@@ -656,13 +659,27 @@ pub(super) fn fillet_along(model: &mut Model, shape: Shape, edge: Shape, law: &d
     // (Finer along curved edges, where the faces through the sections are smooth.)
     let straight = matches!(model.edge_curve(edge), Some((Curve::Line(_), _, _)));
     let rolled = roll(model, shape, edge, law, if straight { 48 } else { 192 }, Switches::Bisected)?;
-    by_booleans(model, shape, rolled, radius)
+    by_booleans(model, shape, rolled, radius, &Drawing::default())
+}
+
+/// How [`by_booleans`] draws the wedge and the lens where not as for a fillet along an edge.
+#[derive(Default, Clone, Copy)]
+struct Drawing<'a> {
+    /// The wedge's section through each section of the ball, a polygon from the first contact
+    /// to the second; the lens's arc then runs from the first contact through the section's
+    /// point `at` to the second (a full round's, tangent to the face it replaces there).
+    wedge: Option<&'a dyn Fn(&Section) -> Vec<Point>>,
+    /// Whether the sections are translates of one another along the spine, a line square to
+    /// them: the wedge and the lens are then their end sections extruded (the lens's round an
+    /// exact cylinder), not lofted.
+    straight: bool,
 }
 
 /// The fillet of `shape` the ball `rolled` makes (its largest radius `radius`), built by
 /// boolean operations: the wedge cut away, the lens within the solid kept, and the two
-/// sewn (see the [module](self) documentation).
-fn by_booleans(model: &mut Model, shape: Shape, rolled: Rolled, radius: f64) -> Result<Shape> {
+/// sewn (see the [module](self) documentation), drawn as `drawing` says.
+fn by_booleans(model: &mut Model, shape: Shape, rolled: Rolled, radius: f64, drawing: &Drawing) -> Result<Shape> {
+    let Drawing { wedge, straight } = *drawing;
     let Rolled { mut sections, supports, breaks, side_set, convex, closed, tangents } = rolled;
     if !convex && !closed {
         return Err(Error::InvalidInput("run-over fillets of open concave edges are not supported yet".into()));
@@ -753,7 +770,10 @@ fn by_booleans(model: &mut Model, shape: Shape, rolled: Rolled, radius: f64) -> 
         // the end of a face narrowing to nothing: the point out from it is not this one.)
         let at_edge = s.contacts.iter().any(|c| c.distance(s.at) <= 1e-3 * s.radius);
         let beyond = s.at + toward * (if at_edge { 0.75 } else { 0.5 } * s.radius);
-        if convex {
+        if let Some(draw) = wedge {
+            wedge_wires.push(polygon(model, &draw(s))?);
+            lens_wires.push(lens_through(model, s)?);
+        } else if convex {
             let out = |c: Point| c + toward * (0.5 * s.radius);
             wedge_wires.push(polygon(model, &[s.contacts[0], out(s.contacts[0]), beyond, out(s.contacts[1]), s.contacts[1]])?);
             lens_wires.push(if narrows(s) { make::vertex(model, s.contacts[1]) } else { lens(model, s)? });
@@ -775,7 +795,12 @@ fn by_booleans(model: &mut Model, shape: Shape, rolled: Rolled, radius: f64) -> 
     // (Both the same way: then the chords are the same faces in both, and their edges along
     // the contacts lie on the faces there.)
     let options = loft::LoftOptions { solid: !closed, ruled: !curved, spacing: loft::Spacing::ByMeanDistance, ..Default::default() };
+    let run = sections[sections.len() - 1].at - sections[0].at;
     let solid = |model: &mut Model, wires: &[Shape], what: &str| -> Result<Shape> {
+        if straight {
+            let face = make::planar_face(model, wires[0]).map_err(|e| Error::Failed(format!("the {what}'s section: {e}")))?;
+            return Ok(crate::sweep::extrude(model, face, run).map_err(|e| Error::Failed(format!("extruding the {what}: {e}")))?.shape);
+        }
         let lofted = loft::loft_breaking(model, wires, &options, &breaks).map_err(|e| Error::Failed(format!("lofting the {what}: {e}")))?;
         if !closed {
             return Ok(lofted);
@@ -894,7 +919,7 @@ fn by_booleans(model: &mut Model, shape: Shape, rolled: Rolled, radius: f64) -> 
 pub(super) fn fillet_chain(model: &mut Model, shape: Shape, edges: &[Shape], radius: f64) -> Result<Shape> {
     let curved = edges.iter().any(|&e| !matches!(model.edge_curve(e), Some((Curve::Line(_), _, _))));
     let (rolled, _) = roll_chain(model, shape, edges, &|_| radius, if curved { 96 } else { 48 }, Switches::Bisected)?;
-    by_booleans(model, shape, rolled, radius)
+    by_booleans(model, shape, rolled, radius, &Drawing::default())
 }
 
 /// Whether the ball of `radius` along the chain `edges` of `shape` touches anything but the
@@ -1254,6 +1279,21 @@ fn lens(model: &mut Model, s: &Section) -> Result<Shape> {
     };
     let circle = Circle::new(Frame::new(s.center, z, x), s.radius);
     let arc = make::edge_from_curve_range(model, Curve::Circle(circle), 0.0, angle)?;
+    let (start, end) = model.edge_vertices(arc);
+    let chord = make::edge(model, end, start)?;
+    make::wire(model, &[arc, chord])
+}
+
+/// The lens in a section between the ball's arc from the first contact through `at` to the
+/// second, and the chord back.
+fn lens_through(model: &mut Model, s: &Section) -> Result<Shape> {
+    let (a, m, b) = (s.contacts[0] - s.center, s.at - s.center, s.contacts[1] - s.center);
+    let angle = |p: Vector, q: Vector| p.cross(q).length().atan2(p.dot(q));
+    let (Some(z), Some(x)) = (Direction::try_from_vector(a.cross(m)), Direction::try_from_vector(a)) else {
+        return Err(Error::InvalidInput("a round's section has no arc across".into()));
+    };
+    let circle = Circle::new(Frame::new(s.center, z, x), s.radius);
+    let arc = make::edge_from_curve_range(model, Curve::Circle(circle), 0.0, angle(a, m) + angle(m, b))?;
     let (start, end) = model.edge_vertices(arc);
     let chord = make::edge(model, end, start)?;
     make::wire(model, &[arc, chord])
