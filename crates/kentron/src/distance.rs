@@ -128,7 +128,7 @@ pub fn distance_within(model: &mut Model, a: Shape, b: Shape, limit: f64) -> Res
         let mut found: Option<(f64, Point, Point)> = None;
         for (ga, gb, check_a, check_b) in pairs {
             let Some(r) = refine(ga, gb, p, q, within.max(reach), scale) else { continue };
-            if (check_a && !ta.surely_on_piece(ka, r.1, scale)) || (check_b && !tb.surely_on_piece(kb, r.2, scale)) {
+            if (check_a && !ta.surely_on_piece(model, ka, r.1, scale)) || (check_b && !tb.surely_on_piece(model, kb, r.2, scale)) {
                 continue;
             }
             if found.is_none_or(|f| r.0 < f.0) {
@@ -303,6 +303,9 @@ struct KeptTriangles(Triangles, Option<Bvh>);
 struct Lazy {
     source: Source,
     made: std::sync::OnceLock<Exact>,
+    /// A face's classifier against its bounds (made the first time a point by its boundary
+    /// is asked about; none where it could not be made).
+    bounds: std::sync::OnceLock<Option<PointClassifier>>,
 }
 
 /// What a piece's exact geometry is made from.
@@ -317,7 +320,15 @@ enum Source {
 
 impl Lazy {
     fn new(source: Source) -> Lazy {
-        Lazy { source, made: std::sync::OnceLock::new() }
+        Lazy { source, made: std::sync::OnceLock::new(), bounds: std::sync::OnceLock::new() }
+    }
+
+    /// Whether `p`, a point of a face's surface, lies inside the face's bounds and off its
+    /// boundary (by the face's own edges, not its mesh).
+    fn inside_bounds(&self, model: &Model, p: Point) -> bool {
+        let Source::Face(face) = self.source else { return false };
+        let classifier = self.bounds.get_or_init(|| PointClassifier::new(model, face).ok());
+        classifier.as_ref().is_some_and(|c| c.locate_on_faces(p) == PointLocation::Inside)
     }
 
     fn get(&self, model: &Model) -> &Exact {
@@ -493,17 +504,23 @@ impl Triangles {
         self.ranges[k].clone().any(|i| point_triangle(p, self.corners(i)).distance(p) <= reach)
     }
 
-    /// Whether `p` lies on piece `k` for sure: on a face's mesh and clear of its boundary
-    /// (a point by the boundary is left to the boundary's edges). Edges and points: always.
-    fn surely_on_piece(&self, k: usize, p: Point, scale: f64) -> bool {
+    /// Whether `p` lies on piece `k` for sure: on a face's mesh and inside its boundary, as
+    /// the boundary's polylines show where it is clear of them and as the face's exact bounds
+    /// do by them (a point on the boundary, or beyond it on the surface, is left to the
+    /// boundary's edges; as OCCT's BRepExtrema_ExtFF keeps a face's extremum where its
+    /// BRepClass_FaceClassifier finds it in the face). Edges and points: always.
+    fn surely_on_piece(&self, model: &Model, k: usize, p: Point, scale: f64) -> bool {
         if !self.exact[k].is_surface() {
             return true;
         }
-        self.near_piece(k, p, scale)
-            && self.piece_edges[k].iter().all(|&e| {
-                let (_, points, deviation) = &self.edges[e];
-                polyline_distance(points, p) > 2.0 * (deviation + self.deviation[k]) + 1e-9 * scale
-            })
+        if !self.near_piece(k, p, scale) {
+            return false;
+        }
+        let clear = self.piece_edges[k].iter().all(|&e| {
+            let (_, points, deviation) = &self.edges[e];
+            polyline_distance(points, p) > 2.0 * (deviation + self.deviation[k]) + 1e-9 * scale
+        });
+        clear || self.exact[k].inside_bounds(model, p)
     }
 
     /// Piece `k`'s boundary edges coming within `within` of `p`.
@@ -728,6 +745,22 @@ mod tests {
         let rod = Cylinder::new(0.998, 4.0).with_frame(at(-1.0)).build(&mut model).unwrap();
         let d = distance(&mut model, holed, rod).unwrap().value;
         assert!((d - 0.002).abs() < 1e-9, "{d}");
+    }
+
+    /// A shaft pressed into a tube's bore by less than the meshes stray: its side crosses the
+    /// tube's ends by their inner edges, where the meshes alone cannot tell it on them.
+    #[test]
+    fn a_shaft_pressed_into_a_bore_by_a_hair_touches_it() {
+        let mut model = Model::new();
+        let at = |z: f64| Frame::new(Point::new(0.0, 0.0, z), Direction::Z, Direction::X);
+        for press in [1.005, 1.01] {
+            let outer = Cylinder::new(2.0, 4.0).build(&mut model).unwrap();
+            let bore = Cylinder::new(1.0, 4.0).build(&mut model).unwrap();
+            let tube = crate::boolean::difference(&mut model, outer, bore).unwrap();
+            let shaft = Cylinder::new(press, 6.0).with_frame(at(-1.0)).build(&mut model).unwrap();
+            let d = distance(&mut model, tube, shaft).unwrap().value;
+            assert!(d < 1e-9, "{press}: {d}");
+        }
     }
 
     #[test]

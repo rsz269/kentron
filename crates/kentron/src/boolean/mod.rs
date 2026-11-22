@@ -32,6 +32,7 @@ mod fuse;
 mod fuzzy;
 mod geom;
 mod graph;
+mod interference;
 mod intersect;
 mod march;
 mod mixed;
@@ -45,6 +46,7 @@ use crate::topology::{Model, Shape};
 pub use arguments::{combine, Combination};
 pub use cells::{cells, Cell};
 pub use fuzzy::snapped;
+pub use interference::{interference, Interference};
 pub use volume::{enclosed_solids, enclosed_solids_unsplit};
 pub(crate) use cells::point_inside;
 
@@ -371,6 +373,22 @@ impl PointClassifier {
     /// where that cannot be told.
     pub(crate) fn winding(&self, p: crate::math::Point) -> Option<i32> {
         self.graph.winding(0, p)
+    }
+
+    /// Where `p`, a point of the surface of a face the shape has, lies with respect to that
+    /// face's bounds: inside, on its boundary (within 1e-6) or outside (as OCCT's
+    /// BRepClass_FaceClassifier tells IN, ON and OUT); inside or on any of the shape's faces
+    /// counts.
+    pub(crate) fn locate_on_faces(&self, p: crate::math::Point) -> PointLocation {
+        let mut found = PointLocation::Outside;
+        for face in &self.graph.faces {
+            match face.locate(p, &self.graph.edges, &self.graph.vertices) {
+                graph::Location::Inside => return PointLocation::Inside,
+                graph::Location::Boundary => found = PointLocation::Boundary,
+                graph::Location::Outside => {}
+            }
+        }
+        found
     }
 
     /// Where `p` lies with respect to the shape's solids.

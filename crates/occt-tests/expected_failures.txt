@@ -490,7 +490,6 @@ tests/bugs/modalg_7/bug25968
 tests/bugs/modalg_7/bug25983_2
 tests/bugs/modalg_7/bug26563
 tests/bugs/modalg_7/bug26795
-tests/bugs/modalg_7/bug27087
 tests/bugs/modalg_7/bug27928
 tests/bugs/modalg_7/bug27948
 tests/bugs/modalg_7/bug28248
