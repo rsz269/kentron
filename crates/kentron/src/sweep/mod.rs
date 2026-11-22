@@ -647,21 +647,21 @@ pub fn revolve(model: &mut Model, profile: Shape, axis: Axis, angle: f64) -> Res
     Ok(Sweep { shape, generated, ends, copies })
 }
 
-/// Why `profile`, a face to sweep, has no region to sweep: its boundary crosses itself
-/// (OCCT's `BRepCheck_SelfIntersectingWire`, `BRepCheck_IntersectingWires`) or its loops are
-/// not nested as a face's must be (`BRepCheck_InvalidImbricationOfWires`, a hole outside the
-/// outer loop). `None` for a sound face and for shapes other than faces. (OCCT's sweeps take
-/// such a face as it is and make an invalid solid of it; its checker then finds the face's
-/// fault.)
+/// Why `profile`, a face to sweep, has no region to sweep: a loop of it crosses itself, as a
+/// bow tie does (OCCT's `BRepCheck_SelfIntersectingWire`), or a hole lies wholly outside its
+/// outer loop (`BRepCheck_InvalidImbricationOfWires`). `None` for other faces and for shapes
+/// other than faces. (OCCT's sweeps take such a face as it is and make an invalid solid of
+/// it, which its checker then finds. Holes crossing the outline or one another are swept as
+/// OCCT sweeps them, the booleans after resolving them, as CadQuery models rely on.)
 pub(crate) fn profile_fault(model: &Model, profile: Shape) -> Option<String> {
     if profile.kind() != NodeKind::Face {
         return None;
     }
-    if !crate::validity::boundary_crossings(model, profile).is_empty() {
-        return Some("a profile whose loops cross themselves or each other".into());
+    if !crate::validity::self_crossing_loops(model, profile).is_empty() {
+        return Some("a profile whose loop crosses itself".into());
     }
-    if !crate::validity::misnested_loops(model, profile).is_empty() {
-        return Some("a profile whose loops are not nested as a face's (a hole outside it)".into());
+    if !crate::validity::holes_outside(model, profile).is_empty() {
+        return Some("a profile with a hole outside it".into());
     }
     None
 }
@@ -2131,9 +2131,26 @@ mod tests {
     }
 
     /// A 4 x 4 square with a 1 x 1 hole: inside it, the plate with its hole, 15 by the height;
-    /// outside it, refused (a hole outside the profile is no hole of it).
+    /// outside it, refused (a hole outside the profile is no hole of it). Two holes crossing
+    /// each other inside it are swept as OCCT sweeps them (a boolean after resolves them).
     #[test]
     fn a_hole_outside_its_profile_is_refused() {
+        {
+            let mut model = Model::new();
+            let square = |model: &mut Model, lo: [f64; 2], hi: [f64; 2], ccw: bool| {
+                let mut p: Vec<Point> = [(lo[0], lo[1]), (hi[0], lo[1]), (hi[0], hi[1]), (lo[0], hi[1])].iter().map(|&(x, y)| Point::new(x, y, 0.0)).collect();
+                if !ccw {
+                    p.reverse();
+                }
+                let edges: Vec<Shape> = (0..4).map(|i| make::edge_between(model, p[i], p[(i + 1) % 4]).unwrap()).collect();
+                make::wire(model, &edges).unwrap()
+            };
+            let outer = square(&mut model, [0.0, 0.0], [4.0, 4.0], true);
+            let a = square(&mut model, [1.0, 1.0], [2.5, 2.5], false);
+            let b = square(&mut model, [2.0, 1.5], [3.0, 3.0], false);
+            let face = make::face_bounded_on(&mut model, Surface::Plane(Plane::new(Point::ORIGIN, Direction::Z)), &[outer, a, b]).unwrap();
+            assert!(extrude(&mut model, face, Vector::new(0.0, 0.0, 2.0)).is_ok());
+        }
         for (at, inside) in [(1.5, true), (6.0, false)] {
             let mut model = Model::new();
             let square = |model: &mut Model, lo: f64, hi: f64, ccw: bool| {

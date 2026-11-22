@@ -651,14 +651,14 @@ pub(crate) fn loop_area_in_parameters(model: &Model, coedges: &[CoEdgeId], orien
     Some(if orientation == Orientation::Reversed { -area } else { area })
 }
 
-/// The faces of `shape` on planes whose loops are not nested as a face's must be: a hole
-/// outside the outer loop, a hole inside another hole, or more than one outer loop (OCCT's
-/// `BRepCheck_InvalidImbricationOfWires`). As OCCT's `BRepCheck_Face::ClassifyWires` tells
-/// it, each loop alone bounds a region of the plane (inside an outer loop, which runs
-/// counter-clockwise; outside a hole, which runs clockwise), and every other loop must lie
-/// within that region. Loops that cross are another fault ([`boundary_crossings`]); a loop
-/// is placed here by a point of it off the other's boundary.
-pub fn misnested_loops(model: &Model, shape: Shape) -> Vec<Shape> {
+/// The faces of `shape` on planes with a hole lying wholly outside their outer loop (the
+/// loop of the largest area): no hole of the face's region, as OCCT's
+/// `BRepCheck_Face::ClassifyWires` finds a wire outside the outer one
+/// (`BRepCheck_InvalidImbricationOfWires`). Each hole is placed by its points off the outer
+/// loop: all of them outside it. (Holes crossing the outer loop or one another, or one
+/// within another, are other faults, not told here: OCCT's sweeps take such faces as they
+/// are, and a boolean after them resolves the holes.)
+pub fn holes_outside(model: &Model, shape: Shape) -> Vec<Shape> {
     let mut out = Vec::new();
     for face in model.unique_subshapes(shape, NodeKind::Face) {
         if !matches!(model.surface(face), Some(Surface::Plane(_))) {
@@ -671,7 +671,7 @@ pub fn misnested_loops(model: &Model, shape: Shape) -> Vec<Shape> {
         const SAMPLES: usize = 32;
         let polygons: Vec<Vec<Point2>> = loops.iter().map(|l| l.iter().flat_map(|u| (0..SAMPLES).map(move |k| u.at(k as f64 / SAMPLES as f64))).collect()).collect();
         let area = |p: &[Point2]| 0.5 * (0..p.len()).map(|i| p[i].x * p[(i + 1) % p.len()].y - p[(i + 1) % p.len()].x * p[i].y).sum::<f64>();
-        let outer: Vec<bool> = polygons.iter().map(|p| area(p) > 0.0).collect();
+        let Some(outer) = (0..polygons.len()).max_by(|&i, &j| area(&polygons[i]).abs().total_cmp(&area(&polygons[j]).abs())) else { continue };
         let size = polygons.iter().flatten().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), p| (lo.min(p.x.min(p.y)), hi.max(p.x.max(p.y))));
         let near = 1e-9 * (size.1 - size.0).max(1.0);
         // Whether `q` lies inside polygon `p` (`None` on its boundary).
@@ -690,19 +690,28 @@ pub fn misnested_loops(model: &Model, shape: Shape) -> Vec<Shape> {
             }
             Some(crossings % 2 == 1)
         };
-        let mut faulty = outer.iter().filter(|&&o| o).count() > 1;
-        for i in 0..polygons.len() {
-            for j in 0..polygons.len() {
-                if i == j || faulty {
-                    continue;
-                }
-                // (A point of loop `j` off loop `i`.)
-                let Some(within) = polygons[j].iter().find_map(|&q| inside(&polygons[i], q)) else { continue };
-                // (Inside an outer loop's region, outside a hole's.)
-                faulty = within != outer[i];
-            }
+        let outside = (0..polygons.len()).filter(|&j| j != outer).any(|j| {
+            let placed: Vec<bool> = polygons[j].iter().filter_map(|&q| inside(&polygons[outer], q)).collect();
+            !placed.is_empty() && placed.iter().all(|&within| !within)
+        });
+        if outside {
+            out.push(face);
         }
-        if faulty {
+    }
+    out
+}
+
+/// The faces of `shape` one of whose loops crosses itself, away from its vertices (OCCT's
+/// `BRepCheck_SelfIntersectingWire`), as a bow tie does. (Loops crossing one another, OCCT's
+/// `BRepCheck_IntersectingWires`, are [`boundary_crossings`]' too.)
+pub fn self_crossing_loops(model: &Model, shape: Shape) -> Vec<Shape> {
+    let mut out = Vec::new();
+    for face in model.unique_subshapes(shape, NodeKind::Face) {
+        let Some(surface) = model.surface(face) else { continue };
+        let Ok(id) = FaceId::try_from(face.node) else { continue };
+        let Some(record) = model.get(id) else { continue };
+        let crossing = record.wires.iter().filter_map(|&u| model.get(u)).filter_map(|u| model.get(u.wire)).any(|w| boundary_crossing(model, &w.coedges, surface).is_some());
+        if crossing {
             out.push(face);
         }
     }
