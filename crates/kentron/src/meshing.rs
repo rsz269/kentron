@@ -18,6 +18,9 @@ use crate::math::{Point, Point2, Transform, Transformable};
 use crate::mesh::{MeshPolyline, Polyline, TriangleMesh};
 use crate::topology::{CoEdgeId, EdgeId, FaceId, Model, NodeKind, Orientation, Shape, WireId};
 
+mod display;
+pub use display::{display, Display, DisplayEdge, DisplayFace};
+
 /// How finely [`mesh_with`] triangulates.
 #[doc(alias = "IMeshTools_Parameters")]
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -78,21 +81,26 @@ pub fn mesh_with(model: &mut Model, shape: Shape, options: MeshOptions) -> Resul
     let edges = once_each(edges);
     let model_now: &Model = model;
     let polylines = crate::parallel::map(&edges, |&edge| edge_polyline(model_now, edge, edge_options(edge)));
+    let mut remeshed: FastSet<crate::topology::NodeId> = FastSet::default();
     for (&edge, polyline) in edges.iter().zip(polylines) {
         if let Some(polyline) = polyline {
             model.set_edge_polyline(edge, Some(polyline))?;
+            remeshed.insert(edge.node);
         }
     }
     // As OCCT does, a mesh recording no deviation (of a plane, say) is exact. (One made for
     // this deflection or a finer one is kept too, though it came out coarser: meshing again
-    // makes the same.)
+    // makes the same.) A face one of whose edges was cut again is meshed again on the new
+    // polyline, as OCCT's `BRepMesh_ModelPreProcessor` clears a triangulation whose polygons
+    // on its edges are out of date, so that the faces still meet node to node.
     let faces: Vec<Shape> = model
         .unique_subshapes(local, NodeKind::Face)
         .into_iter()
         .map(unplaced)
         .filter(|&face| {
             let d = face_options(face).deflection;
-            !model.face_mesh(face).is_some_and(|m| m.deflection() <= d || m.requested().is_some_and(|r| r <= d))
+            let current = model.face_mesh(face).is_some_and(|m| m.deflection() <= d || m.requested().is_some_and(|r| r <= d));
+            !current || model.unique_subshapes(face, NodeKind::Edge).iter().any(|e| remeshed.contains(&e.node))
         })
         .collect();
     let faces = once_each(faces);
@@ -365,6 +373,17 @@ fn face_mesh(model: &Model, face: Shape, options: MeshOptions) -> Result<Option<
     let mut all = boundary_points.clone();
     all.extend(inside.iter().map(|&p| scaled(p)));
     let mut cdt = Cdt::new(&all, &segments);
+    // The boundary points where the parameters are singular, as `uv_of` tells them, each
+    // with whether u (else v) is the parameter left free there.
+    let free: Vec<Option<bool>> = loops
+        .iter()
+        .flatten()
+        .map(|n| {
+            let (_, du, dv) = surface.d1(n.uv.x, n.uv.y);
+            let singular = du.cross(dv).length() <= 1e-12 * (du.length() + dv.length()).powi(2).max(1e-300);
+            singular.then(|| du.length() <= dv.length())
+        })
+        .collect();
     loop {
         triangles = cdt.as_ref().map_or_else(Vec::new, Cdt::triangles);
         let inside_face = triangles_inside(&triangles, &all, &polygons, &boundary_edges);
@@ -379,6 +398,7 @@ fn face_mesh(model: &Model, face: Shape, options: MeshOptions) -> Result<Option<
         // (The inside points evaluated once each.)
         let inside_3d: Vec<Point> = inside.iter().map(|uv| surface.point(uv.x, uv.y)).collect();
         let point3 = |i: usize| if i < boundary_3d.len() { boundary_3d[i] } else { inside_3d[i - boundary_3d.len()] };
+        let free = &free;
         let mut added: FastSet<(usize, usize)> = FastSet::default();
         let mut new_points = Vec::new();
         for t in &triangles {
@@ -387,7 +407,16 @@ fn face_mesh(model: &Model, face: Shape, options: MeshOptions) -> Result<Option<
                 if boundary_edges.contains(&(a, b)) || !added.insert((a, b)) {
                     continue;
                 }
-                let mid = unscale(Point2::new(0.5 * (all[a].x + all[b].x), 0.5 * (all[a].y + all[b].y)));
+                // From a point where the parameters are singular (a pole, an apex), the
+                // side runs along the other end's parameter: there the free one is the
+                // other end's, so that the middle is that of the chord in space.
+                let (mut ua, mut ub) = (unscale(all[a]), unscale(all[b]));
+                match (free.get(a).copied().flatten(), free.get(b).copied().flatten()) {
+                    (Some(along_u), None) => ua = if along_u { Point2::new(ub.x, ua.y) } else { Point2::new(ua.x, ub.y) },
+                    (None, Some(along_u)) => ub = if along_u { Point2::new(ua.x, ub.y) } else { Point2::new(ub.x, ua.y) },
+                    _ => {}
+                }
+                let mid = Point2::new(0.5 * (ua.x + ub.x), 0.5 * (ua.y + ub.y));
                 let on_surface = surface.point(mid.x, mid.y);
                 let (pa, pb) = (point3(a), point3(b));
                 let chord = pa + (pb - pa) * 0.5;
@@ -411,15 +440,28 @@ fn face_mesh(model: &Model, face: Shape, options: MeshOptions) -> Result<Option<
     }
     let deflection = if curved { achieved_deflection(&surface, &triangles, &boundary_3d, &inside, &polygons, unscale) } else { 0.0 };
     let mut keys: Vec<NodeKey> = loops.iter().flatten().map(|n| n.key).collect();
+    // Each node's (u, v): where a node stands for several (both sides of a seam, a pole's
+    // stretch), the first, which is the same point.
+    let mut uv_of_key: HashMap<NodeKey, Point2> = HashMap::default();
+    for n in loops.iter().flatten() {
+        uv_of_key.entry(n.key).or_insert(n.uv);
+    }
     for (k, &uv) in inside.iter().enumerate() {
         let key = NodeKey::Inside(k);
         points.insert(key, surface.point(uv.x, uv.y));
+        uv_of_key.insert(key, uv);
         keys.push(key);
     }
     let mut node_of: HashMap<NodeKey, u32> = HashMap::default();
     let mut nodes: Vec<Point> = Vec::new();
+    let mut uv_nodes: Vec<Point2> = Vec::new();
     let mut index = |key: NodeKey| *node_of.entry(key).or_insert_with(|| {
         nodes.push(points[&key]);
+        // (A node of a loop too short to triangulate has none: the surface's own.)
+        uv_nodes.push(uv_of_key.get(&key).copied().unwrap_or_else(|| {
+            let (u, v, _) = crate::geometry::extrema::nearest_on_surface(points[&key], &surface, None);
+            Point2::new(u, v)
+        }));
         (nodes.len() - 1) as u32
     });
     let mut kept = Vec::new();
@@ -431,7 +473,7 @@ fn face_mesh(model: &Model, face: Shape, options: MeshOptions) -> Result<Option<
     }
     let chains = chains.into_iter().map(|(c, ks)| (c, ks.into_iter().map(&mut index).collect())).collect();
     let _ = id;
-    Ok(Some((TriangleMesh::new(nodes, kept).with_deflection(deflection), chains)))
+    Ok(Some((TriangleMesh::new(nodes, kept).with_uv_nodes(uv_nodes).with_deflection(deflection), chains)))
 }
 
 /// Which of `triangles` (over `points`) lie inside `polygons`: by their middles, except that

@@ -421,7 +421,7 @@ fn elementary(s: &Surface) -> bool {
 }
 
 /// True if two elementary surfaces are the same point set.
-fn same_domain(a: &Surface, b: &Surface) -> bool {
+pub(crate) fn same_domain(a: &Surface, b: &Surface) -> bool {
     let tol = tolerance::LINEAR;
     let parallel = |x: Direction, y: Direction| Vector::from(x).cross(Vector::from(y)).length() <= 1e-9;
     let on_axis = |origin: Point, z: Direction, p: Point| {

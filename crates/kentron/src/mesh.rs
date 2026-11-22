@@ -9,6 +9,8 @@ pub struct TriangleMesh {
     nodes: Vec<Point>,
     triangles: Vec<[u32; 3]>,
     normals: Option<Vec<Direction>>,
+    /// The surface parameters of each node, where the mesh was made on a face's surface.
+    uv_nodes: Option<Vec<Point2>>,
     deflection: f64,
     /// The deflection it was made for, where known (it may come out coarser).
     requested: Option<f64>,
@@ -21,13 +23,27 @@ impl TriangleMesh {
             triangles.iter().flatten().all(|&i| (i as usize) < nodes.len()),
             "triangle node index out of range"
         );
-        Self { nodes, triangles, normals: None, deflection: 0.0, requested: None }
+        Self { nodes, triangles, normals: None, uv_nodes: None, deflection: 0.0, requested: None }
     }
 
     /// Sets one normal per node; panics on a count mismatch.
     pub fn with_normals(self, normals: Vec<Direction>) -> Self {
         assert_eq!(normals.len(), self.nodes.len(), "one normal per node");
         Self { normals: Some(normals), ..self }
+    }
+
+    /// Sets each node's parameters on the surface it was made on; panics on a count
+    /// mismatch.
+    #[doc(alias = "Poly_Triangulation::SetUVNode")]
+    pub fn with_uv_nodes(self, uv_nodes: Vec<Point2>) -> Self {
+        assert_eq!(uv_nodes.len(), self.nodes.len(), "one (u, v) per node");
+        Self { uv_nodes: Some(uv_nodes), ..self }
+    }
+
+    /// Each node's parameters on the face's surface, where known.
+    #[doc(alias = "Poly_Triangulation::UVNode")]
+    pub fn uv_nodes(&self) -> Option<&[Point2]> {
+        self.uv_nodes.as_deref()
     }
 
     /// Sets the maximal distance between the mesh and the exact geometry.
@@ -160,7 +176,8 @@ impl MeshPolyline {
 
 /// Nodes are mapped; normals are mapped by the inverse transpose (and kept when the map
 /// collapses them); a reflection reverses each triangle's node order so that the winding
-/// still agrees with the normals; the deflection grows by the map's largest stretch.
+/// still agrees with the normals; the deflection grows by the map's largest stretch. The
+/// nodes' parameters are dropped: the mapped surface may be parametrized otherwise.
 impl AffineTransformable for TriangleMesh {
     fn affine_transformed(&self, t: &AffineTransform) -> Self {
         let reflects = t.matrix().determinant() < 0.0;
@@ -173,6 +190,7 @@ impl AffineTransformable for TriangleMesh {
             nodes: self.nodes.iter().map(|&p| t.transform_point(p)).collect(),
             triangles,
             normals,
+            uv_nodes: None,
             deflection: self.deflection * t.max_stretch(),
             // (What it was made for is of the shape it was made on.)
             requested: None,
