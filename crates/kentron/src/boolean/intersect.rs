@@ -636,6 +636,20 @@ fn plane_across_extrusion(plane: &Surface, extrusion: &Surface) -> Option<Sectio
     if matches!(curve, Curve::Circle(_) | Curve::Ellipse(_)) && (last - first - TAU).abs() <= 1e-12 {
         return Some(Section::Closed(curve, Default::default()));
     }
+    // (So a periodic B-spline, the closed profile of a prism: a stretch of it inside both
+    // faces across its seam was otherwise cut at the seam and lost. Its knots moved to start
+    // at 0, as closed sections run from 0 to their period.)
+    if let Curve::BSpline(c) = &curve {
+        if c.is_periodic() {
+            let mut c = c.clone();
+            let k0 = c.knots()[0];
+            for i in 0..c.knots().len() {
+                let k = c.knots()[i];
+                c.set_knot(i, k - k0);
+            }
+            return Some(Section::Closed(Curve::BSpline(c), Default::default()));
+        }
+    }
     Some(Section::Open(curve, first, last))
 }
 
@@ -857,12 +871,21 @@ fn same_reversed(a: &Curve, b: &Curve) -> bool {
         && a.poles().iter().zip(b.poles().iter().rev()).all(|(&p, &q)| p.distance(q) <= on_tol())
 }
 
+/// The period of a closed section's curve, which starts at 0: 2π for a circle or ellipse,
+/// its knots' span for a periodic B-spline.
+fn closed_period(c: &Curve) -> f64 {
+    match c {
+        Curve::BSpline(b) => b.last_parameter() - b.first_parameter(),
+        _ => TAU,
+    }
+}
+
 /// A curve where two faces' surfaces meet.
 enum Section {
     /// A line, restricted to a range covering both faces.
     Open(Curve, f64, f64),
-    /// A circle or ellipse (period 2π), with its samples for projections onto it (found
-    /// once).
+    /// A circle or ellipse (period 2π), or a periodic B-spline (from 0 to its period), with
+    /// its samples for projections onto it (found once).
     Closed(Curve, std::sync::OnceLock<Vec<Point>>),
     /// A chain of branches of a cylinder's or cone's intersection with another quadric,
     /// each run forwards or backwards; closed, or open where it leaves the faces' range.
@@ -1201,7 +1224,7 @@ impl Section {
     fn range(&self) -> (f64, f64) {
         match self {
             Section::Open(_, a, b) => (*a, *b),
-            Section::Closed(..) => (0.0, TAU),
+            Section::Closed(c, _) => (0.0, closed_period(c)),
             Section::Chain(branches, ..) => (0.0, branches.len() as f64),
             Section::Sampled(points, closed, _) => (0.0, if *closed { points.len() } else { points.len() - 1 } as f64),
         }
@@ -1294,7 +1317,10 @@ impl Section {
             Section::Open(c, a, b) => geom::project(c, *a, *b, p),
             // (A circle's projection looks at few samples; an ellipse's at all.)
             Section::Closed(c @ Curve::Circle(_), _) => geom::project(c, 0.0, TAU, p),
-            Section::Closed(c, samples) => geom::project_among(c, 0.0, TAU, Some(samples.get_or_init(|| geom::projection_samples(c, 0.0, TAU))), p),
+            Section::Closed(c, samples) => {
+                let period = closed_period(c);
+                geom::project_among(c, 0.0, period, Some(samples.get_or_init(|| geom::projection_samples(c, 0.0, period))), p)
+            }
             Section::Sampled(points, closed, _) => {
                 // The nearest stretch of the polyline, then the curve near it.
                 let n = points.len();
@@ -1479,7 +1505,7 @@ impl Section {
     fn project_seeded(&self, p: Point, seed: f64) -> (f64, f64) {
         let (curve, lo, hi, periodic) = match self {
             Section::Open(c, a, b) => (c, a.min(*b), a.max(*b), false),
-            Section::Closed(c, _) => (c, 0.0, TAU, true),
+            Section::Closed(c, _) => (c, 0.0, closed_period(c), true),
             _ => return self.project(p),
         };
         let mut t = seed;
@@ -3831,6 +3857,15 @@ impl Graph {
     fn add_section(&mut self, fa: usize, fb: usize, section: &Section, mut on: Vec<(f64, usize)>) {
         let (lo, hi) = section.range();
         let period = hi - lo;
+        // (On a closed section, its end is its start: a point found there taken at the start,
+        // so the pieces run within one period from it.)
+        if section.closed() {
+            for (t, _) in on.iter_mut() {
+                if *t >= hi {
+                    *t -= period;
+                }
+            }
+        }
         on.sort_by(|a, b| a.0.total_cmp(&b.0));
         let inside_both = |graph: &Graph, p: Point| {
             graph.faces[fa].locate(p, &graph.edges, &graph.vertices) == Location::Inside

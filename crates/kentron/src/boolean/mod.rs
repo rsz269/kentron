@@ -2270,6 +2270,54 @@ mod tests {
         crate::sweep::extrude(model, face, Vector::new(0.0, 0.0, height)).unwrap().shape
     }
 
+    /// A prism on a closed periodic cubic B-spline (a wavy ring of ten poles), its curve's
+    /// seam at +x, raised by `z` and moved across by `(dx, dy)`.
+    fn wavy_prism(model: &mut Model, (dx, dy, z): (f64, f64, f64), height: f64) -> Shape {
+        use crate::geometry::curve::{BSplineCurve, Curve};
+        let poles = (0..10)
+            .map(|i| {
+                let (angle, r) = (i as f64 * PI / 5.0, if i % 2 == 0 { 5.0 } else { 4.0 });
+                Point::new(dx + r * angle.cos(), dy + r * angle.sin(), z)
+            })
+            .collect();
+        let knots: Vec<f64> = (0..=10).map(|k| 3.0 + k as f64).collect();
+        let curve = BSplineCurve::try_new_periodic(poles, knots, vec![1; 11], 3).unwrap();
+        let edge = crate::make::edge_from_curve(model, Curve::BSpline(curve)).unwrap();
+        let wire = crate::make::wire(model, &[edge]).unwrap();
+        let face = crate::make::planar_face(model, wire).unwrap();
+        crate::sweep::extrude(model, face, Vector::new(0.0, 0.0, height)).unwrap().shape
+    }
+
+    /// Two wavy prisms, the second moved across (so its side crosses the first's) and up (so
+    /// its bottom cuts the first's side along a closed spline, its seam inside the second): the
+    /// stretch of that curve inside the second's bottom runs across the seam. Each result's
+    /// shells close; union and intersection add up to the operands, difference and
+    /// intersection to the first; and the intersection is the cross-sections' overlap (that of
+    /// the prisms moved across only, over their height) over the height they share.
+    #[test]
+    fn prisms_on_a_periodic_spline_crossing_its_seam() {
+        let (h, d) = (5.0, (0.8, 0.4));
+        let mut model = Model::new();
+        let a = wavy_prism(&mut model, (0.0, 0.0, 0.0), h);
+        let b = wavy_prism(&mut model, (d.0, d.1, 1.0), h);
+        let across = wavy_prism(&mut model, (d.0, d.1, 0.0), h);
+        let volume = |model: &Model, s: Shape| properties::volume(model, s).mass;
+        let va = volume(&model, a);
+        let mut results = Vec::new();
+        for op in [union, intersection, difference] {
+            let r = op(&mut model, a, b).unwrap();
+            let report = validity::check(&model, r);
+            assert!(report.problems.is_empty(), "{report:?}");
+            results.push(volume(&model, r));
+        }
+        let [joined, common, cut] = results[..] else { unreachable!() };
+        assert!((joined + common - 2.0 * va).abs() < 1e-8 * va, "{joined} + {common} against {}", 2.0 * va);
+        assert!((cut + common - va).abs() < 1e-8 * va, "{cut} + {common} against {va}");
+        let overlap = intersection(&mut model, a, across).unwrap();
+        let section = volume(&model, overlap) / h;
+        assert!((common - section * (h - 1.0)).abs() < 1e-8 * va, "{common} against {}", section * (h - 1.0));
+    }
+
     /// Two arched prisms, one on the other's side surface along all of it (moved along the
     /// direction of extrusion): their curved sides are one surface, met along no line, and
     /// the union is the prism made taller.
