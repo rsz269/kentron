@@ -559,10 +559,10 @@ fn run_graph(model: &mut Model, a: Shape, b: Shape, operation: Operation, use_fa
     if !graph.only_solids() {
         return Ok(Some((mixed::run(model, graph, operation)?, Vec::new(), true)));
     }
-    let (pieces, arcs_of, regions) = classified(model, &mut graph);
+    let (pieces, arcs_of, regions, far_states) = classified(model, &mut graph);
     // Faces far from the other operand lie outside it, whole (or inside it, those apart from
     // its faces where the operands overlap).
-    let Some(far_states) = far::states(&graph) else { return Ok(None) };
+    let Some(far_states) = far_states else { return Ok(None) };
     let mut kept = Vec::new();
     for (fi, region, state) in regions {
         if let Some(flip) = operation.keeps(graph.faces[fi].operand, state) {
@@ -581,9 +581,9 @@ fn run_graph(model: &mut Model, a: Shape, b: Shape, operation: Operation, use_fa
 }
 
 /// The operands' faces split along where they meet, and each region with where it lies
-/// with respect to the other operand.
+/// with respect to the other operand; with where the far faces lie ([`far::states`]).
 #[allow(clippy::type_complexity)]
-fn classified(model: &Model, graph: &mut Graph) -> (Vec<split::Piece>, Vec<Vec<split::ArcOnFace>>, Vec<(usize, split::Region, State)>) {
+fn classified(model: &Model, graph: &mut Graph) -> (Vec<split::Piece>, Vec<Vec<split::ArcOnFace>>, Vec<(usize, split::Region, State)>, Option<Vec<State>>) {
     graph.intersect_edges_with_faces();
     graph.intersect_edges_on_faces();
     graph.share_vertices();
@@ -647,12 +647,19 @@ fn classified(model: &Model, graph: &mut Graph) -> (Vec<split::Piece>, Vec<Vec<s
     let mut regions: Vec<(usize, split::Region, State)> = found.into_iter().flatten().collect();
     // Where each region lies: regions joined across edges the other operand does not touch
     // lie alike, so of a large group of them only some are classified (a spread of them),
-    // unless they disagree or one lies on the other operand (then all are).
-    let roots = clean_components(graph, &pieces, &arcs_of, &regions);
+    // unless they disagree or one lies on the other operand (then all are). (Far faces joined
+    // to them count as classified regions of their groups, as they would in the graph.)
+    let far_states = far::states(graph);
+    let roots = clean_components(graph, &pieces, &arcs_of, &regions, far_states.as_deref());
     let mut groups: crate::hashing::FastMap<usize, Vec<usize>> = Default::default();
-    for (ri, &root) in roots.iter().enumerate() {
+    for (ri, &root) in roots[..regions.len()].iter().enumerate() {
         groups.entry(root).or_default().push(ri);
     }
+    let mut far_votes: crate::hashing::FastMap<usize, Vec<State>> = Default::default();
+    for (&root, &state) in roots[regions.len()..].iter().zip(far_states.iter().flatten()) {
+        far_votes.entry(root).or_default().push(state);
+    }
+    let votes = |g: &[usize]| far_votes.get(&roots[g[0]]).map_or(&[][..], |v| &v[..]);
     let classify = |ri: usize| {
         let (fi, region, _) = &regions[ri];
         let face = &graph.faces[*fi];
@@ -709,7 +716,7 @@ fn classified(model: &Model, graph: &mut Graph) -> (Vec<split::Piece>, Vec<Vec<s
         // (Unless the sample agrees, all: a region lying on the other operand, or a group
         // not all on one side after all.)
         let s = sample(g);
-        let unanimous = s.iter().all(|ri| known[ri] == known[&s[0]]) && matches!(known[&s[0]], State::Inside | State::Outside);
+        let unanimous = s.iter().all(|ri| known[ri] == known[&s[0]]) && votes(g).iter().all(|&v| v == known[&s[0]]) && matches!(known[&s[0]], State::Inside | State::Outside);
         if g.len() > SAMPLES && !unanimous {
             rest.extend(g.iter().filter(|ri| !known.contains_key(ri)));
         }
@@ -720,10 +727,10 @@ fn classified(model: &Model, graph: &mut Graph) -> (Vec<split::Piece>, Vec<Vec<s
     // apart).
     for g in groups.values() {
         let (mut inside, mut outside) = (0, 0);
-        for ri in g {
-            match known.get(ri) {
-                Some(State::Inside) => inside += 1,
-                Some(State::Outside) => outside += 1,
+        for state in g.iter().filter_map(|ri| known.get(ri)).chain(votes(g)) {
+            match state {
+                State::Inside => inside += 1,
+                State::Outside => outside += 1,
                 _ => {}
             }
         }
@@ -737,7 +744,7 @@ fn classified(model: &Model, graph: &mut Graph) -> (Vec<split::Piece>, Vec<Vec<s
             };
         }
     }
-    (pieces, arcs_of, regions)
+    (pieces, arcs_of, regions, far_states)
 }
 
 /// `a` and `b` split by one another: the solids inside both, inside `a` only and inside
@@ -748,7 +755,7 @@ pub(crate) fn partition(model: &mut Model, a: Shape, b: Shape) -> Result<[Shape;
     if !graph.only_solids() {
         return Err(Error::InvalidInput("a partition of shapes other than solids".into()));
     }
-    let (pieces, arcs_of, regions) = classified(model, &mut graph);
+    let (pieces, arcs_of, regions, _) = classified(model, &mut graph);
     // Each region once (coplanar ones of `a` only, the other operand's being the same),
     // and the cells it bounds: as it is, or turned inside out.
     use State::*;
@@ -791,8 +798,11 @@ struct WholeArcs(f64, Vec<split::WholeArc>);
 /// edge that the other operand leaves alone (no section, not shared with it, not on its
 /// faces) lie on the same side of it (each group then takes its majority, so that one
 /// region classified wrongly, a ray miscounting near a thin feature, follows its
-/// neighbours; and a large group needs only some of its regions classified).
-fn clean_components(graph: &Graph, pieces: &[split::Piece], arcs_of: &[Vec<split::ArcOnFace>], regions: &[(usize, split::Region, State)]) -> Vec<usize> {
+/// neighbours; and a large group needs only some of its regions classified). Then, given
+/// where they lie (`far`), for each far face (after the regions), its group: joined to
+/// regions across its edges alike, and to the far faces it shares an edge with (an unplaced
+/// one, whose edges are the graph's).
+fn clean_components(graph: &Graph, pieces: &[split::Piece], arcs_of: &[Vec<split::ArcOnFace>], regions: &[(usize, split::Region, State)], far: Option<&[State]>) -> Vec<usize> {
     use crate::hashing::{FastMap as HashMap, FastSet as HashSet};
     // Pieces touched by the other operand: shared with its pieces, or of edges on its faces.
     let mut by_rep: HashMap<usize, HashSet<Option<usize>>> = HashMap::default();
@@ -848,7 +858,8 @@ fn clean_components(graph: &Graph, pieces: &[split::Piece], arcs_of: &[Vec<split
         let d = geom::signed_distance(&graph.faces[g].surface, geom::surface_point(&graph.faces[fi].surface, q));
         if d.abs() <= 10.0 * geom::on_tol() { 0 } else if d > 0.0 { 1 } else { -1 }
     };
-    let mut parent: Vec<usize> = (0..regions.len()).collect();
+    let joined = if far.is_some() { graph.far.len() } else { 0 };
+    let mut parent: Vec<usize> = (0..regions.len() + joined).collect();
     fn find(parent: &mut [usize], i: usize) -> usize {
         let mut r = i;
         while parent[r] != r {
@@ -879,7 +890,44 @@ fn clean_components(graph: &Graph, pieces: &[split::Piece], arcs_of: &[Vec<split
             }
         }
     }
-    (0..regions.len()).map(|ri| find(&mut parent, ri)).collect()
+    // (A far face's edges are clear of the other operand's faces, as the face is: nothing of
+    // it passes between the face and the regions beyond them.)
+    let mut far_edges: HashMap<(usize, crate::topology::EdgeId), Vec<usize>> = HashMap::default();
+    for (i, f) in graph.far.iter().enumerate().take(joined) {
+        if f.placement == crate::math::Transform::IDENTITY {
+            for e in f.data.edges.iter().filter(|e| e.curve.is_some()) {
+                far_edges.entry((f.operand, e.edge)).or_default().push(i);
+            }
+        }
+    }
+    // (Far faces sharing an edge, which is not in the graph, alike too.)
+    for faces in far_edges.values() {
+        for w in faces.windows(2) {
+            let (a, b) = (find(&mut parent, regions.len() + w[0]), find(&mut parent, regions.len() + w[1]));
+            parent[a] = b;
+        }
+    }
+    for (piece, p) in pieces.iter().enumerate() {
+        let e = &graph.edges[p.edge];
+        let (Some(operand), Some(origin)) = (e.operand, e.origin) else { continue };
+        let Some(faces) = far_edges.get(&(operand, origin)) else { continue };
+        if !clean(piece, operand) {
+            continue;
+        }
+        for &i in faces {
+            let node = regions.len() + i;
+            match first_by_rep.get(&p.rep) {
+                Some(&(rj, _)) => {
+                    let (a, b) = (find(&mut parent, node), find(&mut parent, rj));
+                    parent[a] = b;
+                }
+                None => {
+                    first_by_rep.insert(p.rep, (node, 0));
+                }
+            }
+        }
+    }
+    (0..regions.len() + joined).map(|ri| find(&mut parent, ri)).collect()
 }
 
 #[cfg(test)]
@@ -1187,6 +1235,28 @@ mod tests {
         let h = 5.0 * std::f64::consts::FRAC_1_SQRT_2;
         for touching in [Point::new(2.0 * t, -h, t - h), Point::new(2.0 * t, h, t + h)] {
             assert!(ends.iter().any(|p| p.distance(touching) <= 1e-3), "no section ends at {touching:?}: {ends:?}");
+        }
+    }
+
+    #[test]
+    fn far_faces_vote_with_the_regions_they_are_joined_to() {
+        let mut model = Model::new();
+        // A post through a block's top: the block's top is split, its sides and bottom left
+        // out of the graph, and joined to the top's regions across the top's edges.
+        let block = cuboid(&mut model, (0.0, 0.0, 0.0), (10.0, 10.0, 10.0));
+        let post = cuboid(&mut model, (4.0, 4.0, 8.0), (2.0, 2.0, 4.0));
+        let mut graph = operands(&model, block, post, true).unwrap();
+        let (pieces, arcs_of, regions, far_states) = classified(&model, &mut graph);
+        let far_states = far_states.unwrap();
+        let roots = clean_components(&graph, &pieces, &arcs_of, &regions, Some(&far_states));
+        assert_eq!(roots.len(), regions.len() + graph.far.len());
+        let block_far: Vec<usize> = (0..graph.far.len()).filter(|&i| graph.far[i].operand == 0).collect();
+        assert_eq!(block_far.len(), 5);
+        // (All in the group of the top's region outside the post.)
+        let top = (0..regions.len()).find(|&ri| graph.faces[regions[ri].0].operand == 0 && regions[ri].2 == State::Outside).unwrap();
+        for i in block_far {
+            assert_eq!(far_states[i], State::Outside);
+            assert_eq!(roots[regions.len() + i], roots[top]);
         }
     }
 
