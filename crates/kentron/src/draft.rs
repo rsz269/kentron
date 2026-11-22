@@ -6,6 +6,9 @@
 //! cone about the pull direction becomes the cone through its circle on the neutral plane.
 //! Faces meeting a drafted one tangentially are drafted with it (those that can be). The shape keeps its
 //! topology: its edges and vertices are found again where the new surfaces meet.
+//!
+//! Faces moved rigidly ([`move_faces`]) are the same direct edit: the moved faces' surfaces
+//! carried by the motion, the faces round them kept on theirs and met again.
 
 use std::collections::HashMap;
 
@@ -13,7 +16,7 @@ use crate::error::{Error, Result};
 use crate::geometry::surface::{Cone, Cylinder, Plane, Surface};
 use crate::geometry::ParametricSurface;
 use crate::math::{Axis, Direction, Point, Transform, Transformable, Vector};
-use crate::tolerance::ANGULAR;
+use crate::tolerance::{ANGULAR, LINEAR};
 use crate::topology::{Model, NodeId, NodeKind, Orientation, Shape};
 
 /// A face to draft: by `angle` (radians) to the pull direction, staying in place where it
@@ -76,8 +79,81 @@ pub(crate) fn drafted(model: &mut Model, shape: Shape, direction: Direction, fac
     Ok(drafted)
 }
 
-/// For each face of `shape`, the faces meeting it tangentially along an edge.
-fn tangent_neighbours(model: &Model, shape: Shape) -> HashMap<NodeId, Vec<Shape>> {
+/// `shape` with `faces` moved rigidly by `motion` (`p ↦ R·p + t`, `R` a rotation), as a
+/// direct edit: the moved faces' surfaces carried by the motion, the faces round them kept
+/// on their surfaces, extended or trimmed to meet them, the edges and vertices found again
+/// where the surfaces meet (as Draft_Modification finds them for drafted faces). A hole's
+/// face moved across a plate moves the hole; a plane moved along itself stays the plane it
+/// was.
+///
+/// `faces` must name one face of `shape` or more, and `motion` be rigid (InvalidInput
+/// otherwise); where the faces round the moved ones cannot meet them, it fails.
+#[doc(alias = "BRepTools_Modifier")]
+#[doc(alias = "BRepTools_Modification")]
+pub fn move_faces(model: &mut Model, shape: Shape, faces: &[Shape], motion: &Transform) -> Result<Shape> {
+    if faces.is_empty() {
+        return Err(Error::InvalidInput("no faces to move".into()));
+    }
+    let own: Vec<NodeId> = model.unique_subshapes(shape, NodeKind::Face).into_iter().map(|f| f.node).collect();
+    if let Some(f) = faces.iter().find(|f| f.kind() != NodeKind::Face || !own.contains(&f.node)) {
+        return Err(Error::InvalidInput(format!("{:?} is not a face of the shape", f.node)));
+    }
+    if !is_rigid(motion) {
+        return Err(Error::InvalidInput("a face move is rigid: a rotation and a translation".into()));
+    }
+    let moved: Vec<NodeId> = faces.iter().map(|f| f.node).collect();
+    let new_surface = |face: Shape, surface: &Surface| -> Result<Surface> {
+        if !moved.contains(&face.node) {
+            return Ok(surface.clone());
+        }
+        let carried = surface.transformed(motion);
+        // A plane moved along itself is the same plane (as Draft_Modification keeps a face
+        // whose draft turns it by no angle).
+        if let (Surface::Plane(old), Surface::Plane(new)) = (surface, &carried) {
+            let along = Vector::from(old.normal()).dot(Vector::from(new.normal())) >= 1.0 - ANGULAR;
+            if along && (new.origin() - old.origin()).dot(Vector::from(old.normal())).abs() <= LINEAR {
+                return Ok(surface.clone());
+            }
+        }
+        Ok(carried)
+    };
+    // Each edge between a moved face and one kept is the section of their surfaces: where
+    // they have none (a plane turned parallel to the plane it met), the edit fails, as
+    // Draft_Modification fails an edge it cannot recompute (Draft_EdgeRecomputation).
+    let faces_of_edge = faces_of_edges(model, shape);
+    let placed = |f: Shape| model.surface(f).map(|s| s.transformed(&f.placement));
+    for pair in faces_of_edge.values() {
+        let [a, b] = pair[..] else { continue };
+        if moved.contains(&a.node) == moved.contains(&b.node) {
+            continue;
+        }
+        let (Some(sa), Some(sb)) = (placed(a), placed(b)) else { continue };
+        let (na, nb) = (new_surface(a, &sa)?, new_surface(b, &sb)?);
+        use crate::geometry::intersect::{quadrics, QuadricIntersection as Q};
+        if matches!(quadrics(&na, &nb, LINEAR), Q::Empty | Q::Points(_)) {
+            return Err(Error::Failed("a face round the moved ones cannot reach them (their surfaces do not meet)".into()));
+        }
+    }
+    // (Where the surfaces round a moved face do not reach it, no vertex or edge is found:
+    // the edit fails, as Draft_Modification fails it.)
+    let moved = crate::offset::shape::with_surfaces(model, shape, &new_surface, true).map_err(|e| match e {
+        Error::InvalidInput(m) | Error::Failed(m) => Error::Failed(format!("the faces round the moved ones do not meet them: {m}")),
+    })?;
+    crate::heal::move_crossed_seams(model, moved)?;
+    Ok(moved)
+}
+
+/// Whether `t` moves rigidly: no scale, no reflection, and its matrix a rotation (`RᵀR = I`
+/// to the angular tolerance).
+fn is_rigid(t: &Transform) -> bool {
+    let rows = t.rows();
+    let column = |c: usize| Vector::new(rows[0][c], rows[1][c], rows[2][c]);
+    let orthonormal = (0..3).all(|i| (0..3).all(|j| (column(i).dot(column(j)) - if i == j { 1.0 } else { 0.0 }).abs() <= ANGULAR));
+    orthonormal && !t.is_negative()
+}
+
+/// For each edge of `shape`, the faces using it (each once).
+fn faces_of_edges(model: &Model, shape: Shape) -> HashMap<NodeId, Vec<Shape>> {
     let mut faces_of_edge: HashMap<NodeId, Vec<Shape>> = HashMap::new();
     for face in model.unique_subshapes(shape, NodeKind::Face) {
         for edge in model.unique_subshapes(face, NodeKind::Edge) {
@@ -87,6 +163,12 @@ fn tangent_neighbours(model: &Model, shape: Shape) -> HashMap<NodeId, Vec<Shape>
             }
         }
     }
+    faces_of_edge
+}
+
+/// For each face of `shape`, the faces meeting it tangentially along an edge.
+fn tangent_neighbours(model: &Model, shape: Shape) -> HashMap<NodeId, Vec<Shape>> {
+    let faces_of_edge = faces_of_edges(model, shape);
     let mut out: HashMap<NodeId, Vec<Shape>> = HashMap::new();
     for (edge, faces) in &faces_of_edge {
         let [a, b] = faces[..] else { continue };
@@ -392,6 +474,132 @@ mod tests {
         let mut model = Model::new();
         let outline = [(0.0, 0.0), (20.0, 0.0), (20.0, 5.0), (5.0, 5.0), (5.0, 15.0), (0.0, 15.0)];
         assert!(sides_drafted(&mut model, &outline, 8.0, 30.0).is_err());
+    }
+
+    /// The face of `shape` whose surface passes through `p` (on the shape's boundary).
+    fn face_through(model: &Model, shape: Shape, p: Point) -> Shape {
+        model
+            .unique_subshapes(shape, NodeKind::Face)
+            .into_iter()
+            .find(|&f| {
+                let s = model.surface(f).unwrap().transformed(&f.placement);
+                let (u, v, _) = crate::geometry::extrema::nearest_on_surface(p, &s, None);
+                s.point(u, v).distance(p) < 1e-9 && crate::boolean::classify_point(model, f, p).unwrap() == crate::boolean::PointLocation::Boundary
+            })
+            .expect("a face through the point")
+    }
+
+    fn locate(model: &Model, s: Shape, x: f64, y: f64, z: f64) -> crate::boolean::PointLocation {
+        crate::boolean::classify_point(model, s, Point::new(x, y, z)).unwrap()
+    }
+
+    /// A box's top raised 3 and slid sideways along itself: the box 3 taller.
+    #[test]
+    fn a_box_top_moved_up() {
+        let mut model = Model::new();
+        let b = Cuboid::new(10.0, 20.0, 30.0).build(&mut model).unwrap();
+        let top = face_through(&model, b, Point::new(5.0, 10.0, 30.0));
+        let moved = move_faces(&mut model, b, &[top], &Transform::translation(Vector::new(1.0, -2.0, 3.0))).unwrap();
+        valid(&model, moved);
+        let v = volume(&model, moved).mass;
+        assert!((v - 6000.0 - 200.0 * 3.0).abs() < 1e-6, "{v}");
+    }
+
+    /// A box's side x = 10 turned by θ about its bottom edge (x = 10, z = 0): the side leans,
+    /// the box a prism under a trapezoid of top 10 + h·tan θ.
+    #[test]
+    fn a_box_side_turned_about_its_bottom_edge_leans() {
+        let (w, d, h) = (10.0, 20.0, 30.0);
+        for theta in [0.2f64, -0.25] {
+            let mut model = Model::new();
+            let b = Cuboid::new(w, d, h).build(&mut model).unwrap();
+            let side = face_at_x(&model, b, w);
+            // (A turn by θ about +y carries +z toward +x: the top edge out to w + h·tan θ.)
+            let edge = Axis::new(Point::new(w, 0.0, 0.0), Direction::Y);
+            let moved = move_faces(&mut model, b, &[side], &Transform::rotation(edge, theta)).unwrap();
+            valid(&model, moved);
+            let expected = d * h * (w + 0.5 * h * theta.tan());
+            let v = volume(&model, moved).mass;
+            assert!((v - expected).abs() < 1e-6 * expected, "{theta}: {v} vs {expected}");
+        }
+    }
+
+    /// A plate's through hole moved across it: the plate's volume unchanged, the hole at its
+    /// new place.
+    #[test]
+    fn a_hole_moved_across_a_plate() {
+        let mut model = Model::new();
+        let (w, d, h, r) = (12.0, 8.0, 2.0, 1.5);
+        let plate = Cuboid::new(w, d, h).build(&mut model).unwrap();
+        let drill = CylinderPrimitive::new(r, 4.0).with_frame(crate::math::Frame::from_z(Point::new(4.0, 4.0, -1.0), Direction::Z)).build(&mut model).unwrap();
+        let holed = crate::boolean::difference(&mut model, plate, drill).unwrap();
+        let before = volume(&model, holed).mass;
+        let wall = face_through(&model, holed, Point::new(4.0 + r, 4.0, 1.0));
+        let moved = move_faces(&mut model, holed, &[wall], &Transform::translation(Vector::new(4.5, -1.5, 0.0))).unwrap();
+        valid(&model, moved);
+        let v = volume(&model, moved).mass;
+        assert!((v - before).abs() < 1e-6 * before, "{v} vs {before}");
+        use crate::boolean::PointLocation::*;
+        assert_eq!(locate(&model, moved, 4.0, 4.0, 1.0), Inside);
+        assert_eq!(locate(&model, moved, 8.5, 2.5, 1.0), Outside);
+        assert_eq!(locate(&model, moved, 8.5 + r, 2.5, 1.0), Boundary);
+        assert_eq!(locate(&model, moved, 8.5, 2.5 - r - 0.1, 1.0), Inside);
+    }
+
+    /// A notch through a block's side y = d (x from 2 to 4, 3 deep), its three faces moved 5
+    /// along the side: the notch from 7 to 9.
+    #[test]
+    fn a_notch_moved_along_a_side() {
+        let mut model = Model::new();
+        let (w, d, h) = (12.0, 8.0, 3.0);
+        let block = Cuboid::new(w, d, h).build(&mut model).unwrap();
+        let cut = Cuboid::from_corners(Point::new(2.0, d - 3.0, -1.0), Point::new(4.0, d + 1.0, h + 1.0)).build(&mut model).unwrap();
+        let notched = crate::boolean::difference(&mut model, block, cut).unwrap();
+        let faces: Vec<Shape> = [Point::new(2.0, d - 1.5, 1.5), Point::new(4.0, d - 1.5, 1.5), Point::new(3.0, d - 3.0, 1.5)]
+            .into_iter()
+            .map(|p| face_through(&model, notched, p))
+            .collect();
+        let moved = move_faces(&mut model, notched, &faces, &Transform::translation(Vector::new(5.0, 0.0, 0.0))).unwrap();
+        valid(&model, moved);
+        let v = volume(&model, moved).mass;
+        let expected = w * d * h - 2.0 * 3.0 * h;
+        assert!((v - expected).abs() < 1e-6 * expected, "{v} vs {expected}");
+        use crate::boolean::PointLocation::*;
+        assert_eq!(locate(&model, moved, 3.0, d - 1.0, 1.5), Inside);
+        assert_eq!(locate(&model, moved, 8.0, d - 1.0, 1.5), Outside);
+        assert_eq!(locate(&model, moved, 8.0, d - 3.5, 1.5), Inside);
+    }
+
+    /// A box's top slid and turned along itself: the same plane, the same box.
+    #[test]
+    fn a_plane_moved_along_itself_is_unchanged() {
+        let mut model = Model::new();
+        let b = Cuboid::new(10.0, 20.0, 30.0).build(&mut model).unwrap();
+        let top = face_through(&model, b, Point::new(5.0, 10.0, 30.0));
+        let turn = Transform::rotation(Axis::new(Point::new(1.0, 2.0, 0.0), Direction::Z), 0.3) * Transform::translation(Vector::new(2.0, 1.0, 0.0));
+        let moved = move_faces(&mut model, b, &[top], &turn).unwrap();
+        valid(&model, moved);
+        let new_top = face_through(&model, moved, Point::new(5.0, 10.0, 30.0));
+        assert_eq!(model.surface(new_top), model.surface(top));
+        assert!((volume(&model, moved).mass - 6000.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn face_moves_are_refused_or_fail() {
+        let mut model = Model::new();
+        let b = Cuboid::new(10.0, 20.0, 30.0).build(&mut model).unwrap();
+        let top = face_through(&model, b, Point::new(5.0, 10.0, 30.0));
+        let shift = Transform::translation(Vector::new(0.0, 0.0, 1.0));
+        assert!(matches!(move_faces(&mut model, b, &[], &shift), Err(Error::InvalidInput(_))));
+        let scaled = Transform::scaling(Point::ORIGIN, 2.0);
+        assert!(matches!(move_faces(&mut model, b, &[top], &scaled), Err(Error::InvalidInput(_))));
+        let mirrored = Transform::mirror_plane(Point::new(0.0, 0.0, 15.0), Direction::Z);
+        assert!(matches!(move_faces(&mut model, b, &[top], &mirrored), Err(Error::InvalidInput(_))));
+        let sheared = Transform::from_rows([[1.0, 0.5, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]]).unwrap();
+        assert!(matches!(move_faces(&mut model, b, &[top], &sheared), Err(Error::InvalidInput(_))));
+        // The top stood upright, parallel to the sides x = 0 and x = 10: they cannot meet it.
+        let upright = Transform::rotation(Axis::new(Point::new(5.0, 10.0, 30.0), Direction::Y), std::f64::consts::FRAC_PI_2);
+        assert!(matches!(move_faces(&mut model, b, &[top], &upright), Err(Error::Failed(_))));
     }
 
     #[test]
