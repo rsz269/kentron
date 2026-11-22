@@ -24,6 +24,7 @@ pub(crate) mod abscissa;
 pub(crate) mod adaptor;
 pub(crate) mod curvlin;
 pub(crate) mod function_root;
+pub(crate) mod function_set_root;
 pub(crate) mod ext_pc;
 pub(crate) mod locate_ext_pc;
 // (OCCT's shape analysis and pcurve projection, as the readers add pcurves.)
@@ -36,6 +37,7 @@ pub(crate) mod function_roots;
 // (The ports below serve the guide-plane trihedron, not wired in yet.)
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) mod int_curve_plane;
+pub(crate) mod int_line_surface;
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) mod polynomial_roots;
 // (For the shape-analysis ports, not wired in yet.)

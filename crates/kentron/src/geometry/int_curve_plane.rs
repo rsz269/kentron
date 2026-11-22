@@ -31,7 +31,7 @@ use super::Continuity;
 /// `THE_TOLTANGENCY`: the tolerance on the curve's and the plane's parameter bounds.
 const TOLTANGENCY: f64 = 0.00000001;
 /// `THE_TOLERANCE_ANGULAIRE`.
-const TOLERANCE_ANGULAIRE: f64 = 1.0e-12;
+pub(super) const TOLERANCE_ANGULAIRE: f64 = 1.0e-12;
 /// `THE_TOLERANCE`: the distance tolerance handed to the circle and ellipse cases.
 const TOLERANCE: f64 = 0.00000001;
 /// `Precision::Infinite()`: the plane's parameter bounds.
@@ -105,14 +105,14 @@ pub(crate) fn plane_through(p: Point, v: Direction) -> Plane {
 
 /// A `gp_Ax3`: location and three directions (left-handed allowed).
 #[derive(Clone, Copy, Debug)]
-struct Ax3 {
-    location: [f64; 3],
-    x: [f64; 3],
-    y: [f64; 3],
-    z: [f64; 3],
+pub(super) struct Ax3 {
+    pub(super) location: [f64; 3],
+    pub(super) x: [f64; 3],
+    pub(super) y: [f64; 3],
+    pub(super) z: [f64; 3],
 }
 
-fn coords(d: Direction) -> [f64; 3] {
+pub(super) fn coords(d: Direction) -> [f64; 3] {
     [d.x(), d.y(), d.z()]
 }
 
@@ -139,7 +139,7 @@ fn gp_dir(a: [f64; 3]) -> [f64; 3] {
 }
 
 impl Ax3 {
-    fn from_frame(frame: &Frame) -> Ax3 {
+    pub(super) fn from_frame(frame: &Frame) -> Ax3 {
         let o = frame.origin();
         Ax3 { location: [o.x, o.y, o.z], x: coords(frame.x()), y: coords(frame.y()), z: coords(frame.z()) }
     }
@@ -167,7 +167,7 @@ impl Ax3 {
 
     /// `gp_Trsf::SetTransformation(A3)`: the rows of the matrix (the axes) and the
     /// translation `-(M · Location)`.
-    fn transformation(&self) -> ([[f64; 3]; 3], [f64; 3]) {
+    pub(super) fn transformation(&self) -> ([[f64; 3]; 3], [f64; 3]) {
         let m = [self.x, self.y, self.z];
         let o = self.location;
         let mut loc = [0.0; 3];
@@ -190,17 +190,17 @@ impl Ax3 {
 /// + Cz z) + Ccte`.
 #[doc(alias = "IntAna_Quadric")]
 #[derive(Clone, Copy, Debug)]
-struct Quadric {
-    cxx: f64,
-    cyy: f64,
-    czz: f64,
-    cxy: f64,
-    cxz: f64,
-    cyz: f64,
-    cx: f64,
-    cy: f64,
-    cz: f64,
-    ccte: f64,
+pub(super) struct Quadric {
+    pub(super) cxx: f64,
+    pub(super) cyy: f64,
+    pub(super) czz: f64,
+    pub(super) cxy: f64,
+    pub(super) cxz: f64,
+    pub(super) cyz: f64,
+    pub(super) cx: f64,
+    pub(super) cy: f64,
+    pub(super) cz: f64,
+    pub(super) ccte: f64,
 }
 
 impl Quadric {
@@ -256,16 +256,16 @@ impl Quadric {
 /// The result of `IntAna_IntConicQuad`.
 #[doc(alias = "IntAna_IntConicQuad")]
 #[derive(Clone, Debug, Default)]
-struct ConicQuad {
-    done: bool,
-    parallel: bool,
-    inquadric: bool,
+pub(super) struct ConicQuad {
+    pub(super) done: bool,
+    pub(super) parallel: bool,
+    pub(super) inquadric: bool,
     /// `Point(i)`, `ParamOnConic(i)`.
-    points: Vec<([f64; 3], f64)>,
+    pub(super) points: Vec<([f64; 3], f64)>,
 }
 
 /// `IntAna_IntConicQuad::Perform(gp_Lin, gp_Pln, Tolang, Tol, Len)`.
-fn line_plane(origin: [f64; 3], direction: [f64; 3], plane: &Ax3, tolang: f64, tol: f64, len: f64) -> ConicQuad {
+pub(super) fn line_plane(origin: [f64; 3], direction: [f64; 3], plane: &Ax3, tolang: f64, tol: f64, len: f64) -> ConicQuad {
     // Tolang is the angular tolerance under which the angle between two vectors counts as
     // zero (reasoning on its cosine, cos(t) close to t near Pi/2).
     let mut out = ConicQuad::default();

@@ -168,7 +168,7 @@ fn locate_parameter(knots: &[f64], u: f64, periodic: bool, from_k1: usize, to_k2
 }
 
 /// `BSplCLib::FirstUKnotIndex`, 1-based.
-fn first_u_knot_index(degree: usize, mults: &[usize]) -> usize {
+pub(super) fn first_u_knot_index(degree: usize, mults: &[usize]) -> usize {
     let mut index = 1;
     let mut sigma = mults[0];
     while sigma <= degree {

@@ -63,6 +63,7 @@ pub mod modify;
 pub mod primitives;
 pub mod project;
 pub mod properties;
+pub mod raycast;
 pub mod sew;
 pub mod sketch;
 pub mod sweep;
