@@ -39,6 +39,9 @@ pub fn shape(model: &mut Model, shape: Shape, distance: f64, join: Join) -> Resu
 #[doc(alias = "offsetonface")]
 pub fn shape_with_faces(model: &mut Model, shape: Shape, distance: f64, faces: &[(Shape, f64)], join: Join) -> Result<Shape> {
     let own: Vec<(NodeId, f64)> = faces.iter().map(|(f, d)| (f.node, *d)).collect();
+    if let Some(passed) = passing_beyond(model, shape, distance, &own) {
+        return Err(Error::InvalidInput(passed));
+    }
     // (A partial solid of revolution whose side planes move off a pole or apex on its axis.)
     if join == Join::Intersection {
         let distance_of = |n: NodeId| own.iter().find(|(m, _)| *m == n).map_or(distance, |&(_, d)| d);
@@ -71,6 +74,54 @@ pub fn shape_with_faces(model: &mut Model, shape: Shape, distance: f64, faces: &
         }
     }
     rounded.map(|(r, _)| r)
+}
+
+/// Why moving the faces `own` (by their distances, the others by `distance`) passes a planar
+/// face beyond a planar face it meets that stays where it is: the moved face's plane carried
+/// past every point of that face, as a step's lower top raised past the upper or a box's top
+/// pushed in past its bottom. (Carried just onto its far side, the face between shrinks to
+/// nothing and goes, the two on either side of it merging; past it, the faces round it no
+/// longer meet the moved face.) `None` where no face passes so. OCCT's
+/// `BRepOffset_MakeOffset` has no such check; this is the direct edit's condition.
+fn passing_beyond(model: &Model, shape: Shape, distance: f64, own: &[(NodeId, f64)]) -> Option<String> {
+    let distance_of = |n: NodeId| own.iter().find(|(m, _)| *m == n).map_or(distance, |&(_, d)| d);
+    let faces = model.unique_subshapes(shape, NodeKind::Face);
+    let plane_of = |f: Shape| -> Option<(Point, Vector)> {
+        let Surface::Plane(p) = model.surface(f)?.transformed(&f.placement) else { return None };
+        let n = Vector::from(p.normal());
+        Some((p.origin(), if f.orientation == Orientation::Reversed { -n } else { n }))
+    };
+    for &(node, d) in own {
+        let Some(&face) = faces.iter().find(|f| f.node == node) else { continue };
+        let Some((origin, n)) = plane_of(face) else { continue };
+        if d == 0.0 {
+            continue;
+        }
+        let way = n * d.signum();
+        let edges: Vec<NodeId> = model.unique_subshapes(face, NodeKind::Edge).into_iter().map(|e| e.node).collect();
+        for &other in &faces {
+            if other.node == node || distance_of(other.node) != 0.0 || plane_of(other).is_none() {
+                continue;
+            }
+            let other_edges = model.unique_subshapes(other, NodeKind::Edge);
+            if !other_edges.iter().any(|e| edges.contains(&e.node)) {
+                continue;
+            }
+            // How far the face reaches the way the moved face goes, from its plane.
+            let reach = other_edges
+                .iter()
+                .flat_map(|&e| match model.edge_curve(Shape { orientation: Orientation::Forward, ..e }) {
+                    Some((curve, first, last)) => (0..=32).map(|i| curve.point(first + (last - first) * i as f64 / 32.0)).collect(),
+                    None => Vec::new(),
+                })
+                .map(|p| (p - origin).dot(way))
+                .fold(f64::NEG_INFINITY, f64::max);
+            if reach > crate::tolerance::LINEAR && d.abs() > reach + crate::tolerance::LINEAR {
+                return Some(format!("a face moved {d} past a face it meets, which reaches {reach} that way"));
+            }
+        }
+    }
+    None
 }
 
 /// [`shape_with_faces`] where faces side by side on one plane (facing the same way) move by
@@ -257,6 +308,54 @@ pub(super) fn moved_and_rounded(model: &mut Model, shape: Shape, distance: f64, 
 #[doc(alias = "BRepOffsetAPI_MakeThickSolid")]
 #[doc(alias = "thickshell")]
 pub fn thick_solid(model: &mut Model, shape: Shape, removed: &[Shape], thickness: f64, join: Join) -> Result<Shape> {
+    let result = thick_solid_as_made(model, shape, removed, thickness, join)?;
+    if thickness < 0.0 && walls_meet(model, shape, removed, result, -thickness)? {
+        return Err(Error::InvalidInput(format!("walls {} thick meeting inside the solid (a shell as thick as the part)", -thickness)));
+    }
+    Ok(result)
+}
+
+/// Whether the walls of `hollowed`, `shape` hollowed inwards to walls `thickness` thick (open
+/// at `removed`), meet all round, as in a shell as thick as the part: every corner of the
+/// cavity lies nearer than `thickness` to a planar face of `shape` that stays closed. Where
+/// the faces moved inwards bound a cavity, each such plane moved bounds it or lies beyond it,
+/// so its corners lie at least `thickness` inside those faces; where opposite walls pass
+/// through each other, the faces moved bound none, and the corners where they meet lie nearer
+/// to the faces across. (A planar face shrinking to nothing as it moves, a narrow chamfer,
+/// lies beyond the corner its neighbours' offsets leave. A curved one need not: a convex round
+/// no larger than the thickness leaves a sharp corner nearer to it, so curved faces are not
+/// measured. Corners on the solid's faces, the walls' outsides and the rims at the openings,
+/// are not the cavity's.) Walls meeting in part only, a cavity left elsewhere, are not told
+/// here. OCCT's `BRepOffsetAPI_MakeThickSolid` has no such check; this is the walls'
+/// definition.
+fn walls_meet(model: &mut Model, shape: Shape, removed: &[Shape], hollowed: Shape, thickness: f64) -> Result<bool> {
+    let (closed, all) = (model.new_empty(NodeKind::Compound), model.new_empty(NodeKind::Compound));
+    for face in model.unique_subshapes(shape, NodeKind::Face) {
+        model.add(all, face)?;
+        if !removed.iter().any(|r| r.node == face.node) && matches!(model.surface(face), Some(Surface::Plane(_))) {
+            model.add(closed, face)?;
+        }
+    }
+    if model.unique_subshapes(closed, NodeKind::Face).is_empty() {
+        return Ok(false);
+    }
+    let slack = 1e-6 * thickness + 10.0 * crate::tolerance::LINEAR;
+    let mut corners = 0;
+    for vertex in model.unique_subshapes(hollowed, NodeKind::Vertex) {
+        // (A corner on the solid's faces, of a wall's outside or a rim: not the cavity's.)
+        if crate::distance::distance_within(model, vertex, all, 2.0 * slack)?.value <= slack {
+            continue;
+        }
+        corners += 1;
+        if crate::distance::distance_within(model, vertex, closed, thickness)?.value >= thickness - slack {
+            return Ok(false);
+        }
+    }
+    Ok(corners > 0)
+}
+
+/// [`thick_solid`] as made, its walls not yet checked.
+fn thick_solid_as_made(model: &mut Model, shape: Shape, removed: &[Shape], thickness: f64, join: Join) -> Result<Shape> {
     // A compound of one solid: that solid.
     let solids = model.unique_subshapes(shape, NodeKind::Solid);
     let shells = model.unique_subshapes(shape, NodeKind::Shell);
@@ -285,7 +384,7 @@ pub fn thick_solid(model: &mut Model, shape: Shape, removed: &[Shape], thickness
             .iter()
             .map(|f| corresponding_face(model, shape, baked, *f))
             .collect::<Result<_>>()?;
-        return thick_solid(model, baked, &removed, thickness, join);
+        return thick_solid_as_made(model, baked, &removed, thickness, join);
     }
     let kept: Vec<NodeId> = removed.iter().map(|f| f.node).collect();
     // (A partial solid of revolution whose side planes move off a pole or apex on its axis:
@@ -2117,5 +2216,56 @@ mod tests {
             let v = volume(&model, level).mass;
             assert!((v - want).abs() < 1e-6 * want, "{v}, not {want}");
         }
+    }
+
+    /// A box 6 x 4 x 3 hollowed inwards, open at the top: walls `t` thick leave the cavity
+    /// (6 − 2t)(4 − 2t)(3 − t); at t past 2 the side walls pass through each other, and past 3
+    /// every wall passes the one across: refused.
+    #[test]
+    fn a_shell_as_thick_as_the_part_is_refused() {
+        for (t, fits) in [(1.0, true), (1.9, true), (2.5, false), (3.5, false)] {
+            let mut model = Model::new();
+            let b = Cuboid::new(6.0, 4.0, 3.0).build(&mut model).unwrap();
+            let top = model.unique_subshapes(b, NodeKind::Face).into_iter().find(|&f| crate::properties::bounding_box(&model, f).min.z > 2.999).unwrap();
+            let result = thick_solid(&mut model, b, &[top], -t, Join::Intersection);
+            assert_eq!(result.is_ok(), fits, "{t}: {result:?}");
+            if let Ok(r) = result {
+                valid(&model, r);
+                let expected = 72.0 - (6.0 - 2.0 * t) * (4.0 - 2.0 * t) * (3.0 - t);
+                let v = volume(&model, r).mass;
+                assert!((v - expected).abs() < 1e-6 * expected, "{t}: {v}, not {expected}");
+            }
+        }
+    }
+
+    /// A step, its lower top 1 up and its upper 4 up (an L-shaped prism 3 deep, 10 x 3), the
+    /// lower top (2 wide) raised: short of the upper top the step rises (by 2 x 3 a unit); past
+    /// it, refused, as is the box's top pushed down through its bottom.
+    #[test]
+    fn a_face_moved_past_the_face_it_meets_is_refused() {
+        for (d, fits) in [(1.0, true), (2.5, true), (3.5, false)] {
+            let mut model = Model::new();
+            let p: Vec<Point> = [(0.0, 0.0), (4.0, 0.0), (4.0, 1.0), (2.0, 1.0), (2.0, 4.0), (0.0, 4.0)].iter().map(|&(x, z)| Point::new(x, 0.0, z)).collect();
+            let edges: Vec<Shape> = (0..p.len()).map(|i| crate::make::edge_between(&mut model, p[i], p[(i + 1) % p.len()]).unwrap()).collect();
+            let wire = crate::make::wire(&mut model, &edges).unwrap();
+            let face = crate::make::planar_face(&mut model, wire).unwrap();
+            let step = crate::sweep::extrude(&mut model, face, Vector::new(0.0, -3.0, 0.0)).unwrap().shape;
+            let lower = model.unique_subshapes(step, NodeKind::Face).into_iter().find(|&f| {
+                let b = crate::properties::bounding_box(&model, f);
+                (b.min.z - 1.0).abs() < 1e-6 && (b.max.z - 1.0).abs() < 1e-6 && b.min.x > 1.9
+            }).unwrap();
+            let result = shape_with_faces(&mut model, step, 0.0, &[(lower, d)], Join::Intersection);
+            assert_eq!(result.is_ok(), fits, "{d}: {result:?}");
+            if let Ok(r) = result {
+                valid(&model, r);
+                let expected = 3.0 * (4.0 * 1.0 + 2.0 * 3.0) + 2.0 * 3.0 * d;
+                let v = volume(&model, r).mass;
+                assert!((v - expected).abs() < 1e-6 * expected, "{d}: {v}, not {expected}");
+            }
+        }
+        let mut model = Model::new();
+        let b = Cuboid::new(2.0, 2.0, 2.0).build(&mut model).unwrap();
+        let top = model.unique_subshapes(b, NodeKind::Face).into_iter().find(|&f| crate::properties::bounding_box(&model, f).min.z > 1.999).unwrap();
+        assert!(shape_with_faces(&mut model, b, 0.0, &[(top, -2.5)], Join::Intersection).is_err());
     }
 }
