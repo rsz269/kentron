@@ -20,7 +20,8 @@ pub struct Cell {
 /// difference of them are those inside the right ones.
 ///
 /// Solid cells share the faces, edges and vertices where they meet, as do the halves of
-/// a solid split by a planar face (with the face's part between them); a face of a solid
+/// a solid split by a planar face (with the face's part between them: a whole plane,
+/// [`crate::make::whole_face`], splits it wherever it crosses it); a face of a solid
 /// split by later shapes is no longer shared with the cells that met it whole.
 #[doc(alias = "BOPAlgo_Builder")]
 #[doc(alias = "BOPAlgo_CellsBuilder")]
@@ -512,5 +513,117 @@ mod tests {
         let below = area(0.5) - area(-0.5) - 2.0;
         assert_eq!(parts.len(), 2, "{parts:?}");
         assert!((parts[0] - (3.0 - below)).abs() < 1e-6 && (parts[1] - below).abs() < 1e-6, "{parts:?} {below}");
+    }
+
+    /// The whole plane through `origin` square to `normal`: a face without edges on it.
+    fn whole_plane(model: &mut Model, origin: Point, normal: Vector) -> Shape {
+        use crate::geometry::surface::{Plane, Surface};
+        crate::make::whole_face(model, Surface::Plane(Plane::new(origin, crate::math::Direction::from_vector(normal)))).unwrap()
+    }
+
+    /// `solid` split by the whole plane through `origin` square to `normal`: the volumes of
+    /// its pieces on the normal's side, then of those on the other side, each sorted.
+    fn split_by_plane(model: &mut Model, solid: Shape, origin: Point, normal: Vector) -> (Vec<f64>, Vec<f64>) {
+        let plane = whole_plane(model, origin, normal);
+        let found = cells(model, &[solid, plane]).unwrap();
+        let (mut above, mut below) = (Vec::new(), Vec::new());
+        for c in found.iter().filter(|c| c.inside[0] && c.shape.kind() == NodeKind::Solid) {
+            let p = point_inside(model, c.shape).unwrap().unwrap();
+            let v = crate::properties::volume(model, c.shape).mass;
+            if (p - origin).dot(normal) > 0.0 { above.push(v) } else { below.push(v) }
+        }
+        above.sort_by(f64::total_cmp);
+        below.sort_by(f64::total_cmp);
+        (above, below)
+    }
+
+    fn close(found: &[f64], expected: &[f64]) -> bool {
+        found.len() == expected.len() && found.iter().zip(expected).all(|(a, b)| (a - b).abs() <= 1e-6 * (1.0 + b.abs()))
+    }
+
+    /// A box 2 x 2 x 2 split by the whole plane z = 1: halves of 4, and the plane's square
+    /// across it inside both.
+    #[test]
+    fn a_box_is_split_by_a_whole_plane() {
+        let mut model = Model::new();
+        let block = Cuboid::new(2.0, 2.0, 2.0).build(&mut model).unwrap();
+        let plane = whole_plane(&mut model, Point::new(0.0, 0.0, 1.0), Vector::new(0.0, 0.0, 1.0));
+        let found = cells(&mut model, &[block, plane]).unwrap();
+        let across: f64 = found.iter().filter(|c| c.inside == [true, true]).map(|c| crate::properties::area(&model, c.shape).mass).sum();
+        assert!((across - 4.0).abs() < 1e-9, "{across}");
+        let (above, below) = split_by_plane(&mut model, block, Point::new(0.0, 0.0, 1.0), Vector::new(0.0, 0.0, 1.0));
+        assert!(close(&above, &[4.0]) && close(&below, &[4.0]), "{above:?} {below:?}");
+    }
+
+    /// A cylinder (radius 1, height 2) split by whole planes along its axis (halves of π)
+    /// and across it at z = 0.5 (π/2 below, 3π/2 above).
+    #[test]
+    fn a_cylinder_is_split_along_and_across() {
+        use std::f64::consts::PI;
+        let mut model = Model::new();
+        let rod = crate::primitives::Cylinder::new(1.0, 2.0).build(&mut model).unwrap();
+        let (a, b) = split_by_plane(&mut model, rod, Point::new(0.0, 0.0, 1.0), Vector::new(1.0, 1.0, 0.0));
+        assert!(close(&a, &[PI]) && close(&b, &[PI]), "{a:?} {b:?}");
+        let (a, b) = split_by_plane(&mut model, rod, Point::new(0.0, 0.0, 0.5), Vector::new(0.0, 0.0, 1.0));
+        assert!(close(&a, &[1.5 * PI]) && close(&b, &[0.5 * PI]), "{a:?} {b:?}");
+    }
+
+    /// A ball of radius 1 split by a whole plane 0.4 from its centre, square to (1, 2, 2):
+    /// the cap of height h = 0.6 beyond it, πh²(3 − h)/3, and the rest.
+    #[test]
+    fn a_ball_is_split_off_centre() {
+        use std::f64::consts::PI;
+        let mut model = Model::new();
+        let ball = crate::primitives::Sphere::new(1.0).build(&mut model).unwrap();
+        let n = Vector::new(1.0, 2.0, 2.0) * (1.0 / 3.0);
+        let h: f64 = 0.6;
+        let cap = PI * h * h * (3.0 - h) / 3.0;
+        let (a, b) = split_by_plane(&mut model, ball, Point::ORIGIN + n * (1.0 - h), n);
+        assert!(close(&a, &[cap]) && close(&b, &[4.0 * PI / 3.0 - cap]), "{a:?} {b:?}");
+    }
+
+    /// Whole planes missing a box, or through one of its faces: it is left whole, on one
+    /// side, the other side empty.
+    #[test]
+    fn a_plane_missing_a_box_or_along_its_face_leaves_it_whole() {
+        let mut model = Model::new();
+        let block = Cuboid::new(2.0, 2.0, 2.0).build(&mut model).unwrap();
+        let (a, b) = split_by_plane(&mut model, block, Point::new(0.0, 0.0, 3.0), Vector::new(0.0, 0.0, 1.0));
+        assert!(a.is_empty() && close(&b, &[8.0]), "{a:?} {b:?}");
+        let (a, b) = split_by_plane(&mut model, block, Point::new(0.0, 0.0, 2.0), Vector::new(0.0, 0.0, -1.0));
+        assert!(close(&a, &[8.0]) && b.is_empty(), "{a:?} {b:?}");
+        let (a, b) = split_by_plane(&mut model, block, Point::new(0.0, 0.0, 0.0), Vector::new(0.0, 0.0, 1.0));
+        assert!(close(&a, &[8.0]) && b.is_empty(), "{a:?} {b:?}");
+    }
+
+    /// A U (a block 3 x 1 x 3 less a slot 1 wide, 2 deep) split across both arms at z = 2:
+    /// each arm's top (1), and the rest below (5).
+    #[test]
+    fn a_u_is_split_into_three() {
+        let mut model = Model::new();
+        let block = Cuboid::new(3.0, 1.0, 3.0).build(&mut model).unwrap();
+        let slot = Cuboid::from_corners(Point::new(1.0, -1.0, 1.0), Point::new(2.0, 2.0, 4.0)).build(&mut model).unwrap();
+        let u = crate::boolean::difference(&mut model, block, slot).unwrap();
+        let (a, b) = split_by_plane(&mut model, u, Point::new(0.0, 0.0, 2.0), Vector::new(0.0, 0.0, 1.0));
+        assert!(close(&a, &[1.0, 1.0]) && close(&b, &[5.0]), "{a:?} {b:?}");
+    }
+
+    /// A box 2 x 2 x 2 with the half-space above the whole plane z = 1: their common part
+    /// (its area 16, capped by the plane's square), the box less it, and the box's cells,
+    /// each a half of 4.
+    #[test]
+    fn a_box_with_a_half_space_of_a_whole_plane() {
+        let mut model = Model::new();
+        let block = Cuboid::new(2.0, 2.0, 2.0).build(&mut model).unwrap();
+        let plane = whole_plane(&mut model, Point::new(0.0, 0.0, 1.0), Vector::new(0.0, 0.0, 1.0));
+        let above = crate::primitives::half_space(&mut model, plane, Point::new(0.0, 0.0, 5.0)).unwrap();
+        let common = crate::boolean::intersection(&mut model, block, above).unwrap();
+        assert!((crate::properties::volume(&model, common).mass - 4.0).abs() < 1e-9);
+        assert!((crate::properties::area(&model, common).mass - 16.0).abs() < 1e-9);
+        let rest = crate::boolean::difference(&mut model, block, above).unwrap();
+        assert!((crate::properties::volume(&model, rest).mass - 4.0).abs() < 1e-9);
+        let found = cells(&mut model, &[block, above]).unwrap();
+        let volume = |inside: [bool; 2]| -> Vec<f64> { found.iter().filter(|c| c.inside == inside).map(|c| crate::properties::volume(&model, c.shape).mass).collect() };
+        assert!(close(&volume([true, true]), &[4.0]) && close(&volume([true, false]), &[4.0]));
     }
 }

@@ -481,6 +481,16 @@ pub fn face_on_surface(model: &mut Model, surface: Surface) -> Result<Shape> {
     face_on_domain(model, surface, u1, u2, v1, v2)
 }
 
+/// A face on the whole of `surface`, without edges: on a plane, the whole plane (as
+/// `BRepBuilderAPI_MakeFace(gp_Pln)` makes, its bounds infinite). As a tool of
+/// [`crate::boolean::cells`] it splits a solid along where the surface crosses it.
+#[doc(alias = "BRepBuilderAPI_MakeFace")]
+pub fn whole_face(model: &mut Model, surface: Surface) -> Result<Shape> {
+    let face = model.new_empty(NodeKind::Face);
+    model.set_face_surface(face, surface, tolerance::LINEAR)?;
+    Ok(face)
+}
+
 /// A face on the rectangle `[u1, u2] × [v1, v2]` of `surface`'s parameters, bounded by the
 /// iso-curves along its sides. A side spanning a whole period of a periodic direction meets
 /// the opposite side in a seam, and a side collapsed to a point (a pole) is a degenerate

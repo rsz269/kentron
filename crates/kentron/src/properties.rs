@@ -1096,20 +1096,19 @@ fn placed_box(b: &BoundingBox, t: &crate::math::Transform) -> BoundingBox {
     if t.is_identity() {
         return *b;
     }
-    BoundingBox::from_points((0..8).map(|i| {
-        Point::new(
-            if i & 1 == 0 { b.min.x } else { b.max.x },
-            if i & 2 == 0 { b.min.y } else { b.max.y },
-            if i & 4 == 0 { b.min.z } else { b.max.z },
-        )
-        .transformed(t)
-    }))
+    b.transformed(t)
 }
 
 /// [`face_box`] of an unplaced face.
 fn local_face_box(model: &Model, f: Shape) -> Option<BoundingBox> {
     let surface = model.surface(f)?;
     let surface = surface.transformed(&f.placement);
+    // A face without edges: its surface over its natural bounds, open where those are
+    // infinite (a whole plane: on the sides it runs out to).
+    if model.explore(Shape { orientation: Orientation::Forward, ..f }, NodeKind::Edge).next().is_none() {
+        let (u1, u2, v1, v2) = model.face_uv_bounds(f);
+        return Some(crate::geometry::bounds::surface_within(&surface, u1, u2, v1, v2, model.tolerance(f)));
+    }
     if matches!(surface, Surface::Plane(_)) {
         return None;
     }

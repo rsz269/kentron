@@ -255,12 +255,63 @@ impl BoundingBox {
 }
 
 impl Transformable for BoundingBox {
-    /// The box of the transformed box (of its eight corners).
+    /// The box of the transformed box (of its eight corners). An open side stays open where
+    /// a translation moves it; turned, it opens the sides its direction then points to.
+    #[doc(alias = "Bnd_Box::Transformed")]
     fn transformed(&self, t: &Transform) -> Self {
         if self.is_empty() {
             return *self;
         }
-        BoundingBox::from_points(corners(self).into_iter().map(|p| p.transformed(t)))
+        let open = [self.min.x, self.min.y, self.min.z, self.max.x, self.max.y, self.max.z].iter().any(|c| !c.is_finite());
+        if !open {
+            return BoundingBox::from_points(corners(self).into_iter().map(|p| p.transformed(t)));
+        }
+        if *t == Transform::translation(t.translation_part()) {
+            // (Infinite sides stay infinite.)
+            let d = t.translation_part();
+            return BoundingBox::new(self.min + d, self.max + d);
+        }
+        // The finite part (an open side at the other one, or at 0 where both are open) by
+        // its corners; then the open sides' directions, turned.
+        let finite = |lo: f64, hi: f64| match (lo.is_finite(), hi.is_finite()) {
+            (true, true) => (lo, hi),
+            (true, false) => (lo, lo),
+            (false, true) => (hi, hi),
+            (false, false) => (0.0, 0.0),
+        };
+        let (x, y, z) = (finite(self.min.x, self.max.x), finite(self.min.y, self.max.y), finite(self.min.z, self.max.z));
+        let part = BoundingBox::new(Point::new(x.0, y.0, z.0), Point::new(x.1, y.1, z.1));
+        let mut b = BoundingBox::from_points(corners(&part).into_iter().map(|p| p.transformed(t)));
+        let sides = [
+            (self.min.x, Vector::new(-1.0, 0.0, 0.0)),
+            (self.max.x, Vector::new(1.0, 0.0, 0.0)),
+            (self.min.y, Vector::new(0.0, -1.0, 0.0)),
+            (self.max.y, Vector::new(0.0, 1.0, 0.0)),
+            (self.min.z, Vector::new(0.0, 0.0, -1.0)),
+            (self.max.z, Vector::new(0.0, 0.0, 1.0)),
+        ];
+        for (side, direction) in sides {
+            if side.is_finite() {
+                continue;
+            }
+            let d = direction.transformed(t);
+            let d = d / d.length();
+            // (As `Bnd_Box::Add(gp_Dir)`: beyond `RealEpsilon`.)
+            let eps = f64::EPSILON;
+            for (k, c) in [d.x, d.y, d.z].into_iter().enumerate() {
+                let (lo, hi) = match k {
+                    0 => (&mut b.min.x, &mut b.max.x),
+                    1 => (&mut b.min.y, &mut b.max.y),
+                    _ => (&mut b.min.z, &mut b.max.z),
+                };
+                if c < -eps {
+                    *lo = f64::NEG_INFINITY;
+                } else if c > eps {
+                    *hi = f64::INFINITY;
+                }
+            }
+        }
+        b
     }
 }
 

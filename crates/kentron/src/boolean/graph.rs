@@ -1042,7 +1042,14 @@ impl Graph {
         for u in far_uses {
             *uses.entry(u).or_default() += 1;
         }
-        self.open[operand] = uses.values().any(|&n| n < 2);
+        // (So does an infinite face, without a boundary on a surface running out to
+        // infinity, as `IntTools_Context::IsInfiniteFace` tells by its open box: a whole
+        // plane.)
+        let infinite = self.faces.iter().filter(|f| f.operand == operand && f.solid && f.boundary.is_empty()).any(|f| {
+            let b = crate::geometry::bounds::surface(&f.surface, 0.0);
+            [b.min.x, b.min.y, b.min.z, b.max.x, b.max.y, b.max.z].iter().any(|c| c.is_infinite())
+        });
+        self.open[operand] = infinite || uses.values().any(|&n| n < 2);
         Ok(())
     }
 

@@ -1259,6 +1259,30 @@ def figure_copies(rebuild):
     return figure
 
 
+def figure_whole_plane(rebuild):
+    """A diagram: the parts of a whole plane (a face without edges) crossing a box."""
+    width, height = (WIDTH - 2 * MARGIN - GAP) / 2, 200
+    figure = Figure(WIDTH, TOP + height + 40, "A whole plane crossing a box, split by it: OCCT keeps both parts of the plane, the square inside the box and the rest of the plane round it; kentron builds only the square.")
+    for column, title, note, verdict in (
+            (0, "OCCT: both parts of the plane", "the square, and the plane with a square hole", ("good", "the parts of the plane make up the whole plane")),
+            (1, "kentron: the square only", "the plane round it, bounded by no outer edge, is dropped", ("bad", "what lies outside the box has no face on the plane"))):
+        x, y = MARGIN + column * (width + GAP), TOP
+        # The plane seen from above, running out past the panel; the box's section a square.
+        cx, cy, half = width / 2, height / 2, 46
+        square = [(cx - half, cy - half), (cx + half, cy - half), (cx + half, cy + half), (cx - half, cy + half)]
+        drawing = '<path class="wash second" d="%s"/>\n' % path_data(square, True)
+        drawing += '<path class="ink" d="%s"/>\n' % path_data(square, True)
+        outer = [(-10, -10), (width + 10, -10), (width + 10, height + 10), (-10, height + 10)]
+        if column == 0:
+            drawing = '<path class="wash first" fill-rule="evenodd" d="%s %s"/>\n' % (path_data(outer, True), path_data(square[::-1], True)) + drawing
+        else:
+            drawing = '<path class="ghost" d="%s"/>\n' % path_data([(14, 14), (width - 14, 14), (width - 14, height - 14), (14, height - 14)], True) + drawing
+        figure.panel(x, y, width, height, drawing, title, note, verdict)
+        figure.text(x + cx, y + cy + 4, "inside the box", "small", "middle")
+        figure.text(x + 22, y + 32, "the rest of the plane" if column == 0 else "not built", "note small")
+    return figure
+
+
 FIGURES = {name[7:]: f for name, f in list(globals().items()) if name.startswith("figure_")}
 
 

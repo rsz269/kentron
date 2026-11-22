@@ -286,6 +286,33 @@ boolean may not find them on the surface.
   OCCT's tolerance checks in bug32945 and buc60555_1, whose real gaps are larger.
 - **Needed:** tighter section fitting, so that the true deviation is small.
 
+### The part of a whole plane outside what it meets
+
+*Found 2026-11-22.*
+
+![A diagram: OCCT keeps both parts of a whole plane crossing a box, the square inside it and the plane round it; kentron builds only the square](known-gaps/whole-plane.svg)
+
+A face without edges on an unbounded surface (a whole plane, as
+`BRepBuilderAPI_MakeFace(gp_Pln)` or `make::whole_face` makes), split by a section loop,
+has a bounded part inside the loop and an unbounded part outside it: the plane with a
+hole, bounded by no outer edge. `BOPAlgo_BuilderFace::PerformAreas` makes the second from
+the loops left over as holes ("unused holes" added to a face on the whole surface, where
+the face's box is open). kentron's `split::split_face` builds regions
+only from an outer loop, so the hole loops are dropped and only the part inside is built.
+Splitting a solid by such a plane, and the common part and difference of a solid and the
+half-space of one, are right (they use only the part inside); what keeps the outside part
+is not.
+
+- **Repro:** `cells(&[block, half_space(whole plane)])` for a 2 x 2 x 2 box and the plane
+  z = 1 (see `a_box_with_a_half_space_of_a_whole_plane` in `boolean/cells.rs`): the cell
+  of the half-space outside the box comes out with no face on the plane, its volume -3.85.
+  `cells(&[block, whole plane])` has no cell for the plane outside the box. A union of the
+  box and the half-space is broken the same way, and a whole plane met by nothing (no
+  loops at all, which `PerformAreas` keeps whole) is dropped.
+- **Needed:** a region of holes only (no outer loop) on an infinite face, through
+  `split_face`, the regions' interior points (outside every hole) and the faces built from
+  them.
+
 ## pykentron
 
 ### Solids from placed shells keep copies of their faces

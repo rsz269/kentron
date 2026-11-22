@@ -62,12 +62,10 @@ tests/boolean/bopcommon_2d/N2
 tests/boolean/bopcommon_complex/H8
 tests/boolean/bopcommon_complex/J1
 tests/boolean/bopcommon_complex/K2
-tests/boolean/bopcommon_complex/K3
 tests/boolean/bopcut_2d/D5
 tests/boolean/bopcut_complex/E5
 tests/boolean/bopcut_complex/H8
 tests/boolean/bopcut_complex/I8
-tests/boolean/bopcut_complex/K9
 tests/boolean/bopfuse_complex/D4
 tests/boolean/bopfuse_complex/D5
 tests/boolean/bopfuse_complex/H1
