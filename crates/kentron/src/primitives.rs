@@ -1089,6 +1089,49 @@ mod tests {
     }
 
     #[test]
+    fn slab_area_over_uneven_knots() {
+        // The sides' areas are the integrals of the boundary curves' heights (Σ h ∫N times
+        // the side's length), the bottom's the rectangle's; the top's
+        // ∫∫ |S_u × S_v| by a 10-point rule on pieces of the knot spans.
+        let (su, sv) = (8.0, 5.0);
+        let (ku, kv) = (clamped(&[0.25, 0.6]), clamped(&[0.1, 0.45, 0.8]));
+        let (nu, nv) = (ku.len() - 4, kv.len() - 4);
+        let heights = bumpy(nu, nv);
+        let (wu, wv) = (basis_integrals(&ku), basis_integrals(&kv));
+        let sides = su * (0..nu).map(|i| (heights[i][0] + heights[i][nv - 1]) * wu[i]).sum::<f64>()
+            + sv * (0..nv).map(|j| (heights[0][j] + heights[nu - 1][j]) * wv[j]).sum::<f64>();
+        let mut model = Model::new();
+        let slab = Slab::new(su, sv, ku.clone(), kv.clone(), heights).build(&mut model).unwrap();
+        let top = model.explore(slab, NodeKind::Face).find(|&f| matches!(model.surface(f), Some(Surface::BSpline(_)))).unwrap();
+        let Some(Surface::BSpline(surface)) = model.surface(top) else { unreachable!() };
+        // (Gauss–Legendre on 10 points, from its roots' halves.)
+        const X: [f64; 5] = [0.148_874_338_981_631_2, 0.433_395_394_129_247_2, 0.679_409_568_299_024_4, 0.865_063_366_688_984_5, 0.973_906_528_517_171_7];
+        const W: [f64; 5] = [0.295_524_224_714_752_9, 0.269_266_719_309_996_4, 0.219_086_362_515_982_1, 0.149_451_349_150_580_6, 0.066_671_344_308_688_1];
+        let rule: Vec<(f64, f64)> = X.iter().zip(W).flat_map(|(&x, w)| [(-x, w), (x, w)]).collect();
+        // (Each knot span in 16 pieces: steep, the top's integrand is far from a polynomial
+        // across a span, and 10 points on each span leave it 5e-5 short.)
+        let nodes = |knots: &[f64]| -> Vec<(f64, f64)> {
+            let ends: Vec<f64> = knots.windows(2).filter(|w| w[1] > w[0]).flat_map(|w| (0..16).map(move |k| w[0] + (w[1] - w[0]) * k as f64 / 16.0)).chain([1.0]).collect();
+            ends.windows(2).flat_map(|w| rule.iter().map(move |&(x, wt)| (0.5 * (w[0] + w[1]) + 0.5 * (w[1] - w[0]) * x, 0.5 * (w[1] - w[0]) * wt))).collect()
+        };
+        let mut top_area = 0.0;
+        for &(u, a) in &nodes(&ku) {
+            for &(v, b) in &nodes(&kv) {
+                let (_, du, dv) = surface.d1(u, v);
+                top_area += a * b * du.cross(dv).length();
+            }
+        }
+        let expected = su * sv + sides + top_area;
+        // Integrated to 1e-9 as OCCT does, the inner integrals along u are not refined (only
+        // the pieces along the boundary are): steep across its spans, the top comes out
+        // some 6e-6 short of it, the error estimated below 1e-9.
+        let (area, error) = crate::properties::area_within(&model, slab, 1e-9);
+        let area = area.mass;
+        assert!((area - expected).abs() < 1e-5 * expected, "area {area} != {expected}, estimated error {error}");
+        assert!(error < 1e-9, "estimated error {error}");
+    }
+
+    #[test]
     fn slab_with_a_bump_in_the_middle() {
         // A bicubic copy of the API's example: heights 5 with a 7 in the middle.
         let knots = clamped(&[0.5]);
