@@ -4,11 +4,13 @@ mod ball;
 mod exact;
 mod corner2d;
 mod runover;
+mod sections;
 mod setback;
 #[cfg(test)]
 mod setback_tests;
 
 pub use corner2d::{chamfer_2d, fillet_2d, fillet_wire_2d, Corner2d};
+pub use sections::{fillet_conic, fillet_g2};
 pub use setback::fillet_setback;
 
 use crate::error::{Error, Result};
