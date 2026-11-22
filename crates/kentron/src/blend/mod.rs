@@ -319,6 +319,13 @@ fn sharp<T: Copy>(model: &Model, shape: Shape, edges: &[T], edge: impl Fn(&T) ->
 
 /// [`fillet_edges`] of a shape with solids.
 fn fillet_solid_edges(model: &mut Model, shape: Shape, edges: &[(Shape, f64)]) -> Result<Shape> {
+    for &(edge, radius) in edges {
+        if let Some(corner) = Corner::of(model, shape, edge, false)? {
+            if ball_cannot_fit(model, shape, &corner, &|_| radius)? {
+                return Err(Error::InvalidInput(format!("a fillet of radius {radius} does not fit between the faces at its edge")));
+            }
+        }
+    }
     // (Edges ending on fillets made before, as a pocket's rim rounded one edge at a time:
     // those fillets undone and made again with the edges, meeting them as OCCT's do.)
     let found = with_earlier_fillets(model, shape, edges, false)?;
@@ -1869,6 +1876,88 @@ fn rolls_off_among(model: &Model, faces: &[Shape], corner: &Corner, radius: f64,
     runover::rolls_off(model, [a, b], corner.tangent, length, [t1, t2], [corner.origin, corner.end], known, narrowing)
 }
 
+/// Whether the ball of the fillet along `corner` (straight and convex), of radius `radius(s)`
+/// at the fraction `s` of the edge's length from its start, cannot fit between the edge's
+/// faces of `shape`. A fillet's ball must touch each face on the face. It cannot where,
+/// somewhere along the edge (but for its very ends), it would touch one off its bounds with
+/// nothing of that face past the contact (the face narrower than the ball's reach; not a
+/// groove the ball passes over, which OCCT rounds across, as blend simple Y2) while its
+/// centre lies outside the solid: the ball then touches the faces from beyond the material,
+/// as round an edge of a box with a radius wider than one of the faces there. OCCT's fillet
+/// fails there (`StdFail_NotDone`: on a 5.3 x 5.33 box edge it rounds r 5.29 and refuses
+/// 5.31). A ball rolling on over a narrow face it swallows keeps its centre within the solid,
+/// and is left to the run-over fillet. (Not a port of OCCT's walking: the fillet's own
+/// condition, its contacts on its faces, told from the ball's sections.)
+fn ball_cannot_fit(model: &Model, shape: Shape, corner: &Corner, radius: &dyn Fn(f64) -> f64) -> Result<bool> {
+    let Path::Line { length } = corner.path else { return Ok(false) };
+    if !corner.convex {
+        return Ok(false);
+    }
+    let faces = model.unique_subshapes(shape, NodeKind::Face);
+    let find = |node: NodeId| faces.iter().copied().find(|f| f.node == node);
+    let (Some(a), Some(b)) = (find(corner.faces[0].0), find(corner.faces[1].0)) else { return Ok(false) };
+    let known = runover::KnownFaces::default();
+    let mut solid = None;
+    const SAMPLES: usize = 16;
+    for i in 0..=SAMPLES {
+        let f = 0.02 + 0.96 * i as f64 / SAMPLES as f64;
+        let Ok((center, t1, t2)) = corner.ball(radius(f)) else { continue };
+        let along = corner.tangent.normalized() * (f * length);
+        // (A contact off its face with nothing of the face past it: the face too narrow for
+        // the ball there, not a groove or hole the ball passes over.)
+        let off = [(a, t1), (b, t2)].into_iter().any(|(face, t)| {
+            runover::off_face(model, face, t + along, length, [corner.origin, corner.end], &known, false) && !runover::face_beyond(model, face, t + along, t - corner.origin, &known)
+        });
+        if !off {
+            continue;
+        }
+        let classifier = match &solid {
+            Some(c) => c,
+            None => solid.insert(boolean::PointClassifier::new(model, shape)?),
+        };
+        if classifier.locate(center + along) == boolean::PointLocation::Outside {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Whether the chamfer along `corner` (straight), cut `distances` back along its two faces,
+/// cuts a face of `shape` off its bounds into nothing: somewhere along the edge (but for its
+/// very ends, and where a face narrows to the edge's end) a line the cut runs through lies off
+/// its face and outside the solid, beyond the face's far edge, as along an edge of a box
+/// chamfered deeper than a face there is wide. Each cut must stay on its faces; the chamfer
+/// has no answer otherwise, and OCCT's fails there too, its walking finding no section. (A
+/// line off its face but within the solid, as where the face narrows toward the edge's end
+/// and the cut runs on into the face beyond, is left to the chamfer as OCCT makes it. This is
+/// the chamfer's own condition, not a port of that walking.)
+fn cut_off_faces(model: &Model, shape: Shape, corner: &Corner, distances: [f64; 2]) -> Result<bool> {
+    let Path::Line { length } = corner.path else { return Ok(false) };
+    let faces = model.unique_subshapes(shape, NodeKind::Face);
+    let find = |node: NodeId| faces.iter().copied().find(|f| f.node == node);
+    let (Some(a), Some(b)) = (find(corner.faces[0].0), find(corner.faces[1].0)) else { return Ok(false) };
+    let feet = [corner.chamfer_foot(0, distances[0])?, corner.chamfer_foot(1, distances[1])?];
+    let known = runover::KnownFaces::default();
+    let mut solid = None;
+    const SAMPLES: usize = 16;
+    for i in 0..=SAMPLES {
+        let along = corner.tangent.normalized() * (length * (0.02 + 0.96 * i as f64 / SAMPLES as f64));
+        for (face, t) in [(a, feet[0]), (b, feet[1])] {
+            if !runover::off_face(model, face, t + along, length, [corner.origin, corner.end], &known, false) {
+                continue;
+            }
+            let classifier = match &solid {
+                Some(c) => c,
+                None => solid.insert(boolean::PointClassifier::new(model, shape)?),
+            };
+            if classifier.locate(t + along) == boolean::PointLocation::Outside {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
 /// `op` on `shape` where it has solids; on the solids closed shells bound, given back as
 /// shells; and on an open shell (alone) as the solid it bounds with its offset back by
 /// twice `reach` (the largest radius or distance) and walls between the two's free edges,
@@ -2543,7 +2632,11 @@ fn chamfer_solid_edges(model: &mut Model, shape: Shape, edges: &[ChamferedEdge])
                 (d, corner.angle_foot(first, d, angle)?.distance(corner.origin))
             }
         };
-        corners.push((corner, if first_on_second { [d2, d1] } else { [d1, d2] }));
+        let distances = if first_on_second { [d2, d1] } else { [d1, d2] };
+        if cut_off_faces(model, shape, &corner, distances)? {
+            return Err(Error::InvalidInput(format!("a chamfer of {d1} and {d2} cuts its faces off their bounds")));
+        }
+        corners.push((corner, distances));
     }
     let sized: Vec<(Corner, f64)> = corners.iter().map(|(c, d)| (c.clone(), d[0].max(d[1]))).collect();
     let mut mitred = mitres(&sized);
@@ -3421,6 +3514,13 @@ fn fillet_solid_evolving(model: &mut Model, shape: Shape, edges: &[(Shape, &dyn 
     let placement = shape.placement;
     if edges.iter().any(|(e, _)| e.placement != placement) {
         todo!("rolling-ball fillets of edges placed apart from their shape");
+    }
+    for &(edge, law) in edges {
+        if let Some(corner) = Corner::of(model, shape, edge, false)? {
+            if ball_cannot_fit(model, shape, &corner, law)? {
+                return Err(Error::InvalidInput("a fillet's ball does not fit between the faces at its edge".into()));
+            }
+        }
     }
     let unscale = 1.0 / placement.scale_factor().abs();
     let radii: Vec<Box<dyn Fn(f64) -> f64 + '_>> = edges.iter().map(|&(_, law)| Box::new(move |s: f64| law(s) * unscale) as Box<dyn Fn(f64) -> f64>).collect();
@@ -7057,5 +7157,98 @@ mod evolving_chamfer_tests {
             assert!((law.at(s) - d).abs() < 1e-15, "{s}: {}", law.at(s));
         }
         assert!(DistanceLaw::new(&[(0.0, 1.0), (1.0, -1.0)]).is_err());
+    }
+
+    /// The box 5 x 4 x 6 and its edges: the one along z at (5, 4), and those along x and y
+    /// at the top corner (5, 4, 6).
+    fn box_and_corner_edges(model: &mut Model) -> (Shape, [Shape; 3]) {
+        let b = Cuboid::new(5.0, 4.0, 6.0).build(model).unwrap();
+        let along = |model: &Model, axis: usize| {
+            model.unique_subshapes(b, NodeKind::Edge).into_iter().find(|&e| {
+                let (p, q) = model.edge_vertices(e);
+                let (p, q) = (model.point(p), model.point(q));
+                let c = [5.0, 4.0, 6.0];
+                let at = |p: Point, k: usize| [p.x, p.y, p.z][k];
+                (0..3).all(|k| k == axis || (at(p, k) - c[k]).abs() < 1e-9 && (at(q, k) - c[k]).abs() < 1e-9)
+            }).unwrap()
+        };
+        let edges = [along(model, 0), along(model, 1), along(model, 2)];
+        (b, edges)
+    }
+
+    /// Round the edge of a box between faces 4 and 5 wide, a ball of radius `r` touches each
+    /// face `r` from the edge: up to 4 it fits (the box less the corner's square less its
+    /// quarter disc, along the edge's 6), past it the ball's contact leaves the face 4 wide
+    /// with its centre outside the box, and no fillet is made (as OCCT makes none); also
+    /// radius 100 (which once rounded the box away to nothing).
+    #[test]
+    fn a_fillet_wider_than_a_face_at_its_edge_is_refused() {
+        for (radius, fits) in [(2.0, true), (3.99, true), (4.01, false), (4.5, false), (100.0, false)] {
+            let mut model = Model::new();
+            let (b, [_, _, edge]) = box_and_corner_edges(&mut model);
+            let result = fillet(&mut model, b, &[edge], radius);
+            assert_eq!(result.is_ok(), fits, "radius {radius}: {result:?}");
+            if let Ok(r) = result {
+                let expected = 120.0 - (radius * radius - PI * radius * radius / 4.0) * 6.0;
+                let v = properties::volume(&model, r).mass;
+                assert!((v - expected).abs() <= 1e-6 * expected, "radius {radius}: {v} against {expected}");
+            }
+        }
+    }
+
+    /// A ball growing evenly along the edge from 0.5 to `r`: refused where it outgrows the
+    /// face 4 wide before the edge's end.
+    #[test]
+    fn a_variable_fillet_outgrowing_a_face_is_refused() {
+        for (r, fits) in [(3.5, true), (4.5, false)] {
+            let mut model = Model::new();
+            let (b, [_, _, edge]) = box_and_corner_edges(&mut model);
+            let result = fillet_linear(&mut model, b, &[(edge, 0.5, r)]);
+            assert_eq!(result.is_ok(), fits, "{r}: {result:?}");
+        }
+    }
+
+    /// Three edges meeting at a corner rounded at once, one of them by a ball too wide for the
+    /// faces 4 and 6 wide at it: refused.
+    #[test]
+    fn one_radius_too_big_of_several_is_refused() {
+        let mut model = Model::new();
+        let (b, [x, y, z]) = box_and_corner_edges(&mut model);
+        assert!(fillet_edges(&mut model, b, &[(x, 0.5), (y, 0.5), (z, 0.5)]).is_ok());
+        let (b, [x, y, z]) = box_and_corner_edges(&mut model);
+        // (The edge along x lies between the faces 4 and 6 wide.)
+        assert!(fillet_edges(&mut model, b, &[(x, 4.2), (y, 0.5), (z, 0.5)]).is_err());
+    }
+
+    /// A chamfer cutting back `d` along both faces of the edge between faces 4 and 5 wide: up
+    /// to 4 the box less the triangle d²/2 along the edge's 6; past it, the cut runs off the
+    /// face 4 wide and is refused. So with two distances, the one along the face 4 wide past
+    /// it.
+    #[test]
+    fn a_chamfer_deeper_than_its_face_is_refused() {
+        for (d, fits) in [(2.0, true), (3.99, true), (4.01, false), (9.0, false)] {
+            let mut model = Model::new();
+            let (b, [_, _, edge]) = box_and_corner_edges(&mut model);
+            let result = chamfer(&mut model, b, &[edge], d);
+            assert_eq!(result.is_ok(), fits, "{d}: {result:?}");
+            if let Ok(r) = result {
+                let expected = 120.0 - d * d / 2.0 * 6.0;
+                let v = properties::volume(&model, r).mass;
+                assert!((v - expected).abs() <= 1e-6 * expected, "{d}: {v} against {expected}");
+            }
+        }
+        // (The face x = 5 is 4 wide, the face y = 4 is 5 wide.)
+        for (d1, d2, fits) in [(3.0, 4.5, true), (4.5, 3.0, false)] {
+            let mut model = Model::new();
+            let (b, [_, _, edge]) = box_and_corner_edges(&mut model);
+            let face = model.unique_subshapes(b, NodeKind::Face).into_iter().find(|&f| matches!(model.surface(f), Some(Surface::Plane(p)) if Vector::from(p.normal()).x.abs() > 0.5 && (Point::new(5.0, 0.0, 0.0) - p.origin()).dot(Vector::from(p.normal())).abs() < 1e-9)).unwrap();
+            let result = chamfer_edges(&mut model, b, &[ChamferedEdge { edge, size: ChamferSize::Distances(d1, d2), face: Some(face) }]);
+            assert_eq!(result.is_ok(), fits, "{d1} {d2}: {result:?}");
+            if let Ok(r) = result {
+                let expected = 120.0 - d1 * d2 / 2.0 * 6.0;
+                let v = properties::volume(&model, r).mass;
+                assert!((v - expected).abs() <= 1e-6 * expected, "{d1} {d2}: {v} against {expected}");
+            }
+        }
     }
 }

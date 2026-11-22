@@ -635,6 +635,36 @@ pub(super) fn needed_along(model: &Model, shape: Shape, edge: Shape, radius: &dy
     inner.iter().any(|s| s.iter().any(|&support| support != (0, None)))
 }
 
+/// Whether `face` goes on past `p`, a point of its surface off it, along `direction`: whether
+/// the line from `p` that way (in the face's parameters, as it starts) enters the face, its
+/// boundary crossed somewhere past `p`. (A contact off its face over a groove or a hole has
+/// the face again beyond it; one past the face's far side has nothing of it there.)
+pub(super) fn face_beyond(model: &Model, face: Shape, p: Point, direction: Vector, known: &KnownFaces) -> bool {
+    let Some(bounded) = known.get(model, face) else { return true };
+    let (u0, v0, _) = nearest_on_surface(p, &bounded.surface, None);
+    let (u1, v1, _) = nearest_on_surface(p + direction.normalized() * 1e-3, &bounded.surface, Some((u0, v0)));
+    let (du, dv) = (u1 - u0, v1 - v0);
+    if !(du.hypot(dv) > 0.0) {
+        return true;
+    }
+    // (Each side of the loops crossed by the ray from (u0, v0) along (du, dv).)
+    let cross = |ax: f64, ay: f64, bx: f64, by: f64| ax * by - ay * bx;
+    bounded.loops.iter().any(|l| {
+        l.windows(2).any(|w| {
+            let (a, b) = (w[0], w[1]);
+            let (ex, ey) = (b.x - a.x, b.y - a.y);
+            let den = cross(du, dv, ex, ey);
+            if den == 0.0 {
+                return false;
+            }
+            let (qx, qy) = (a.x - u0, a.y - v0);
+            let t = cross(qx, qy, ex, ey) / den;
+            let s = cross(qx, qy, du, dv) / den;
+            t > 0.0 && (0.0..=1.0).contains(&s)
+        })
+    })
+}
+
 /// The largest of `radius(s)` along an edge (`s` from 0 to 1), sampled.
 fn largest(radius: &dyn Fn(f64) -> f64) -> f64 {
     (0..=32).map(|i| radius(i as f64 / 32.0)).fold(0.0, f64::max)
@@ -1319,22 +1349,29 @@ impl KnownFaces {
 pub(super) fn rolls_off(model: &Model, faces: [Shape; 2], tangent: Vector, length: f64, contacts: [Point; 2], ends: [Point; 2], known: &KnownFaces, narrowing: bool) -> bool {
     const SAMPLES: usize = 32;
     faces.iter().zip(contacts).any(|(&face, contact)| {
-        let Some(bounded) = known.get(model, face) else { return false };
-        // (Whether the face's boundary edge nearest `p` runs from one of the edge's ends.)
-        let from_an_end = |p: Point| {
-            let gap = |&(ref c, first, last): &(Curve, f64, f64)| (0..=64).map(|i| c.point(first + (last - first) * i as f64 / 64.0).distance(p)).fold(f64::INFINITY, f64::min);
-            let Some(nearest) = (0..bounded.edges.len()).min_by(|&i, &j| gap(&bounded.edges[i]).total_cmp(&gap(&bounded.edges[j]))) else { return false };
-            let (c, first, last) = &bounded.edges[nearest];
-            [c.point(*first), c.point(*last)].iter().any(|q| ends.iter().any(|e| q.distance(*e) <= crate::tolerance::LINEAR))
-        };
         (0..=SAMPLES).any(|i| {
             // (Not at the very ends, where the contact meets the faces there.)
             let s = length * (0.02 + 0.96 * i as f64 / SAMPLES as f64);
-            let p = contact + tangent.normalized() * s;
-            let (u, v, d) = nearest_on_surface(p, &bounded.surface, None);
-            d <= 1e-6 * (1.0 + length) && !bounded.contains((u, v)) && (narrowing || !from_an_end(p))
+            off_face(model, face, contact + tangent.normalized() * s, length, ends, known, narrowing)
         })
     })
+}
+
+/// Whether `p`, a point of `face`'s surface (within `1e-6·(1 + size)`), lies off the face as
+/// bounded, for a fillet or chamfer along an edge from `ends[0]` to `ends[1]` (of length
+/// about `size`). (Not where it leaves the face across an edge from one of the edge's ends,
+/// as a face narrowing to its end, unless `narrowing`: see [`rolls_off`].)
+pub(super) fn off_face(model: &Model, face: Shape, p: Point, size: f64, ends: [Point; 2], known: &KnownFaces, narrowing: bool) -> bool {
+    let Some(bounded) = known.get(model, face) else { return false };
+    // (Whether the face's boundary edge nearest `p` runs from one of the edge's ends.)
+    let from_an_end = |p: Point| {
+        let gap = |&(ref c, first, last): &(Curve, f64, f64)| (0..=64).map(|i| c.point(first + (last - first) * i as f64 / 64.0).distance(p)).fold(f64::INFINITY, f64::min);
+        let Some(nearest) = (0..bounded.edges.len()).min_by(|&i, &j| gap(&bounded.edges[i]).total_cmp(&gap(&bounded.edges[j]))) else { return false };
+        let (c, first, last) = &bounded.edges[nearest];
+        [c.point(*first), c.point(*last)].iter().any(|q| ends.iter().any(|e| q.distance(*e) <= crate::tolerance::LINEAR))
+    };
+    let (u, v, d) = nearest_on_surface(p, &bounded.surface, None);
+    d <= 1e-6 * (1.0 + size) && !bounded.contains((u, v)) && (narrowing || !from_an_end(p))
 }
 
 #[cfg(test)]
