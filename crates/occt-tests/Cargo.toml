@@ -1,6 +1,6 @@
 [package]
 name = "occt-tests"
-version = "0.19.1"
+version = "0.19.2"
 edition.workspace = true
 publish = false
 repository.workspace = true
