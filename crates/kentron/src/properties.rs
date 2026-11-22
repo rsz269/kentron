@@ -335,7 +335,7 @@ fn integrate_face(model: &Model, face: Shape, mut sample: impl FnMut(Point, Vect
                 let density = |knots: &[f64], turn: f64| {
                     let spans = knots.len().saturating_sub(1);
                     let range = knots[knots.len() - 1] - knots[0];
-                    let pieces = (spans.div_ceil(4).max(spans.min(8)).min(256) as f64).max((turn / MAX_ANGLE_STEP).ceil().min(4.0 * spans as f64));
+                    let pieces = (spans.div_ceil(4).max(spans.min(SPAN_PIECES)).min(256) as f64).max((turn / MAX_ANGLE_STEP).ceil().min(4.0 * spans as f64));
                     if spans > 1 && range > 0.0 { pieces / range } else { 0.0 }
                 };
                 (density(b.u_knots(), u_turn), density(b.v_knots(), v_turn))
@@ -379,14 +379,18 @@ fn integrate_face(model: &Model, face: Shape, mut sample: impl FnMut(Point, Vect
         }
         None => (b - a).abs() * u_density * MAX_ANGLE_STEP,
     };
-    // Knots of a B-spline surface where it is at most C1 (as at the joins of a piecewise
-    // Bézier surface): no Gauss rule may span one.
+    // Knots of a B-spline surface no Gauss rule may span: where it is at most C1 (as at the
+    // joins of a piecewise Bézier surface), and every knot across up to 8 spans, as many as
+    // it has pieces there (see `densities`), the surface being a polynomial only between
+    // them (BRepGProp_Face::UKnots, VKnots: span by span, so that a polynomial integrand,
+    // as a bicubic's volume, comes out exact to rounding).
     fn kinks(surface: &Surface) -> (Vec<f64>, Vec<f64>) {
         match surface {
             Surface::BSpline(b) => {
                 let low = |knots: &[f64], mults: &[usize], degree: usize| -> Vec<f64> {
                     let n = knots.len();
-                    (1..n.saturating_sub(1)).filter(|&i| mults[i] + 1 >= degree).map(|i| knots[i]).collect()
+                    let every = n - 1 <= SPAN_PIECES;
+                    (1..n.saturating_sub(1)).filter(|&i| every || mults[i] + 1 >= degree).map(|i| knots[i]).collect()
                 };
                 (low(b.u_knots(), b.u_multiplicities(), b.u_degree()), low(b.v_knots(), b.v_multiplicities(), b.v_degree()))
             }
@@ -651,7 +655,7 @@ fn integrate_face(model: &Model, face: Shape, mut sample: impl FnMut(Point, Vect
                         }
                         continue;
                     }
-                    // From u_start to the point, in stretches between the surface's kinks.
+                    // From u_start to the point, in stretches between the surface's knots.
                     ends.clear();
                     ends.push(u_start);
                     let (lo, hi) = (u_start.min(uv.x), u_start.max(uv.x));
@@ -779,6 +783,10 @@ const GAUSS_LEGENDRE_2: [(f64, f64); 2] = [(-0.577_350_269_189_625_8, 1.0), (0.5
 
 /// The 3-point Gauss–Legendre rule on [-1, 1] (exact for polynomials of degree 5).
 const GAUSS_LEGENDRE_3: [(f64, f64); 3] = [(-0.774_596_669_241_483_4, 0.555_555_555_555_555_6), (0.0, 0.888_888_888_888_888_9), (0.774_596_669_241_483_4, 0.555_555_555_555_555_6)];
+
+/// Up to this many knot spans of a B-spline surface, a Gauss piece each (see
+/// `integrate_face`).
+const SPAN_PIECES: usize = 8;
 
 /// The 10-point Gauss–Legendre rule on [-1, 1]: (node, weight).
 const GAUSS_LEGENDRE: [(f64, f64); 10] = [

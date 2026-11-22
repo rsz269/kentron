@@ -1060,25 +1060,31 @@ mod tests {
         }
     }
 
+    /// A height grid of `nu` x `nv` coefficients between 3 and 6.2.
+    fn bumpy(nu: usize, nv: usize) -> Vec<Vec<f64>> {
+        (0..nu).map(|i| (0..nv).map(|j| 3.0 + ((i * 7 + j * 3) % 5) as f64 * 0.8).collect()).collect()
+    }
+
     #[test]
     fn slab_volume_is_the_integral_of_its_height_field() {
         // f = Σ h_ij N_i(u) N_j(v), so ∫∫ f = Σ h_ij ∫N_i ∫N_j over the unit square, and
-        // the volume is that times the size. (Uniform knots: the volume's Gauss pieces fall
-        // on the knot spans, so the rule is exact for the polynomials between them.)
+        // the volume is that times the size. The integrands are polynomials between the
+        // knots, uneven here: integrated span by span, exact to rounding.
         let (su, sv) = (10.0, 7.0);
-        let (ku, kv) = (clamped(&[1.0 / 3.0, 2.0 / 3.0]), clamped(&[0.5]));
-        let heights: Vec<Vec<f64>> =
-            (0..6).map(|i| (0..5).map(|j| 3.0 + ((i * 7 + j * 3) % 5) as f64 * 0.8).collect()).collect();
-        let (wu, wv) = (basis_integrals(&ku), basis_integrals(&kv));
-        let mean: f64 = (0..6).flat_map(|i| (0..5).map(move |j| (i, j))).map(|(i, j)| heights[i][j] * wu[i] * wv[j]).sum();
-        let expected = su * sv * mean;
-        for frame in [Frame::WORLD, tilted(true), tilted(false)] {
-            let mut model = Model::new();
-            let slab = Slab::new(su, sv, ku.clone(), kv.clone(), heights.clone()).with_frame(frame).build(&mut model).unwrap();
-            let report = crate::validity::check(&model, slab);
-            assert!(report.problems.is_empty(), "{report:?}");
-            let v = crate::properties::volume(&model, slab).mass;
-            assert!((v - expected).abs() < 1e-9 * expected, "volume {v} != {expected}");
+        for (ku, kv) in [(clamped(&[0.25, 0.6]), clamped(&[0.1, 0.45, 0.45, 0.8])), (clamped(&[1.0 / 3.0, 2.0 / 3.0]), clamped(&[0.5]))] {
+            let (nu, nv) = (ku.len() - 4, kv.len() - 4);
+            let heights = bumpy(nu, nv);
+            let (wu, wv) = (basis_integrals(&ku), basis_integrals(&kv));
+            let mean: f64 = (0..nu).flat_map(|i| (0..nv).map(move |j| (i, j))).map(|(i, j)| heights[i][j] * wu[i] * wv[j]).sum();
+            let expected = su * sv * mean;
+            for frame in [Frame::WORLD, tilted(true), tilted(false)] {
+                let mut model = Model::new();
+                let slab = Slab::new(su, sv, ku.clone(), kv.clone(), heights.clone()).with_frame(frame).build(&mut model).unwrap();
+                let report = crate::validity::check(&model, slab);
+                assert!(report.problems.is_empty(), "{report:?}");
+                let v = crate::properties::volume(&model, slab).mass;
+                assert!((v - expected).abs() < 1e-12 * expected, "volume {v} != {expected}");
+            }
         }
     }
 
