@@ -551,6 +551,65 @@ pub fn face_on_domain(model: &mut Model, surface: Surface, u1: f64, u2: f64, v1:
     Ok(face)
 }
 
+/// The triangles of `mesh` as planar faces, in a compound: one face per triangle, the faces
+/// sharing a vertex per node and an edge per pair of nodes, each face's boundary running
+/// round its triangle as the triangle's nodes are given (so that it faces along
+/// `(n1 − n0) × (n2 − n0)`). Triangles naming a node twice, or with two nodes at the same
+/// point, are left out, as are those whose sides are parallel. Fails where two nodes of a
+/// triangle lie apart by no more than the linear tolerance (an edge cannot join them).
+#[doc(alias = "BRepBuilderAPI_MakeShapeOnMesh")]
+pub fn shape_on_mesh(model: &mut Model, mesh: &crate::mesh::TriangleMesh) -> Result<Shape> {
+    let result = model.new_empty(NodeKind::Compound);
+    let (nodes, triangles) = (mesh.nodes(), mesh.triangles());
+    if nodes.is_empty() || triangles.is_empty() {
+        return Ok(result);
+    }
+    // (gp::Resolution() and Precision::SquareConfusion().)
+    let resolution = f64::MIN_POSITIVE;
+    let square_confusion = tolerance::LINEAR * tolerance::LINEAR;
+    let vertices: Vec<Shape> = nodes.iter().map(|&p| vertex(model, p)).collect();
+    // The shared edges, by their nodes (the lower first), each running from its lower node.
+    let mut edges: crate::hashing::FastMap<(u32, u32), Shape> = Default::default();
+    for &[a, b, c] in triangles {
+        if a == b || a == c || b == c {
+            continue;
+        }
+        let (p1, p2, p3) = (nodes[a as usize], nodes[b as usize], nodes[c as usize]);
+        if p1.distance_squared(p2) < resolution || p1.distance_squared(p3) < resolution || p2.distance_squared(p3) < resolution {
+            continue;
+        }
+        for (i, j) in [(a, b), (b, c), (c, a)] {
+            let key = (i.min(j), i.max(j));
+            if !edges.contains_key(&key) {
+                let e = edge(model, vertices[key.0 as usize], vertices[key.1 as usize])?;
+                edges.insert(key, e);
+            }
+        }
+    }
+    for &[a, b, c] in triangles {
+        // (Edges are missing where the triangle was left out above.)
+        let Some(boundary) = [(a, b), (b, c), (c, a)]
+            .iter()
+            .map(|&(i, j)| edges.get(&(i.min(j), i.max(j))).map(|&e| if j < i { e.reversed() } else { e }))
+            .collect::<Option<Vec<Shape>>>()
+        else {
+            continue;
+        };
+        // The plane through the first node, facing along the cross product of the first two
+        // sides' directions as the boundary runs.
+        let along = |i: u32, j: u32| (nodes[j as usize] - nodes[i as usize]).normalized();
+        let normal = along(a, b).cross(along(b, c));
+        if normal.length_squared() < square_confusion {
+            continue;
+        }
+        let Some(normal) = Direction::try_from_vector(normal) else { continue };
+        let w = wire(model, &boundary)?;
+        let face = face_on(model, Surface::Plane(Plane::new(nodes[a as usize], normal)), w)?;
+        model.add(result, face)?;
+    }
+    Ok(result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

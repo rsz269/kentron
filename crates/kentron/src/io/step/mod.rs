@@ -254,6 +254,20 @@ struct EdgeMade {
     pcurves: Vec<(usize, usize)>,
 }
 
+/// A triangulated face or surface set of the file.
+struct Triangulation {
+    /// Its coordinates list's instance.
+    list: usize,
+    /// Each node's point in that list (0-based), and the point.
+    at: Vec<usize>,
+    nodes: Vec<Point>,
+    /// Over the nodes, 0-based.
+    triangles: Vec<[u32; 3]>,
+    normals: Option<Vec<Direction>>,
+    /// The face it is linked to.
+    link: Option<usize>,
+}
+
 struct Reader<'a> {
     x: &'a Exchange,
     model: &'a mut Model,
@@ -1034,10 +1048,208 @@ impl<'a> Reader<'a> {
         Ok(shell)
     }
 
+    // --- tessellated geometry (AP242) ----------------------------------------------------
+
+    /// The triangulation of a triangulated face or surface set, plain or complex (`None` for
+    /// other instances), as OCCT's `StepToTopoDS_TranslateFace` makes it
+    /// (`CreatePolyTriangulation`): a node per index of the file's `pnindex` into its list of
+    /// coordinates, or per point of that list where `pnindex` is empty; the triangles given
+    /// as such, or those of the strips and fans (strips' and fans' triangles taken in OCCT's
+    /// order and turn, those naming a point twice left out).
+    fn triangulation(&self, id: usize) -> Result<Option<Triangulation>> {
+        let inst = self.get(id)?;
+        // (The record; whether it has a geometric link, which surface sets have not; whether
+        // its triangles come as strips and fans.)
+        let (p, linked, complex) = if let Some(p) = inst.record("TRIANGULATED_FACE") {
+            (p, true, false)
+        } else if let Some(p) = inst.record("COMPLEX_TRIANGULATED_FACE") {
+            (p, true, true)
+        } else if let Some(p) = inst.record("TRIANGULATED_SURFACE_SET") {
+            (p, false, false)
+        } else if let Some(p) = inst.record("COMPLEX_TRIANGULATED_SURFACE_SET") {
+            (p, false, true)
+        } else {
+            return Ok(None);
+        };
+        let k = if linked { 5 } else { 4 };
+        if p.len() < k + if complex { 3 } else { 2 } {
+            return Err(invalid(format!("#{id}: too few parameters for a {}", inst.name())));
+        }
+        let list = Self::reference(&p[1])?;
+        let coordinates = self.get(list)?.record("COORDINATES_LIST").ok_or_else(|| invalid(format!("#{list} is not a coordinates list")))?;
+        let s = self.length;
+        let points = self
+            .list(coordinates.get(2).ok_or_else(|| invalid(format!("#{list}: no coordinates")))?)?
+            .iter()
+            .map(|c| match self.list(c)? {
+                [x, y, z] => Ok(Point::new(self.real(x)? * s, self.real(y)? * s, self.real(z)? * s)),
+                _ => Err(invalid(format!("#{list}: a point without three coordinates"))),
+            })
+            .collect::<Result<Vec<Point>>>()?;
+        let int = |v: &Value| v.as_integer().ok_or_else(|| invalid(format!("#{id}: expected an integer, got {v:?}")));
+        let ints = |v: &Value| -> Result<Vec<i64>> { self.x.list(v).unwrap_or(&[]).iter().map(int).collect() };
+        // Each node's point in the list (0-based).
+        let pnindex = ints(&p[k])?;
+        let at: Vec<usize> = if pnindex.is_empty() {
+            (0..points.len()).collect()
+        } else {
+            pnindex
+                .iter()
+                .map(|&i| if (1..=points.len() as i64).contains(&i) { Ok(i as usize - 1) } else { Err(invalid(format!("#{id} names point {i} of {}", points.len()))) })
+                .collect::<Result<_>>()?
+        };
+        let mut triangles: Vec<[i64; 3]> = Vec::new();
+        if !complex {
+            for t in self.x.list(&p[k + 1]).unwrap_or(&[]) {
+                match self.list(t)? {
+                    [a, b, c] => triangles.push([int(a)?, int(b)?, int(c)?]),
+                    _ => return Err(invalid(format!("#{id}: a triangle without three nodes"))),
+                }
+            }
+        } else {
+            // (OCCT's SetTriangles, 1-based as there: a strip's triangles at its odd
+            // positions, then at its even ones; a fan's about its first node.)
+            for strip in self.x.list(&p[k + 1]).unwrap_or(&[]) {
+                let v = ints(strip)?;
+                let at = |j: usize| v[j - 1];
+                for j in (3..=v.len()).step_by(2) {
+                    if at(j) != at(j - 2) && at(j) != at(j - 1) {
+                        triangles.push([at(j - 2), at(j), at(j - 1)]);
+                    }
+                }
+                for j in (4..=v.len()).step_by(2) {
+                    if at(j) != at(j - 2) && at(j) != at(j - 1) {
+                        triangles.push([at(j - 2), at(j - 1), at(j)]);
+                    }
+                }
+            }
+            for fan in self.x.list(&p[k + 2]).unwrap_or(&[]) {
+                let v = ints(fan)?;
+                let at = |j: usize| v[j - 1];
+                for j in 3..=v.len() {
+                    if at(j) != at(j - 2) && at(j - 1) != at(j - 2) {
+                        triangles.push([at(1), at(j), at(j - 1)]);
+                    }
+                }
+            }
+        }
+        let n = at.len() as i64;
+        let triangles = triangles
+            .into_iter()
+            .map(|t| if t.iter().all(|i| (1..=n).contains(i)) { Ok(t.map(|i| (i - 1) as u32)) } else { Err(invalid(format!("#{id}: a triangle names a node beyond its {n}"))) })
+            .collect::<Result<Vec<[u32; 3]>>>()?;
+        // (OCCT's SetNormals: one for every node, or one per node.)
+        let normals = self
+            .x
+            .list(&p[3])
+            .unwrap_or(&[])
+            .iter()
+            .map(|v| match self.list(v)? {
+                [x, y, z] => Ok(Direction::try_from_vector(Vector::new(self.real(x)?, self.real(y)?, self.real(z)?))),
+                _ => Ok(None),
+            })
+            .collect::<Result<Option<Vec<Direction>>>>()?
+            .and_then(|d| match d.len() {
+                1 => Some(vec![d[0]; at.len()]),
+                m if m == at.len() && m > 0 => Some(d),
+                _ => None,
+            });
+        let link = if linked { p[4].as_reference() } else { None };
+        Ok(Some(Triangulation { list, nodes: at.iter().map(|&i| points[i]).collect(), at, triangles, normals, link }))
+    }
+
+    /// The planar faces of triangulations, in a compound (OCCT's
+    /// `BRepBuilderAPI_MakeShapeOnMesh` on one mesh of all of them): nodes at the same
+    /// point of the same coordinates list one vertex, so that the faces of one solid or
+    /// shell share their edges across the file's faces. OCCT reads a triangulated face as a
+    /// face carrying its triangulation and no surface; kentron's measures, classification
+    /// and checks work on faces' surfaces, so the triangles are read as the planes they span.
+    fn mesh_faces(&mut self, triangulations: &[Triangulation]) -> Result<Shape> {
+        let mut index: HashMap<(usize, usize), u32> = HashMap::default();
+        let (mut nodes, mut triangles) = (Vec::new(), Vec::new());
+        for t in triangulations {
+            let mut node = Vec::with_capacity(t.at.len());
+            for (k, &i) in t.at.iter().enumerate() {
+                node.push(*index.entry((t.list, i)).or_insert_with(|| {
+                    nodes.push(t.nodes[k]);
+                    nodes.len() as u32 - 1
+                }));
+            }
+            triangles.extend(t.triangles.iter().map(|tri| tri.map(|i| node[i as usize])));
+        }
+        crate::make::shape_on_mesh(self.model, &crate::mesh::TriangleMesh::new(nodes, triangles))
+    }
+
+    /// A tessellated solid or shell, or a triangulated face or surface set standing alone
+    /// (`None` for other instances), as OCCT's `StepToTopoDS_TranslateSolid`,
+    /// `TranslateShell` and `TranslateFace` read them (with `read.step.tessellated` On, its
+    /// default): a solid or shell already read from the B-rep the item is linked to is that
+    /// solid or shell, its faces linked to faces read given their triangulations; otherwise
+    /// a new solid of one shell, or a new shell, of the items' faces ([`Self::mesh_faces`]).
+    /// (A face linked to a B-rep face read, in a solid or shell not linked, is read from its
+    /// triangles too, where OCCT would put the B-rep face in the new shell.)
+    fn tessellated(&mut self, id: usize) -> Result<Option<Shape>> {
+        let inst = self.get(id)?;
+        if let Some(t) = self.triangulation(id)? {
+            return Ok(Some(self.mesh_faces(&[t])?));
+        }
+        let (p, solid) = match (inst.record("TESSELLATED_SOLID"), inst.record("TESSELLATED_SHELL")) {
+            (Some(p), _) => (p.to_vec(), true),
+            (None, Some(p)) => (p.to_vec(), false),
+            _ => return Ok(None),
+        };
+        let mut triangulations = Vec::new();
+        for item in self.x.list(&p[1]).unwrap_or(&[]) {
+            let item = Self::reference(item)?;
+            // (Only tessellated faces: a surface set is no item of a solid or shell.)
+            let face = self.get(item)?;
+            if face.has("TRIANGULATED_FACE") || face.has("COMPLEX_TRIANGULATED_FACE") {
+                triangulations.extend(self.triangulation(item)?);
+            }
+        }
+        let link = p.get(2).and_then(Value::as_reference);
+        let linked = link.and_then(|l| {
+            if solid {
+                self.bodies.get(&l).copied()
+            } else {
+                self.shell_instances.iter().find(|&(_, &i)| i == l).map(|(&node, _)| Shape { node, orientation: crate::topology::Orientation::Forward, placement: Transform::IDENTITY })
+            }
+        });
+        if let Some(linked) = linked {
+            for t in triangulations {
+                let Some(face_link) = t.link else { continue };
+                let Some(node) = self.face_instances.iter().find(|&(_, &i)| i == face_link).map(|(&node, _)| node) else { continue };
+                let mesh = crate::mesh::TriangleMesh::new(t.nodes, t.triangles);
+                let mesh = match t.normals {
+                    Some(normals) => mesh.with_normals(normals),
+                    None => mesh,
+                };
+                self.model.set_face_mesh(Shape { node, orientation: crate::topology::Orientation::Forward, placement: Transform::IDENTITY }, Some(mesh))?;
+            }
+            return Ok(Some(linked));
+        }
+        let faces = self.mesh_faces(&triangulations)?;
+        let shell = self.model.new_empty(NodeKind::Shell);
+        for face in self.model.children(faces).collect::<Vec<_>>() {
+            self.model.add(shell, face)?;
+        }
+        if !solid {
+            self.shell_instances.insert(shell.node, id);
+            return Ok(Some(shell));
+        }
+        let made = self.model.new_empty(NodeKind::Solid);
+        self.model.add(made, shell)?;
+        Ok(Some(made))
+    }
+
     /// A solid or shell of a representation (`None` for other items, such as placements).
     fn body(&mut self, id: usize) -> Result<Option<Shape>> {
         if let Some(&s) = self.bodies.get(&id) {
             return Ok(Some(s));
+        }
+        if let Some(made) = self.tessellated(id)? {
+            self.bodies.insert(id, made);
+            return Ok(Some(made));
         }
         let inst = self.get(id)?;
         let made = if let Some(p) = inst.record("MANIFOLD_SOLID_BREP").or(inst.record("FACETED_BREP")).or(inst.record("BREP_WITH_VOIDS").filter(|_| !inst.is_complex())) {
@@ -2054,6 +2266,113 @@ mod tests {
         let area = crate::properties::area(&model, shape).mass;
         let expected = std::f64::consts::PI * 100.0 * 2.0;
         assert!((area - expected).abs() < 1e-6 * expected, "area {area}");
+    }
+
+    /// An AP242 file of one part whose shape is the tessellated items `items` (entities
+    /// numbered from #20, the last the item of the representation).
+    fn tessellated_file(items: &[String]) -> String {
+        let mut data = String::from(
+            "#1=APPLICATION_CONTEXT('managed model based 3d engineering');\n\
+             #2=APPLICATION_PROTOCOL_DEFINITION('international standard','ap242_managed_model_based_3d_engineering',2011,#1);\n\
+             #3=PRODUCT_CONTEXT('',#1,'mechanical');\n#4=PRODUCT('p','p','',(#3));\n\
+             #5=PRODUCT_DEFINITION_FORMATION('','',#4);\n#6=PRODUCT_DEFINITION_CONTEXT('part definition',#1,'design');\n\
+             #7=PRODUCT_DEFINITION('design','',#5,#6);\n#8=PRODUCT_DEFINITION_SHAPE('','',#7);\n\
+             #9=SHAPE_DEFINITION_REPRESENTATION(#8,#19);\n#10=(LENGTH_UNIT()NAMED_UNIT(*)SI_UNIT(.MILLI.,.METRE.));\n\
+             #11=(NAMED_UNIT(*)PLANE_ANGLE_UNIT()SI_UNIT($,.RADIAN.));\n#12=(NAMED_UNIT(*)SI_UNIT($,.STERADIAN.)SOLID_ANGLE_UNIT());\n\
+             #13=UNCERTAINTY_MEASURE_WITH_UNIT(LENGTH_MEASURE(1.E-07),#10,'distance_accuracy_value','');\n\
+             #14=(GEOMETRIC_REPRESENTATION_CONTEXT(3)GLOBAL_UNCERTAINTY_ASSIGNED_CONTEXT((#13))GLOBAL_UNIT_ASSIGNED_CONTEXT((#10,#11,#12))REPRESENTATION_CONTEXT('',''));\n",
+        );
+        let last = 19 + items.len();
+        data += &format!("#19=TESSELLATED_SHAPE_REPRESENTATION('',(#{last}),#14);\n");
+        for (i, item) in items.iter().enumerate() {
+            data += &format!("#{}={item};\n", 20 + i);
+        }
+        format!(
+            "ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION((''),'2;1');\nFILE_NAME('t','',(''),(''),'','','');\n\
+             FILE_SCHEMA(('AP242_MANAGED_MODEL_BASED_3D_ENGINEERING_MIM_LF {{ 1 0 10303 442 1 1 4 }}'));\nENDSEC;\nDATA;\n{data}ENDSEC;\nEND-ISO-10303-21;\n"
+        )
+    }
+
+    /// The corners of a 2 × 3 × 4 box, point k (1-based) at bits k − 1 = (x, y, z), as a
+    /// coordinates list.
+    fn box_corners() -> String {
+        let points: Vec<String> = (0..8).map(|k| format!("({:.1},{:.1},{:.1})", 2.0 * (k & 1) as f64, 3.0 * ((k >> 1) & 1) as f64, 4.0 * ((k >> 2) & 1) as f64)).collect();
+        format!("COORDINATES_LIST('',8,({}))", points.join(","))
+    }
+
+    /// The box's sides, each counter-clockwise seen from outside.
+    const BOX_SIDES: [[usize; 4]; 6] = [[1, 3, 4, 2], [5, 6, 8, 7], [1, 2, 6, 5], [3, 7, 8, 4], [1, 5, 7, 3], [2, 4, 8, 6]];
+
+    fn triangles(sides: &[[usize; 4]], node: impl Fn(usize) -> usize) -> String {
+        let t: Vec<String> = sides.iter().flat_map(|&[a, b, c, d]| [[a, b, c], [a, c, d]]).map(|t| format!("({},{},{})", node(t[0]), node(t[1]), node(t[2]))).collect();
+        t.join(",")
+    }
+
+    fn assert_box(model: &Model, shape: Shape, faces: usize) {
+        assert_eq!(shape.kind(), NodeKind::Solid);
+        assert_eq!(model.explore(shape, NodeKind::Face).count(), faces);
+        let report = crate::validity::check(model, shape);
+        assert!(report.is_valid(), "{report:?}");
+        let volume = crate::properties::volume(model, shape).mass;
+        assert!((volume - 24.0).abs() < 1e-9, "volume {volume}");
+        let area = crate::properties::area(model, shape).mass;
+        assert!((area - 52.0).abs() < 1e-9, "area {area}");
+    }
+
+    /// A tessellated solid of one triangulated face: a solid of the triangles' planar faces,
+    /// sharing their edges, the box's volume and area.
+    #[test]
+    fn a_tessellated_solid_of_one_triangulated_face() {
+        let file = tessellated_file(&[
+            box_corners(),
+            format!("TRIANGULATED_FACE('',#20,8,(),$,(),({}))", triangles(&BOX_SIDES, |k| k)),
+            "TESSELLATED_SOLID('',(#21),$)".into(),
+        ]);
+        let mut model = Model::new();
+        let shape = read(&mut model, &mut file.as_bytes()).unwrap();
+        assert_box(&model, shape, 12);
+    }
+
+    /// Two triangulated faces over one coordinates list, one naming its points through
+    /// `pnindex` in reverse: their nodes at the same points one vertex, the shell closed.
+    #[test]
+    fn triangulated_faces_sharing_their_points() {
+        let file = tessellated_file(&[
+            box_corners(),
+            format!("TRIANGULATED_FACE('',#20,8,(),$,(),({}))", triangles(&BOX_SIDES[..3], |k| k)),
+            format!("TRIANGULATED_FACE('',#20,8,(),$,(8,7,6,5,4,3,2,1),({}))", triangles(&BOX_SIDES[3..], |k| 9 - k)),
+            "TESSELLATED_SOLID('',(#21,#22),$)".into(),
+        ]);
+        let mut model = Model::new();
+        let shape = read(&mut model, &mut file.as_bytes()).unwrap();
+        assert_box(&model, shape, 12);
+        assert_eq!(model.unique_subshapes(shape, NodeKind::Vertex).len(), 8);
+    }
+
+    /// A complex triangulated face of fans, one per side, in a tessellated shell: each fan
+    /// taken about its first node, a fan (a, b, c, …) giving (a, c, b), (a, d, c), … as
+    /// OCCT reads it.
+    #[test]
+    fn a_complex_triangulated_face_of_fans() {
+        let fans: Vec<String> = BOX_SIDES.iter().map(|&[a, b, c, d]| format!("({a},{d},{c},{b})")).collect();
+        let file = tessellated_file(&[
+            box_corners(),
+            format!("COMPLEX_TRIANGULATED_FACE('',#20,8,(),$,(),(),({}))", fans.join(",")),
+            "TESSELLATED_SHELL('',(#21),$)".into(),
+        ]);
+        let mut model = Model::new();
+        let shell = read(&mut model, &mut file.as_bytes()).unwrap();
+        assert_eq!(shell.kind(), NodeKind::Shell);
+        let solid = model.new_empty(NodeKind::Solid);
+        model.add(solid, shell).unwrap();
+        assert_box(&model, solid, 12);
+    }
+
+    /// A triangle naming a node the face has not is refused.
+    #[test]
+    fn a_triangle_beyond_the_nodes_refused() {
+        let file = tessellated_file(&[box_corners(), "TRIANGULATED_FACE('',#20,8,(),$,(),((1,2,9)))".into(), "TESSELLATED_SOLID('',(#21),$)".into()]);
+        assert!(read(&mut Model::new(), &mut file.as_bytes()).is_err());
     }
 
     /// Unbounded conics' edges get their parameters from their vertices in closed form.
