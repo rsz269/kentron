@@ -139,13 +139,33 @@ pub fn fillet_edges(model: &mut Model, shape: Shape, edges: &[(Shape, f64)]) -> 
     })
 }
 
+thread_local! {
+    /// Set while [`fillet_all`] or [`fillet_all_on_open_shell`] rounds an offset's parting
+    /// edges: there the rounds stand for the offset's distance, the points within it of the
+    /// faces before they moved, and two meeting over a concave edge's end meet in a mitre
+    /// (each point past the corner lies nearest one of the two edges), not in the torus a
+    /// ball rolling in the moved solid sweeps (see [`toric_corners`]).
+    static ROUNDING_AN_OFFSET: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// `op` with [`ROUNDING_AN_OFFSET`] set, as it was again after.
+fn as_offset_rounds<T>(op: impl FnOnce() -> T) -> T {
+    let before = ROUNDING_AN_OFFSET.with(|f| f.replace(true));
+    let out = op();
+    ROUNDING_AN_OFFSET.with(|f| f.set(before));
+    out
+}
+
 /// [`fillet`] of all `edges`, those where the faces meet smoothly too (as an offset's
-/// parting edges, which may meet so but for rounding).
+/// parting edges, which may meet so but for rounding), as an offset's rounds: two meeting
+/// over a concave edge's end meet in a mitre.
 pub(crate) fn fillet_all(model: &mut Model, shape: Shape, edges: &[Shape], radius: f64) -> Result<Shape> {
     let edges: Vec<(Shape, f64)> = edges.iter().map(|&e| (e, radius)).collect();
-    on_solids(model, shape, radius, |model, shape, found| {
-        let edges = remapped(model, shape, &edges, |e| e.0, |e, c| Some((c, e.1)), found)?;
-        each_solid(model, shape, &edges, |e| e.0, |e, c| Some((c, e.1)), fillet_solid_edges)
+    as_offset_rounds(|| {
+        on_solids(model, shape, radius, |model, shape, found| {
+            let edges = remapped(model, shape, &edges, |e| e.0, |e, c| Some((c, e.1)), found)?;
+            each_solid(model, shape, &edges, |e| e.0, |e, c| Some((c, e.1)), fillet_solid_edges)
+        })
     })
 }
 
@@ -157,9 +177,11 @@ pub(crate) fn fillet_all(model: &mut Model, shape: Shape, edges: &[Shape], radiu
 /// corners: the tools' faces there, past the rounds' ends.)
 pub(crate) fn fillet_all_on_open_shell(model: &mut Model, shell: Shape, edges: &[Shape], radius: f64) -> Result<Shape> {
     let edges: Vec<(Shape, f64)> = edges.iter().map(|&e| (e, radius)).collect();
-    on_open_shell(model, shell, 2.0 * radius, |model, shape, found| {
-        let edges = remapped(model, shape, &edges, |e| e.0, |e, c| Some((c, e.1)), found)?;
-        each_solid(model, shape, &edges, |e| e.0, |e, c| Some((c, e.1)), fillet_solid_edges)
+    as_offset_rounds(|| {
+        on_open_shell(model, shell, 2.0 * radius, |model, shape, found| {
+            let edges = remapped(model, shape, &edges, |e| e.0, |e, c| Some((c, e.1)), found)?;
+            each_solid(model, shape, &edges, |e| e.0, |e, c| Some((c, e.1)), fillet_solid_edges)
+        })
     })
 }
 
@@ -1379,8 +1401,17 @@ fn fillet_solid_edges_as(model: &mut Model, shape: Shape, edges: &[(Shape, f64)]
         }
         Ok(result)
     };
-    let mitred = mitres(&corners);
-    let extended = extensions(model, shape, &corners);
+    let mut mitred = mitres(&corners);
+    // (Where the ball swings round a pivot from one fillet on to the other, no mitre: the
+    // tools end square at the vertex, the torus between them. Not for an offset's rounds.)
+    let toric = if ROUNDING_AN_OFFSET.with(|f| f.get()) { Vec::new() } else { toric_corners(model, shape, &corners, &mitred) };
+    let mut extended = extensions(model, shape, &corners);
+    for &(i, ki, j, kj, _, _) in &toric {
+        mitred[i][ki] = None;
+        mitred[j][kj] = None;
+        extended[i][ki] = 0.0;
+        extended[j][kj] = 0.0;
+    }
     let overhangs = overhanging_ends(model, shape, &corners, &extended, &mitred);
     let runs = extended.clone();
     // (The planes of the tools' ends, where the faces the tools leave there may lie on the
@@ -1418,6 +1449,15 @@ fn fillet_solid_edges_as(model: &mut Model, shape: Shape, edges: &[(Shape, f64)]
         if corner.convex != pending.1 {
             result = take_tools(model, result, shape, &sound, &pending.0, pending.1, closed, &keep)?;
             pending = (Vec::new(), corner.convex);
+        }
+        pending.0.push(tool);
+    }
+    for &(i, ki, j, _, axis, angle) in &toric {
+        let tool = toric_tool(model, &corners[i].0, ki, corners[i].1, axis, angle)?;
+        record_tool(model, tool, &[corners[i].0.edges.clone(), corners[j].0.edges.clone()].concat());
+        if !pending.1 {
+            result = take_tools(model, result, shape, &sound, &pending.0, pending.1, closed, &keep)?;
+            pending = (Vec::new(), true);
         }
         pending.0.push(tool);
     }
@@ -2181,6 +2221,120 @@ fn mitres(corners: &[(Corner, f64)]) -> Vec<[Option<(Point, Vector)>; 2]> {
             })
         })
         .collect()
+}
+
+/// Where two straight convex fillets of one radius meet at a vertex on a plane they share,
+/// concave on it (as [`mitres`] finds them), their other faces planes square to it meeting
+/// in a concave edge from the vertex (the pivot) at least the radius long: the ball rolling
+/// along either fillet reaches the pivot at the vertex, a radius below the plane, and swings
+/// round it on to the other, its centre on a circle of the radius about the pivot. What it
+/// sweeps there is a horn torus, of the radius both ways, about the pivot. Per such vertex,
+/// the two corners and their ends there (`(i, end of i, j, end of j)`), the pivot's axis
+/// (from the vertex, oriented for the ball to turn about it from corner `i`'s wall to corner
+/// `j`'s), and the angle it turns through.
+///
+/// The test is OCCT's `ToricRotule` (ChFi3d_FilBuilder_C2.cxx: three planes, the third square
+/// to the other two, two constant fillets of one radius, to 1e-7) at a vertex OCCT finds
+/// `c1rotule` (both fillets ending on one face, their ends on one pivot). OCCT tries
+/// `PerformTwoCornerbyInter` there first, the two fillets cut where they meet (a mitre), and
+/// builds the torus only where that fails: on an L-prism it succeeds, and leaves material
+/// out under the fillets at the corner, which the ball rolling in the solid does reach (the
+/// mitre lies within the rolling ball's opening of the solid and is short of it by exactly
+/// 2(1 − π/4)(5/3 − π/2)r³ over an L-prism's two corners: 89.92708 mm³ against the
+/// opening's 89.94815 for w 6.355, t 3.347, d 9.662, h 2.348, r 0.8, OCCT 8.1 and the mitre
+/// alike; a voxel rolling-ball opening of the unfilleted prism finds the mitred results
+/// missing material there and nowhere extra). kentron departs from OCCT's branch order
+/// here: it builds the torus (OCCT's `ChFiKPart_MakeRotule`) wherever `ToricRotule` holds,
+/// and leaves the mitre for the other vertices.
+fn toric_corners(model: &Model, shape: Shape, corners: &[(Corner, f64)], mitred: &[[Option<(Point, Vector)>; 2]]) -> Vec<(usize, usize, usize, usize, Axis, f64)> {
+    // (OCCT's tolerance in `ToricRotule`.)
+    const TOLESP: f64 = 1e-7;
+    let mut found = Vec::new();
+    let plane_normal = |f: &(NodeId, Surface, f64)| match untrimmed(&f.1) {
+        // (Pointing out of the material.)
+        Surface::Plane(p) => Some(Vector::from(p.normal()) * f.2),
+        _ => None,
+    };
+    let edges = model.unique_subshapes(shape, NodeKind::Edge);
+    for (i, (corner, radius)) in corners.iter().enumerate() {
+        for ki in 0..2 {
+            let Some((p, _)) = mitred[i][ki] else { continue };
+            let Some((j, kj)) = corners.iter().enumerate().find_map(|(j, (o, _))| {
+                (j > i).then_some(())?;
+                [o.origin, o.end].iter().position(|q| q.distance(p) <= tolerance::LINEAR).filter(|&e| mitred[j][e].is_some()).map(|e| (j, e))
+            }) else {
+                continue;
+            };
+            let (other, other_radius) = &corners[j];
+            if (radius - other_radius).abs() >= TOLESP {
+                continue;
+            }
+            // The shared face (one plane), and each fillet's other face, its wall.
+            let Some((fi, fj)) = (0..2).find_map(|a| (0..2).find(|&b| corner.faces[a].0 == other.faces[b].0 || on_one_plane(&corner.faces[a], &other.faces[b])).map(|b| (a, b))) else { continue };
+            let (face, wall_i, wall_j) = (&corner.faces[fi], &corner.faces[1 - fi], &other.faces[1 - fj]);
+            let (Some(n), Some(ni), Some(nj)) = (plane_normal(face), plane_normal(wall_i), plane_normal(wall_j)) else { continue };
+            if n.dot(ni).abs() >= TOLESP || n.dot(nj).abs() >= TOLESP {
+                continue;
+            }
+            // The pivot: the one other edge at the vertex where faces meet at an angle (seams
+            // of a face split along one plane aside), the walls' concave edge, square to the
+            // plane, reaching the ball's contact a radius below it (OCCT's common points of
+            // both fillets on one arc).
+            let mut pivot = None;
+            let mut others = 0;
+            for &e in &edges {
+                if corner.edges.contains(&e.node) || other.edges.contains(&e.node) {
+                    continue;
+                }
+                let (a, b) = model.edge_vertices(e);
+                let (pa, pb) = (model.point(a), model.point(b));
+                let far = if pa.distance(p) <= tolerance::LINEAR {
+                    pb
+                } else if pb.distance(p) <= tolerance::LINEAR {
+                    pa
+                } else {
+                    continue;
+                };
+                if smooth(model, shape, e) {
+                    continue;
+                }
+                others += 1;
+                let Ok(Some(c)) = Corner::of(model, shape, e, false) else { continue };
+                let walls = |f: &(NodeId, Surface, f64)| [wall_i, wall_j].map(|w| f.0 == w.0 || on_one_plane(f, w));
+                let ([a0, b0], [a1, b1]) = (walls(&c.faces[0]), walls(&c.faces[1]));
+                if matches!(c.path, Path::Line { .. }) && !c.convex && ((a0 && b1) || (b0 && a1)) && c.tangent.normalized().dot(n).abs() >= 1.0 - tolerance::ANGULAR && (far - p).dot(n) < 0.0 && far.distance(p) >= radius - tolerance::LINEAR {
+                    pivot = Some(c);
+                }
+            }
+            if others != 1 || pivot.is_none() {
+                continue;
+            }
+            // (OCCT's `dpl1`, `dpl2`: the walls' normals into the material, along which the
+            // ball's centre lies from the pivot; the angle between them is what it turns.)
+            let (di, dj) = (-ni.normalized(), -nj.normalized());
+            let alpha = di.angle(dj);
+            let d = di.cross(dj);
+            if !(alpha > tolerance::ANGULAR && d.length() > 1e-9) {
+                continue;
+            }
+            found.push((i, ki, j, kj, Axis::new(p, Direction::from_vector(d)), alpha));
+        }
+    }
+    found
+}
+
+/// The tool OCCT's `ChFiKPart_MakeRotule` corner leaves to cut: the region between the corner
+/// and the horn torus about `axis` (through the vertex, the pivot's line), swept by corner
+/// `i`'s cross-section at its end `ki` turned about the pivot through `angle` on to the other
+/// fillet's. The section's leg on the wall lies on the pivot itself, the torus's apex where
+/// the ball touches it a radius below the plane.
+fn toric_tool(model: &mut Model, corner: &Corner, ki: usize, radius: f64, axis: Axis, angle: f64) -> Result<Shape> {
+    let section = corner.section(model, radius)?;
+    let section = match corner.path {
+        Path::Line { length } if ki == 1 => section.moved(&Transform::translation(corner.tangent * length)),
+        _ => section,
+    };
+    Ok(sweep::revolve(model, section, axis, angle)?.shape)
 }
 
 /// Corner `i`'s mitres, with those at ends where the other corner's radius differs (by more
@@ -4703,12 +4857,98 @@ mod tests {
     use crate::primitives::Cuboid;
     use crate::{properties, validity};
 
+    /// An L-prism (its outline extruded), arms w × t and t × d, height h, every convex edge
+    /// filleted by r, then its top's two edges at the concave edge alone, at r and at 0.8r.
+    /// At one radius the ball, rolling along either top fillet to the concave edge, swings
+    /// round it on to the other (a horn torus about it, a face of its own at each end): the
+    /// solid is the union of the balls of radius r inside the prism, the L-shaped core shrunk
+    /// by r swelled by r and what the ball sweeps round the concave edge's ends. With V_X and
+    /// S_X the volume and area of box X inset by r and rounded by r all round (A, B the arms,
+    /// C the corner column), H' = h − 2r and k = 1 − π/4: `V = V_A + V_B − V_C − k(H'r² +
+    /// 4r³/3) + 2k(5/3 − π/2)r³` (each end keeps, slice by slice, the square of side
+    /// r − √(r² − s²) less its quarter disk) and `S = S_A + S_B − S_C − k(2H'r + 4r²) −
+    /// 2((2 − π/2)(π/2 − 1) − k)r²` (the torus, (π/2)(π/2 − 1)r², for two mitred cylinder
+    /// pieces of (π/2 − 1)r², and kr² more of the top). At two radii the fillets meet in a
+    /// mitre, as before: no torus.
+    #[test]
+    fn fillets_over_an_l_prisms_concave_edge_swing_round_it() {
+        let (w, t, d, h, r) = (6.355, 3.347, 9.662, 2.348, 0.8);
+        let outline = [[0.0, 0.0], [w, 0.0], [w, t], [t, t], [t, d], [0.0, d]];
+        let prism = |model: &mut Model| -> Shape {
+            let edges: Vec<Shape> = (0..6).map(|i| {
+                let (p, q) = (outline[i], outline[(i + 1) % 6]);
+                make::edge_between(model, Point::new(p[0], p[1], 0.0), Point::new(q[0], q[1], 0.0)).unwrap()
+            }).collect();
+            let wire = make::wire(model, &edges).unwrap();
+            let face = make::planar_face(model, wire).unwrap();
+            sweep::extrude(model, face, Vector::new(0.0, 0.0, h)).unwrap().shape
+        };
+        let edge_at = |model: &mut Model, shape: Shape, p: Point| -> Shape {
+            let v = make::vertex(model, p);
+            let near: Vec<Shape> = model.unique_subshapes(shape, NodeKind::Edge).into_iter().filter(|&e| crate::distance::distance(model, v, e).unwrap().value < 1e-9).collect();
+            assert_eq!(near.len(), 1, "one edge at {p:?}");
+            near[0]
+        };
+        let tori = |model: &Model, shape: Shape| model.unique_subshapes(shape, NodeKind::Face).iter().filter(|&&f| matches!(model.surface(f).map(untrimmed), Some(Surface::Torus(_)))).count();
+        // Every convex edge at r.
+        let mut model = Model::new();
+        let l = prism(&mut model);
+        let mut edges = Vec::new();
+        for i in 0..6 {
+            let (p, q) = (outline[i], outline[(i + 1) % 6]);
+            let mid = [(p[0] + q[0]) / 2.0, (p[1] + q[1]) / 2.0];
+            edges.push(edge_at(&mut model, l, Point::new(mid[0], mid[1], h)));
+            edges.push(edge_at(&mut model, l, Point::new(mid[0], mid[1], 0.0)));
+            // (Not the concave edge at (t, t).)
+            if i != 3 {
+                edges.push(edge_at(&mut model, l, Point::new(p[0], p[1], h / 2.0)));
+            }
+        }
+        let rounded = fillet(&mut model, l, &edges, r).unwrap();
+        assert!(validity::check(&model, rounded).is_valid());
+        assert_eq!(tori(&model, rounded), 2);
+        let block = |a: f64, b: f64, c: f64| {
+            let (a, b, c) = (a - 2.0 * r, b - 2.0 * r, c - 2.0 * r);
+            (a * b * c + 2.0 * r * (a * b + b * c + c * a) + PI * r * r * (a + b + c) + 4.0 / 3.0 * PI * r.powi(3), 2.0 * (a * b + b * c + c * a) + 2.0 * PI * r * (a + b + c) + 4.0 * PI * r * r)
+        };
+        let ((va, sa), (vb, sb), (vc, sc)) = (block(w, t, h), block(t, d, h), block(t, t, h));
+        let (k, core) = (1.0 - PI / 4.0, h - 2.0 * r);
+        let want_volume = va + vb - vc - k * (core * r * r + 4.0 / 3.0 * r.powi(3)) + 2.0 * k * (5.0 / 3.0 - PI / 2.0) * r.powi(3);
+        let want_area = sa + sb - sc - k * (2.0 * core * r + 4.0 * r * r) - 2.0 * ((2.0 - PI / 2.0) * (PI / 2.0 - 1.0) - k) * r * r;
+        let volume = properties::volume(&model, rounded).mass;
+        assert!((volume - want_volume).abs() < 1e-9 * want_volume, "{volume} against {want_volume}");
+        let area = properties::area(&model, rounded).mass;
+        assert!((area - want_area).abs() < 1e-7 * want_area, "{area} against {want_area}");
+        // The two top edges at the concave edge alone: at r, the corner a torus; at r and
+        // 0.8r, none.
+        for (second, torus) in [(r, true), (0.8 * r, false)] {
+            let mut model = Model::new();
+            let l = prism(&mut model);
+            let a = edge_at(&mut model, l, Point::new((w + t) / 2.0, t, h));
+            let b = edge_at(&mut model, l, Point::new(t, (t + d) / 2.0, h));
+            let rounded = fillet_edges(&mut model, l, &[(a, r), (b, second)]).unwrap();
+            assert!(validity::check(&model, rounded).is_valid());
+            assert_eq!(tori(&model, rounded), usize::from(torus));
+            if torus {
+                // (Each fillet takes `k r²` along its edge, square at the far end, and the
+                // corner its section turned a right angle about the concave edge: by Pappus,
+                // `k r²` times its centroid's `(5/6 − π/4)r / k` from the edge times π/2.)
+                let full = (w * t + (d - t) * t) * h;
+                let want = full - k * r * r * ((w - t) + (d - t)) - PI / 2.0 * (5.0 / 6.0 - PI / 4.0) * r.powi(3);
+                let volume = properties::volume(&model, rounded).mass;
+                assert!((volume - want).abs() < 1e-9 * full, "{volume} against {want}");
+            }
+        }
+    }
+
     /// An L-prism, its arms w × t and t × d and its height h, as the union of its two arm
     /// boxes (its top, bottom and outer sides split along the seam the union leaves), every
     /// convex edge filleted by r: the fillets along the seam's split edges run on as one, and
-    /// the two over the concave edge's ends meet in a mitre, as on the prism itself. The
-    /// solid is then the L-shaped core shrunk by r swelled by r (the swelled core's corner
-    /// over the concave edge is that mitre): `V_A + V_B − V_C − (1 − π/4)(H'r² + 4r³/3)`
+    /// the two over the concave edge's ends meet as on the prism itself, the ball swinging
+    /// round the concave edge in a horn torus. The solid is then the L-shaped core shrunk by
+    /// r swelled by r, `V_A + V_B − V_C − (1 − π/4)(H'r² + 4r³/3)` (the swelled core's corner
+    /// over the concave edge is a mitre), and the `(1 − π/4)(5/3 − π/2)r³` the torus keeps
+    /// at each end of the concave edge over the mitre,
     /// with H' = h − 2r, each arm and the corner column a box rounded by r all round,
     /// `abc + 2r(ab + bc + ca) + πr²(a + b + c) + 4πr³/3` on the box a × b × c inset by r.
     #[test]
@@ -4745,7 +4985,7 @@ mod tests {
         assert!(validity::check(&model, rounded).is_valid());
         let rounded_block = |a: f64, b: f64, c: f64| a * b * c + 2.0 * r * (a * b + b * c + c * a) + PI * r * r * (a + b + c) + 4.0 / 3.0 * PI * r.powi(3);
         let (va, vb, vc) = (rounded_block(w - 2.0 * r, t - 2.0 * r, h - 2.0 * r), rounded_block(t - 2.0 * r, d - 2.0 * r, h - 2.0 * r), rounded_block(t - 2.0 * r, t - 2.0 * r, h - 2.0 * r));
-        let want = va + vb - vc - (1.0 - PI / 4.0) * ((h - 2.0 * r) * r * r + 4.0 / 3.0 * r.powi(3));
+        let want = va + vb - vc - (1.0 - PI / 4.0) * ((h - 2.0 * r) * r * r + 4.0 / 3.0 * r.powi(3)) + 2.0 * (1.0 - PI / 4.0) * (5.0 / 3.0 - PI / 2.0) * r.powi(3);
         let got = properties::volume(&model, rounded).mass;
         assert!((got - want).abs() < 1e-7 * want, "{got} against {want}");
     }
@@ -5199,11 +5439,17 @@ mod tests {
     }
 
     /// A block (20 x 20 x 6) with a pocket (10 x 8, 3 deep) in its top: the pocket's rim
-    /// bevelled (1) or rounded (R 1), the blends mitred at its corners, which are concave
-    /// on the top face (OCCT gives these values).
+    /// bevelled (1) or rounded (R 1), at its corners, which are concave on the top face.
+    /// The chamfers meet in mitres (OCCT's value). The fillets' ball swings round each of the
+    /// pocket's upright edges from one fillet on to the next, in a horn torus (a face each):
+    /// the moulding, `(1 − π/4)r²` across, mitred all round would take `(1 − π/4)·36 + 8(5/6 −
+    /// π/4)` (its section's centroid `(5/6 − π/4)/(1 − π/4)` from the rim), and each corner
+    /// keeps `(1 − π/4)(5/3 − π/2)` of what the mitre takes (OCCT mitres them: 2151.8909).
     #[test]
-    fn blends_round_a_pocket_rim_meet_in_mitres() {
-        for (round, expected) in [(false, 2140.6667), (true, 2151.8909)] {
+    fn blends_round_a_pocket_rim_meet_in_mitres_or_swing_round_its_corners() {
+        let k = 1.0 - PI / 4.0;
+        let rounded = 2160.0 - (36.0 * k + 8.0 * (5.0 / 6.0 - PI / 4.0)) + 4.0 * k * (5.0 / 3.0 - PI / 2.0);
+        for (round, expected) in [(false, 2140.6667), (true, rounded)] {
             let mut model = Model::new();
             let block = Cuboid::new(20.0, 20.0, 6.0).build(&mut model).unwrap();
             let pocket = Cuboid::new(10.0, 8.0, 4.0).with_frame(Frame::from_z(Point::new(5.0, 6.0, 3.0), Direction::Z)).build(&mut model).unwrap();
@@ -5216,9 +5462,9 @@ mod tests {
             assert_eq!(rim.len(), 4);
             let result = if round { fillet(&mut model, shape, &rim, 1.0) } else { chamfer(&mut model, shape, &rim, 1.0) }.unwrap();
             assert!(validity::check(&model, result).is_valid());
-            assert_eq!(model.unique_subshapes(result, NodeKind::Face).len(), 15);
+            assert_eq!(model.unique_subshapes(result, NodeKind::Face).len(), if round { 19 } else { 15 });
             let volume = properties::volume(&model, result).mass;
-            assert!((volume - expected).abs() < 1e-3, "{volume} not {expected}");
+            assert!((volume - expected).abs() < if round { 1e-7 * expected } else { 1e-3 }, "{volume} not {expected}");
         }
     }
 
@@ -5858,12 +6104,17 @@ mod tests {
 
     /// A 30 x 30 x 10 block with a 10 x 16 pocket 4 deep in its top: the rim's long edge
     /// rounded (R 1), then a short edge meeting it at the pocket's corner, on its own. The
-    /// two fillets meet as when both are rounded at once (OCCT's values: its fillet of one
-    /// then the other is so too), not the later running square into the earlier's cylinder.
-    /// Of radius 0.99 the later meets it so too.
+    /// two fillets meet as when both are rounded at once, not the later running square into
+    /// the earlier's cylinder. Of radius 1 the ball swings round the pocket's upright edge
+    /// in a horn torus: OCCT's values (its fillet of one then the other meets them in a
+    /// mitre) with the corner's `(1 − π/4)(5/3 − π/2)` of volume the torus keeps, and its
+    /// area, `(π/2)(π/2 − 1)`, for the mitre's two cylinder pieces, `π/2 − 1` each, and the
+    /// `1 − π/4` the top keeps. Of radius 0.99 the later meets it in a mitre (OCCT's values).
     #[test]
     fn a_fillet_meets_one_made_before_at_a_pockets_corner() {
-        for (radius, occt_volume, occt_area, faces) in [(1.0, 8354.32448, 3197.41150, Some(13)), (0.99, 8354.39425, 3197.47451, None)] {
+        let k = 1.0 - PI / 4.0;
+        let (swing, swing_area) = (k * (5.0 / 3.0 - PI / 2.0), (2.0 - PI / 2.0) * (PI / 2.0 - 1.0) - k);
+        for (radius, want_volume, want_area, faces) in [(1.0, 8354.32448 + swing, 3197.41150 - swing_area, Some(14)), (0.99, 8354.39425, 3197.47451, None)] {
             let mut model = Model::new();
             let block = Cuboid::from_corners(Point::new(-15.0, -15.0, -5.0), Point::new(15.0, 15.0, 5.0)).build(&mut model).unwrap();
             let pocket = Cuboid::from_corners(Point::new(-5.0, -8.0, 1.0), Point::new(5.0, 8.0, 6.0)).build(&mut model).unwrap();
@@ -5885,9 +6136,9 @@ mod tests {
             let report = validity::check(&model, both);
             assert!(report.problems.is_empty(), "{report:?}");
             let v = properties::volume(&model, both).mass;
-            assert!((v - occt_volume).abs() < 1e-7 * v, "{v}");
+            assert!((v - want_volume).abs() < 1e-7 * v, "{v}");
             let a = properties::area(&model, both).mass;
-            assert!((a - occt_area).abs() < 1e-5 * a, "{a}");
+            assert!((a - want_area).abs() < 1e-5 * a, "{a}");
             if let Some(faces) = faces {
                 assert_eq!(model.unique_subshapes(both, NodeKind::Face).len(), faces);
             }
@@ -6352,15 +6603,19 @@ mod tests {
         assert!(least > 0.01, "a face of {least}");
     }
 
-    /// A 30 x 20 pocket 10 deep, its rim rounded R 1 (the rim's fillets meeting in mitre
-    /// ellipses in the pocket's inner corners), its floor's two short edges R 2, then a long
-    /// one R 2: the rounding runs on round the short ones' ends, up the corners and on along
-    /// the valleys between the rim's fillets, a ball larger than their rounding. Its tool's
-    /// sections there, closed far out along the rays, came back on one another (the tool
-    /// folding through itself and its union left open, the fillet run on over the solid);
-    /// closed at the edge they run on. OCCT: 42052.09372.
+    /// A 30 x 20 pocket 10 deep, its rim rounded R 1, its floor's two short edges R 2, then a
+    /// long one R 2: the rounding runs on round the short ones' ends and up the corners. Its
+    /// tool's sections there, closed far out along the rays, came back on one another (the
+    /// tool folding through itself and its union left open, the fillet run on over the
+    /// solid); closed at the edge they run on. The rim's ball swings round the pocket's
+    /// upright edges (a horn torus at each corner, `(1 − π/4)(5/3 − π/2)` more than a mitre
+    /// keeps: the rim alone is exact), so the run up a corner ends at the torus's apex, where
+    /// the upright edge does: short of the ball rolling on between the rim's two fillets
+    /// there, 0.35 at each corner by a voxel closing of what it rounds (docs/known-gaps.md).
+    /// (On OCCT's mitred rim, whose fillets meet in a valley the rounding runs on along,
+    /// OCCT gives 42052.09372.)
     #[test]
-    fn a_floor_fillet_runs_up_into_the_valleys_of_a_rounded_rim() {
+    fn a_floor_fillet_runs_up_the_corners_of_a_rounded_rim() {
         let mut model = Model::new();
         let block = Cuboid::from_corners(Point::new(-30.0, -20.0, -10.0), Point::new(30.0, 20.0, 10.0)).build(&mut model).unwrap();
         let pocket = Cuboid::from_corners(Point::new(-15.0, -10.0, 0.0), Point::new(15.0, 10.0, 11.0)).build(&mut model).unwrap();
@@ -6378,6 +6633,12 @@ mod tests {
         let rim = along(&model, body, &|p, q| p.z == 10.0 && q.z == 10.0 && p.x.abs() <= 15.0 && q.x.abs() <= 15.0 && p.y.abs() <= 10.0 && q.y.abs() <= 10.0);
         assert_eq!(rim.len(), 4);
         body = fillet(&mut model, body, &rim, 1.0).unwrap();
+        // (The pocket less the rim's moulding mitred all round, `(1 − π/4)·100 + 8(5/6 − π/4)`,
+        // and what the four tori keep.)
+        let k = 1.0 - PI / 4.0;
+        let rimmed = 42000.0 - (100.0 * k + 8.0 * (5.0 / 6.0 - PI / 4.0)) + 4.0 * k * (5.0 / 3.0 - PI / 2.0);
+        let v = properties::volume(&model, body).mass;
+        assert!((v - rimmed).abs() < 1e-9 * v, "{v} against {rimmed}");
         for x in [-15.0, 15.0] {
             let floor = along(&model, body, &|p, q| (p.x - x).abs() < 1e-9 && (q.x - x).abs() < 1e-9 && p.z.abs() < 1e-9 && q.z.abs() < 1e-9);
             assert_eq!(floor.len(), 1);
@@ -6387,8 +6648,9 @@ mod tests {
         assert_eq!(long.len(), 1);
         let rounded = fillet(&mut model, body, &long, 2.0).unwrap();
         assert!(validity::check(&model, rounded).is_valid());
+        // (kentron's own value, a regression check: see above.)
         let v = properties::volume(&model, rounded).mass;
-        assert!((v - 42052.09372).abs() < 1e-5 * v, "{v}");
+        assert!((v - 42051.10001).abs() < 1e-7 * v, "{v}");
     }
 
     #[test]

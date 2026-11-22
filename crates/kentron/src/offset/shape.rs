@@ -1972,6 +1972,29 @@ mod tests {
         assert!((v - 92.3586).abs() < 1e-3, "{v}");
     }
 
+    /// An L-prism, arms w × t and t × d, height h, grown by s with rounded joins: the points
+    /// within s of it, the union of its two arms grown by s, each a box rounded by s all round
+    /// (`abc + 2s(ab + bc + ca) + πs²(a + b + c) + 4πs³/3`), less their common part, the corner
+    /// column t × t grown by s with the square corners k = 1 − π/4 of s² it lacks outside
+    /// the concave edge (and those of its ends' corners, 4ks³/3). Over the concave edge's
+    /// ends the rounds of the top's two edges there meet in a mitre: there each point lies
+    /// nearest one of the two edges, unlike a ball rolling in the grown solid, which swings
+    /// round the edge (the fillets' horn torus).
+    #[test]
+    fn an_l_prism_grown_with_rounds_mitres_them_over_its_concave_edge() {
+        let (w, t, d, h, s) = (6.5, 2.7, 7.25, 3.1, 1.3);
+        let mut model = Model::new();
+        let l = prism(&mut model, &[(0.0, 0.0), (w, 0.0), (w, t), (t, t), (t, d), (0.0, d)], h);
+        let grown = shape(&mut model, l, s, Join::Arc).unwrap();
+        valid(&model, grown);
+        use std::f64::consts::PI;
+        let block =|a: f64, b: f64, c: f64| a * b * c + 2.0 * s * (a * b + b * c + c * a) + PI * s * s * (a + b + c) + 4.0 / 3.0 * PI * s.powi(3);
+        let k = 1.0 - PI / 4.0;
+        let want = block(w, t, h) + block(t, d, h) - block(t, t, h) - k * (h * s * s + 4.0 / 3.0 * s.powi(3));
+        let v = volume(&model, grown).mass;
+        assert!((v - want).abs() < 1e-9 * want, "{v} against {want}");
+    }
+
     /// A block's outline extruded (its corners in order), 3 high.
     fn prism(model: &mut Model, corners: &[(f64, f64)], h: f64) -> Shape {
         use crate::math::Vector;
