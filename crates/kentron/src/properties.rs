@@ -1434,7 +1434,14 @@ fn face_extremes(model: &Model, face: Shape, surface: &Surface) -> Vec<Point> {
     let clamp_v = |v: f64| v.clamp(-1e6, 1e6);
     for wire in model.children(Shape { orientation: Orientation::Forward, ..face }) {
         let mut points: Vec<[f64; 2]> = Vec::new();
-        for coedge in model.children(wire) {
+        // (A wire reversed on the face runs through its coedges backwards: in their order as
+        // stored, the loop's polygon would cross itself, as a whole sphere's does, its four
+        // sides then a bow tie.)
+        let mut coedges: Vec<Shape> = model.children(wire).collect();
+        if wire.orientation == Orientation::Reversed {
+            coedges.reverse();
+        }
+        for coedge in coedges {
             let Ok(id) = crate::topology::CoEdgeId::try_from(coedge.node) else { continue };
             let Some((pcurve, a, c)) = model.effective_pcurve(id) else { continue };
             // Along the loop's direction (the coedge's own orientation in the wire, the
@@ -1694,6 +1701,21 @@ mod tests {
     use crate::math::Direction;
     use crate::primitives::Cuboid;
     use std::f64::consts::TAU;
+
+    /// A ball turned any way is boxed by its centre ± its radius: its face's wire, reversed
+    /// on the face, walked backwards (in stored order its loop crossed itself, and extremes
+    /// lying in the crossed-off parts of the bow tie were missed, the box cut short).
+    #[test]
+    fn a_turned_ball_boxed_whole() {
+        let mut model = Model::new();
+        let r = [[0.9788398224233601, 0.18094247081611328, -0.09556371849799977], [0.1493341997978843, -0.9509430121093625, -0.2709366798554569], [-0.13989960260461975, 0.25093268016608106, -0.9578417881966399]];
+        let column = |j: usize| Direction::new(r[0][j], r[1][j], r[2][j]);
+        let c = Point::new(1.0, -2.0, 3.0);
+        let ball = crate::primitives::Sphere::new(1.5).with_frame(crate::math::Frame::new(c, column(2), column(0))).build(&mut model).unwrap();
+        let b = tight_bounding_box(&model, ball);
+        let expected = Vector::new(1.5, 1.5, 1.5);
+        assert!(b.min.distance(c - expected) < 1e-12 && b.max.distance(c + expected) < 1e-12, "{b:?}");
+    }
 
     #[test]
     fn areas_within_a_precision() {

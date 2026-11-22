@@ -943,6 +943,24 @@ mod tests {
     /// Two unit boxes, one moved 5 along x, the other -15, fused: apart, each is kept as it
     /// was, placed where it was (as OCCT's fuse keeps them: a selection by nearness then
     /// finds the operand itself among the result's solids).
+    /// Two balls turned alike, overlapping: what they share is the lens of closed form,
+    /// `π (a + b − d)² (d² + 2d(a + b) − 3(a − b)²) / 12d`, whichever way they are turned
+    /// (each ball's box was once cut short for some turns, and points of the other inside the
+    /// ball taken to be outside it).
+    #[test]
+    fn turned_balls_share_their_lens() {
+        let (a, b, d) = (1.5, 2.0, 0.8636146524836521);
+        let r = [[0.9788398224233601, 0.18094247081611328, -0.09556371849799977], [0.1493341997978843, -0.9509430121093625, -0.2709366798554569], [-0.13989960260461975, 0.25093268016608106, -0.9578417881966399]];
+        let column = |j: usize| Direction::new(r[0][j], r[1][j], r[2][j]);
+        let mut model = Model::new();
+        let first = Sphere::new(a).with_frame(Frame::new(Point::ORIGIN, column(2), column(0))).build(&mut model).unwrap();
+        let second = Sphere::new(b).with_frame(Frame::new(Point::ORIGIN + Vector::from(column(0)) * d, column(2), column(0))).build(&mut model).unwrap();
+        let common = intersection(&mut model, first, second).unwrap();
+        let lens = PI * (a + b - d).powi(2) * (d * d + 2.0 * d * (a + b) - 3.0 * (a - b).powi(2)) / (12.0 * d);
+        let volume = crate::properties::volume(&model, common).mass;
+        assert!((volume - lens).abs() < 1e-6 * lens, "volume {volume}, lens {lens}");
+    }
+
     #[test]
     fn solids_apart_are_kept_as_they_are() {
         let mut model = Model::new();
