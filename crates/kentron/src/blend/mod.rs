@@ -1048,6 +1048,68 @@ fn reach_by_cylinder(c: &Corner, k: usize, r: f64, cylinder: &crate::geometry::s
 /// for a fillet to be carried on from one to the other where it cannot end between them.
 pub(crate) const KINK: f64 = 2e-5;
 
+/// The fillet of the two edges `pair` of the planar face `narrow`, at `radius`, where the
+/// ball is too big to roll on `narrow` (the two fillets' contacts on it would pass each other):
+/// the ball rests on the faces `beyond` (the faces past `narrow` at each edge), bridging over
+/// `narrow`, and rolls touching them alone, as if they ran on to meet with `narrow` not there.
+/// `narrow` lies wholly in what the ball's sweep removes, so none of it is left.
+///
+/// OCCT's ChFi3d fails here (the walk along each edge leaves `narrow` across its far edge);
+/// this is built instead from the definition, by [`runover::fillet_faces`], the ball rolled
+/// between the two faces beyond and everything past its contacts cut away. `None` where that
+/// does not apply (the faces beyond are not planes, or the round leaves some of `narrow`: a
+/// ball too big for the two fillets and too small to bridge the face, which no fillet fits).
+fn swallowing(model: &mut Model, shape: Shape, narrow: NodeId, pair: [Shape; 2], beyond: [NodeId; 2], radius: f64) -> Result<Option<Shape>> {
+    let faces = model.unique_subshapes(shape, NodeKind::Face);
+    let find = |id: NodeId| faces.iter().copied().find(|f| f.node == id);
+    let (Some(n), Some(a), Some(b)) = (find(narrow), find(beyond[0]), find(beyond[1])) else { return Ok(None) };
+    let planar = |f: Shape| matches!(model.surface(f), Some(Surface::Plane(_)));
+    if !planar(a) || !planar(b) {
+        return Ok(None);
+    }
+    // (The narrow face between the two edges alone: both of them its edges.)
+    let own = model.unique_subshapes(n, NodeKind::Edge);
+    if !pair.iter().all(|e| own.iter().any(|o| o.node == e.node)) {
+        return Ok(None);
+    }
+    let Ok(rounded) = runover::fillet_faces(model, shape, a, b, radius) else { return Ok(None) };
+    // None of the narrow face left: its corners and the middles of its edges outside.
+    let mut points: Vec<Point> = model.unique_subshapes(n, NodeKind::Vertex).into_iter().map(|v| model.point(v)).collect();
+    for e in &own {
+        use crate::geometry::ParametricCurve;
+        if let Some((curve, first, last)) = model.edge_curve(Shape { orientation: Orientation::Forward, ..*e }) {
+            points.push(curve.point(0.5 * (first + last)));
+        }
+    }
+    let classifier = boolean::PointClassifier::new(model, rounded)?;
+    if points.iter().any(|&p| classifier.locate(p) != boolean::PointLocation::Outside) {
+        return Ok(None);
+    }
+    Ok(Some(rounded))
+}
+
+/// The edges `rest` (of the solid a swallowing fillet was made on) found again on `rounded`
+/// and filleted there: each as the edge of `rounded` that its ends and middle lie on.
+fn fillet_rest(model: &mut Model, rounded: Shape, rest: &[(Shape, f64)], elementary: bool, over_kinks: bool, sharp: &[(Curve, f64, f64)]) -> Result<Shape> {
+    use crate::geometry::ParametricCurve;
+    if rest.is_empty() {
+        return Ok(rounded);
+    }
+    let edges = model.unique_subshapes(rounded, NodeKind::Edge);
+    let mut found = Vec::with_capacity(rest.len());
+    for &(edge, radius) in rest {
+        let (curve, first, last) = model.edge_curve(Shape { orientation: Orientation::Forward, ..edge }).ok_or_else(|| Error::InvalidInput("a fillet edge without a curve".into()))?;
+        let points = [curve.point(first), curve.point(0.5 * (first + last)), curve.point(last)];
+        let tol = 1e-6 * points[0].distance(points[1]).max(1.0);
+        let on = edges.iter().copied().find(|&e| {
+            let Some((c, a, b)) = model.edge_curve(Shape { orientation: Orientation::Forward, ..e }) else { return false };
+            points.iter().all(|&p| crate::geometry::extrema::nearest_on_curve(p, &c, a, b).distance <= tol)
+        });
+        found.push((on.ok_or_else(|| Error::Failed("a fillet edge not found again past a swallowed face".into()))?, radius));
+    }
+    fillet_solid_edges_as(model, rounded, &found, elementary, over_kinks, sharp)
+}
+
 /// [`fillet_solid_edges`], the cylinder and torus fillets made as tools for boolean
 /// operations where `elementary`, else rolled as the others; carried on over slight kinks
 /// (within [`KINK`]) where `over_kinks`; not onto edges along the curves `sharp`.
@@ -1071,12 +1133,13 @@ fn fillet_solid_edges_as(model: &mut Model, shape: Shape, edges: &[(Shape, f64)]
     // it pass each other (as round both long edges of a strip narrower than twice the
     // radius): no fillet there leaves the face between them, as OCCT finds. (Contacts
     // meeting, a strip rounded right across, are a fillet each still.)
-    let straight: Vec<(Corner, f64)> = classified
+    let straight: Vec<(Corner, f64, usize)> = classified
         .iter()
-        .filter_map(|&(edge, radius, _)| Corner::of(model, shape, edge, false).ok().flatten().filter(|c| matches!(c.path, Path::Line { .. }) && c.convex).map(|c| (c, radius)))
+        .enumerate()
+        .filter_map(|(k, &(edge, radius, _))| Corner::of(model, shape, edge, false).ok().flatten().filter(|c| matches!(c.path, Path::Line { .. }) && c.convex).map(|c| (c, radius, k)))
         .collect();
-    for (i, (a, ra)) in straight.iter().enumerate() {
-        for (b, rb) in &straight[i + 1..] {
+    for (i, (a, ra, ia)) in straight.iter().enumerate() {
+        for (b, rb, ib) in &straight[i + 1..] {
             if a.tangent.cross(b.tangent).length() > 1e-9 * a.tangent.length() * b.tangent.length() {
                 continue;
             }
@@ -1102,6 +1165,15 @@ fn fillet_solid_edges_as(model: &mut Model, shape: Shape, edges: &[(Shape, f64)]
                 let (lo, hi) = (along(b.origin).min(along(b.end)), along(b.origin).max(along(b.end)));
                 let beside = hi > tolerance::LINEAR && lo < a.origin.distance(a.end) - tolerance::LINEAR;
                 if apart > tolerance::LINEAR && facing && beside && reach(a, ka, *ra) + reach(b, kb, *rb) > apart + tolerance::LINEAR {
+                    // Both edges of a narrow face, between two others, at one radius: the ball
+                    // bridges over the face, rolling on the two beyond it, and swallows it.
+                    let rest: Vec<(Shape, f64)> = classified.iter().enumerate().filter(|&(k, _)| k != *ia && k != *ib).map(|(_, &(e, r, _))| (e, r)).collect();
+                    let (pair, beyond) = ([classified[*ia].0, classified[*ib].0], [a.faces[1 - ka].0, b.faces[1 - kb].0]);
+                    if (ra - rb).abs() <= tolerance::LINEAR && beyond[0] != beyond[1] && beyond.iter().all(|&f| f != fa.0) {
+                        if let Some(swallowed) = swallowing(model, shape, fa.0, pair, beyond, *ra)? {
+                            return fillet_rest(model, swallowed, &rest, elementary, over_kinks, sharp);
+                        }
+                    }
                     return Err(Error::InvalidInput("two fillets passing each other across a face".into()));
                 }
             }
@@ -6675,6 +6747,52 @@ mod tests {
         assert!(report.problems.is_empty(), "{report:?}");
         let v = properties::volume(&model, rounded).mass;
         assert!((v - 7448.7719).abs() < 0.1, "{v}");
+    }
+
+    /// A 10 × 10 × 5 block's vertical corner chamfered by a hair (0.01 back along each
+    /// side), both edges of the chamfer filleted by 1: the ball cannot touch the chamfer and
+    /// bridges over it, giving the sharp corner filleted, `500 − 5(1 − π/4)`, nothing of the
+    /// chamfer left. A ball small enough to roll on the chamfer gives two fillets instead.
+    #[test]
+    fn a_fillet_swallows_a_face_too_narrow_for_its_ball() {
+        let block = |model: &mut Model| {
+            let pts = [(0.0, 0.0), (10.0, 0.0), (10.0, 9.99), (9.99, 10.0), (0.0, 10.0)].map(|(x, y)| Point::new(x, y, 0.0));
+            let edges: Vec<Shape> = (0..5).map(|i| make::edge_between(model, pts[i], pts[(i + 1) % 5]).unwrap()).collect();
+            let wire = make::wire(model, &edges).unwrap();
+            let face = make::planar_face(model, wire).unwrap();
+            sweep::extrude(model, face, Vector::new(0.0, 0.0, 5.0)).unwrap().shape
+        };
+        let chamfer_edges = |model: &Model, s: Shape| -> Vec<Shape> {
+            model
+                .unique_subshapes(s, NodeKind::Edge)
+                .into_iter()
+                .filter(|&e| {
+                    let b = properties::bounding_box(model, e);
+                    b.min.x > 9.98 && b.min.y > 9.98 && b.max.z - b.min.z > 4.0
+                })
+                .collect()
+        };
+        let mut model = Model::new();
+        let s = block(&mut model);
+        let pair = chamfer_edges(&model, s);
+        assert_eq!(pair.len(), 2);
+        let rounded = fillet(&mut model, s, &pair, 1.0).unwrap();
+        assert!(validity::check(&model, rounded).is_valid());
+        let v = properties::volume(&model, rounded).mass;
+        let want = 500.0 - 5.0 * (1.0 - PI / 4.0);
+        assert!((v - want).abs() < 1e-6 * want, "{v}, not {want}");
+        // (None of the chamfer's plane left on the result.)
+        let chamfer = |p: Point| (p.x + p.y - 19.99).abs() < 1e-9;
+        assert!(model.unique_subshapes(rounded, NodeKind::Vertex).into_iter().all(|v| !chamfer(model.point(v))));
+        // A ball of 0.001 fits on the chamfer (about 0.0141 wide): two fillets, each taking
+        // off `5·r²·(tan(θ/2) − θ/2)` at its edge, turning by θ = π/4.
+        let s = block(&mut model);
+        let pair = chamfer_edges(&model, s);
+        let rounded = fillet(&mut model, s, &pair, 1e-3).unwrap();
+        let v = properties::volume(&model, rounded).mass;
+        let theta = PI / 4.0;
+        let want = 500.0 - 0.5 * 0.01 * 0.01 * 5.0 - 2.0 * 5.0 * 1e-6 * ((theta / 2.0).tan() - theta / 2.0);
+        assert!((v - want).abs() < 1e-9, "{v}, not {want}");
     }
 }
 

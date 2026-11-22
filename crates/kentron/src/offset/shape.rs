@@ -5,8 +5,11 @@
 //! meet, the new edge is where their offset surfaces meet (joined by intersection), traced
 //! point by point in the faces' parameters from the old edge and extended or cut back to the
 //! new vertices, each found where its faces' offset surfaces meet. Offsets small enough to
-//! leave every face in place are supported; faces vanishing or new ones appearing (as offsets
-//! grow past features) are not.
+//! leave every face in place are supported, and faces shrinking to nothing just as the faces
+//! round them meet (an edge's ends brought together, a step pushed level, a slot's wall
+//! pushed onto the other): those edges go, and the faces they leave enclosing no area drop
+//! out where the offset is regularized. Faces vanishing past that, or new ones appearing (as
+//! offsets grow past features), are not.
 
 use std::collections::HashMap;
 
@@ -704,18 +707,48 @@ fn replace_surfaces(
     // (Each vertex's tolerance covering how far it lies from the faces round it: where more
     // than three faces' offsets would meet, they meet in no one point.)
     let mut strained = false;
-    let new_vertices: Vec<VertexId> = new_points
+    // Edges the new surfaces shrink to a point (their ends' new points within the tolerance
+    // of each other, where they were apart: a slot's floor at its ends, its walls brought
+    // together): gone, their ends one vertex. (The faces they leave enclosing no area drop
+    // out after, where the offset is regularized.)
+    let shrunk: Vec<bool> = edges
         .iter()
-        .enumerate()
-        .map(|(v, &p)| {
-            let off = around[v].iter().map(|&(f, uv)| p.distance(foot_on(&faces[f].offset, p, uv, faces[f].nappe).1)).fold(0.0, f64::max);
-            strained |= off > 1e-5 * scale.max(1.0);
-            model.add_vertex(p, tolerance.max(off * (1.0 + 1e-6)))
-        })
+        .map(|e| e.curve.is_some() && e.start != e.end && new_points[e.start].distance(new_points[e.end]) <= tolerance && vertices[e.start].1.distance(vertices[e.end].1) > tolerance)
         .collect();
+    let mut joined: Vec<usize> = (0..vertices.len()).collect();
+    fn root(joined: &mut [usize], mut i: usize) -> usize {
+        while joined[i] != i {
+            joined[i] = joined[joined[i]];
+            i = joined[i];
+        }
+        i
+    }
+    for (e, _) in edges.iter().zip(&shrunk).filter(|(_, &s)| s) {
+        let (a, b) = (root(&mut joined, e.start), root(&mut joined, e.end));
+        joined[a.max(b)] = a.min(b);
+    }
+    let mut new_vertices: Vec<Option<VertexId>> = vec![None; vertices.len()];
+    for v in 0..vertices.len() {
+        let r = root(&mut joined, v);
+        if new_vertices[r].is_none() {
+            let p = new_points[r];
+            let off = around[r].iter().map(|&(f, uv)| p.distance(foot_on(&faces[f].offset, p, uv, faces[f].nappe).1)).fold(0.0, f64::max);
+            strained |= off > 1e-5 * scale.max(1.0);
+            new_vertices[r] = Some(model.add_vertex(p, tolerance.max(off * (1.0 + 1e-6))));
+        }
+        new_vertices[v] = new_vertices[r];
+    }
+    let new_vertices: Vec<VertexId> = new_vertices.into_iter().map(|v| v.expect("a vertex for each")).collect();
+    let new_points: Vec<Point> = (0..vertices.len()).map(|v| new_points[root(&mut joined, v)]).collect();
     // The new edges, with their pcurves on the faces using them.
     let mut new_edges: Vec<(EdgeId, Vec<(Curve2, f64, f64)>)> = Vec::with_capacity(edges.len());
-    for edge in &edges {
+    for (edge, &gone) in edges.iter().zip(&shrunk) {
+        if gone {
+            // (No pcurves: left out of the wires.)
+            let v = new_vertices[edge.start];
+            new_edges.push((model.add_edge(v, v, tolerance)?, Vec::new()));
+            continue;
+        }
         new_edges.push(trace_edge(model, &faces, edge, &new_points, &new_vertices, tolerance, ordered)?);
         // (Each new face and edge from the one it replaces, for the history.)
         crate::boolean::record(model.uid(), edge.shape.node, new_edges[new_edges.len() - 1].0.into());
@@ -2040,4 +2073,49 @@ mod tests {
         assert!((v - expected).abs() < 1e-6 * expected, "{v}, not {expected}");
     }
 
+    /// The planar face of `solid` on the plane `x = x0` (`axis` 0) or `y = x0` (`axis` 1).
+    fn face_across(model: &Model, solid: Shape, axis: usize, x0: f64) -> Shape {
+        model
+            .unique_subshapes(solid, NodeKind::Face)
+            .into_iter()
+            .find(|&f| {
+                let b = crate::properties::bounding_box(model, f);
+                let (lo, hi) = if axis == 0 { (b.min.x, b.max.x) } else { (b.min.y, b.max.y) };
+                (lo - x0).abs() < 1e-6 && (hi - x0).abs() < 1e-6
+            })
+            .unwrap()
+    }
+
+    /// A slot's wall pushed across to the other wall closes the slot, its floor shrinking to
+    /// nothing and dropping out: the block it was cut from, `w·h·t`. (Walls at positions
+    /// whose difference is not exact in floating point, so that the floor's ends shrink to
+    /// rounding, not to zero.)
+    #[test]
+    fn a_slot_wall_pushed_across_closes_the_slot() {
+        let (w, h, floor, a, b, t) = (7.375903186017899, 6.016471622972029, 3.1669941383830826, 1.9010966447304922, 5.481541705286095, 4.0);
+        let mut model = Model::new();
+        let slotted = prism(&mut model, &[(0.0, 0.0), (w, 0.0), (w, h), (b, h), (b, floor), (a, floor), (a, h), (0.0, h)], t);
+        let wall = face_across(&model, slotted, 0, a);
+        let closed = shape_with_faces(&mut model, slotted, 0.0, &[(wall, b - a)], Join::Intersection).unwrap();
+        valid(&model, closed);
+        let v = volume(&model, closed).mass;
+        assert!((v - w * h * t).abs() < 1e-6 * w * h * t, "{v}");
+    }
+
+    /// A step's lower top pushed up level with the higher one: the riser between them
+    /// shrinks to nothing and drops out, leaving the block `w·high·t`; and the higher top
+    /// pulled down level with the lower, `w·low·t`.
+    #[test]
+    fn a_step_pushed_level_leaves_a_block() {
+        let (w, s, low, high, t) = (9.37216, 4.118327, 1.7330172, 6.20943119, 3.5);
+        for (at, d, want) in [(low, high - low, w * high * t), (high, low - high, w * low * t)] {
+            let mut model = Model::new();
+            let stepped = prism(&mut model, &[(0.0, 0.0), (w, 0.0), (w, low), (s, low), (s, high), (0.0, high)], t);
+            let top = face_across(&model, stepped, 1, at);
+            let level = shape_with_faces(&mut model, stepped, 0.0, &[(top, d)], Join::Intersection).unwrap();
+            valid(&model, level);
+            let v = volume(&model, level).mass;
+            assert!((v - want).abs() < 1e-6 * want, "{v}, not {want}");
+        }
+    }
 }

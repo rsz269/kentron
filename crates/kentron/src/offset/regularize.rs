@@ -123,6 +123,12 @@ fn simple_pieces(model: &mut Model, face: Shape) -> Result<Vec<(Shape, i32)>> {
     let Some(surface @ Surface::Plane(_)) = model.surface(face).cloned() else { return once };
     let Some(loops) = face_loops(model, face) else { return once };
     let polygons: Vec<Vec<Point2>> = loops.iter().map(|l| l.iter().flat_map(|u| (0..32).map(move |i| u.at(i as f64 / 32.0))).collect()).collect();
+    // A face shrunk to nothing (its loops' area no wider than the tolerance along them, as
+    // a slot's floor whose walls the offset brings together): it winds round nothing, and
+    // drops out.
+    if shrunk_to_nothing(&polygons) {
+        return Ok(Vec::new());
+    }
     if !crosses_itself(&polygons) {
         // (Its loops turned round, as where an offset moved the face past its neighbours:
         // it covers its surface the other way.)
@@ -205,6 +211,21 @@ pub(super) fn crosses_itself(polygons: &[Vec<Point2>]) -> bool {
         }
     }
     false
+}
+
+/// Whether the closed polygons enclose no area wider than the tolerance [`crosses_itself`]
+/// takes (`1e-7` of their extent): twice their area over the length round them, the width
+/// of a strip, below it.
+fn shrunk_to_nothing(polygons: &[Vec<Point2>]) -> bool {
+    let (mut lo, mut hi) = (Point2::new(f64::INFINITY, f64::INFINITY), Point2::new(f64::NEG_INFINITY, f64::NEG_INFINITY));
+    for p in polygons.iter().flatten() {
+        lo = Point2::new(lo.x.min(p.x), lo.y.min(p.y));
+        hi = Point2::new(hi.x.max(p.x), hi.y.max(p.y));
+    }
+    let near = 1e-7 * (hi - lo).length();
+    let area: f64 = polygons.iter().map(|p| signed_area(p)).sum();
+    let round: f64 = polygons.iter().map(|p| (0..p.len()).map(|i| (p[(i + 1) % p.len()] - p[i]).length()).sum::<f64>()).sum();
+    round > 0.0 && 2.0 * area.abs() <= near * round
 }
 
 /// The polygon's area, positive where it runs anticlockwise.

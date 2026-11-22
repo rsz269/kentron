@@ -308,8 +308,17 @@ impl Sides {
         }
         let mut around = Vec::with_capacity(by_edge.len());
         for (_, list) in by_edge {
+            // (An edge with no direction, or a face with none in from it: shrunk to a point,
+            // or to a sliver, bounding nothing that can be ordered round it.)
+            let degenerate = |v: Vector| !(v.length() > crate::tolerance::RESOLUTION);
+            if degenerate(list[0].2) {
+                return Err(Error::Failed("enclosing solids: an edge of no length".into()));
+            }
             let tangent = list[0].2.normalized();
             let flat = |v: Vector| v - tangent * v.dot(tangent);
+            if degenerate(flat(list[0].3)) {
+                return Err(Error::Failed("enclosing solids: a face with no width at an edge".into()));
+            }
             let x = flat(list[0].3).normalized();
             let y = tangent.cross(x);
             let angle = |v: Vector| {

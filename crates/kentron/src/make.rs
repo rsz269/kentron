@@ -313,8 +313,10 @@ fn wire_polygon(model: &Model, wire: Shape) -> Result<(Vec<Point>, Vector, f64)>
         }
     }
     let n = points.len();
+    // (About the wire's first point, not the origin: a small wire far from the origin has
+    // an area far below the products of its points' positions, which cancel to rounding.)
     let normal = (0..n).fold(Vector::ZERO, |acc, i| {
-        let (a, b) = (points[i] - Point::ORIGIN, points[(i + 1) % n] - Point::ORIGIN);
+        let (a, b) = (points[i] - points[0], points[(i + 1) % n] - points[0]);
         acc + a.cross(b) * 0.5
     });
     Ok((points, normal, tolerance))
@@ -729,6 +731,26 @@ mod tests {
         let expected = 2.0 * (5.0 * std::f64::consts::PI * 0.09 + 2.0 * 2.0 * std::f64::consts::PI * 0.3 * j1);
         let area = crate::properties::area(&model, made).mass;
         assert!((area - expected).abs() < 1e-4 * expected, "{area} vs {expected}");
+    }
+
+    /// A small wire far from the origin (a fillet's section, a few ten-thousandths across, 70
+    /// out on a skew plane) gets its plane true to the wire: each edge has its pcurve on it,
+    /// and the face the area of its triangle, `ab/2`.
+    #[test]
+    fn a_small_wire_far_out_lies_on_its_plane() {
+        let mut model = Model::new();
+        let o = Point::new(49.2145, -34.1259, -49.0410);
+        let (x, y) = (Vector::new(-0.7493243688826432, -0.6118142626704354, -0.2533698841450184), Vector::new(0.42199712476286305, -0.14631839857017392, -0.8947118826369392));
+        let (a, b) = (3.8e-4, 2.9e-4);
+        let corners = [o, o + x * a, o + y * b];
+        let edges: Vec<Shape> = (0..3).map(|i| edge_between(&mut model, corners[i], corners[(i + 1) % 3]).unwrap()).collect();
+        let wire = wire(&mut model, &edges).unwrap();
+        let face = planar_face(&mut model, wire).unwrap();
+        for coedge in model.explore(face, NodeKind::CoEdge).collect::<Vec<_>>() {
+            assert!(model.effective_pcurve(crate::topology::CoEdgeId::try_from(coedge.node).unwrap()).is_some());
+        }
+        let area = crate::properties::area(&model, face).mass;
+        assert!((area - a * b / 2.0).abs() < 1e-6 * a * b, "{area}");
     }
 }
 
