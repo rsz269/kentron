@@ -125,7 +125,83 @@ impl Loft {
 #[doc(alias = "BRepOffsetAPI_ThruSections")]
 #[doc(alias = "thrusections")]
 pub fn loft(model: &mut Model, sections: &[Shape], options: &LoftOptions) -> Result<Loft> {
+    if sections_out_of_order(model, sections) {
+        return Err(Error::InvalidInput("loft sections on parallel planes out of order: the loft would fold back through itself".into()));
+    }
     loft_traced(model, sections, options, &[], false, false)
+}
+
+/// Whether `sections` (wires, or vertices first and last) all lie on parallel planes (a
+/// vertex at its place across them) but not in order across those planes: each section
+/// further on than the last, the same way (none on the plane of the one before). A loft
+/// through such sections runs back over itself, or flat along a plane, and bounds no solid.
+/// (OCCT's `BRepOffsetAPI_ThruSections` takes the sections in any order; this is the loft's
+/// own condition: a solid through sections across parallel planes meets each plane once.)
+fn sections_out_of_order(model: &Model, sections: &[Shape]) -> bool {
+    // Points spanning what each section's curves lie in: a line's ends, a conic's centre and
+    // its frame's axes, a spline's poles (its curve within their hull); a vertex's point.
+    // (Not samples along the curves: a helix sampled once a turn would look flat.)
+    fn spanning(curve: &Curve, first: f64, last: f64) -> Option<Vec<Point>> {
+        let frame = |f: &Frame| vec![f.origin(), f.origin() + Vector::from(f.x()), f.origin() + Vector::from(f.y())];
+        Some(match curve {
+            Curve::Line(_) => vec![curve.point(first), curve.point(last)],
+            Curve::Circle(c) => frame(c.frame()),
+            Curve::Ellipse(c) => frame(c.frame()),
+            Curve::Hyperbola(c) => frame(c.frame()),
+            Curve::Parabola(c) => frame(c.frame()),
+            Curve::Bezier(b) => b.poles().to_vec(),
+            Curve::BSpline(b) => b.poles().to_vec(),
+            Curve::Trimmed(t) => spanning(t.basis(), first, last)?,
+            Curve::Offset(_) => return None,
+        })
+    }
+    let mut points: Vec<Vec<Point>> = Vec::with_capacity(sections.len());
+    for &s in sections {
+        if s.kind() == NodeKind::Vertex {
+            points.push(vec![model.point(s)]);
+            continue;
+        }
+        let mut pts = Vec::new();
+        for edge in model.unique_subshapes(s, NodeKind::Edge) {
+            let Some((curve, first, last)) = model.edge_curve(Shape { orientation: Orientation::Forward, ..edge }) else { return false };
+            let Some(more) = spanning(&curve, first, last) else { return false };
+            pts.extend(more);
+        }
+        if pts.is_empty() {
+            return false;
+        }
+        points.push(pts);
+    }
+    // The plane of each wire (through its two samples farthest apart and the sample farthest
+    // from their line), all parallel.
+    let mut normal: Option<Vector> = None;
+    for p in points.iter().filter(|p| p.len() > 1) {
+        let a = p[0];
+        let Some(&b) = p.iter().max_by(|x, y| x.distance(a).total_cmp(&y.distance(a))) else { return false };
+        let off = |q: &Point| (*q - a).cross(b - a).length();
+        let Some(&c) = p.iter().max_by(|x, y| off(x).total_cmp(&off(y))) else { return false };
+        let n = (b - a).cross(c - a);
+        if !(n.length() > crate::tolerance::LINEAR * (b - a).length()) {
+            return false;
+        }
+        let n = n.normalized();
+        let c = a;
+        let flat = p.iter().all(|q| (*q - c).dot(n).abs() <= crate::tolerance::LINEAR);
+        if !flat {
+            return false;
+        }
+        match normal {
+            None => normal = Some(n),
+            Some(m) if m.cross(n).length() <= crate::tolerance::ANGULAR => {}
+            Some(_) => return false,
+        }
+    }
+    let Some(n) = normal else { return false };
+    let heights: Vec<f64> = points.iter().map(|p| Vector::new(p[0].x, p[0].y, p[0].z).dot(n)).collect();
+    let steps: Vec<f64> = heights.windows(2).map(|w| w[1] - w[0]).collect();
+    let rising = steps.iter().all(|&d| d > crate::tolerance::LINEAR);
+    let falling = steps.iter().all(|&d| d < -crate::tolerance::LINEAR);
+    !(rising || falling)
 }
 
 /// [`loft`] of sections closing on themselves (the last the first again), periodic across
@@ -2076,5 +2152,27 @@ mod tests {
         // (Between 1000, the box, and 1000 plus the lifted corner's pyramid over the top.)
         let volume = crate::properties::volume(&model, built.shape).mass;
         assert!(volume > 1000.0 && volume < 1000.0 + 100.0 * 2.0 / 2.0, "{volume}");
+    }
+
+    /// Sections on parallel planes, lofted in order up or down them; out of order (the third
+    /// back below the second) or two on one plane, the loft would fold back on itself:
+    /// refused. Ruled through equal circles in order: the cylinder, π·4·3.
+    #[test]
+    fn sections_out_of_order_across_their_planes_are_refused() {
+        let ruled = LoftOptions { solid: true, ruled: true, ..Default::default() };
+        let smooth = LoftOptions { solid: true, ..Default::default() };
+        for (heights, fits) in [([0.0, 1.0, 3.0], true), ([3.0, 1.0, 0.0], true), ([0.0, 3.0, 2.5], false), ([0.0, 2.0, 2.0], false)] {
+            for options in [&ruled, &smooth] {
+                let mut model = Model::new();
+                let sections: Vec<Shape> = heights.iter().map(|&z| circle(&mut model, z, 2.0, Direction::Z)).collect();
+                let result = loft(&mut model, &sections, options);
+                assert_eq!(result.is_ok(), fits, "{heights:?}: {:?}", result.as_ref().err());
+                if let (Ok(built), true) = (result, options.ruled) {
+                    let volume = crate::properties::volume(&model, built.shape).mass;
+                    // (The circles as the loft's surface fits them.)
+                    assert!((volume - std::f64::consts::PI * 4.0 * 3.0).abs() < 1e-6 * volume, "{volume}");
+                }
+            }
+        }
     }
 }
