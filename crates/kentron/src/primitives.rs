@@ -1,4 +1,5 @@
-//! Primitive solids: box, wedge, cylinder, cone, sphere, torus.
+//! Primitive solids: box, wedge, cylinder, cone, sphere, torus, and a block with a
+//! free-form top (slab).
 //!
 //! Each primitive is described by a small builder value and created in a model with
 //! `build`:
@@ -21,11 +22,11 @@ use std::f64::consts::{FRAC_PI_2, TAU};
 use std::collections::HashMap;
 
 use crate::error::{Error, Result};
-use crate::geometry::curve::{Circle, Curve, Line};
+use crate::geometry::curve::{BSplineCurve, Circle, Curve, Line};
 use crate::geometry::curve2::{Curve2, Line2};
 use crate::geometry::project;
 use crate::geometry::surface::{
-    Cone as ConeSurface, Cylinder as CylinderSurface, Plane, Sphere as SphereSurface, Surface, Torus as TorusSurface,
+    BSplineSurface, Cone as ConeSurface, Cylinder as CylinderSurface, KnotVector, Plane, Sphere as SphereSurface, Surface, Torus as TorusSurface,
 };
 use crate::geometry::ParametricSurface;
 use crate::math::{Direction, Direction2, Frame, Point, Point2, Vector};
@@ -512,6 +513,164 @@ impl Torus {
     }
 }
 
+/// A block with a free-form top: the points over the rectangle `[0, size_u] x [0, size_v]`
+/// of its frame's XY plane from `z = 0` up to the height field `z = f(x / size_u, y / size_v)`,
+/// `f` the bicubic B-spline over `[0, 1]²` with clamped knots `knots_u`, `knots_v` (each
+/// running four times 0 first and four times 1 last, as flat knot vectors) and coefficients
+/// `heights[i][j]` (`i` along u), all positive, which keeps `f` positive.
+///
+/// The top is that B-spline as a surface, its poles at the knots' Greville abscissae times
+/// the size (so its x and y run linearly with its parameters) and at the heights above them;
+/// its four boundary curves bound the planar sides from above.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Slab {
+    frame: Frame,
+    size_u: f64,
+    size_v: f64,
+    knots_u: Vec<f64>,
+    knots_v: Vec<f64>,
+    heights: Vec<Vec<f64>>,
+}
+
+impl Slab {
+    const DEGREE: usize = 3;
+
+    pub fn new(size_u: f64, size_v: f64, knots_u: Vec<f64>, knots_v: Vec<f64>, heights: Vec<Vec<f64>>) -> Self {
+        Self { frame: Frame::WORLD, size_u, size_v, knots_u, knots_v, heights }
+    }
+
+    pub fn with_frame(self, frame: Frame) -> Self {
+        Self { frame, ..self }
+    }
+
+    /// Fails unless both sizes and all heights are positive, each knot vector is clamped
+    /// on `[0, 1]` for degree 3 (at most three equal knots inside) and the heights' grid has
+    /// one row per u pole and one column per v pole.
+    /// Builds the shape in `model`; its nodes start unedited (revision 0).
+    pub fn build(&self, model: &mut Model) -> Result<Shape> {
+        let shape = self.build_fresh(model)?;
+        model.settle(shape);
+        Ok(shape)
+    }
+
+    /// The flat knot vector `knots` as distinct knots and multiplicities, and the Greville
+    /// abscissae of its `poles` poles; fails unless it is clamped on `[0, 1]` for degree 3.
+    fn knot_vector(knots: &[f64], poles: usize, name: &str) -> Result<(KnotVector, Vec<f64>)> {
+        let p = Self::DEGREE;
+        if poles < p + 1 || knots.len() != poles + p + 1 {
+            return Err(Error::InvalidInput(format!(
+                "slab {name}: {} knots for {poles} heights, a clamped cubic needs {}",
+                knots.len(),
+                poles + p + 1
+            )));
+        }
+        let clamped = knots[..=p].iter().all(|&k| k == 0.0) && knots[poles..].iter().all(|&k| k == 1.0);
+        let inside = &knots[p + 1..poles];
+        if !clamped || inside.iter().any(|&k| !(k > 0.0 && k < 1.0)) || knots.windows(2).any(|w| !(w[0] <= w[1])) {
+            return Err(Error::InvalidInput(format!(
+                "slab {name} {knots:?} must be non-decreasing, four times 0 first and four times 1 last"
+            )));
+        }
+        let (mut distinct, mut multiplicities): (Vec<f64>, Vec<usize>) = (Vec::new(), Vec::new());
+        for &k in knots {
+            match distinct.last() {
+                Some(&last) if last == k => *multiplicities.last_mut().expect("a multiplicity") += 1,
+                _ => {
+                    distinct.push(k);
+                    multiplicities.push(1);
+                }
+            }
+        }
+        if multiplicities[1..multiplicities.len() - 1].iter().any(|&m| m > p) {
+            return Err(Error::InvalidInput(format!("slab {name} {knots:?} repeats a knot inside more than three times")));
+        }
+        let greville = (0..poles).map(|i| knots[i + 1..=i + p].iter().sum::<f64>() / p as f64).collect();
+        Ok((KnotVector::new(distinct, multiplicities, p), greville))
+    }
+
+    fn build_fresh(&self, model: &mut Model) -> Result<Shape> {
+        let (su, sv) = (self.size_u, self.size_v);
+        if !(su > 0.0 && sv > 0.0 && su.is_finite() && sv.is_finite()) {
+            return Err(Error::InvalidInput(format!("slab size must be positive, got {su} x {sv}")));
+        }
+        let nu = self.heights.len();
+        let nv = self.heights.first().map_or(0, Vec::len);
+        if self.heights.iter().any(|row| row.len() != nv) {
+            return Err(Error::InvalidInput("slab heights must be a rectangular grid".into()));
+        }
+        if self.heights.iter().flatten().any(|&h| !(h > 0.0 && h.is_finite())) {
+            return Err(Error::InvalidInput("slab heights must be positive".into()));
+        }
+        let (u_knots, greville_u) = Self::knot_vector(&self.knots_u, nu, "knots_u")?;
+        let (v_knots, greville_v) = Self::knot_vector(&self.knots_v, nv, "knots_v")?;
+
+        let f = &self.frame;
+        let (x, y, z) = (Vector::from(f.x()), Vector::from(f.y()), Vector::from(f.z()));
+        let at = |a: f64, b: f64, h: f64| f.origin() + x * a + y * b + z * h;
+        let poles: Vec<Vec<Point>> = (0..nu)
+            .map(|i| (0..nv).map(|j| at(greville_u[i] * su, greville_v[j] * sv, self.heights[i][j])).collect())
+            .collect();
+        let top = BSplineSurface::try_new(poles.clone(), u_knots.clone(), v_knots.clone())?;
+        // The top's boundary curves: its poles' first and last rows and columns (a clamped
+        // B-spline's iso-curves at its ends), each in the plane of a side.
+        let boundary = |poles: Vec<Point>, kv: &KnotVector| {
+            BSplineCurve::try_new(poles, kv.knots.clone(), kv.multiplicities.clone(), kv.degree).map(Curve::BSpline)
+        };
+        let column = |i: usize| poles[i].clone();
+        let row = |j: usize| poles.iter().map(|r| r[j]).collect::<Vec<Point>>();
+
+        // Every loop below turns counterclockwise about the outward normal of a right-handed
+        // frame; a left-handed one turns them all, so its faces are used reversed.
+        let sign = if f.is_right_handed() { 1.0 } else { -1.0 };
+        let reversed = sign < 0.0;
+        let mut b = Builder::new(model);
+        // Corner (a, c) of the rectangle (at the low or high end along u and v): below, and
+        // on the top at its corner pole's height.
+        let (ends_u, ends_v) = ([0.0, su], [0.0, sv]);
+        let corner = |a: usize, c: usize| (ends_u[a], ends_v[c], self.heights[a * (nu - 1)][c * (nv - 1)]);
+        let mut vertices = [[[None; 2]; 2]; 2];
+        for (a, c, up) in (0..2).flat_map(|a| (0..2).flat_map(move |c| [(a, c, 0), (a, c, 1)])) {
+            let (pu, pv, h) = corner(a, c);
+            vertices[up][a][c] = Some(b.vertex(at(pu, pv, if up == 1 { h } else { 0.0 })));
+        }
+        let [low, high] = vertices.map(|layer| layer.map(|r| r.map(|v| v.expect("a vertex"))));
+        // The top's edges: along u at v = 0 and 1, along v at u = 0 and 1, each over [0, 1].
+        let top_v0 = b.edge(high[0][0], high[1][0], boundary(row(0), &u_knots)?, 0.0, 1.0)?;
+        let top_v1 = b.edge(high[0][1], high[1][1], boundary(row(nv - 1), &u_knots)?, 0.0, 1.0)?;
+        let top_u0 = b.edge(high[0][0], high[0][1], boundary(column(0), &v_knots)?, 0.0, 1.0)?;
+        let top_u1 = b.edge(high[1][0], high[1][1], boundary(column(nu - 1), &v_knots)?, 0.0, 1.0)?;
+        // The bottom's edges, the same way round, and the upright ones from low to high.
+        let bottom_v0 = b.segment(low[0][0], low[1][0])?;
+        let bottom_v1 = b.segment(low[0][1], low[1][1])?;
+        let bottom_u0 = b.segment(low[0][0], low[0][1])?;
+        let bottom_u1 = b.segment(low[1][0], low[1][1])?;
+        let upright = [[b.segment(low[0][0], high[0][0])?, b.segment(low[0][1], high[0][1])?], [b.segment(low[1][0], high[1][0])?, b.segment(low[1][1], high[1][1])?]];
+
+        // The top, round its parameter square from (0, 0) through (1, 0), each edge with
+        // its iso-line as pcurve.
+        let top_loop = vec![
+            fwd(top_v0).on_line((0.0, 0.0), (1.0, 0.0), 0.0, 1.0),
+            fwd(top_u1).on_line((1.0, 0.0), (0.0, 1.0), 0.0, 1.0),
+            rev(top_v1).on_line((0.0, 1.0), (1.0, 0.0), 0.0, 1.0),
+            rev(top_u0).on_line((0.0, 0.0), (0.0, 1.0), 0.0, 1.0),
+        ];
+        b.oriented_face(Surface::BSpline(top), vec![(top_loop, false)], reversed)?;
+        // The sides, each along its bottom edge, up, back along the top and down; the
+        // bottom from the origin along v first.
+        let sides = [
+            (-y, x, at(0.0, 0.0, 0.0), vec![fwd(bottom_v0), fwd(upright[1][0]), rev(top_v0), rev(upright[0][0])]),
+            (x, y, at(su, 0.0, 0.0), vec![fwd(bottom_u1), fwd(upright[1][1]), rev(top_u1), rev(upright[1][0])]),
+            (y, x, at(0.0, sv, 0.0), vec![rev(bottom_v1), fwd(upright[0][1]), fwd(top_v1), rev(upright[1][1])]),
+            (-x, y, at(0.0, 0.0, 0.0), vec![rev(bottom_u0), fwd(upright[0][0]), fwd(top_u0), rev(upright[0][1])]),
+            (-z, x, at(0.0, 0.0, 0.0), vec![fwd(bottom_u0), fwd(bottom_v1), rev(bottom_u1), rev(bottom_v0)]),
+        ];
+        for (outward, along, origin, uses) in sides {
+            b.oriented_face(plane(origin, outward * sign, along), vec![(uses, false)], reversed)?;
+        }
+        b.solid()
+    }
+}
+
 /// A solid of revolution about the Z axis of `frame`: the side face covers
 /// `[0, angle] x v_range` of `surface`, a surface of revolution about that axis whose
 /// u-isos are the profile (lines for cylinders and cones, meridians for spheres). Each end
@@ -860,6 +1019,103 @@ mod tests {
                 let expected = volume * angle / (2.0 * PI);
                 assert!((v - expected).abs() < 1e-9 * expected, "tube [{v1}, {v2}], angle {angle}: {v} != {expected}");
             }
+        }
+    }
+
+    /// Clamped cubic knots on `[0, 1]` with the given knots inside.
+    fn clamped(inside: &[f64]) -> Vec<f64> {
+        [&[0.0; 4][..], inside, &[1.0; 4][..]].concat()
+    }
+
+    /// `∫ N_i` over `[0, 1]` for each B-spline basis function of degree 3 on `knots`:
+    /// `(t_{i+4} - t_i) / 4`.
+    fn basis_integrals(knots: &[f64]) -> Vec<f64> {
+        (0..knots.len() - 4).map(|i| (knots[i + 4] - knots[i]) / 4.0).collect()
+    }
+
+    /// A frame turned off the axes and away from the origin, right- or left-handed.
+    fn tilted(right_handed: bool) -> Frame {
+        let mut f = Frame::new(Point::new(3.0, -2.0, 1.5), Direction::new(1.0, 2.0, 2.0), Direction::new(0.0, 1.0, -1.0));
+        if !right_handed {
+            f.flip_y();
+        }
+        f
+    }
+
+    #[test]
+    fn slab_of_constant_height_is_a_box() {
+        let (su, sv, h) = (6.0, 4.0, 2.5);
+        let (ku, kv) = (clamped(&[0.3, 0.3, 0.7]), clamped(&[0.5]));
+        let heights = vec![vec![h; kv.len() - 4]; ku.len() - 4];
+        for frame in [Frame::WORLD, tilted(true), tilted(false)] {
+            let mut model = Model::new();
+            let slab = Slab::new(su, sv, ku.clone(), kv.clone(), heights.clone()).with_frame(frame).build(&mut model).unwrap();
+            let report = crate::validity::check(&model, slab);
+            assert!(report.problems.is_empty(), "{report:?}");
+            let v = crate::properties::volume(&model, slab).mass;
+            let a = crate::properties::area(&model, slab).mass;
+            assert!((v - su * sv * h).abs() < 1e-9 * su * sv * h, "volume {v}");
+            let area = 2.0 * (su * sv + su * h + sv * h);
+            assert!((a - area).abs() < 1e-9 * area, "area {a} != {area}");
+        }
+    }
+
+    #[test]
+    fn slab_volume_is_the_integral_of_its_height_field() {
+        // f = Σ h_ij N_i(u) N_j(v), so ∫∫ f = Σ h_ij ∫N_i ∫N_j over the unit square, and
+        // the volume is that times the size. (Uniform knots: the volume's Gauss pieces fall
+        // on the knot spans, so the rule is exact for the polynomials between them.)
+        let (su, sv) = (10.0, 7.0);
+        let (ku, kv) = (clamped(&[1.0 / 3.0, 2.0 / 3.0]), clamped(&[0.5]));
+        let heights: Vec<Vec<f64>> =
+            (0..6).map(|i| (0..5).map(|j| 3.0 + ((i * 7 + j * 3) % 5) as f64 * 0.8).collect()).collect();
+        let (wu, wv) = (basis_integrals(&ku), basis_integrals(&kv));
+        let mean: f64 = (0..6).flat_map(|i| (0..5).map(move |j| (i, j))).map(|(i, j)| heights[i][j] * wu[i] * wv[j]).sum();
+        let expected = su * sv * mean;
+        for frame in [Frame::WORLD, tilted(true), tilted(false)] {
+            let mut model = Model::new();
+            let slab = Slab::new(su, sv, ku.clone(), kv.clone(), heights.clone()).with_frame(frame).build(&mut model).unwrap();
+            let report = crate::validity::check(&model, slab);
+            assert!(report.problems.is_empty(), "{report:?}");
+            let v = crate::properties::volume(&model, slab).mass;
+            assert!((v - expected).abs() < 1e-9 * expected, "volume {v} != {expected}");
+        }
+    }
+
+    #[test]
+    fn slab_with_a_bump_in_the_middle() {
+        // A bicubic copy of the API's example: heights 5 with a 7 in the middle.
+        let knots = clamped(&[0.5]);
+        let mut heights = vec![vec![5.0; 5]; 5];
+        heights[2][2] = 7.0;
+        let mut model = Model::new();
+        let slab = Slab::new(10.0, 10.0, knots.clone(), knots.clone(), heights.clone()).build(&mut model).unwrap();
+        let report = crate::validity::check(&model, slab);
+        assert!(report.problems.is_empty(), "{report:?}");
+        // ∫N_2 = (t_6 - t_2) / 4 = 1/4 in each direction: the bump adds 2 · 1/16 of the area.
+        let expected = 100.0 * (5.0 + 2.0 / 16.0);
+        let v = crate::properties::volume(&model, slab).mass;
+        assert!((v - expected).abs() < 1e-9 * expected, "volume {v} != {expected}");
+    }
+
+    #[test]
+    fn slab_refuses_invalid_input() {
+        let knots = clamped(&[]);
+        let grid = |h: f64| vec![vec![h; 4]; 4];
+        let cases = [
+            Slab::new(0.0, 5.0, knots.clone(), knots.clone(), grid(1.0)),
+            Slab::new(5.0, -1.0, knots.clone(), knots.clone(), grid(1.0)),
+            Slab::new(5.0, 5.0, knots.clone(), knots.clone(), grid(0.0)),
+            Slab::new(5.0, 5.0, knots.clone(), knots.clone(), vec![vec![1.0; 4], vec![1.0; 4], vec![1.0; 4], vec![1.0; 3]]),
+            Slab::new(5.0, 5.0, clamped(&[0.5]), knots.clone(), grid(1.0)),
+            Slab::new(5.0, 5.0, vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0], knots.clone(), vec![vec![1.0; 4]; 3]),
+            Slab::new(5.0, 5.0, vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 2.0], knots.clone(), grid(1.0)),
+            Slab::new(5.0, 5.0, clamped(&[0.6, 0.4]), knots.clone(), vec![vec![1.0; 4]; 6]),
+            Slab::new(5.0, 5.0, clamped(&[0.5; 4]), knots.clone(), vec![vec![1.0; 4]; 8]),
+        ];
+        for slab in cases {
+            let mut model = Model::new();
+            assert!(matches!(slab.build(&mut model), Err(Error::InvalidInput(_))), "{slab:?}");
         }
     }
 }
