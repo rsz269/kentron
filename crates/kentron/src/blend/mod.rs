@@ -4,8 +4,12 @@ mod ball;
 mod exact;
 mod corner2d;
 mod runover;
+mod setback;
+#[cfg(test)]
+mod setback_tests;
 
 pub use corner2d::{chamfer_2d, fillet_2d, fillet_wire_2d, Corner2d};
+pub use setback::fillet_setback;
 
 use crate::error::{Error, Result};
 use crate::geometry::curve::{Circle, Curve};
@@ -3779,7 +3783,12 @@ impl CornerPatch {
             return Err(Error::InvalidInput("no ball touches the three faces at a corner".into()));
         }
         // Each fillet's cross-section through the centre: square to a straight edge, through
-        // the axis of a circular one.
+        // the axis of a circular one, its normal towards the ball's part the corner keeps:
+        // where the ball's normals are among those of the three faces (on the side of the
+        // faces' normals together; the vertex's side only where the faces are square to one
+        // another, and on the far side of a fillet's section where a face slopes back over
+        // its edge, as a chamfer's at the end of an edge).
+        let inward = normal_at(a) + normal_at(b) + normal_at(c);
         let planes = at
             .iter()
             .map(|&i| {
@@ -3787,7 +3796,7 @@ impl CornerPatch {
                     Path::Line { .. } => corners[i].0.tangent,
                     Path::Arc { axis, .. } => Vector::from(axis.direction).cross(center - foot(axis, center)).normalized(),
                 };
-                if (vertex - center).dot(n) < 0.0 { -n } else { n }
+                if inward.dot(n) < 0.0 { -n } else { n }
             })
             .collect();
         let planar = faces.iter().all(|f| matches!(f.1, Surface::Plane(_)));
