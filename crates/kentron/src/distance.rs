@@ -144,6 +144,92 @@ pub fn distance_within(model: &mut Model, a: Shape, b: Shape, limit: f64) -> Res
     Ok(ShapeDistance { value, on_first, on_second })
 }
 
+/// A face of a shape near a point, with its point nearest that point.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct NearFace {
+    pub face: Shape,
+    pub point: Point,
+    pub distance: f64,
+}
+
+/// The faces of `shape` within `slack` of being the nearest to `p`, each with its point
+/// nearest `p`, nearest first (equally near ones in the order the shape lists its faces):
+/// as `BRepExtrema_DistShapeShape` between a vertex and each face finds it, the nearest of
+/// the point's projection onto the face's surface where the face holds it
+/// (`BRepExtrema_ExtPF`, with `BRepClass_FaceClassifier`) and its projections onto the
+/// face's boundary edges (`BRepExtrema_ExtPC`, their ends included). The faces' meshes only
+/// pick which faces and edges to project onto. Faces without a surface are left out.
+#[doc(alias = "BRepExtrema_ExtPF")]
+pub(crate) fn nearest_faces(model: &mut Model, shape: Shape, p: Point, slack: f64) -> Result<Vec<NearFace>> {
+    let print = model.shape_fingerprint(shape);
+    let size = model
+        .derived(shape.node, print, || {
+            let b = crate::properties::bounding_box(model, shape);
+            KeptSize(if b.is_empty() { 0.0 } else { b.min.distance(b.max) })
+        })
+        .0;
+    let scale = size.max(1e-9);
+    // (Meshed as finely as for `distance`, so that the meshes serve both.)
+    let options = MeshOptions { deflection: 1e-3 * scale, angle: 0.3, relative: false };
+    let kept = Triangles::kept(model, shape, options, print)?;
+    let t = &kept.0;
+    let Some(bvh) = kept.1.as_ref() else { return Ok(Vec::new()) };
+    let Some((_, nearest)) = bvh.nearest(p, |i| point_triangle(p, t.corners(i)).distance(p)) else { return Ok(Vec::new()) };
+    // A face within `slack` of the nearest has its mesh within the meshes' deviations more.
+    let deviation = t.deviation.iter().fold(0.0f64, |m, &d| m.max(d));
+    let reach = nearest + 2.0 * deviation + slack + 1e-12 * scale;
+    let query = BoundingBox::new(p - Vector::new(reach, reach, reach), p + Vector::new(reach, reach, reach));
+    let mut pieces: Vec<usize> = bvh.overlapping(&query).into_iter().filter(|&i| point_triangle(p, t.corners(i)).distance(p) <= reach).map(|i| t.face[i]).collect();
+    pieces.sort_unstable();
+    pieces.dedup();
+    let mut found = Vec::new();
+    for k in pieces {
+        let Source::Face(face) = t.exact[k].source else { continue };
+        let model: &Model = model;
+        let mut best: Option<(f64, Point)> = None;
+        let mut keep = |d: f64, q: Point| {
+            if best.is_none_or(|b| d < b.0) {
+                best = Some((d, q));
+            }
+        };
+        // The projection onto the surface, where the face holds it: surely, on its mesh and
+        // clear of its boundary; else as the face's classifier finds it.
+        if let Exact::Surface(s) = t.exact[k].get(model) {
+            let (u, v, _) = crate::geometry::extrema::nearest_on_surface(p, s, None);
+            let q = s.point(u, v);
+            let on = t.surely_on_piece(model, k, q, scale)
+                || (t.near_piece(k, q, scale) && {
+                    let kept = model.derived(face.node, model.shape_fingerprint(face), || KeptClassifier(PointClassifier::new(model, face)));
+                    let classifier = kept.0.as_ref().map_err(Clone::clone)?;
+                    classifier.locate(q) == PointLocation::Boundary
+                });
+            if on {
+                keep(q.distance(p), q);
+            }
+        }
+        // The boundary edges near.
+        for &e in &t.piece_edges[k] {
+            let (lazy, points, deviation) = &t.edges[e];
+            if polyline_distance(points, p) > reach + 2.0 * deviation {
+                continue;
+            }
+            if let Exact::Curve(c, first, last) = lazy.get(model) {
+                let q = crate::geometry::extrema::nearest_on_curve(p, c, *first, *last).point;
+                keep(q.distance(p), q);
+            }
+        }
+        if let Some((distance, point)) = best {
+            found.push(NearFace { face, point, distance });
+        }
+    }
+    // (Stable: equally near faces stay in the shape's order.)
+    found.sort_by(|a, b| a.distance.total_cmp(&b.distance));
+    if let Some(least) = found.first().map(|f| f.distance) {
+        found.retain(|f| f.distance <= least + slack);
+    }
+    Ok(found)
+}
+
 /// The nearest points of two pieces' exact geometry, from the meshes' nearest points `p` and
 /// `q`, staying within `reach` of them (none when a piece has no exact geometry).
 fn refine(ea: &Exact, eb: &Exact, p: Point, q: Point, reach: f64, scale: f64) -> Option<(f64, Point, Point)> {

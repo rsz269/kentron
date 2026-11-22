@@ -1,4 +1,10 @@
-//! Global properties of shapes: length, area, volume and their centers.
+//! Global properties of shapes: length, area, volume and their centers; and the local
+//! properties of a shape's boundary at points (its outward normal and principal
+//! curvatures).
+
+mod local;
+
+pub use local::{curvatures, normals, PrincipalCurvatures, ON_BOUNDARY};
 
 use crate::geometry::curve::Line;
 use crate::geometry::curve2::Curve2;

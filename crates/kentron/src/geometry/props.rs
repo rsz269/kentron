@@ -1,6 +1,6 @@
 //! Local differential properties of curves and surfaces: tangents, curvature, normals.
 
-use crate::math::{Direction, Direction2, Point2, Vector2};
+use crate::math::{Direction, Direction2, Point2, Vector, Vector2};
 
 use super::curve2::Curve2;
 use super::parametric::{ParametricCurve, ParametricSurface};
@@ -243,4 +243,241 @@ pub fn surface_normal(surface: &Surface, u: f64, v: f64, tolerance: f64) -> Opti
         }
     }
     None
+}
+
+/// `GeomLib::NormEstim`'s step into the parameters off a singular point.
+const NORMAL_PARAMETER_STEP: f64 = 1.0e-5;
+/// `GeomLib::NormEstim`'s least squared length of a normal found off a singular point.
+const NORMAL_SQUARED_MAGNITUDE_TOL: f64 = 1.0e-16;
+/// `GeomLib::NormEstim`'s angle within which the normals either side of a cone's apex are
+/// opposite.
+const CONE_NORMAL_ANGULAR_TOLERANCE: f64 = 1.0e-4;
+
+/// `CSLib::Normal` from the second derivatives, at a point where the first ones are
+/// parallel or vanish: the normal as the limit of the normals nearby (along the derivatives
+/// of `D1U ^ D1V`), unless they turn round the point (`CSLib_InfinityOfSolutions`) or
+/// vanish too.
+#[doc(alias = "CSLib::Normal")]
+fn limit_normal(d: &super::SurfaceD2, sin_tol: f64) -> Option<Direction> {
+    let d1nu = d.duu.cross(d.dv) + d.du.cross(d.duv);
+    let d1nv = d.duv.cross(d.dv) + d.du.cross(d.dvv);
+    let (lu, lv) = (d1nu.length_squared(), d1nv.length_squared());
+    let eps = f64::EPSILON;
+    if lu <= eps && lv <= eps {
+        return None;
+    }
+    if lu < eps {
+        return Direction::try_from_vector(d1nv);
+    }
+    if lv < eps {
+        return Direction::try_from_vector(d1nu);
+    }
+    if lv / lu <= eps || lu / lv <= eps {
+        return None;
+    }
+    let sin2 = d1nu.cross(d1nv).length_squared() / (lu * lv);
+    if sin2 < sin_tol * sin_tol {
+        return Direction::try_from_vector(d1nu);
+    }
+    None
+}
+
+/// The unit normal of `surface` at `(u, v)` (along `D1U ^ D1V`), as OCCT's
+/// `GeomLib::NormEstim` finds it for a mesh's nodes: from the first derivatives where
+/// neither is shorter than `tolerance`; where one is (as at a sphere's pole), the limit of
+/// the normals nearby, turned the way the normal a step into the parameters points. `None`
+/// where the surface has no normal there: the first derivatives' cross product shorter than
+/// `tolerance`, or a point the normals turn round (a cone's apex: the normals a step either
+/// way along v opposite).
+#[doc(alias = "GeomLib::NormEstim")]
+pub fn estimated_normal(surface: &Surface, u: f64, v: f64, tolerance: f64) -> Option<Direction> {
+    let tol2 = tolerance * tolerance;
+    let (_, du, dv) = surface.d1(u, v);
+    let (mdu, mdv) = (du.length_squared(), dv.length_squared());
+    if mdu >= tol2 && mdv >= tol2 {
+        let n = du.cross(dv);
+        if n.length_squared() < tol2 {
+            return None;
+        }
+        return Direction::try_from_vector(n);
+    }
+    let mut normal = limit_normal(&surface.d2(u, v), tolerance)?;
+    let (umin, umax, vmin, vmax) = surface.bounds();
+    let step = NORMAL_PARAMETER_STEP;
+    let normal_at = |u: f64, v: f64| {
+        let (_, a, b) = surface.d1(u, v);
+        (a, b)
+    };
+    let long_enough = |a: Vector, b: Vector| a.length_squared() > NORMAL_SQUARED_MAGNITUDE_TOL && b.length_squared() > NORMAL_SQUARED_MAGNITUDE_TOL;
+    let mut sign = -1.0;
+    // A cone's apex: the normals a step either way along v opposite.
+    if v > vmin + step && v < vmax - step {
+        let (a, b) = normal_at(u, v - sign * step);
+        if long_enough(a, b) {
+            let before = Direction::try_from_vector(a.cross(b));
+            let (a, b) = normal_at(u, v + sign * step);
+            if long_enough(a, b) {
+                let after = Direction::try_from_vector(a.cross(b));
+                if let (Some(n1), Some(n2)) = (before, after) {
+                    if n1.is_opposite(n2, CONE_NORMAL_ANGULAR_TOLERANCE) {
+                        return None;
+                    }
+                }
+            }
+        }
+    }
+    // Along v.
+    if mdu < tol2 && mdv >= tol2 {
+        if vmax - v > v - vmin {
+            sign = 1.0;
+        }
+        let (a, b) = normal_at(u, v + sign * step);
+        let mut n = a.cross(b);
+        if n.length_squared() < NORMAL_SQUARED_MAGNITUDE_TOL {
+            let sign1 = if umax - u > u - umin { 1.0 } else { -1.0 };
+            let (a, b) = normal_at(u + sign1 * step, v + sign * step);
+            n = a.cross(b);
+        }
+        if n.length_squared() >= NORMAL_SQUARED_MAGNITUDE_TOL && n.dot(Vector::from(normal)) < 0.0 {
+            normal = -normal;
+        }
+    }
+    // Along u.
+    if mdv < tol2 && mdu >= tol2 {
+        if umax - u > u - umin {
+            sign = 1.0;
+        }
+        let (a, b) = normal_at(u + sign * step, v);
+        let mut n = a.cross(b);
+        if n.length_squared() < NORMAL_SQUARED_MAGNITUDE_TOL {
+            let sign1 = if vmax - v > v - vmin { 1.0 } else { -1.0 };
+            let (a, b) = normal_at(u + sign * step, v + sign1 * step);
+            n = a.cross(b);
+        }
+        if n.length_squared() >= NORMAL_SQUARED_MAGNITUDE_TOL && n.dot(Vector::from(normal)) < 0.0 {
+            normal = -normal;
+        }
+    }
+    Some(normal)
+}
+
+/// The principal curvatures of a surface at a point, with their directions, as
+/// `GeomLProp_SLProps` gives them: signed along the surface's normal `D1U ^ D1V` (positive
+/// where the surface bends towards it).
+#[doc(alias = "GeomLProp_SLProps::MaxCurvature")]
+#[doc(alias = "GeomLProp_SLProps::MinCurvature")]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SurfaceCurvatures {
+    pub max: f64,
+    pub min: f64,
+    pub max_direction: Direction,
+    pub min_direction: Direction,
+    #[doc(alias = "GeomLProp_SLProps::MeanCurvature")]
+    pub mean: f64,
+    #[doc(alias = "GeomLProp_SLProps::GaussianCurvature")]
+    pub gaussian: f64,
+}
+
+/// Local properties of a surface at one parameter pair, as `GeomLProp_SLProps` (to the
+/// second derivatives) gives them. Quantities undefined there are `None`.
+#[doc(alias = "GeomLProp_SLProps")]
+#[doc(alias = "BRepLProp_SLProps")]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SurfacePoint {
+    pub u: f64,
+    pub v: f64,
+    pub derivatives: super::SurfaceD2,
+    /// The unit normal along `D1U ^ D1V`: none where a first derivative vanishes or the two
+    /// are parallel (`IsNormalDefined`).
+    pub normal: Option<Direction>,
+    /// None where the normal, or a tangent along u or v (from the first of the first and
+    /// second derivatives not vanishing), is undefined, or the shape operator has no two
+    /// eigenvalues (`IsCurvatureDefined`).
+    pub curvatures: Option<SurfaceCurvatures>,
+}
+
+/// The local properties of `surface` at `(u, v)`; derivatives (and the sine between the
+/// first two) below `tolerance` count as vanishing (`GeomLProp_SLProps(S, u, v, 2, tol)`).
+#[doc(alias = "GeomLProp_SLProps")]
+#[doc(alias = "BRepLProp_SLProps")]
+pub fn surface_point(surface: &Surface, u: f64, v: f64, tolerance: f64) -> SurfacePoint {
+    let d = surface.d2(u, v);
+    let normal = sl_normal(d.du, d.dv, tolerance);
+    // (`IsTangentUDefined`, `IsTangentVDefined`: the first or the second derivative longer
+    // than the tolerance.)
+    let tol2 = tolerance * tolerance;
+    let tangent_u = d.du.length_squared() > tol2 || d.duu.length_squared() > tol2;
+    let tangent_v = d.dv.length_squared() > tol2 || d.dvv.length_squared() > tol2;
+    let curvatures = match normal {
+        Some(n) if tangent_u && tangent_v => sl_curvatures(&d, n),
+        _ => None,
+    };
+    SurfacePoint { u, v, derivatives: d, normal, curvatures }
+}
+
+/// `CSLib::Normal(D1U, D1V, SinTol)`: none where a derivative vanishes or the sine between
+/// them is below `sin_tol`.
+#[doc(alias = "CSLib::Normal")]
+fn sl_normal(du: Vector, dv: Vector, sin_tol: f64) -> Option<Direction> {
+    let (mu, mv) = (du.length_squared(), dv.length_squared());
+    if mu <= crate::tolerance::RESOLUTION || mv <= crate::tolerance::RESOLUTION {
+        return None;
+    }
+    let n = du.cross(dv);
+    if n.length_squared() / (mu * mv) < sin_tol * sin_tol {
+        return None;
+    }
+    Direction::try_from_vector(n)
+}
+
+/// `LProp_SurfaceUtils::ComputeSurfCurvatures`: the shape operator's eigenvalues and
+/// eigenvectors from the fundamental forms.
+fn sl_curvatures(d: &super::SurfaceD2, normal: Direction) -> Option<SurfaceCurvatures> {
+    let n = Vector::from(normal);
+    let (e, f, g) = (d.du.length_squared(), d.du.dot(d.dv), d.dv.length_squared());
+    let (l, m, nn) = (n.dot(d.duu), n.dot(d.duv), n.dot(d.dvv));
+    let (a0, b0, c0) = (e * m - f * l, e * nn - g * l, f * nn - g * m);
+    let largest = a0.abs().max(b0.abs()).max(c0.abs());
+    let eps = f64::EPSILON;
+    if largest < eps {
+        // An umbilic point.
+        if g < eps {
+            return None;
+        }
+        let k = nn / g;
+        return Some(SurfaceCurvatures {
+            max: k,
+            min: k,
+            max_direction: Direction::try_from_vector(d.du.cross(n))?,
+            min_direction: Direction::try_from_vector(d.du)?,
+            mean: k,
+            gaussian: k * k,
+        });
+    }
+    let (a, b, c) = (a0 / largest, b0 / largest, c0 / largest);
+    let two_roots = |a: f64, b: f64, c: f64| {
+        let r = super::polynomial_roots::PolynomialRoots::quadratic(a, b, c);
+        (r.done && !r.infinite && r.roots.len() == 2).then(|| (r.roots[0], r.roots[1]))
+    };
+    let (k1, k2, v1, v2) = if a.abs() > eps {
+        let (r1, r2) = two_roots(a, b, c)?;
+        let k = |r: f64| ((l * r + 2.0 * m) * r + nn) / ((e * r + 2.0 * f) * r + g);
+        (k(r1), k(r2), d.du * r1 + d.dv, d.du * r2 + d.dv)
+    } else if c.abs() > eps {
+        let (r1, r2) = two_roots(c, b, a)?;
+        let k = |r: f64| ((nn * r + 2.0 * m) * r + l) / ((g * r + 2.0 * f) * r + e);
+        (k(r1), k(r2), d.du + d.dv * r1, d.du + d.dv * r2)
+    } else {
+        (l / e, nn / g, d.du, d.dv)
+    };
+    let ((min, min_v), (max, max_v)) = if k1 < k2 { ((k1, v1), (k2, v2)) } else { ((k2, v2), (k1, v1)) };
+    let eg_ff = e * g - f * f;
+    Some(SurfaceCurvatures {
+        max,
+        min,
+        max_direction: Direction::try_from_vector(max_v)?,
+        min_direction: Direction::try_from_vector(min_v)?,
+        mean: (nn * e - 2.0 * m * f + l * g) / (2.0 * eg_ff),
+        gaussian: (l * nn - m * m) / eg_ff,
+    })
 }
