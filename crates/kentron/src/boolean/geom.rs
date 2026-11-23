@@ -132,6 +132,32 @@ pub(super) fn signed_distance(surface: &Surface, p: Point) -> f64 {
     }
 }
 
+/// How far the magnitude of [`signed_distance`] to `surface` may stray from a function
+/// changing no faster than its point moves (a distance to a set: the surface itself, or
+/// curves in the half-plane through the axis): nothing for the elementary surfaces, the
+/// tie between a torus's two candidate feet for a surface of revolution of a circle in a
+/// plane through its axis clear of it (its closed form; the foot's normal never
+/// degenerate). `None` for others, found numerically (a foot may be a local one).
+pub(super) fn distance_slack(surface: &Surface) -> Option<f64> {
+    match surface {
+        Surface::Plane(_) | Surface::Cylinder(_) | Surface::Sphere(_) | Surface::Cone(_) | Surface::Torus(_) => Some(0.0),
+        Surface::Revolution(r) => {
+            let crate::geometry::curve::Curve::Circle(circle) = r.basis() else { return None };
+            let axis = r.axis();
+            let (o, z) = (axis.origin, Vector::from(axis.direction));
+            let f = circle.frame();
+            let normal = Vector::from(f.x()).cross(Vector::from(f.y()));
+            let center = circle.center() - o;
+            let radial = center - z * center.dot(z);
+            // (Where RevolutionSurface::parameters takes it in closed form; within the tie it
+            // allows between the two feet.)
+            let in_meridian = normal.dot(z).abs() <= 1e-12 && normal.dot(center).abs() <= 1e-12 * (1.0 + center.length());
+            (in_meridian && radial.length() > circle.radius()).then(|| 1e-9 * (1.0 + circle.radius()))
+        }
+        _ => None,
+    }
+}
+
 pub(super) fn unsupported(surface: &Surface) -> ! {
     let kind = format!("{surface:?}");
     todo!("boolean operations on {} faces", kind.split('(').next().unwrap_or_default().to_lowercase())

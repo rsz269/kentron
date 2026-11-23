@@ -2056,7 +2056,13 @@ fn parallels(base: &Face, other: &Face) -> Vec<Section> {
         }
     };
     let u = 0.5 * (base.u_range.0 + base.u_range.1);
-    let f = |v: f64| geom::signed_distance(q, s.point(u, v));
+    // (The meridian at u: its points as the surface gives them, the turn found once.)
+    let turn = crate::math::Transform::rotation(r.axis(), u);
+    let at = |v: f64| {
+        use crate::math::Transformable;
+        r.basis().point(v).transformed(&turn)
+    };
+    let f = |v: f64| geom::signed_distance(q, at(v));
     let n = 2000;
     let step = (v1 - v0) / n as f64;
     let values: Vec<f64> = (0..=n).map(|i| f(v0 + step * i as f64)).collect();
@@ -2092,12 +2098,23 @@ fn parallels(base: &Face, other: &Face) -> Vec<Section> {
     // the derivative.
     let h = 1e-7 * (v1 - v0);
     let df = |v: f64| (f(v + h) - f(v - h)) / (2.0 * h);
+    // (Where |f| is a distance changing no faster than the point moves, and the meridian's
+    // points move no faster than `speed` along it, |f| between the neighbouring samples is
+    // at least the middle one's less that speed over their span: a minimum farther than that
+    // from the surface cannot come within the tolerance, and is passed over unrefined.)
+    let speed = meridian_speed(r.basis()).zip(geom::distance_slack(q));
     for i in 1..n {
         let (a, b, c) = (values[i - 1].abs(), values[i].abs(), values[i + 1].abs());
         if b > a || b > c || (values[i - 1] > 0.0) != (values[i + 1] > 0.0) {
             continue;
         }
         let (va, vc) = (v0 + step * (i - 1) as f64, v0 + step * (i + 1) as f64);
+        if let Some((speed, slack)) = speed {
+            let reach = speed * (vc - va);
+            if b - reach - slack - 1e-9 * (1.0 + b + reach) > on_tol() {
+                continue;
+            }
+        }
         let v = if (df(va) > 0.0) != (df(vc) > 0.0) { bisect(&df, va, vc) } else { v0 + step * i as f64 };
         if f(v).abs() <= on_tol() {
             roots.push(v);
@@ -2118,6 +2135,18 @@ fn parallels(base: &Face, other: &Face) -> Vec<Section> {
             })
         })
         .collect()
+}
+
+/// A bound on how fast a meridian (the basis of a surface of revolution) moves along its
+/// parameter, everywhere: a circle's radius, an ellipse's major radius, a line's unit
+/// speed; `None` for other curves.
+fn meridian_speed(basis: &Curve) -> Option<f64> {
+    match basis {
+        Curve::Line(_) => Some(1.0),
+        Curve::Circle(c) => Some(c.radius()),
+        Curve::Ellipse(e) => Some(e.major_radius()),
+        _ => None,
+    }
 }
 
 /// Whether `a`'s surface lies on `b`'s over `a`'s range (the same surface, or one made from

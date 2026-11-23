@@ -1359,17 +1359,20 @@ impl ParametricSurface for RevolutionSurface {
         self.basis().point(v).transformed(&Transform::rotation(self.axis(), u))
     }
     // The derivatives from the same sine and cosine of u and basis point.
+    // (The point as [`point`](Self::point) gives it, from the one basis point.)
     fn d1(&self, u: f64, v: f64) -> (Point, Vector, Vector) {
         let su = u.sin_cos();
-        let at = self.basis().point(v) - self.axis().origin;
-        (self.point(u, v), self.turned(su, at, 1), self.turned(su, self.basis().dn(v, 1), 0))
+        let basis = self.basis().point(v);
+        let at = basis - self.axis().origin;
+        (basis.transformed(&Transform::rotation(self.axis(), u)), self.turned(su, at, 1), self.turned(su, self.basis().dn(v, 1), 0))
     }
     fn d2(&self, u: f64, v: f64) -> SurfaceD2 {
         let su = u.sin_cos();
-        let at = self.basis().point(v) - self.axis().origin;
+        let basis = self.basis().point(v);
+        let at = basis - self.axis().origin;
         let (d1, d2) = (self.basis().dn(v, 1), self.basis().dn(v, 2));
         SurfaceD2 {
-            point: self.point(u, v),
+            point: basis.transformed(&Transform::rotation(self.axis(), u)),
             du: self.turned(su, at, 1),
             dv: self.turned(su, d1, 0),
             duu: self.turned(su, at, 2),
