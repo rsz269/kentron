@@ -183,10 +183,6 @@ impl<'a> Searcher<'a> {
         self.sample(u).map_or(f64::NAN, |s| s.f)
     }
 
-    fn df(&mut self, u: f64) -> f64 {
-        self.sample(u).map_or(f64::NAN, |s| s.df)
-    }
-
     /// `F` at the parameter where a span's end `u` is evaluated: just inside the span when `u`
     /// is a breakpoint (`inward` the direction into the span).
     fn inside(&self, u: f64, inward: f64) -> f64 {
@@ -280,15 +276,10 @@ impl<'a> Searcher<'a> {
         self.refine(m, b, min_width, out)
     }
 
-    /// A root of `F` (or of `F′` with `derivative`) bracketed by `[a, b]`, to full precision.
-    fn root(&mut self, a: f64, b: f64, derivative: bool) -> Option<f64> {
-        let r = if derivative {
-            let mut g = Closure(|x: f64| self.df(x));
-            bracketed_root(&mut g, a, b, 0.0, 400, f64::EPSILON)
-        } else {
-            let mut g = Closure(|x: f64| self.f(x));
-            bracketed_root(&mut g, a, b, 0.0, 400, f64::EPSILON)
-        };
+    /// A root of `F` bracketed by `[a, b]`, to full precision.
+    fn root(&mut self, a: f64, b: f64) -> Option<f64> {
+        let mut g = Closure(|x: f64| self.f(x));
+        let r = bracketed_root(&mut g, a, b, 0.0, 400, f64::EPSILON);
         if r.value.is_finite() { Some(r.root) } else { None }
     }
 
@@ -319,7 +310,7 @@ impl<'a> Searcher<'a> {
                 continue;
             }
             if (f0 < 0.0) != (f1 < 0.0) {
-                if let Some(u) = self.root(s[i].u, s[i + 1].u, false) {
+                if let Some(u) = self.root(s[i].u, s[i + 1].u) {
                     out.push(root(f0 < 0.0, u));
                 }
                 continue;
@@ -363,10 +354,10 @@ impl<'a> Searcher<'a> {
             minimiser.perform(&mut objective, a, start, b);
             if let Some(m) = across {
                 // `F` crosses zero and comes back: two extrema.
-                if let Some(u) = self.root(a, m, false) {
+                if let Some(u) = self.root(a, m) {
                     out.push(root(sign < 0.0, u));
                 }
-                if let Some(u) = self.root(m, b, false) {
+                if let Some(u) = self.root(m, b) {
                     out.push(root(sign > 0.0, u));
                 }
             }
