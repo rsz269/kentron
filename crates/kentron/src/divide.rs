@@ -342,6 +342,9 @@ pub fn divide_face(model: &mut Model, face: Shape, cuts: &[Cut]) -> Result<Vec<S
     // (Near a use's ends: at its vertex. Only where the loop passes from one side of the cut
     // to the other: a cut touching a loop does not divide the face there.)
     let snap = (1e-6 * scale).max(eps);
+    // (Crossings found only by the use leaving the vertex they are at: taken at the end of the
+    // use arriving there, after all the others, where none of those is there already.)
+    let mut from_starts: Vec<(usize, usize, usize, f64, Point2)> = Vec::new();
     for (li, l) in loops.iter().enumerate() {
         for (ui, u) in l.iter().enumerate() {
             for (ci, c) in cuts.iter().enumerate() {
@@ -352,7 +355,8 @@ pub fn divide_face(model: &mut Model, face: Shape, cuts: &[Cut]) -> Result<Vec<S
                     // use's start and end are one, taken at its end.)
                     let at_start = s <= 1e-9 || uv.distance(u.at(0.0)) <= snap;
                     let at_end = s >= 1.0 - 1e-9 || uv.distance(u.at(1.0)) <= snap;
-                    let (ui, at_end) = if at_start && (!at_end || s < 0.5) { ((ui + l.len() - 1) % l.len(), true) } else { (ui, at_end) };
+                    let moved = at_start && (!at_end || s < 0.5);
+                    let (ui, at_end) = if moved { ((ui + l.len() - 1) % l.len(), true) } else { (ui, at_end) };
                     let (u, next) = (&l[ui], &l[(ui + 1) % l.len()]);
                     let (pc, tangent) = c.pcurve.d1(tau);
                     let side = |q: Point2| {
@@ -364,7 +368,18 @@ pub fn divide_face(model: &mut Model, face: Shape, cuts: &[Cut]) -> Result<Vec<S
                     if (side(before) > 0.0) == (side(after) > 0.0) {
                         continue;
                     }
+                    // (Taken from the use leaving the vertex, only where the loop either side of it
+                    // stands clear of the cut: where the use arriving there runs along the cut, the
+                    // cut meets the loop along it, not across it.)
+                    let clear = |q: Point2| side(q).abs() > snap * tangent.length();
+                    if moved && !(clear(before) && clear(after)) {
+                        continue;
+                    }
                     let (s, uv) = if at_end { (1.0, u.at(1.0)) } else { (s, uv) };
+                    if moved {
+                        from_starts.push((li, ui, ci, tau, uv));
+                        continue;
+                    }
                     // (Found from both uses meeting there: once.)
                     if at_end && on_cuts[ci].iter().any(|x| x.uv.distance(uv) <= snap) && on_uses[li][ui].iter().any(|&(x, _)| x == 1.0) {
                         continue;
@@ -374,6 +389,13 @@ pub fn divide_face(model: &mut Model, face: Shape, cuts: &[Cut]) -> Result<Vec<S
                 }
             }
         }
+    }
+    for (li, ui, ci, tau, uv) in from_starts {
+        if on_cuts[ci].iter().any(|x| x.uv.distance(uv) <= snap) {
+            continue;
+        }
+        on_uses[li][ui].push((1.0, uv));
+        on_cuts[ci].push(Crossing { at: tau, uv });
     }
     // Where cuts cross each other (in the face or not: the pieces off it are dropped).
     let mut cut_crossings: Vec<(usize, f64, usize, f64, Point2)> = Vec::new();
