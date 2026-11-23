@@ -160,21 +160,9 @@ impl Plane {
         Self { frame }
     }
 
-    /// The plane `a*x + b*y + c*z + d = 0`; `None` if `(a, b, c)` is (near) zero.
+    /// Clean-room rewrite pending: see cleanroom spec `surface_conventions.md`.
     pub fn from_equation(a: f64, b: f64, c: f64, d: f64) -> Option<Self> {
-        // As OCCT's gp_Pln: the origin on the axis of the largest coefficient but one.
-        let normal = Direction::try_from_vector(Vector::new(a, b, c))?;
-        let (aa, ab, ac) = (a.abs(), b.abs(), c.abs());
-        let (origin, x) = if ab <= aa && ab <= ac {
-            if aa > ac { (Point::new(-d / a, 0.0, 0.0), Vector::new(-c, 0.0, a)) } else { (Point::new(0.0, 0.0, -d / c), Vector::new(c, 0.0, -a)) }
-        } else if aa <= ab && aa <= ac {
-            if ab > ac { (Point::new(0.0, -d / b, 0.0), Vector::new(0.0, -c, b)) } else { (Point::new(0.0, 0.0, -d / c), Vector::new(0.0, c, -b)) }
-        } else if aa > ab {
-            (Point::new(-d / a, 0.0, 0.0), Vector::new(-b, a, 0.0))
-        } else {
-            (Point::new(0.0, -d / b, 0.0), Vector::new(b, -a, 0.0))
-        };
-        Some(Plane::from_frame(Frame::new(origin, normal, Direction::try_from_vector(x)?)))
+        todo!("clean-room rewrite")
     }
 
     /// Coefficients `(a, b, c, d)` of the plane's equation, with `(a, b, c)` the unit normal.
@@ -205,12 +193,9 @@ impl Plane {
         self.distance(p) <= tolerance
     }
 
-    /// The parameters `(u, v)` of `p`, which should lie on the surface (for other points,
-    /// those of a nearby surface point; `u` in `[0, 2π)` for an angular parameter).
-    #[doc(alias = "ElSLib::Parameters")]
+    /// Clean-room rewrite pending: see cleanroom spec `surface_conventions.md`.
     pub fn parameters(&self, p: Point) -> (f64, f64) {
-        let d = p - self.origin();
-        (d.dot(Vector::from(self.frame.x())), d.dot(Vector::from(self.frame.y())))
+        todo!("clean-room rewrite")
     }
 }
 
@@ -247,12 +232,9 @@ impl Cylinder {
         self.radius
     }
 
-    /// The parameters `(u, v)` of `p`, which should lie on the surface (for other points,
-    /// those of a nearby surface point; `u` in `[0, 2π)` for an angular parameter).
-    #[doc(alias = "ElSLib::Parameters")]
+    /// Clean-room rewrite pending: see cleanroom spec `surface_conventions.md`.
     pub fn parameters(&self, p: Point) -> (f64, f64) {
-        let (x, y, z) = local_coordinates(&self.frame, p);
-        (angle_in_period(y.atan2(x)), z)
+        todo!("clean-room rewrite")
     }
 }
 
@@ -306,22 +288,9 @@ impl Cone {
         self.radius
     }
 
-    /// The parameters `(u, v)` of `p`, which should lie on the surface (for other points,
-    /// those of a nearby surface point; `u` in `[0, 2π)` for an angular parameter).
-    #[doc(alias = "ElSLib::Parameters")]
+    /// Clean-room rewrite pending: see cleanroom spec `surface_conventions.md`.
     pub fn parameters(&self, p: Point) -> (f64, f64) {
-        let (x, y, z) = local_coordinates(&self.frame, p);
-        let radial = x.hypot(y);
-        let u = if radial > 0.0 { angle_in_period(y.atan2(x)) } else { 0.0 };
-        let (sin, cos) = self.semi_angle.sin_cos();
-        // On the generator at `u`, or past the apex on the one opposite (`v` beyond the
-        // apex's, the radius negative): whichever the point is nearer.
-        let off = |signed_radial: f64| ((signed_radial - self.radius) * cos - z * sin).abs();
-        if radial > 0.0 && off(-radial) < off(radial) {
-            (angle_in_period(u + std::f64::consts::PI), (-radial - self.radius) * sin + z * cos)
-        } else {
-            (u, (radial - self.radius) * sin + z * cos)
-        }
+        todo!("clean-room rewrite")
     }
 
     /// The apex: where the generating lines meet, at `v = -radius / sin(semi_angle)`.
@@ -364,14 +333,9 @@ impl Sphere {
         self.radius
     }
 
-    /// The parameters `(u, v)` of `p`, which should lie on the surface (for other points,
-    /// those of a nearby surface point; `u` in `[0, 2π)` for an angular parameter).
-    #[doc(alias = "ElSLib::Parameters")]
+    /// Clean-room rewrite pending: see cleanroom spec `surface_conventions.md`.
     pub fn parameters(&self, p: Point) -> (f64, f64) {
-        let (x, y, z) = local_coordinates(&self.frame, p);
-        let radial = x.hypot(y);
-        let u = if radial > 0.0 { angle_in_period(y.atan2(x)) } else { 0.0 };
-        (u, z.atan2(radial))
+        todo!("clean-room rewrite")
     }
 }
 
@@ -395,85 +359,16 @@ pub struct TrimmedSurface {
 }
 
 impl TrimmedSurface {
-    /// Panics if a range is empty or outside the basis' domain in a non-periodic direction.
-    /// As OCCT's `Geom_RectangularTrimmedSurface`: in a periodic direction the range's end is
-    /// shifted by periods to follow its start; in another, a reversed range trims the basis
-    /// reversed in that direction.
+    /// Clean-room rewrite pending: see cleanroom spec `surface_conventions.md`.
     pub fn new(basis: Surface, u1: f64, u2: f64, v1: f64, v2: f64) -> Self {
-        use super::ParametricSurface;
-        let mut basis = basis;
-        let (bu1, bu2, bv1, bv2) = basis.bounds();
-        let (u1, u2) = Self::range(&mut basis, true, u1, u2, bu1, bu2);
-        let (v1, v2) = Self::range(&mut basis, false, v1, v2, bv1, bv2);
-        Self { basis: Box::new(basis), u1, u2, v1, v2 }
+        todo!("clean-room rewrite")
     }
 
-    /// As OCCT's `Geom_RectangularTrimmedSurface::SetTrim` with senses (as STEP's
-    /// `RECTANGULAR_TRIMMED_SURFACE` gives them): in a periodic direction the range brought
-    /// into the basis' first period (`ElCLib::AdjustPeriodic`), the surface reversed there
-    /// unless `sense`; in another, the range ordered, the surface reversed where the order
-    /// and `sense` disagree. `None` for an empty range or one outside the basis' domain.
-    #[doc(alias = "Geom_RectangularTrimmedSurface::SetTrim")]
+    /// Clean-room rewrite pending: see cleanroom spec `surface_conventions.md`.
     pub fn with_senses(basis: Surface, u1: f64, u2: f64, v1: f64, v2: f64, u_sense: bool, v_sense: bool) -> Option<Self> {
-        use super::ParametricSurface;
-        const P_CONFUSION: f64 = 1e-9;
-        let (bu1, bu2, bv1, bv2) = basis.bounds();
-        let direction = |periodic: bool, t1: f64, t2: f64, first: f64, last: f64, sense: bool| -> Option<(f64, f64, bool)> {
-            if t1 == t2 {
-                return None;
-            }
-            if periodic {
-                let (t1, t2) = super::adaptor::adjust_periodic(first, last, ((t2 - t1).abs() / 2.0).min(P_CONFUSION), t1, t2);
-                return Some((t1, t2, sense));
-            }
-            let (same, t1, t2) = if t1 < t2 { (sense, t1, t2) } else { (!sense, t2, t1) };
-            if first - t1 > P_CONFUSION || t2 - last > P_CONFUSION {
-                return None;
-            }
-            Some((t1, t2, same))
-        };
-        let (u1, u2, u_same) = direction(basis.is_u_periodic(), u1, u2, bu1, bu2, u_sense)?;
-        let (v1, v2, v_same) = direction(basis.is_v_periodic(), v1, v2, bv1, bv2, v_sense)?;
-        let mut trimmed = Self { basis: Box::new(basis), u1, u2, v1, v2 };
-        if !u_same {
-            trimmed.u_reverse();
-        }
-        if !v_same {
-            trimmed.v_reverse();
-        }
-        Some(trimmed)
+        todo!("clean-room rewrite")
     }
 
-    /// One direction's range, normalized (reversing the basis if needed).
-    fn range(basis: &mut Surface, u: bool, t1: f64, t2: f64, first: f64, last: f64) -> (f64, f64) {
-        use super::ParametricSurface;
-        assert!((t1 - t2).abs() > crate::tolerance::PARAMETRIC, "an empty trimming range [{t1}, {t2}]");
-        let period = if u { basis.u_period() } else { basis.v_period() };
-        if let Some(period) = period {
-            let mut t2 = t2;
-            while t2 <= t1 {
-                t2 += period;
-            }
-            while t2 > t1 + period + crate::tolerance::PARAMETRIC {
-                t2 -= period;
-            }
-            return (t1, t2);
-        }
-        let outside = |t: f64| t < first - crate::tolerance::PARAMETRIC || t > last + crate::tolerance::PARAMETRIC;
-        assert!(!outside(t1) && !outside(t2), "trimming range [{t1}, {t2}] outside [{first}, {last}]");
-        if t1 < t2 {
-            return (t1, t2);
-        }
-        if u {
-            let r = (basis.u_reversed_parameter(t1), basis.u_reversed_parameter(t2));
-            basis.u_reverse();
-            r
-        } else {
-            let r = (basis.v_reversed_parameter(t1), basis.v_reversed_parameter(t2));
-            basis.v_reverse();
-            r
-        }
-    }
 
     pub fn basis(&self) -> &Surface {
         &self.basis
@@ -486,74 +381,94 @@ impl TrimmedSurface {
 }
 
 impl super::ParametricSurface for TrimmedSurface {
+    /// Clean-room rewrite pending: see cleanroom spec `surface_conventions.md`.
     fn bounds(&self) -> (f64, f64, f64, f64) {
-        (self.u1, self.u2, self.v1, self.v2)
+        todo!("clean-room rewrite")
     }
     // As OCCT: a trimmed direction is not closed, but periodicity is the basis'.
+    /// Clean-room rewrite pending: see cleanroom spec `surface_conventions.md`.
     fn is_u_closed(&self) -> bool {
-        false
+        todo!("clean-room rewrite")
     }
+    /// Clean-room rewrite pending: see cleanroom spec `surface_conventions.md`.
     fn is_v_closed(&self) -> bool {
-        false
+        todo!("clean-room rewrite")
     }
+    /// Clean-room rewrite pending: see cleanroom spec `surface_conventions.md`.
     fn is_u_periodic(&self) -> bool {
-        self.basis.is_u_periodic()
+        todo!("clean-room rewrite")
     }
+    /// Clean-room rewrite pending: see cleanroom spec `surface_conventions.md`.
     fn is_v_periodic(&self) -> bool {
-        self.basis.is_v_periodic()
+        todo!("clean-room rewrite")
     }
+    /// Clean-room rewrite pending: see cleanroom spec `surface_conventions.md`.
     fn u_period(&self) -> Option<f64> {
-        self.basis.u_period()
+        todo!("clean-room rewrite")
     }
+    /// Clean-room rewrite pending: see cleanroom spec `surface_conventions.md`.
     fn v_period(&self) -> Option<f64> {
-        self.basis.v_period()
+        todo!("clean-room rewrite")
     }
+    /// Clean-room rewrite pending: see cleanroom spec `surface_conventions.md`.
     fn continuity(&self) -> super::Continuity {
-        self.basis.continuity()
+        todo!("clean-room rewrite")
     }
+    /// Clean-room rewrite pending: see cleanroom spec `surface_conventions.md`.
     fn is_cn_u(&self, n: u32) -> bool {
-        self.basis.is_cn_u(n)
+        todo!("clean-room rewrite")
     }
+    /// Clean-room rewrite pending: see cleanroom spec `surface_conventions.md`.
     fn is_cn_v(&self, n: u32) -> bool {
-        self.basis.is_cn_v(n)
+        todo!("clean-room rewrite")
     }
+    /// Clean-room rewrite pending: see cleanroom spec `surface_conventions.md`.
     fn point(&self, u: f64, v: f64) -> Point {
-        self.basis.point(u, v)
+        todo!("clean-room rewrite")
     }
+    /// Clean-room rewrite pending: see cleanroom spec `surface_conventions.md`.
     fn d1(&self, u: f64, v: f64) -> (Point, Vector, Vector) {
-        self.basis.d1(u, v)
+        todo!("clean-room rewrite")
     }
+    /// Clean-room rewrite pending: see cleanroom spec `surface_conventions.md`.
     fn d2(&self, u: f64, v: f64) -> super::SurfaceD2 {
-        self.basis.d2(u, v)
+        todo!("clean-room rewrite")
     }
+    /// Clean-room rewrite pending: see cleanroom spec `surface_conventions.md`.
     fn d3(&self, u: f64, v: f64) -> super::SurfaceD3 {
-        self.basis.d3(u, v)
+        todo!("clean-room rewrite")
     }
+    /// Clean-room rewrite pending: see cleanroom spec `surface_conventions.md`.
     fn dn(&self, u: f64, v: f64, nu: u32, nv: u32) -> Vector {
-        self.basis.dn(u, v, nu, nv)
+        todo!("clean-room rewrite")
     }
+    /// Clean-room rewrite pending: see cleanroom spec `surface_conventions.md`.
     fn u_iso(&self, u: f64) -> Curve {
-        Curve::Trimmed(super::curve::TrimmedCurve::new(self.basis.u_iso(u), self.v1, self.v2))
+        todo!("clean-room rewrite")
     }
+    /// Clean-room rewrite pending: see cleanroom spec `surface_conventions.md`.
     fn v_iso(&self, v: f64) -> Curve {
-        Curve::Trimmed(super::curve::TrimmedCurve::new(self.basis.v_iso(v), self.u1, self.u2))
+        todo!("clean-room rewrite")
     }
+    /// Clean-room rewrite pending: see cleanroom spec `surface_conventions.md`.
     fn u_reversed_parameter(&self, u: f64) -> f64 {
-        self.basis.u_reversed_parameter(u)
+        todo!("clean-room rewrite")
     }
+    /// Clean-room rewrite pending: see cleanroom spec `surface_conventions.md`.
     fn v_reversed_parameter(&self, v: f64) -> f64 {
-        self.basis.v_reversed_parameter(v)
+        todo!("clean-room rewrite")
     }
+    /// Clean-room rewrite pending: see cleanroom spec `surface_conventions.md`.
     fn u_reverse(&mut self) {
-        (self.u1, self.u2) = (self.basis.u_reversed_parameter(self.u2), self.basis.u_reversed_parameter(self.u1));
-        self.basis.u_reverse();
+        todo!("clean-room rewrite")
     }
+    /// Clean-room rewrite pending: see cleanroom spec `surface_conventions.md`.
     fn v_reverse(&mut self) {
-        (self.v1, self.v2) = (self.basis.v_reversed_parameter(self.v2), self.basis.v_reversed_parameter(self.v1));
-        self.basis.v_reverse();
+        todo!("clean-room rewrite")
     }
+    /// Clean-room rewrite pending: see cleanroom spec `surface_conventions.md`.
     fn resolution(&self, tolerance: f64) -> (f64, f64) {
-        self.basis.resolution(tolerance)
+        todo!("clean-room rewrite")
     }
 }
 
@@ -598,89 +513,15 @@ impl Torus {
         self.minor_radius
     }
 
-    /// The parameters `(u, v)` of `p`, which should lie on the surface (for other points,
-    /// those of a nearby surface point; `u` in `[0, 2π)` for an angular parameter).
-    #[doc(alias = "ElSLib::Parameters")]
+    /// Clean-room rewrite pending: see cleanroom spec `surface_conventions.md`.
     pub fn parameters(&self, p: Point) -> (f64, f64) {
-        let (x, y, z) = local_coordinates(&self.frame, p);
-        let (major, minor) = (self.major_radius, self.minor_radius);
-        let mut u = y.atan2(x);
-        // On a spindle torus (minor radius larger), the point may lie on the tube of the
-        // opposite longitude: the one whose circle of centres it is nearer the radius from.
-        if major < minor {
-            let (s, c) = u.sin_cos();
-            let off = |sign: f64| {
-                let (dx, dy) = (x - sign * major * c, y - sign * major * s);
-                (dx * dx + dy * dy + z * z - minor * minor).abs()
-            };
-            if off(-1.0) < off(1.0) {
-                u += std::f64::consts::PI;
-            }
-        }
-        let u = angle_in_period(u);
-        let (s, c) = u.sin_cos();
-        let (a, z) = (x * c + y * s - major, z);
-        let v = if (a * a + z * z).sqrt() <= f64::MIN_POSITIVE { 0.0 } else { angle_in_period(z.atan2(a)) };
-        (u, v)
+        todo!("clean-room rewrite")
     }
 
 
-    /// The 35 coefficients of the torus' implicit quartic equation `F(x, y, z) = 0`, in the
-    /// order x^4, y^4, z^4, x^3y, x^3z, y^3x, y^3z, z^3x, z^3y, x^2y^2, x^2z^2, y^2z^2,
-    /// x^2yz, xy^2z, xyz^2, x^3, y^3, z^3, x^2y, x^2z, y^2x, y^2z, z^2x, z^2y, xyz, x^2, y^2,
-    /// z^2, xy, xz, yz, x, y, z, 1.
+    /// Clean-room rewrite pending: see cleanroom spec `surface_conventions.md`.
     pub fn implicit_coefficients(&self) -> [f64; 35] {
-        // As OCCT's gp_Torus::Coefficients: the quartic of the torus in its frame, in
-        // global coordinates through T, the map into the frame.
-        let f = self.frame();
-        let (x, y, z, o) = (Vector::from(f.x()), Vector::from(f.y()), Vector::from(f.z()), f.origin() - Point::ORIGIN);
-        let t = [[x.x, x.y, x.z, -x.dot(o)], [y.x, y.y, y.z, -y.dot(o)], [z.x, z.y, z.z, -z.dot(o)]];
-        let col = |i: usize, j: usize| t[0][i] * t[0][j] + t[1][i] * t[1][j] + t[2][i] * t[2][j];
-        let (c11, c22, c33, c44) = (col(0, 0), col(1, 1), col(2, 2), col(3, 3));
-        let (c12, c13, c23) = (col(0, 1), col(0, 2), col(1, 2));
-        let (c14, c24, c34) = (col(0, 3), col(1, 3), col(2, 3));
-        let (r, q) = (self.major_radius(), self.minor_radius());
-        let (sum, sub) = (r * r + q * q, r * r - q * q);
-        let [t11, t12, t13, t14] = t[0];
-        let [t21, t22, t23, t24] = t[1];
-        let [t31, t32, t33, t34] = t[2];
-        [
-            c11 * c11,
-            c22 * c22,
-            c33 * c33,
-            4.0 * c11 * c12,
-            4.0 * c11 * c13,
-            4.0 * c22 * c12,
-            4.0 * c22 * c23,
-            4.0 * c33 * c13,
-            4.0 * c33 * c23,
-            2.0 * (c11 * c22 + 2.0 * c12 * c12),
-            2.0 * (c11 * c33 + 2.0 * c13 * c13),
-            2.0 * (c22 * c33 + 2.0 * c23 * c23),
-            4.0 * (c11 * c23 + 2.0 * c12 * c13),
-            4.0 * (c22 * c13 + 2.0 * c12 * c23),
-            4.0 * (c33 * c12 + 2.0 * c13 * c23),
-            4.0 * c11 * c14,
-            4.0 * c22 * c24,
-            4.0 * c33 * c34,
-            4.0 * (c11 * c24 + 2.0 * c14 * c12),
-            4.0 * (c11 * c34 + 2.0 * c14 * c13),
-            4.0 * (c22 * c14 + 2.0 * c24 * c12),
-            4.0 * (c22 * c34 + 2.0 * c24 * c23),
-            4.0 * (c33 * c14 + 2.0 * c34 * c13),
-            4.0 * (c33 * c24 + 2.0 * c34 * c23),
-            8.0 * (c12 * c34 + c23 * c14 + c24 * c13),
-            2.0 * (sub * t31 * t31 - sum * (t11 * t11 + t21 * t21) + c44 * c11 + 2.0 * c14 * c14),
-            2.0 * (sub * t32 * t32 - sum * (t12 * t12 + t22 * t22) + c44 * c22 + 2.0 * c24 * c24),
-            2.0 * (sub * t33 * t33 - sum * (t13 * t13 + t23 * t23) + c44 * c33 + 2.0 * c34 * c34),
-            4.0 * (sub * t31 * t32 - sum * (t11 * t12 + t21 * t22) + c44 * c12 + 2.0 * c14 * c24),
-            4.0 * (sub * t31 * t33 - sum * (t11 * t13 + t21 * t23) + c44 * c13 + 2.0 * c14 * c34),
-            4.0 * (sub * t32 * t33 - sum * (t12 * t13 + t22 * t23) + c44 * c23 + 2.0 * c24 * c34),
-            4.0 * (c44 * c14 + sub * t31 * t34 - sum * (t11 * t14 + t21 * t24)),
-            4.0 * (c44 * c24 + sub * t32 * t34 - sum * (t12 * t14 + t22 * t24)),
-            4.0 * (c44 * c34 + sub * t33 * t34 - sum * (t13 * t14 + t23 * t24)),
-            2.0 * sub * t34 * t34 - 2.0 * sum * (t14 * t14 + t24 * t24) + c44 * c44 + sub * sub,
-        ]
+        todo!("clean-room rewrite")
     }
 }
 

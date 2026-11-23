@@ -336,22 +336,14 @@ impl Cylinder {
         Ok(Self::new(frame, radius))
     }
 
-    /// The cylinder around `axis`.
-    #[doc(alias = "gce_MakeCylinder")]
+    /// Clean-room rewrite pending: see cleanroom spec `construct_cone.md`.
     pub fn from_axis(axis: Axis, radius: f64) -> Result<Cylinder> {
-        check_radius(radius)?;
-        Ok(Self::new(Frame::new(axis.origin, axis.direction, occt_x(axis.direction)), radius))
+        todo!("clean-room rewrite")
     }
 
-    /// The cylinder with axis through `p1` and `p2`, through `p3`.
-    #[doc(alias = "gce_MakeCylinder")]
+    /// Clean-room rewrite pending: see cleanroom spec `construct_cone.md`.
     pub fn from_three_points(p1: Point, p2: Point, p3: Point) -> Result<Cylinder> {
-        if p1.distance(p2) < crate::tolerance::RESOLUTION {
-            return Err(ConstructionError::ConfusedPoints);
-        }
-        let z = Direction::from_vector(p2 - p1);
-        let radius = super::curve::Line::new(p1, z).distance_to_point(p3);
-        Ok(Cylinder::new(Frame::new(p1, z, occt_x(z)), radius))
+        todo!("clean-room rewrite")
     }
 }
 
@@ -394,63 +386,17 @@ impl Cone {
         Ok(Cone::new(*f, self.semi_angle(), radius))
     }
 
-    /// The cone with axis from `p1` to `p2` and radii `r1` at `p1` and `r2` at `p2`.
-    #[doc(alias = "gce_MakeCone")]
+    /// Clean-room rewrite pending: see cleanroom spec `construct_cone.md`.
     pub fn from_points_radii(p1: Point, p2: Point, r1: f64, r2: f64) -> Result<Cone> {
-        let length = p1.distance(p2);
-        if length < crate::tolerance::RESOLUTION {
-            return Err(ConstructionError::NullAxis);
-        }
-        check_radius(r1)?;
-        check_radius(r2)?;
-        let angle = ((r1 - r2) / length).atan().abs();
-        if (std::f64::consts::FRAC_PI_2 - angle).abs() < crate::tolerance::RESOLUTION || angle < crate::tolerance::RESOLUTION {
-            return Err(ConstructionError::BadAngle);
-        }
-        let z = Direction::from_vector(p2 - p1);
-        let angle = if r1 > r2 { -angle } else { angle };
-        Ok(Cone::new(Frame::new(p1, z, occt_x(z)), angle, r1))
+        todo!("clean-room rewrite")
     }
 
-    /// The cone with axis from `p1` to `p2` through `p3` and `p4`.
-    #[doc(alias = "gce_MakeCone")]
+    /// Clean-room rewrite pending: see cleanroom spec `construct_cone.md`.
     pub fn from_four_points(p1: Point, p2: Point, p3: Point, p4: Point) -> Result<Cone> {
-        if p1.distance(p2) < crate::tolerance::RESOLUTION || p3.distance(p4) < crate::tolerance::RESOLUTION {
-            return Err(ConstructionError::ConfusedPoints);
-        }
-        let axis = Direction::from_vector(p2 - p1);
-        let foot = |q: Point| p1 + Vector::from(axis) * (q - p1).dot(Vector::from(axis));
-        let (f3, f4) = (foot(p3), foot(p4));
-        let (h3, h4) = (f3.distance(p1), f4.distance(p1));
-        if (h3 - h4).abs() < crate::tolerance::RESOLUTION {
-            return Err(ConstructionError::BadAngle);
-        }
-        let line = super::curve::Line::new(p1, axis);
-        let (d3, d4) = (line.distance_to_point(p3), line.distance_to_point(p4));
-        let angle = ((d3 - d4) / (h3 - h4)).atan().abs();
-        if (std::f64::consts::FRAC_PI_2 - angle).abs() < crate::tolerance::RESOLUTION || angle < crate::tolerance::RESOLUTION {
-            return Err(ConstructionError::BadAngle);
-        }
-        let (r1, r2) = (f3.distance(p3), f4.distance(p4));
-        let z = Direction::try_from_vector(f4 - f3).ok_or(ConstructionError::NullAxis)?;
-        let angle = if r1 > r2 { -angle } else { angle };
-        Ok(Cone::new(Frame::new(f3, z, occt_x(z)), angle, r1))
+        todo!("clean-room rewrite")
     }
 }
 
-/// The X direction OCCT's constructors give an axis `z`: perpendicular to it, in the XY
-/// plane where possible.
-fn occt_x(z: Direction) -> Direction {
-    let (x, y, w) = (z.x(), z.y(), z.z());
-    let r = crate::tolerance::RESOLUTION;
-    if x.abs() > r {
-        Direction::new(-y, x, 0.0)
-    } else if y.abs() > r {
-        Direction::new(0.0, -w, y)
-    } else {
-        Direction::new(w, 0.0, -x)
-    }
-}
 
 /// The parameter (angle) of a point of a circle.
 fn circle_parameter(circle: &Circle, p: Point) -> f64 {

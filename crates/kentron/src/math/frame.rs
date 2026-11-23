@@ -40,21 +40,9 @@ impl Frame {
         Self { origin, x, y, z }
     }
 
-    /// Right-handed frame with main axis `z`; the X axis is chosen automatically.
+    /// Clean-room rewrite pending: see cleanroom spec `frame.md`.
     pub fn from_z(origin: Point, z: Direction) -> Self {
-        // OCCT's gp_Ax2 choice, so that parametrizations match OCCT's: zero the smallest
-        // component of `z` and swap the other two.
-        let (a, b, c) = (z.x().abs(), z.y().abs(), z.z().abs());
-        let x_hint = if b <= a && b <= c {
-            if a > c { Direction::new(-z.z(), 0.0, z.x()) } else { Direction::new(z.z(), 0.0, -z.x()) }
-        } else if a <= b && a <= c {
-            if b > c { Direction::new(0.0, -z.z(), z.y()) } else { Direction::new(0.0, z.z(), -z.y()) }
-        } else if a > b {
-            Direction::new(-z.y(), z.x(), 0.0)
-        } else {
-            Direction::new(z.y(), -z.x(), 0.0)
-        };
-        Self::new(origin, z, x_hint)
+        todo!("clean-room rewrite")
     }
 
     pub fn origin(&self) -> Point {
@@ -95,71 +83,24 @@ impl Frame {
         self.z = -self.z;
     }
 
-    /// Re-orients the frame so that its main direction is `z`, keeping its handedness.
+    /// Clean-room rewrite pending: see cleanroom spec `frame.md`.
     pub fn set_z(&mut self, z: Direction) {
-        // As OCCT's gp_Ax3::SetDirection.
-        let dot = Vector::from(z).dot(Vector::from(self.x));
-        if 1.0 - dot.abs() <= crate::tolerance::ANGULAR {
-            if dot > 0.0 {
-                (self.x, self.y) = (self.y, self.z);
-            } else {
-                self.x = self.z;
-            }
-            self.z = z;
-        } else {
-            let right_handed = self.is_right_handed();
-            let zv = Vector::from(z);
-            self.z = z;
-            self.x = Direction::from_vector(zv.cross(Vector::from(self.x).cross(zv)));
-            self.y = Direction::from_vector(if right_handed { zv.cross(Vector::from(self.x)) } else { Vector::from(self.x).cross(zv) });
-        }
+        todo!("clean-room rewrite")
     }
 
-    /// Moves the origin to `axis.origin` and sets the main direction, keeping handedness.
+    /// Clean-room rewrite pending: see cleanroom spec `frame.md`.
     pub fn set_z_axis(&mut self, axis: Axis) {
-        self.origin = axis.origin;
-        self.set_z(axis.direction);
+        todo!("clean-room rewrite")
     }
 
-    /// Sets the X direction (projected to be perpendicular to Z), keeping handedness.
+    /// Clean-room rewrite pending: see cleanroom spec `frame.md`.
     pub fn set_x(&mut self, x: Direction) {
-        // As OCCT's gp_Ax3::SetXDirection.
-        let dot = Vector::from(x).dot(Vector::from(self.z));
-        if 1.0 - dot.abs() <= crate::tolerance::ANGULAR {
-            if dot > 0.0 {
-                self.z = self.x;
-                self.y = -self.y;
-            } else {
-                self.z = self.x;
-            }
-            self.x = x;
-        } else {
-            let right_handed = self.is_right_handed();
-            let zv = Vector::from(self.z);
-            self.x = Direction::from_vector(zv.cross(Vector::from(x).cross(zv)));
-            self.y = Direction::from_vector(if right_handed { zv.cross(Vector::from(self.x)) } else { Vector::from(self.x).cross(zv) });
-        }
+        todo!("clean-room rewrite")
     }
 
-    /// Sets the Y direction (projected to be perpendicular to Z), keeping handedness.
+    /// Clean-room rewrite pending: see cleanroom spec `frame.md`.
     pub fn set_y(&mut self, y: Direction) {
-        // As OCCT's gp_Ax3::SetYDirection.
-        let dot = Vector::from(y).dot(Vector::from(self.z));
-        if 1.0 - dot.abs() <= crate::tolerance::ANGULAR {
-            if dot > 0.0 {
-                self.z = self.y;
-                self.x = -self.x;
-            } else {
-                self.z = self.y;
-            }
-            self.y = y;
-        } else {
-            let right_handed = self.is_right_handed();
-            let zv = Vector::from(self.z);
-            let x = Direction::from_vector(Vector::from(y).cross(zv));
-            self.y = Direction::from_vector(zv.cross(Vector::from(x)));
-            self.x = if right_handed { x } else { -x };
-        }
+        todo!("clean-room rewrite")
     }
 }
 

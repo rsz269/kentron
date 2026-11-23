@@ -245,16 +245,8 @@ class gp_Dir(gp_Vec):
 
 
 def _default_x(n) -> gp_Dir:
-    """The X direction OCCT gives a frame with only its main direction (gp_Ax2)."""
-    a, b, c = n
-    aa, ab, ac = abs(a), abs(b), abs(c)
-    if ab <= aa and ab <= ac:
-        d = (-c, 0.0, a) if aa > ac else (c, 0.0, -a)
-    elif aa <= ab and aa <= ac:
-        d = (0.0, -c, b) if ab > ac else (0.0, c, -b)
-    else:
-        d = (-b, a, 0.0) if aa > ab else (b, -a, 0.0)
-    return gp_Dir(*d)
+    """Clean-room rewrite pending: see cleanroom spec `pykentron_default_x.md`."""
+    raise NotImplementedError("clean-room rewrite")
 
 
 class gp_Ax1:

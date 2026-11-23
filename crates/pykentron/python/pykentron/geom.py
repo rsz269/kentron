@@ -492,16 +492,8 @@ _NAMED_PLANES = {
 
 
 def _default_x(n: Vector) -> Vector:
-    """The x direction OCCT gives a coordinate system with only its normal (gp_Ax2)."""
-    a, b, c = n
-    aa, ab, ac = abs(a), abs(b), abs(c)
-    if ab <= aa and ab <= ac:
-        d = (-c, 0.0, a) if aa > ac else (c, 0.0, -a)
-    elif aa <= ab and aa <= ac:
-        d = (0.0, -c, b) if ab > ac else (0.0, c, -b)
-    else:
-        d = (-b, a, 0.0) if aa > ab else (b, -a, 0.0)
-    return Vector(d).normalized()
+    """Clean-room rewrite pending: see cleanroom spec `pykentron_default_x.md`."""
+    raise NotImplementedError("clean-room rewrite")
 
 
 def _named(name: str):
