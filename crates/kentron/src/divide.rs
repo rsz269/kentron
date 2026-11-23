@@ -344,7 +344,6 @@ pub fn divide_face(model: &mut Model, face: Shape, cuts: &[Cut]) -> Result<Vec<S
     let snap = (1e-6 * scale).max(eps);
     for (li, l) in loops.iter().enumerate() {
         for (ui, u) in l.iter().enumerate() {
-            let next = &l[(ui + 1) % l.len()];
             for (ci, c) in cuts.iter().enumerate() {
                 for (t, tau) in crossings(&u.pcurve, u.first, u.last, &c.pcurve, c.first, c.last, eps.max(1e-7 * scale)) {
                     let s = (t - u.first) / (u.last - u.first);
@@ -353,9 +352,8 @@ pub fn divide_face(model: &mut Model, face: Shape, cuts: &[Cut]) -> Result<Vec<S
                     // use's start and end are one, taken at its end.)
                     let at_start = s <= 1e-9 || uv.distance(u.at(0.0)) <= snap;
                     let at_end = s >= 1.0 - 1e-9 || uv.distance(u.at(1.0)) <= snap;
-                    if at_start && (!at_end || s < 0.5) {
-                        continue;
-                    }
+                    let (ui, at_end) = if at_start && (!at_end || s < 0.5) { ((ui + l.len() - 1) % l.len(), true) } else { (ui, at_end) };
+                    let (u, next) = (&l[ui], &l[(ui + 1) % l.len()]);
                     let (pc, tangent) = c.pcurve.d1(tau);
                     let side = |q: Point2| {
                         let w = q - pc;
@@ -367,6 +365,10 @@ pub fn divide_face(model: &mut Model, face: Shape, cuts: &[Cut]) -> Result<Vec<S
                         continue;
                     }
                     let (s, uv) = if at_end { (1.0, u.at(1.0)) } else { (s, uv) };
+                    // (Found from both uses meeting there: once.)
+                    if at_end && on_cuts[ci].iter().any(|x| x.uv.distance(uv) <= snap) && on_uses[li][ui].iter().any(|&(x, _)| x == 1.0) {
+                        continue;
+                    }
                     on_uses[li][ui].push((s, uv));
                     on_cuts[ci].push(Crossing { at: tau, uv });
                 }
