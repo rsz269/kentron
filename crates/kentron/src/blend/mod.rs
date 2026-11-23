@@ -1497,7 +1497,11 @@ fn fillet_solid_edges_as(model: &mut Model, shape: Shape, edges: &[(Shape, f64)]
     let tools = patches.iter().map(|patch| patch.tool(model, &mut made)).collect::<Result<Vec<_>>>()?;
     result = take_tools(model, result, shape, &sound, &tools, true, closed, &keep)?;
     result = take_tools(model, result, shape, &sound, &fills, false, closed, &keep)?;
-    merged_at_caps(model, result, &caps)
+    let result = merged_at_caps(model, result, &caps)?;
+    // (A concave fillet whose edge ends at the apex of a rim's horn torus, rolled on past
+    // it, over the rim's cylinders, to where its ball sits in the torus.)
+    let apexes = if ROUNDING_AN_OFFSET.with(|f| f.get()) { Vec::new() } else { apex_ends(model, shape, &corners) };
+    apexes.iter().try_fold(result, |result, apex| runover::roll_past(model, result, apex))
 }
 
 /// `tools` cut from `result` (`convex`) or added to it, those well apart from one another in
@@ -2318,6 +2322,88 @@ fn toric_corners(model: &Model, shape: Shape, corners: &[(Corner, f64)], mitred:
                 continue;
             }
             found.push((i, ki, j, kj, Axis::new(p, Direction::from_vector(d)), alpha));
+        }
+    }
+    found
+}
+
+/// The ends of the concave straight `corners` at the apex of a horn torus (see
+/// [`runover::roll_past`]): no other fillet meeting the end, the edge's faces planes, and the
+/// end's other faces a torus of equal radii about the edge's line, centred at the end, and
+/// a cylinder of that radius along each wall, its axis that radius into the material from
+/// the end, square to the edge (a rim rounded by `toric_corners`'s torus before), all three
+/// convex.
+fn apex_ends(model: &Model, shape: Shape, corners: &[(Corner, f64)]) -> Vec<runover::Apex> {
+    let mut found = Vec::new();
+    let outward = |face: Shape, surface: &Surface, q: Point| -> Option<Vector> {
+        let (u, v) = surface.parameters(q)?;
+        let (_, du, dv) = surface.d1(u, v);
+        let n = du.cross(dv);
+        (n.length() > 1e-12).then(|| n.normalized() * if face.orientation == Orientation::Reversed { -1.0 } else { 1.0 })
+    };
+    for (i, (corner, radius)) in corners.iter().enumerate() {
+        if corner.convex || !matches!(corner.path, Path::Line { .. }) {
+            continue;
+        }
+        let walls = corner.faces.each_ref().map(|f| match untrimmed(&f.1) {
+            // (Into the material.)
+            Surface::Plane(p) => Some(Vector::from(p.normal()) * -f.2),
+            _ => None,
+        });
+        let [Some(d0), Some(d1)] = walls else { continue };
+        for (k, p) in [corner.origin, corner.end].into_iter().enumerate() {
+            if corners.iter().enumerate().any(|(j, (other, _))| j != i && other.ends().iter().any(|q| q.distance(p) <= tolerance::LINEAR)) {
+                continue;
+            }
+            let out = corner.tangent * if k == 0 { -1.0 } else { 1.0 };
+            let mut faces: Vec<Shape> = Vec::new();
+            for face in model.explore(shape, NodeKind::Face) {
+                if corner.faces.iter().any(|f| f.0 == face.node) || faces.iter().any(|f| f.node == face.node) {
+                    continue;
+                }
+                if model.explore(face, NodeKind::Vertex).any(|v| model.point(v).distance(p) <= tolerance::LINEAR) {
+                    faces.push(face);
+                }
+            }
+            if faces.len() != 3 {
+                continue;
+            }
+            let surfaces: Vec<Option<Surface>> = faces.iter().map(|&f| model.surface(f).map(|s| untrimmed(s).transformed(&f.placement))).collect();
+            let Some(t) = surfaces.iter().position(|s| matches!(s, Some(Surface::Torus(_)))) else { continue };
+            let Some(Surface::Torus(torus)) = &surfaces[t] else { continue };
+            let (origin, z, major, r) = (torus.frame().origin(), Vector::from(torus.frame().z()), torus.major_radius(), torus.minor_radius());
+            if (major - r).abs() > tolerance::LINEAR || origin.distance(p) > tolerance::LINEAR || z.cross(corner.tangent).length() > tolerance::ANGULAR {
+                continue;
+            }
+            // (Convex: its normal out of the material along the edge at the top of its tube
+            // halfway round.)
+            let bisector = (d0 + d1).normalized();
+            if !outward(faces[t], surfaces[t].as_ref().expect("a torus"), p + out * r + bisector * r).is_some_and(|n| n.dot(out) > 1.0 - tolerance::ANGULAR) {
+                continue;
+            }
+            // Each wall's cylinder.
+            let mut cylinders = [None, None];
+            for (w, d) in [d0, d1].into_iter().enumerate() {
+                let foot = p + d * r;
+                let along = corner.into[w];
+                cylinders[w] = (0..3).filter(|&f| f != t).find(|&f| match &surfaces[f] {
+                    Some(Surface::Cylinder(c)) => {
+                        let axis = Vector::from(c.frame().z());
+                        let off = (foot - c.frame().origin()) - axis * (foot - c.frame().origin()).dot(axis);
+                        let top = foot + out * r;
+                        (c.radius() - r).abs() <= tolerance::LINEAR
+                            && off.length() <= tolerance::LINEAR
+                            && axis.cross(along).length() <= tolerance::ANGULAR
+                            && outward(faces[f], surfaces[f].as_ref().expect("a cylinder"), top).is_some_and(|n| n.dot(out) > 1.0 - tolerance::ANGULAR)
+                    }
+                    _ => false,
+                });
+            }
+            let [Some(c0), Some(c1)] = cylinders else { continue };
+            if c0 == c1 {
+                continue;
+            }
+            found.push(runover::Apex { vertex: p, out, inward: [d0, d1], along: corner.into, rim: r, radius: *radius, faces: [faces[c0], faces[c1], faces[t]] });
         }
     }
     found
@@ -6609,11 +6695,12 @@ mod tests {
     /// tool folding through itself and its union left open, the fillet run on over the
     /// solid); closed at the edge they run on. The rim's ball swings round the pocket's
     /// upright edges (a horn torus at each corner, `(1 − π/4)(5/3 − π/2)` more than a mitre
-    /// keeps: the rim alone is exact), so the run up a corner ends at the torus's apex, where
-    /// the upright edge does: short of the ball rolling on between the rim's two fillets
-    /// there, 0.35 at each corner by a voxel closing of what it rounds (docs/known-gaps.md).
-    /// (On OCCT's mitred rim, whose fillets meet in a valley the rounding runs on along,
-    /// OCCT gives 42052.09372.)
+    /// keeps: the rim alone is exact), and the run up a corner goes on past the torus's apex,
+    /// where the upright edge ends, between the rim's two cylinders up to the ball sitting in
+    /// the torus: [`ROLLED_PAST_A_SQUARE_APEX`] more at each corner than stopping at the apex
+    /// (the volume a voxel closing of the solid before the last fillet finds kentron's result
+    /// differs from by no voxel near the corner at h 0.03). (On OCCT's mitred rim, whose
+    /// fillets meet in a valley the rounding runs on along, OCCT gives 42052.09372.)
     #[test]
     fn a_floor_fillet_runs_up_the_corners_of_a_rounded_rim() {
         let mut model = Model::new();
@@ -6648,10 +6735,80 @@ mod tests {
         assert_eq!(long.len(), 1);
         let rounded = fillet(&mut model, body, &long, 2.0).unwrap();
         assert!(validity::check(&model, rounded).is_valid());
-        // (kentron's own value, a regression check: see above.)
+        // (The fillet stopping square at the apexes was 42051.10001; to within the lofted
+        // fillets' error.)
         let v = properties::volume(&model, rounded).mass;
-        assert!((v - 42051.10001).abs() < 1e-7 * v, "{v}");
+        let expected = 42051.10001 + 2.0 * ROLLED_PAST_A_SQUARE_APEX;
+        assert!((v - expected).abs() < 1e-4, "{v} against {expected}");
     }
+
+    /// What a round of radius 2 up a square pocket corner adds past the apex of the rim's
+    /// horn torus (radius 1), rolling on between the rim's cylinders (see
+    /// `runover::roll_past`). No closed form: the volume of kentron's result, which a voxel
+    /// closing of the solid before it (tools/brute.py `round close`, R 2) finds no voxel
+    /// apart from near the corner, at h 0.03 and at h 0.02; with 16 to 128 sections along the
+    /// ball's path it is the same to 1e-6.
+    const ROLLED_PAST_A_SQUARE_APEX: f64 = 0.463813;
+
+    /// A block 20 x 20 x 6 with a polygonal pocket 4 deep (`sides` corners on a circle of
+    /// radius 5, one at (5, 0)), its rim rounded by 1; and that corner's upright edge, from
+    /// the floor to the apex of the rim's torus there.
+    fn rimmed_polygon_pocket(model: &mut Model, sides: usize) -> (Shape, Shape) {
+        let block = Cuboid::from_corners(Point::new(-10.0, -10.0, -3.0), Point::new(10.0, 10.0, 3.0)).build(model).unwrap();
+        let corners: Vec<Point> = (0..sides).map(|i| { let a = TAU * i as f64 / sides as f64; Point::new(5.0 * a.cos(), 5.0 * a.sin(), -1.0) }).collect();
+        let edges: Vec<Shape> = (0..sides).map(|i| make::edge_between(model, corners[i], corners[(i + 1) % sides]).unwrap()).collect();
+        let outline = make::wire(model, &edges).unwrap();
+        let face = make::planar_face(model, outline).unwrap();
+        let pocket = sweep::extrude(model, face, Vector::new(0.0, 0.0, 5.0)).unwrap().shape;
+        let body = boolean::difference(model, block, pocket).unwrap();
+        let rim: Vec<Shape> = model
+            .unique_subshapes(body, NodeKind::Edge)
+            .into_iter()
+            .filter(|&e| {
+                let (a, b) = model.edge_vertices(e);
+                [a, b].iter().all(|&v| { let p = model.point(v); p.z == 3.0 && p.x.abs() <= 5.5 && p.y.abs() <= 5.5 })
+            })
+            .collect();
+        assert_eq!(rim.len(), sides);
+        let body = fillet(model, body, &rim, 1.0).unwrap();
+        let upright: Vec<Shape> = model
+            .unique_subshapes(body, NodeKind::Edge)
+            .into_iter()
+            .filter(|&e| {
+                let (a, b) = model.edge_vertices(e);
+                let (p, q) = (model.point(a), model.point(b));
+                [p, q].iter().all(|r| (r.x - 5.0).abs() < 1e-9 && r.y.abs() < 1e-9) && p.distance(q) > 1.0
+            })
+            .collect();
+        assert_eq!(upright.len(), 1);
+        (body, upright[0])
+    }
+
+    /// A round up a pocket's corner whose rim is rounded by a smaller ball, swinging round the
+    /// corner in a horn torus: it rolls on past the torus's apex, where the edge ends, between
+    /// the rim's two cylinders, until its ball sits in the torus, ending in that ball's
+    /// sphere. Square corners (the pocket a square turned 45°) and corners of a hexagon (the
+    /// torus there made by turning the rim's section, its radii equal but for rounding): the
+    /// round along the edge, `3R²(cot(β/2) − (π − β)/2)` for a corner of angle β, and what it
+    /// adds past the apex, by a voxel closing of the rimmed block (tools/brute.py `round
+    /// close`, R 2): no voxel apart near the corner at h 0.03 (nor at h 0.02 for the square).
+    #[test]
+    fn a_round_up_a_pocket_corner_rolls_on_past_the_rims_torus() {
+        for (sides, past) in [(4, ROLLED_PAST_A_SQUARE_APEX), (6, 0.129692)] {
+            let mut model = Model::new();
+            let (body, upright) = rimmed_polygon_pocket(&mut model, sides);
+            let before = properties::volume(&model, body).mass;
+            let rounded = fillet(&mut model, body, &[upright], 2.0).unwrap();
+            assert!(validity::check(&model, rounded).is_valid());
+            let beta = PI - TAU / sides as f64;
+            let along = 3.0 * 4.0 * (1.0 / (0.5 * beta).tan() - 0.5 * (PI - beta));
+            let added = properties::volume(&model, rounded).mass - before;
+            assert!((added - (along + past)).abs() < 1e-5, "{sides} sides: {added} against {}", along + past);
+            let spheres = model.unique_subshapes(rounded, NodeKind::Face).into_iter().filter(|&f| matches!(model.surface(f), Some(Surface::Sphere(_)))).count();
+            assert_eq!(spheres, 1, "{sides} sides");
+        }
+    }
+
 
     #[test]
     fn concave_edge() {

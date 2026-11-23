@@ -260,8 +260,9 @@ fn winding(runs: &[&Vec<Point2>], q: Point2) -> i32 {
     w
 }
 
-/// A point inside the planar `face`: just inside the middle of a side of its outer loop.
-fn interior_point(model: &Model, face: Shape) -> Option<Point> {
+/// A point inside `face`: just inside the middle of a side of its outer loop (in its
+/// parameters).
+pub(crate) fn interior_point(model: &Model, face: Shape) -> Option<Point> {
     use crate::geometry::ParametricSurface;
     let loops = crate::heal::face_loops(model, Shape { orientation: Orientation::Forward, ..face })?;
     let polygons: Vec<Vec<Point2>> = loops.iter().map(|l| l.iter().flat_map(|u| (0..32).map(move |i| u.at(i as f64 / 32.0))).collect()).collect();

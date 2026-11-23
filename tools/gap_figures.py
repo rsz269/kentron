@@ -74,21 +74,6 @@ def scene_overround(cq, kernel):
     return {"rounded": [(rounded.val(), lambda face: BODY if face.geomType() == "PLANE" else FIRST)]}
 
 
-def scene_apex(cq, kernel):
-    """A block 20 by 20 by 6 with a pocket 10 by 8, 4 deep: its rim rounded by 1, then one of
-    its upright corners by 2."""
-    block = cq.Workplane().box(20, 20, 6).faces(">Z").workplane().rect(10, 8).cutBlind(-4)
-    rimmed = block.edges(cq.selectors.BoxSelector((-5.5, -4.5, 2.9), (5.5, 4.5, 3.1))).fillet(1)
-    rounded = rimmed.edges(cq.selectors.NearestToPointSelector((5, 4, 0))).fillet(2)
-
-    def material(face):
-        if face.geomType() == "PLANE":
-            # (The ledge the corner's round ends in, under the rim's torus.)
-            return WRONG if face.Area() < 2 and abs(face.Center().z - 2) < 1e-6 else BODY
-        return SECOND if face.geomType() == "TORUS" else FIRST
-    return {"rounded": [(rounded.val(), material)]}
-
-
 def scene_twisted(cq, kernel):
     """After knurl() of mryndzionek's cadquery_plaground (util.py): height 10, radius 26.75,
     cut angle 120, depth 0.5, twist 40, 12 prisms a set."""
@@ -976,21 +961,6 @@ def figure_overround(rebuild):
     for x, mesh, title, verdict in (
             (COLUMNS[1], kentron, "kentron", ("bad", "the straight fillets cross in a crease")),
             (COLUMNS[2], cadquery, "CadQuery", ("good", "one corner face, tangent all round"))):
-        info = mesh["info"][0]
-        figure.panel(x, TOP, MAIN, height, render([mesh], corner), title, "%d faces, volume %.3f" % (info["faces"], info["volume"]), verdict)
-    return figure
-
-
-def figure_apex(rebuild):
-    kentron, cadquery = (scene("apex", k, rebuild)["rounded"] for k in ("kentron", "cadquery"))
-    height = 280
-    figure = Figure(WIDTH, TOP + height + 40, "A pocket's rim rounded, then an upright corner of the pocket rounded by more: kentron's rim swings round the corner in a horn torus, and the corner's round stops at the torus's apex in a ledge; OCCT's rim is mitred there, and the round runs on up the mitre's crease.")
-    whole = View((-0.8, -1, 0.9), (0, 0, 0.5), 22, SIDE, height)
-    corner = View((-1, -1, 0.9), (4.2, 3.2, 1.6), 4.4, MAIN, height)
-    figure.panel(COLUMNS[0], TOP, SIDE, height, render([kentron], whole), "Pocket", "rim 1, then an upright corner 2")
-    for x, mesh, title, verdict in (
-            (COLUMNS[1], kentron, "kentron", ("bad", "the round ends in a ledge under the torus")),
-            (COLUMNS[2], cadquery, "CadQuery (OCCT)", ("bad", "a mitred rim: the round runs on along its crease"))):
         info = mesh["info"][0]
         figure.panel(x, TOP, MAIN, height, render([mesh], corner), title, "%d faces, volume %.3f" % (info["faces"], info["volume"]), verdict)
     return figure

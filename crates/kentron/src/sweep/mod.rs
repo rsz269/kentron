@@ -12,6 +12,7 @@ pub(crate) mod guide_wire;
 mod draft;
 mod evolved;
 pub use evolved::{evolved, EvolvedOptions};
+pub(crate) use evolved::interior_point;
 pub use draft::extrude_drafted;
 mod middle;
 mod motion;
@@ -953,8 +954,11 @@ impl Revolver<'_> {
                     }
                     let sphere = Sphere::new(frame, circle.radius());
                     SweptSurface::Ruled { surface: Surface::Sphere(sphere), v0: phase - shift, sigma }
-                } else if circle.radius() <= center_radial.length() {
-                    let torus = Torus::new(frame, center_radial.length(), circle.radius());
+                } else if circle.radius() <= center_radial.length() + tol {
+                    // (A horn torus, its centre as far from the axis as its radius, made a
+                    // hair short of it by rounding as a corner's frame turned off the
+                    // coordinate axes leaves it: a horn torus still.)
+                    let torus = Torus::new(frame, center_radial.length().max(circle.radius()), circle.radius());
                     SweptSurface::Ruled { surface: Surface::Torus(torus), v0: phase, sigma }
                 } else {
                     general()

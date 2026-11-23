@@ -76,32 +76,6 @@ kink, not a crease).
   takes its sections square to an edge; this needs it along a guideline of its own, with
   `Trunc`'s extents for the cylinders. A few days' work.
 
-### A concave round running up to a rim's horn-torus corner
-
-*Found 2026-11-22.*
-
-![A pocket's rim rounded, then an upright corner of the pocket rounded by more: kentron's corner beside CadQuery's](known-gaps/apex.svg)
-
-Where two fillets of one radius r meet over a concave edge square to their shared plane
-(a pocket's rim at its corners, the top of an L-prism), the ball swings round the concave
-edge in a horn torus, and kentron builds that torus (OCCT mitres the fillets there). The
-concave edge now ends at the torus's apex, r below the rim, and nothing carries it on.
-Rounding that edge afterwards by a larger radius R, alone or as the run of a floor fillet
-up the corner, ends its fillet at the apex in a flat ledge. A ball of R would roll on up,
-between the rim's two cylinders, which meet only at the apex. OCCT, on its mitred rim,
-carries the round on along the mitre's crease.
-
-- **Repro:** the figure's script (a block 20 × 20 × 6, a pocket 10 × 8, 4 deep, the rim
-  rounded by 1, then one upright corner by 2), or the blend test
-  `a_floor_fillet_runs_up_the_corners_of_a_rounded_rim`.
-- **Evidence:** `brute.py round close` of the rimmed block by 2, compared above the floor
-  near the corner (h 0.03), finds kentron's result missing 0.350 mm³ round the apex, and
-  nothing extra. On the mitred rim kentron built before, the same check finds nothing
-  wrong. The floor-fillet test is short by 0.347 mm³ at each corner it reaches.
-- **Needed:** a concave fillet that rolls on past its edge's end onto the faces beyond,
-  here the two convex cylinders. kentron's rolling on (`runover`) handles faces beyond the
-  edge's sides only. Unknown effort.
-
 ## Offsets and shells
 
 ### A revolved profile's offset cut along its seam plane

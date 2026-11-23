@@ -33,10 +33,12 @@ use crate::math::{Direction, Frame, Point, Point2, Transform, Transformable, Vec
 use crate::topology::{CoEdgeId, Model, NodeKind, Orientation, Shape};
 use crate::{boolean, loft, make, sew, unify};
 
+mod apex;
 mod faces;
 mod trim;
 
 pub(super) use faces::{fillet_faces, full_round};
+pub(super) use apex::{roll_past, Apex};
 
 /// A face measured from: its surface where it is, its boundary in its parameters (to tell
 /// points on it) and its edges' curves.
