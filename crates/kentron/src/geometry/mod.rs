@@ -43,7 +43,6 @@ pub(crate) mod polynomial_roots;
 // (For the shape-analysis ports, not wired in yet.)
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) mod resolution;
-pub(crate) mod tangential_deflection;
 pub(crate) mod brent_minimum;
 pub(crate) mod particle_swarm;
 pub mod extrema;
