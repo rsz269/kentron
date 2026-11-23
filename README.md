@@ -50,7 +50,7 @@ Code), with a human setting the direction and judging the results. Every change 
 against the tests below before it is committed.
 
 <!-- effort -->
-So far (2026-09-25 to 2026-11-23): about 341 hours of the agent's active work, 26.4 million
+So far (2026-09-25 to 2026-11-23): about 342 hours of the agent's active work, 26.5 million
 tokens written by it, and 11.2 billion tokens processed in all (nearly all of them its
 conversation's context, read back from the cache).
 <!-- /effort -->
