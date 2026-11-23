@@ -1805,6 +1805,34 @@ mod tests {
         }
     }
 
+    /// `area_within`: `eps ≥ 1` is `area` itself; a cone frustum's lateral area and a moved
+    /// sphere's centre and inertia, refined to an estimate within the precision.
+    #[test]
+    fn area_within_closed_forms() {
+        let mut model = Model::new();
+        let pi = std::f64::consts::PI;
+        let cone = crate::primitives::Cone::new(2.0, 1.0, 3.0).build(&mut model).unwrap();
+        assert_eq!(area_within(&model, cone, 1.0), (area(&model, cone), 0.0));
+        // Lateral π(r1 + r2)·slant, the discs π(r1² + r2²).
+        let slant = (9.0f64 + 1.0).sqrt();
+        let expected = pi * 3.0 * slant + pi * 5.0;
+        let (props, error) = area_within(&model, cone, 1e-9);
+        assert!((props.mass - expected).abs() < 1e-9 * expected, "{} vs {expected}", props.mass);
+        assert!(error <= 1e-9);
+        // A sphere moved: centre there, inertia of a thin shell 2/3 m r² about any axis.
+        let sphere = crate::primitives::Sphere::new(2.0).build(&mut model).unwrap();
+        let moved = sphere.moved(&crate::math::Transform::translation(Vector::new(1.0, -2.0, 3.0)));
+        let (props, error) = area_within(&model, moved, 1e-6);
+        let mass = 4.0 * pi * 4.0;
+        assert!((props.mass - mass).abs() < 1e-9 * mass);
+        assert!(props.center_of_mass.distance(Point::new(1.0, -2.0, 3.0)) < 1e-9);
+        let principal = props.principal_moments();
+        for m in principal {
+            assert!((m - 2.0 / 3.0 * mass * 4.0).abs() < 1e-8 * mass, "{principal:?}");
+        }
+        assert!(error <= 1e-6);
+    }
+
     /// The area of a helicoid strip winding twenty times in 63 spans (a B-spline ruled
     /// between two helices, as a thread's flank): its Gauss rules each spanning only a little
     /// of a turn, as a fine sum over the surface finds.
