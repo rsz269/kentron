@@ -3415,16 +3415,17 @@ mod tests {
     }
 
     /// A plate (x0, y0, −20) … (x1, y1, 0) less the `mills` in turn, the last a move's
-    /// cylinder: the result valid, and the volume the last removes against the move less the
-    /// others integrated along x (exact on each line) over a grid of 800 in z (split at the
-    /// shanks' bottoms) by 2400 in y (split where the others' sides end, y = m + w sin θ on
-    /// each part): within 5 × 10⁻⁵ of a grid twice as fine for the raster pieces below.
+    /// cylinder: the result valid, and the volume the last removes against the move, below
+    /// the plate's top, less the others integrated along x (exact on each line) over a grid
+    /// of 800 in z (split at the shanks' bottoms) by 2400 in y (split where the others' sides
+    /// end, y = m + w sin θ on each part): within 5 × 10⁻⁵ of a grid twice as fine for the
+    /// raster pieces below.
     fn mill_raster(plate: [f64; 4], mills: &[Mill]) {
         let (&last, others) = mills.split_last().unwrap();
         let Mill::Along(x0, y0, x1, y1) = last else { panic!("the last a move") };
         let reference = || {
             let (a, b) = (mill_centre(x0, y0), mill_centre(x1, y1));
-            let (z0, z1) = (a.z.min(b.z) - 3.1, a.z.max(b.z) + 3.1);
+            let (z0, z1) = (a.z.min(b.z) - 3.1, (a.z.max(b.z) + 3.1).min(0.0));
             let (nz, ny) = (800, 2400);
             let mut zs = vec![z0, z1];
             zs.extend(others.iter().filter_map(|m| match *m {
@@ -3517,5 +3518,22 @@ mod tests {
     fn a_ball_end_mill_move_ending_on_a_cap_nearly_square_to_a_cylinder() {
         use Mill::*;
         mill_raster([66.0, 12.0, 88.0, 26.0], &[Along(80.0, 18.0, 75.0, 18.0), Along(70.0, 20.0, 75.0, 20.0), Ball(75.0, 20.0), Shank(75.0, 20.0), Along(75.0, 20.0, 80.0, 20.0)]);
+    }
+
+    /// A ball-end mill's raster (see [`Mill`]) by the plate's top, the ball's centre above it
+    /// at (40, 20): the moves from (45, 24) to (50, 24) and from (40, 24) to (45, 24), the
+    /// move from (45, 20) to (50, 20), then the move before it, from (40, 20) to (45, 20),
+    /// ending where that one starts, their axes 1.3 degrees apart. Its side crosses the
+    /// other's (equal cylinders, along an ellipse nearly square to both) at a sine of 0.017,
+    /// and so the edge where the other's side meets the first row's: one of that edge's
+    /// samples lay 6.7 × 10⁻⁸ from the side, within the tolerance, and was taken for where
+    /// the edge meets it, 3.9 × 10⁻⁶ along the edge from where it does. The ellipse passed
+    /// the vertex put there by more than the classifying distance and was not ended on it, so
+    /// its piece across the other move's side was not made; the sections on the move's side
+    /// did not close, it stayed one region outside the plate, and the move removed nothing.
+    #[test]
+    fn a_ball_end_mill_move_crossing_the_next_ones_side_beside_a_sample_of_its_edge() {
+        use Mill::*;
+        mill_raster([36.0, 14.0, 54.0, 28.0], &[Along(45.0, 24.0, 50.0, 24.0), Along(40.0, 24.0, 45.0, 24.0), Along(45.0, 20.0, 50.0, 20.0), Along(40.0, 20.0, 45.0, 20.0)]);
     }
 }

@@ -264,6 +264,27 @@ fn contact_from(curve: &Curve, first: f64, last: f64, surface: &Surface, toleran
     if on {
         return Contact::On;
     }
+    // The root between `lo` and `hi`, the distance (`glo` at `lo`) changing sign between them.
+    let bisected = |lo: f64, hi: f64, glo: f64| {
+        let (mut lo, mut hi, mut glo) = (lo, hi, glo);
+        for _ in 0..100 {
+            let mid = 0.5 * (lo + hi);
+            if mid == lo || mid == hi {
+                break;
+            }
+            let gm = g(mid);
+            if gm == 0.0 {
+                return mid;
+            }
+            if (gm < 0.0) == (glo < 0.0) {
+                lo = mid;
+                glo = gm;
+            } else {
+                hi = mid;
+            }
+        }
+        0.5 * (lo + hi)
+    };
     let mut roots = Vec::new();
     for i in 0..=n {
         if values[i].abs() <= TOL {
@@ -286,26 +307,7 @@ fn contact_from(curve: &Curve, first: f64, last: f64, surface: &Surface, toleran
             None
         };
         if let Some((lo, hi, glo)) = bracket {
-            let (mut lo, mut hi, mut glo) = (lo, hi, glo);
-            for _ in 0..100 {
-                let mid = 0.5 * (lo + hi);
-                if mid == lo || mid == hi {
-                    break;
-                }
-                let gm = g(mid);
-                if gm == 0.0 {
-                    lo = mid;
-                    hi = mid;
-                    break;
-                }
-                if (gm < 0.0) == (glo < 0.0) {
-                    lo = mid;
-                    glo = gm;
-                } else {
-                    hi = mid;
-                }
-            }
-            let t = 0.5 * (lo + hi);
+            let t = bisected(lo, hi, glo);
             // A jump of the signed distance (on surfaces without a closed form) is no root.
             if g(t).abs() <= on_tol() {
                 roots.push(t);
@@ -426,6 +428,46 @@ fn contact_from(curve: &Curve, first: f64, last: f64, surface: &Surface, toleran
             kept
         });
     }
+    // (A root taken at a sample is only within the tolerance of the surface: where the curve
+    // meets the surface at a shallow angle, as far along it from where it crosses as the
+    // tolerance over the angle's sine, which may be more than the classifying distance, and
+    // a section of the surface with one of the curve's own faces, through the crossing,
+    // then misses the vertex put at the sample. So where the curve crosses the surface about
+    // such a sample, the samples before and after it clear of the surface on opposite sides,
+    // the root is the crossing itself: the one next to the sample, towards the sample across
+    // the surface from it. The distance may change sign more than once between the two, the
+    // curve lying along the surface there as nearly as the surface was made (the arc a
+    // fillet ends on along the next one's patches, which pass through it where they join):
+    // so the nearest point on the other side is sought in steps from the sample, doubling
+    // from where the distance would vanish if it changed evenly up to the other sample, and
+    // the root found between that and the step before as between any two samples. The
+    // sample stands where that is no nearer the surface, the signed distance jumping there.)
+    for root in roots.iter_mut() {
+        let Some(i) = (1..n).find(|&i| ts[i] == *root) else { continue };
+        let (before, at, after) = (values[i - 1], values[i], values[i + 1]);
+        if at == 0.0 || at.abs() > TOL || before.abs() <= TOL || after.abs() <= TOL || before * after > 0.0 {
+            continue;
+        }
+        let (across, beyond) = if before * at < 0.0 { (ts[i - 1], before) } else { (ts[i + 1], after) };
+        let mut step = (across - ts[i]) * (at / (at - beyond));
+        let (mut near, mut g_near, mut far) = (ts[i], at, across);
+        while step != 0.0 && step.abs() < (across - ts[i]).abs() {
+            let t = ts[i] + step;
+            let gt = g(t);
+            if (gt < 0.0) != (at < 0.0) {
+                far = t;
+                break;
+            }
+            (near, g_near) = (t, gt);
+            step *= 2.0;
+        }
+        let t = bisected(near, far, g_near);
+        if g(t).abs() <= at.abs() {
+            *root = t;
+        }
+    }
+    roots.sort_by(f64::total_cmp);
+    roots.dedup_by(|b, a| (*b - *a).abs() <= resolution);
     if along { Contact::Along(roots) } else { Contact::At(roots) }
 }
 
@@ -4529,5 +4571,46 @@ mod tests {
         // (Nor a coarsely sampled one, turning 30 degrees at each sample.)
         let coarse: Vec<Point> = (0..12).map(|i| Point::new((i as f64 * TAU / 12.0).cos(), (i as f64 * TAU / 12.0).sin(), 0.0)).collect();
         assert_eq!(sharp_turns(&coarse), None);
+    }
+
+    /// A line through a cylinder of radius 3 at a shallow angle (a sine of 0.02 where it
+    /// leaves it), its middle, one of its samples, 5 × 10⁻⁸ inside the cylinder: within the
+    /// tolerance of it, and 2.5 × 10⁻⁶ along the line short of where it leaves. It meets the
+    /// cylinder there, at the crossing as where it enters between two samples, not at the
+    /// sample: a vertex put at the sample would lie off the section of the cylinder with a
+    /// face through the line as nearly tangent to it by more than the classifying distance.
+    #[test]
+    fn a_sample_beside_a_shallow_crossing_is_not_the_crossing() {
+        let cylinder = Surface::Cylinder(crate::geometry::surface::Cylinder::new(Frame::new(Point::ORIGIN, Direction::Z, Direction::X), 3.0));
+        let direction = Direction::new(0.02, 0.9998, 0.0);
+        let middle = Point::new(3.0 - 5e-8, 0.0, 0.0);
+        let line = Curve::Line(Line::new(middle - Vector::from(direction), direction));
+        assert!(geom::signed_distance(&cylinder, line.point(1.0)).abs() > 4e-8);
+        let Contact::At(roots) = surface_contact(&line, 0.0, 2.0, &cylinder, 0.0) else { panic!("crossing it") };
+        assert_eq!(roots.len(), 2, "{roots:?}");
+        for t in roots {
+            let off = geom::signed_distance(&cylinder, line.point(t));
+            assert!(off.abs() <= 1e-12, "at {t}: {off:e} off the cylinder");
+        }
+    }
+
+    /// A curve lying along a surface between two of its samples as nearly as the surface was
+    /// made, their distance changing sign three times there (0.6, 0.35 and 0.02 of the
+    /// samples' spacing before the second sample, which is 8 × 10⁻⁸ past the last): it meets
+    /// the surface at the crossing next to that sample, not at another of them.
+    #[test]
+    fn a_sample_beside_the_last_of_three_crossings_is_met_at_that_one() {
+        let plane = Surface::Plane(crate::geometry::surface::Plane::XY);
+        let line = Curve::Line(Line::new(Point::ORIGIN, Direction::X));
+        let n = 32;
+        let ts: Vec<f64> = (0..=n).map(|i| i as f64 / n as f64).collect();
+        let g = |t: f64| {
+            let x = (t - 0.5) * n as f64;
+            -1.9e-5 * (x + 0.6) * (x + 0.35) * (x + 0.02)
+        };
+        assert!(g(0.5) < 0.0 && g(0.5) > -TOL);
+        let Contact::At(roots) = contact_from(&line, 0.0, 1.0, &plane, 0.0, n, &ts, &g) else { panic!("crossing it") };
+        assert_eq!(roots.len(), 1, "{roots:?}");
+        assert!((roots[0] - (0.5 - 0.02 / n as f64)).abs() <= 1e-12, "{roots:?}");
     }
 }
