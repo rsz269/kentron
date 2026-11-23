@@ -28,8 +28,27 @@ enum Side {
 }
 
 /// The swept solid of `solid` (unplaced; changed: its faces are divided where the motion
-/// grazes them) under `steady`.
+/// grazes them) under `steady`, a screw built in stages of at most a quarter turn (so that no
+/// face winds round its axis: each is a strip short enough that a point's place on it is found
+/// from any start on it).
 pub(super) fn sweep(model: &mut Model, solid: Shape, steady: &Steady) -> Result<Shape> {
+    let (stage, n) = match steady.clone() {
+        Steady::Screw { axis, angle, rise } => {
+            let n = (angle / std::f64::consts::FRAC_PI_2).ceil().max(1.0);
+            (Steady::Screw { axis, angle: angle / n, rise: rise / n }, n as usize)
+        }
+        other => (other, 1),
+    };
+    let junctions = (0..=n).map(|k| steady.at(k as f64 / n as f64)).collect();
+    sweep_in_stages(model, solid, &vec![stage; n], junctions)
+}
+
+/// The swept solid of `solid` (unplaced; changed) under motions one after another, each steady
+/// as `W` goes (its field fixed on the body, or its curves where it grazes the body fixed),
+/// stage `k` carrying the body from where `junctions[k]` puts it to where `junctions[k + 1]`
+/// does. Where a face of the body passes from `W` to outside it, or back, at a junction, it
+/// closes the stages' sweeps there, facing the way the stage before carried it.
+pub(super) fn sweep_in_stages(model: &mut Model, solid: Shape, stages: &[Steady], junctions: Vec<Transform>) -> Result<Shape> {
     let bounds = crate::properties::bounding_box(model, solid);
     let size = (bounds.max - bounds.min).length();
     // The characteristic curves within a billionth of the body's size.
@@ -38,35 +57,60 @@ pub(super) fn sweep(model: &mut Model, solid: Shape, steady: &Steady) -> Result<
     for _ in 0..2 {
         crate::heal::split_closed_faces(model, solid)?;
     }
-    for face in model.unique_subshapes(solid, NodeKind::Face) {
-        let cuts = contour::cuts(model, face, steady, tolerance)?;
-        if !cuts.is_empty() {
-            crate::divide::divide_face(model, face, &cuts)?;
+    // (Each distinct stage's curves once.)
+    let mut distinct: Vec<&Steady> = Vec::new();
+    for s in stages {
+        if !distinct.iter().any(|d| same(d, s)) {
+            distinct.push(s);
+        }
+    }
+    for steady in &distinct {
+        for face in model.unique_subshapes(solid, NodeKind::Face) {
+            let cuts = contour::cuts(model, face, steady, tolerance)?;
+            if !cuts.is_empty() {
+                crate::divide::divide_face(model, face, &cuts)?;
+            }
         }
     }
     let faces = model.unique_subshapes(solid, NodeKind::Face);
-    let speed = speed_bound(model, solid, steady);
-    let sides: Vec<Side> = faces.iter().map(|&f| side(model, f, steady, speed)).collect::<Result<_>>()?;
-    let folds = split_folds(model, &faces, &sides, steady)?;
+    let mut sides: Vec<Vec<Side>> = Vec::with_capacity(stages.len());
+    let mut folds = 0;
+    for steady in stages {
+        let speed = speed_bound(model, solid, steady);
+        let s: Vec<Side> = faces.iter().map(|&f| side(model, f, steady, speed)).collect::<Result<_>>()?;
+        folds += split_folds(model, &faces, &s, steady)?;
+        sides.push(s);
+    }
     // (How far the body reaches from a turn's axis: the farthest corner of its box.)
     let reach = (0..8)
         .map(|i| {
             let p = Point::new(if i & 1 == 0 { bounds.min.x } else { bounds.max.x }, if i & 2 == 0 { bounds.min.y } else { bounds.max.y }, if i & 4 == 0 { bounds.min.z } else { bounds.max.z });
-            match steady {
+            match stages[0] {
                 Steady::Turn { axis, .. } | Steady::Screw { axis, .. } => {
                     let r = p - axis.origin;
                     (r - Vector::from(axis.direction) * r.dot(Vector::from(axis.direction))).length()
                 }
-                Steady::Slide { .. } => 0.0,
+                Steady::Slide { .. } | Steady::Carried(_) => 0.0,
             }
         })
         .fold(0.0, f64::max);
-    let mut builder = Builder::new(model, *steady, size, reach)?;
+    let mut builder = Builder::new(model, stages, junctions, size, reach)?;
     let product = builder.product(&faces, &sides)?;
     if folds == 0 {
         return Ok(product);
     }
     resolved(model, product)
+}
+
+/// Whether two stages run along the body alike (the same steady motion).
+fn same(a: &Steady, b: &Steady) -> bool {
+    match (a, b) {
+        (Steady::Carried(x), Steady::Carried(y)) => std::sync::Arc::ptr_eq(x, y),
+        (Steady::Slide { by: x }, Steady::Slide { by: y }) => x == y,
+        (Steady::Turn { axis: x, angle: p }, Steady::Turn { axis: y, angle: q }) => x == y && p == q,
+        (Steady::Screw { axis: x, angle: p, rise: r }, Steady::Screw { axis: y, angle: q, rise: w }) => x == y && p == q && r == w,
+        _ => false,
+    }
 }
 
 /// The product where it runs into itself (see the module above): its faces split where they
@@ -212,13 +256,13 @@ fn side(model: &Model, face: Shape, steady: &Steady, speed: f64) -> Result<Side>
 /// short enough that a point's place on it is found from any start on it.
 struct Builder<'m> {
     model: &'m mut Model,
-    /// The motion of one stage.
-    steady: Steady,
+    /// The motion of each stage.
+    stages: Vec<Steady>,
     /// Where the stages start and the last ends: the motion's places.
     junctions: Vec<Transform>,
-    /// A stage of the screw as the pipes' motions sample it (its points' paths quintics
-    /// through them).
-    screw: Option<PieceMotion>,
+    /// Each stage, where a screw or a carried motion, as the pipes' motions sample it (its
+    /// points' paths quintics through them).
+    motions: Vec<Option<PieceMotion>>,
     size: f64,
     vertex_copies: HashMap<(VertexId, usize), VertexId>,
     edge_copies: HashMap<(EdgeId, usize), EdgeId>,
@@ -226,42 +270,48 @@ struct Builder<'m> {
 }
 
 impl<'m> Builder<'m> {
-    fn new(model: &'m mut Model, steady: Steady, size: f64, reach: f64) -> Result<Builder<'m>> {
-        let (stage, stages) = match steady {
-            Steady::Screw { axis, angle, rise } => {
-                let n = (angle / std::f64::consts::FRAC_PI_2).ceil().max(1.0);
-                (Steady::Screw { axis, angle: angle / n, rise: rise / n }, n as usize)
-            }
-            other => (other, 1),
-        };
-        let screw = match stage {
-            Steady::Screw { axis, angle, rise } => Some(screw_motion(axis, angle, rise, size, reach)?),
-            _ => None,
-        };
-        let junctions = (0..=stages).map(|k| steady.at(k as f64 / stages as f64)).collect();
-        Ok(Builder { model, steady: stage, junctions, screw, size, vertex_copies: HashMap::new(), edge_copies: HashMap::new(), paths: HashMap::new() })
+    fn new(model: &'m mut Model, stages: &[Steady], junctions: Vec<Transform>, size: f64, reach: f64) -> Result<Builder<'m>> {
+        let mut motions: Vec<Option<PieceMotion>> = Vec::with_capacity(stages.len());
+        for stage in stages {
+            motions.push(match stage {
+                Steady::Screw { axis, angle, rise } => Some(screw_motion(*axis, *angle, *rise, size, reach)?),
+                Steady::Carried(stage) => Some(carried_motion(stage, size)?),
+                _ => None,
+            });
+        }
+        Ok(Builder { model, stages: stages.to_vec(), junctions, motions, size, vertex_copies: HashMap::new(), edge_copies: HashMap::new(), paths: HashMap::new() })
     }
 
-    fn product(&mut self, faces: &[Shape], sides: &[Side]) -> Result<Shape> {
+    fn product(&mut self, faces: &[Shape], sides: &[Vec<Side>]) -> Result<Shape> {
         let shell = self.model.new_empty(NodeKind::Shell);
+        let n = self.stages.len();
         // The faces outside W where the motion starts.
-        for (k, &face) in faces.iter().enumerate() {
-            if sides[k] == Side::Back {
+        for (i, &face) in faces.iter().enumerate() {
+            if sides[0][i] == Side::Back {
                 self.model.add(shell, face)?;
             }
         }
-        // What the boundary of W sweeps, and W at the end.
-        let stages = self.junctions.len() - 1;
-        for (e, along) in boundary_edges(self.model, faces, sides)? {
-            for k in 0..stages {
+        for k in 0..n {
+            // What the boundary of W sweeps over the stage.
+            for (e, along) in boundary_edges(self.model, faces, &sides[k])? {
                 let face = self.side_face(e, along, k)?;
                 self.model.add(shell, face)?;
             }
-        }
-        for (k, &face) in faces.iter().enumerate() {
-            if sides[k] == Side::Front {
-                let copy = self.face_copy(face)?;
-                self.model.add(shell, copy)?;
+            // At the junction after it: the faces passing out of W (facing out) or into it
+            // (facing in); at the end, W.
+            for (i, &face) in faces.iter().enumerate() {
+                let next = if k + 1 < n { Some(sides[k + 1][i]) } else { None };
+                match (sides[k][i], next) {
+                    (Side::Front, None) | (Side::Front, Some(Side::Back)) => {
+                        let copy = self.face_copy(face, k + 1)?;
+                        self.model.add(shell, copy)?;
+                    }
+                    (Side::Back, Some(Side::Front)) => {
+                        let copy = self.face_copy(face, k + 1)?;
+                        self.model.add(shell, copy.reversed())?;
+                    }
+                    _ => {}
+                }
             }
         }
         let volume = crate::properties::closed_shell_volume(self.model, shell);
@@ -304,13 +354,13 @@ impl<'m> Builder<'m> {
         Ok(c)
     }
 
-    /// The copy at the end of a face, used as the body uses it (its edges the copies of its
-    /// edges, its pcurves the same on the moved surface).
-    fn face_copy(&mut self, face: Shape) -> Result<Shape> {
+    /// The copy at junction `j` of a face, used as the body uses it (its edges the copies of
+    /// its edges, its pcurves the same on the moved surface).
+    fn face_copy(&mut self, face: Shape, j: usize) -> Result<Shape> {
         let id = FaceId::from_index(face.node.index);
         let tol = self.model[id].tolerance;
-        let end = *self.junctions.last().expect("junctions");
-        let stages = self.junctions.len() - 1;
+        let end = self.junctions[j];
+        let stages = j;
         let surface = self.model.face_surface(id).ok_or_else(|| Error::InvalidInput("a face without a surface".into()))?.transformed(&end);
         let copy = self.model.new_empty(NodeKind::Face);
         self.model.set_face_surface(copy, surface, tol)?;
@@ -342,10 +392,10 @@ impl<'m> Builder<'m> {
         let p = self.model[start].point;
         let tol = self.model[v].tolerance.max(tolerance::LINEAR);
         let edge = self.model.add_edge(start, end, tol)?;
-        let (curve, first, last) = match self.steady {
+        let (curve, first, last) = match self.stages[k] {
             Steady::Slide { by } => (Curve::Line(Line::new(p, Direction::from_vector(by))), 0.0, by.length()),
             Steady::Turn { axis, angle } => (Curve::Circle(turn_circle(axis, p)?), 0.0, angle),
-            Steady::Screw { .. } => (Curve::BSpline(path(self.screw.as_ref().expect("a screw's motion"), p)?), 0.0, 1.0),
+            Steady::Screw { .. } | Steady::Carried(_) => (Curve::BSpline(path(self.motions[k].as_ref().expect("a screw's motion"), p)?), 0.0, 1.0),
         };
         self.model.set_edge_curve(edge.into(), curve, tol)?;
         self.model.set_edge_range(edge.into(), first, last)?;
@@ -365,7 +415,7 @@ impl<'m> Builder<'m> {
         // The surface; the (u, v) of the curve's point at s and moved to t; and the uses
         // round the face, counter-clockwise in (u, v).
         type Uses = Vec<(EdgeId, Orientation, Curve2, f64, f64)>;
-        let (surface, uv, uses): (Surface, Box<dyn Fn(f64, f64) -> Point2>, Uses) = match self.steady {
+        let (surface, uv, uses): (Surface, Box<dyn Fn(f64, f64) -> Point2>, Uses) = match self.stages[k].clone() {
             Steady::Slide { by } => {
                 let length = by.length();
                 match &curve {
@@ -410,9 +460,9 @@ impl<'m> Builder<'m> {
                 let uses = rectangle_uses(e, top, start_path, end_path, a, b, angle, false);
                 (Surface::Revolution(revolution), Box::new(move |s, t| Point2::new(angle * t, s)), uses)
             }
-            Steady::Screw { .. } => {
+            Steady::Screw { .. } | Steady::Carried(_) => {
                 let profile = Profile::of(&curve, a, b, self.size)?;
-                let motion = self.screw.as_ref().expect("a screw's motion");
+                let motion = self.motions[k].as_ref().expect("a screw's motion");
                 let knots = path(motion, Point::ORIGIN)?;
                 let knots = KnotVector::new(knots.knots().to_vec(), knots.multiplicities().to_vec(), knots.degree());
                 let swept = profiled_surface(&profile.spline, &|q| Ok(path(motion, q)?.poles().to_vec()), knots)?;
@@ -424,7 +474,7 @@ impl<'m> Builder<'m> {
         // runs the edge) crossed with the motion.
         let (sm, tm) = (0.5 * (a + b), 0.5);
         let ds = 1e-6 * (b - a);
-        let moved = |s: f64, t: f64| curve.point(s).transformed(&self.steady.at(t));
+        let moved = |s: f64, t: f64| curve.point(s).transformed(&self.stages[k].at(t));
         let along_s = (moved(sm + ds, tm) - moved(sm - ds, tm)) * if along { 1.0 } else { -1.0 };
         let along_t = moved(sm, tm + 1e-6) - moved(sm, tm - 1e-6);
         let q = uv(sm, tm);
@@ -535,6 +585,46 @@ fn screw_motion(axis: crate::math::Axis, angle: f64, rise: f64, size: f64, reach
         let curve = path(&motion, far)?;
         let error = (0..4 * samples).map(|i| (i as f64 + 0.5) / (4 * samples) as f64).map(|f| curve.point(f).distance(far.transformed(&at(f)))).fold(0.0, f64::max);
         if error <= 1e-10 * size || samples >= 4096 {
+            return Ok(motion);
+        }
+        samples *= 2;
+    }
+}
+
+/// A stretch of a carried motion sampled as the pipes' motions are (its points' velocities and
+/// accelerations by central differences), finely enough that the paths of its box's corners lie
+/// within 1e-9 of `size` of where the motion puts them.
+fn carried_motion(stage: &std::sync::Arc<super::carried::Stage>, size: f64) -> Result<PieceMotion> {
+    // (The probes: points as far from the body as its size, round it.)
+    let probes: Vec<Point> = (0..8).map(|i| Point::new(if i & 1 == 0 { -size } else { size }, if i & 2 == 0 { -size } else { size }, if i & 4 == 0 { -size } else { size })).collect();
+    let mut samples = 8usize;
+    loop {
+        let params: Vec<f64> = (0..=samples).map(|i| i as f64 / samples as f64).collect();
+        let transforms: Vec<Transform> = params.iter().map(|&f| stage.at(f)).collect();
+        let places: Vec<Transform> = transforms.clone();
+        let n = samples;
+        let at = {
+            let stage = std::sync::Arc::clone(stage);
+            move |f: f64| stage.at(f)
+        };
+        // (Velocity and acceleration from the places a little either way.)
+        let h = 1e-4 / n as f64;
+        let rates = move |f: f64, p: Point| -> (Vector, Vector) {
+            let (a, b) = (f - h, f + h);
+            let (pa, p0, pb) = (p.transformed(&at(a)), p.transformed(&at(f)), p.transformed(&at(b)));
+            ((pb - pa) * (0.5 / h), ((pb - p0) - (p0 - pa)) * (1.0 / (h * h)))
+        };
+        let _ = places;
+        let motion = PieceMotion { params, transforms, rates: Some(Box::new(rates)) };
+        let mut error = 0.0f64;
+        for &q in &probes {
+            let curve = path(&motion, q)?;
+            for i in 0..4 * n {
+                let f = (i as f64 + 0.5) / (4 * n) as f64;
+                error = error.max(curve.point(f).distance(q.transformed(&stage.at(f))));
+            }
+        }
+        if error <= 1e-9 * size || samples >= 2048 {
             return Ok(motion);
         }
         samples *= 2;

@@ -37,6 +37,7 @@
 //! Nothing is tuned: the characteristic curves are followed within a tolerance taken from the
 //! body's size, and refusals are stated geometric conditions.
 
+mod carried;
 mod contour;
 mod product;
 
@@ -46,8 +47,19 @@ use crate::error::{Error, Result};
 use crate::math::{Axis, Point, Transform, Vector};
 use crate::topology::{Model, NodeKind, Shape};
 
+/// A rigid motion given by where it puts the body at each `t` in `[0, 1]` (a frame carried
+/// along a curve, a screw whose rise is any function of its turn): its places, smooth in `t`.
+#[derive(Clone)]
+pub struct Carriage(pub std::sync::Arc<dyn Fn(f64) -> Transform + Send + Sync>);
+
+impl std::fmt::Debug for Carriage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Carriage")
+    }
+}
+
 /// How a solid is carried, `t` running from 0 to 1, from where it is drawn.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum RigidMotion {
     /// Carried straight by `t·by`.
     Slide { by: Vector },
@@ -57,12 +69,16 @@ pub enum RigidMotion {
     /// Turned right-handed about `axis` from `from` to `to` (radians) while rising `lead` along
     /// it for every whole turn (the body is drawn at angle 0, unrisen).
     Screw { axis: Axis, lead: f64, from: f64, to: f64 },
+    /// Placed by the given transforms, at each `t` (the body is drawn where the identity
+    /// leaves it).
+    Carried(Carriage),
 }
 
 impl RigidMotion {
     /// Where the motion puts the body at `t`.
     pub fn at(&self, t: f64) -> Transform {
         match *self {
+            RigidMotion::Carried(ref c) => (c.0)(t),
             RigidMotion::Slide { by } => Transform::translation(by * t),
             RigidMotion::Turn { axis, from, to } => Transform::rotation(axis, from + (to - from) * t),
             RigidMotion::Screw { axis, lead, from, to } => {
@@ -76,6 +92,7 @@ impl RigidMotion {
     fn steady(&self) -> Result<(Transform, Steady)> {
         let finite = |x: f64| x.is_finite();
         match *self {
+            RigidMotion::Carried(_) => Err(Error::InvalidInput("a carried motion is not steady".into())),
             RigidMotion::Slide { by } => {
                 if !(by.length() > 0.0 && finite(by.length())) {
                     return Err(Error::InvalidInput("a slide by no distance".into()));
@@ -106,8 +123,10 @@ impl RigidMotion {
 
 /// A motion whose velocity field is the same at every instant (seen from the body, which here
 /// stands at its start): `t` from 0 to 1.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone)]
 pub(super) enum Steady {
+    /// A stretch of a general motion over which `W` stays put (its field the one midway).
+    Carried(std::sync::Arc<carried::Stage>),
     Slide { by: Vector },
     /// Turning by `angle` (positive) right-handed about `axis`.
     Turn { axis: Axis, angle: f64 },
@@ -119,6 +138,7 @@ impl Steady {
     /// The velocity (in `t`) of the point at `p` at the start.
     pub(super) fn velocity(&self, p: Point) -> Vector {
         match *self {
+            Steady::Carried(ref stage) => stage.velocity(p),
             Steady::Slide { by } => by,
             Steady::Turn { axis, angle } => Vector::from(axis.direction).cross(p - axis.origin) * angle,
             Steady::Screw { axis, angle, rise } => Vector::from(axis.direction).cross(p - axis.origin) * angle + Vector::from(axis.direction) * rise,
@@ -128,6 +148,7 @@ impl Steady {
     /// Where the motion puts the start at `t`.
     pub(super) fn at(&self, t: f64) -> Transform {
         match *self {
+            Steady::Carried(ref stage) => stage.at(t),
             Steady::Slide { by } => Transform::translation(by * t),
             Steady::Turn { axis, angle } => Transform::rotation(axis, angle * t),
             Steady::Screw { axis, angle, rise } => Transform::translation(Vector::from(axis.direction) * (rise * t)) * Transform::rotation(axis, angle * t),
@@ -138,6 +159,7 @@ impl Steady {
     /// unit's distance plus the rise.
     pub(super) fn speed_scale(&self) -> f64 {
         match *self {
+            Steady::Carried(ref stage) => stage.velocity(Point::ORIGIN).length() + stage.velocity(Point::new(1.0, 0.0, 0.0)).length(),
             Steady::Slide { by } => by.length(),
             Steady::Turn { angle, .. } => angle,
             Steady::Screw { angle, rise, .. } => angle + rise.abs(),
@@ -157,9 +179,12 @@ pub fn solid(model: &mut Model, tool: Shape, motion: &RigidMotion) -> Result<Sha
     if solids.len() != 1 || model.unique_subshapes(solids[0], NodeKind::Shell).len() != 1 {
         return Err(Error::InvalidInput("a sweep carries one solid of one shell".into()));
     }
+    if let RigidMotion::Carried(carriage) = motion {
+        return carried::sweep(model, solids[0], carriage);
+    }
     let (start, steady) = motion.steady()?;
-    if let Steady::Turn { angle, .. } | Steady::Screw { angle, .. } = steady {
-        if matches!(steady, Steady::Turn { .. }) && angle >= TAU {
+    if let Steady::Turn { angle, .. } = steady {
+        if angle >= TAU {
             return Err(Error::InvalidInput("a turn of a whole turn or more ends where it starts".into()));
         }
     }

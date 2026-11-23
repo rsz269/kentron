@@ -1,7 +1,7 @@
 use std::f64::consts::PI;
 
 use super::*;
-use crate::math::{Direction, Frame};
+use crate::math::{Direction, Frame, Transform};
 use crate::primitives::{Cuboid, Cylinder, Sphere, Torus};
 use crate::{properties, validity};
 
@@ -92,4 +92,109 @@ fn a_ball_screwed_is_a_helical_tube() {
     assert_close("volume", volume, PI * r * r * length + 4.0 / 3.0 * PI * r.powi(3), 1e-7);
     assert_close("area", area, 2.0 * PI * r * length + 4.0 * PI * r * r, 1e-7);
     check(&model, swept);
+}
+
+/// A ball carried straight, ever faster: still a capsule (the motion given by its places).
+#[test]
+fn a_ball_carried_straight_unevenly_is_a_capsule() {
+    let mut model = Model::new();
+    let ball = Sphere::new(1.0).build(&mut model).unwrap();
+    let by = Vector::new(2.0, 1.0, -2.0);
+    let carried = RigidMotion::Carried(Carriage(std::sync::Arc::new(move |t: f64| Transform::translation(by * (t * t)))));
+    let swept = solid(&mut model, ball, &carried).unwrap();
+    let (volume, area) = measure(&model, swept);
+    assert_close("volume", volume, 4.0 / 3.0 * PI + PI * 3.0, 1e-8);
+    assert_close("area", area, 4.0 * PI + 2.0 * PI * 3.0, 1e-8);
+    check(&model, swept);
+}
+
+/// A bar carried by a screw given by its places sweeps what the screw sweeps it through.
+#[test]
+fn a_screw_given_by_its_places_sweeps_as_the_screw() {
+    let axis = Axis::new(Point::ORIGIN, Direction::Z);
+    let (lead, from, to) = (5.0, -0.3, 2.9);
+    let volumes: Vec<f64> = (0..2)
+        .map(|k| {
+            let mut model = Model::new();
+            let bar = Cuboid::new(3.0, 1.0, 1.5).with_frame(Frame::from_z(Point::new(4.0, -0.5, 0.0), Direction::Z)).build(&mut model).unwrap();
+            let screw = RigidMotion::Screw { axis, lead, from, to };
+            let motion = if k == 0 { screw } else { RigidMotion::Carried(Carriage(std::sync::Arc::new(move |t: f64| screw.at(t)))) };
+            let swept = solid(&mut model, bar, &motion).unwrap_or_else(|e| panic!("motion {k}: {e:?}"));
+            check(&model, swept);
+            measure(&model, swept).0
+        })
+        .collect();
+    assert_close("volume", volumes[1], volumes[0], 1e-8);
+}
+
+/// A box carried round a circle, turning with it, runs along its top and bottom beside faces
+/// it carries out: refused; as is a ring whose contact moves over it (tumbling about one line
+/// while carried along another).
+#[test]
+fn motions_beyond_the_product_are_refused() {
+    let mut model = Model::new();
+    let key = Cuboid::new(3.0, 1.6, 4.0).build(&mut model).unwrap();
+    let round = RigidMotion::Carried(Carriage(std::sync::Arc::new(|t: f64| Transform::rotation(Axis::new(Point::new(0.0, 10.0, 0.0), Direction::Z), t))));
+    assert!(solid(&mut model, key, &round).is_err());
+    let torus = Torus::new(3.0, 1.0).build(&mut model).unwrap();
+    let tumble = RigidMotion::Carried(Carriage(std::sync::Arc::new(|t: f64| {
+        Transform::translation(Vector::new(0.0, 10.0 * t, 0.0)) * Transform::rotation(Axis::new(Point::ORIGIN, Direction::X), 1.2 * t)
+    })));
+    assert!(solid(&mut model, torus, &tumble).is_err());
+}
+
+/// A torus leaning 35° pushed straight down 8, against the volume its slide covers summed
+/// column by column (each vertical line meets the torus in intervals, each reaching 8 lower),
+/// on a grid fine enough for 1e-3.
+#[test]
+fn a_leaning_torus_pushed_down_against_its_columns() {
+    let mut model = Model::new();
+    let lean = 35f64.to_radians();
+    let a = Vector::new(lean.sin(), 0.0, lean.cos());
+    let ring = Torus::new(3.0, 1.0).with_frame(Frame::from_z(Point::new(0.0, 0.0, 4.0), Direction::from_vector(a))).build(&mut model).unwrap();
+    let swept = solid(&mut model, ring, &RigidMotion::Slide { by: Vector::new(0.0, 0.0, -8.0) }).unwrap();
+    check(&model, swept);
+    let (volume, _) = measure(&model, swept);
+    // (The torus as (|q⊥| − 3)² + (q·a)² ≤ 1, q from its centre.)
+    let inside = |p: Point| {
+        let q = p - Point::new(0.0, 0.0, 4.0);
+        let along = q.dot(a);
+        let across = (q - a * along).length();
+        (across - 3.0).powi(2) + along * along - 1.0
+    };
+    let n = 300;
+    let h = 9.0 / n as f64;
+    let mut total = 0.0;
+    for i in 0..n {
+        for j in 0..n {
+            let (x, y) = (-4.5 + h * (i as f64 + 0.5), -4.5 + h * (j as f64 + 0.5));
+            let f = |z: f64| inside(Point::new(x, y, z));
+            // The column's crossings, by sign changes on fine steps, each narrowed by bisection.
+            let steps = 300;
+            let z = |k: usize| -0.5 + 9.0 * k as f64 / steps as f64;
+            let mut crossings = Vec::new();
+            for k in 0..steps {
+                let f0 = f(z(k));
+                if (f0 < 0.0) != (f(z(k + 1)) < 0.0) {
+                    let (mut l, mut r) = (z(k), z(k + 1));
+                    for _ in 0..50 {
+                        let m = 0.5 * (l + r);
+                        if (f(m) < 0.0) == (f0 < 0.0) { l = m } else { r = m }
+                    }
+                    crossings.push(0.5 * (l + r));
+                }
+            }
+            let mut covered: Vec<(f64, f64)> = crossings.chunks(2).filter(|c| c.len() == 2).map(|c| (c[0] - 8.0, c[1])).collect();
+            covered.sort_by(|p, q| p.0.total_cmp(&q.0));
+            let mut end = f64::NEG_INFINITY;
+            for (lo, hi) in covered {
+                let start = lo.max(end);
+                if hi > start {
+                    total += hi - start;
+                }
+                end = end.max(hi);
+            }
+        }
+    }
+    assert_close("volume", volume, total * h * h, 1e-3);
 }

@@ -21,7 +21,7 @@ pub use motion::{cut_by_motion, screw_extrude, Blank, MeridianPiece, Motion, Mot
 mod pipe;
 mod section;
 mod solid;
-pub use solid::{solid, RigidMotion};
+pub use solid::{solid, Carriage, RigidMotion};
 pub use middle::middle_path;
 mod pipe_shell;
 // (For the guide-plane trihedron, not wired in yet.)

@@ -82,15 +82,23 @@ fn grid_size(gauge: &Gauge, b: (f64, f64, f64, f64)) -> (usize, usize) {
 }
 
 /// The root of `f` on `[0, 1]` where it changes sign between `fa = f(0)` and `fb = f(1)`
-/// (regula falsi, Illinois).
+/// (regula falsi, Illinois, every other step a bisection, so that the bracket shrinks however
+/// flat `f` is at the rounding level near an end; done where `f` is zero but for rounding).
 pub(super) fn root(f: &dyn Fn(f64) -> f64, mut fa: f64, mut fb: f64) -> f64 {
     let (mut a, mut b) = (0.0f64, 1.0f64);
+    let scale = fa.abs().max(fb.abs());
+    if fa == 0.0 {
+        return 0.0;
+    }
+    if fb == 0.0 {
+        return 1.0;
+    }
     let mut side = 0;
-    for _ in 0..100 {
-        let x = if fb != fa { (a * fb - b * fa) / (fb - fa) } else { 0.5 * (a + b) };
+    for step in 0..200 {
+        let x = if step % 2 == 1 || fb == fa { 0.5 * (a + b) } else { (a * fb - b * fa) / (fb - fa) };
         let x = if x > a && x < b { x } else { 0.5 * (a + b) };
         let fx = f(x);
-        if fx == 0.0 || (b - a) <= 1e-15 {
+        if fx.abs() <= 1e-15 * scale || (b - a) <= 1e-15 {
             return x;
         }
         if (fx > 0.0) == (fa > 0.0) {
