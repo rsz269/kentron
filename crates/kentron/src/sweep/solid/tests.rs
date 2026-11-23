@@ -198,3 +198,18 @@ fn a_leaning_torus_pushed_down_against_its_columns() {
     }
     assert_close("volume", volume, total * h * h, 1e-3);
 }
+
+/// A torus leaning 65° pushed straight down: past 45° its characteristic curves (where its
+/// surface runs upright) turn past the slide's direction, and the sheets they sweep fold over
+/// one another. Refused as soon as the fold is found on the curves, before the product is made
+/// and split where it crosses itself (which found no piece, after 1 s here and 37 s for a
+/// spline bar screwed through a rod).
+#[test]
+fn a_fold_is_refused_before_the_product_is_made() {
+    let mut model = Model::new();
+    let lean = 65f64.to_radians();
+    let ring = Torus::new(3.0, 1.0).with_frame(Frame::from_z(Point::new(0.0, 0.0, 4.0), Direction::new(lean.sin(), 0.0, lean.cos()))).build(&mut model).unwrap();
+    let refused = solid(&mut model, ring, &RigidMotion::Slide { by: Vector::new(0.0, 0.0, -8.0) });
+    let Err(Error::Failed(why)) = refused else { panic!("a fold refused, not {refused:?}") };
+    assert!(why.contains("folding over itself"), "{why}");
+}

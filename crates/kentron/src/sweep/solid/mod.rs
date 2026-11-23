@@ -39,13 +39,14 @@
 //! on `W` counts positively (the map's Jacobian there has the sign of `V·n`), so the product's
 //! winding number about a point is the body at the start (1 inside) plus how many times `W`
 //! passes over it: at least 1 exactly where the point is swept. Where the product does not run
-//! into itself it is the swept solid. Where it does (a fold, where the motion turns past the
-//! line it grazes along; a sheet a concave edge sweeps into the body; a turn coming back over
-//! where it began) its faces are split where they cross ([`crate::boolean::enclosed_solids`])
-//! and the pieces of space it winds round at least once are the swept solid, joined. Where a
-//! characteristic curve folds it is split at the fold and this is done; a fold whose sheets the
-//! split does not part is refused. (A tool that is a union, as a ball on a stem, can instead be
-//! swept a piece at a time: the sweep of a union is the union of the sweeps.)
+//! into itself it is the swept solid. It does where the surface a boundary curve of `W` sweeps
+//! folds (the motion turning past the direction along the curve): the sheets either side of
+//! the fold meet tangent along its path and cross beyond it, and splitting the product where
+//! it crosses itself ([`crate::boolean::enclosed_solids`]) does not part them; so a fold is
+//! refused as soon as it is found, before the product is made. It also does where a sheet a
+//! concave edge sweeps runs into the body, or a turn comes back over where it began: those are
+//! not detected. (A tool that is a union, as a ball on a stem, can instead be swept a piece
+//! at a time: the sweep of a union is the union of the sweeps.)
 //!
 //! Nothing is tuned: the characteristic curves are followed within a tolerance taken from the
 //! body's size, and refusals are stated geometric conditions.

@@ -81,6 +81,14 @@ pub(super) fn sweep_in_stages(model: &mut Model, solid: Shape, stages: &[Steady]
         folds += split_folds(model, &faces, &s, steady)?;
         sides.push(s);
     }
+    // (Where the surface an edge of `W`'s boundary sweeps folds, the motion turning past the
+    // direction along it, the product runs into itself: its sheets on either side of the fold
+    // meet along the fold's path, tangent there, and cross beyond it. Splitting the product
+    // where it crosses itself does not part sheets meeting so, and finds no piece of space
+    // after all the work of trying; so a fold is refused here, before the product is made.)
+    if folds > 0 {
+        return Err(Error::Failed(format!("a sweep folding over itself ({folds} fold{} where the motion turns past a sharp edge or characteristic curve of the tool): its sheets meet tangent along the fold, and are not parted", if folds == 1 { "" } else { "s" })));
+    }
     // (How far the body reaches from a turn's axis: the farthest corner of its box.)
     let reach = (0..8)
         .map(|i| {
@@ -95,11 +103,7 @@ pub(super) fn sweep_in_stages(model: &mut Model, solid: Shape, stages: &[Steady]
         })
         .fold(0.0, f64::max);
     let mut builder = Builder::new(model, stages, junctions, size, reach)?;
-    let product = builder.product(&faces, &sides)?;
-    if folds == 0 {
-        return Ok(product);
-    }
-    resolved(model, product)
+    builder.product(&faces, &sides)
 }
 
 /// Whether two stages run along the body alike (the same steady motion).
@@ -111,30 +115,6 @@ fn same(a: &Steady, b: &Steady) -> bool {
         (Steady::Screw { axis: x, angle: p, rise: r }, Steady::Screw { axis: y, angle: q, rise: w }) => x == y && p == q && r == w,
         _ => false,
     }
-}
-
-/// The product where it runs into itself (see the module above): its faces split where they
-/// cross, the pieces of space it winds round at least once, joined. Itself where it does not.
-fn resolved(model: &mut Model, product: Shape) -> Result<Shape> {
-    let faces = model.unique_subshapes(product, NodeKind::Face);
-    let cells = crate::boolean::enclosed_solids(model, &faces)?;
-    let cells = model.unique_subshapes(cells, NodeKind::Solid);
-    if cells.is_empty() {
-        return Err(Error::Failed("a sweep running into itself, not split into pieces".into()));
-    }
-    if cells.len() == 1 {
-        return Ok(product);
-    }
-    let classifier = crate::boolean::PointClassifier::new(model, product)?;
-    let mut kept = Vec::new();
-    for &cell in &cells {
-        let p = crate::boolean::point_inside(model, cell)?.ok_or_else(|| Error::Failed("a piece of a sweep with no point inside".into()))?;
-        let winding = classifier.winding(p).ok_or_else(|| Error::Failed("how often a sweep winds round a point of it".into()))?;
-        if winding >= 1 {
-            kept.push(cell);
-        }
-    }
-    super::super::joined(model, &kept)
 }
 
 /// The edges between a face in `W` and one outside it (each with whether the face in `W` runs
