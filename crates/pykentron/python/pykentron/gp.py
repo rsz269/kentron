@@ -244,9 +244,23 @@ class gp_Dir(gp_Vec):
         return gp_Dir(*t._apply_vector(self._c))
 
 
+def _default_x_hint(p: float, q: float, r: float) -> Tuple[float, float, float]:
+    """An (unnormalized) X direction perpendicular to the main direction `(p, q, r)`, by
+    the conventional rule kentron's `Frame::from_z` uses: the component of smallest
+    magnitude (y first, then x, then z on ties) is dropped and the other two are swapped
+    with one sign change."""
+    a, b, c = abs(p), abs(q), abs(r)
+    if b <= a and b <= c:
+        return (-r, 0.0, p) if a > c else (r, 0.0, -p)
+    if a <= b and a <= c:
+        return (0.0, -r, q) if b > c else (0.0, r, -q)
+    return (-q, p, 0.0) if a > b else (q, -p, 0.0)
+
+
 def _default_x(n) -> gp_Dir:
-    """Clean-room rewrite pending: see cleanroom spec `pykentron_default_x.md`."""
-    raise NotImplementedError("clean-room rewrite")
+    """The default X direction of a coordinate system with main direction `n` (a unit
+    3-sequence): the one kentron's frames take when no X direction is given."""
+    return gp_Dir(*_default_x_hint(*n))
 
 
 class gp_Ax1:

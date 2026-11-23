@@ -837,6 +837,31 @@ def test_constraints_solved_as_cadquery(name):
                 a = a[:3] + [a[3] - 2 * math.pi * turns] + a[4:]
             assert all(math.isclose(x, y, abs_tol=1e-6) for x, y in zip(a, b)), (name, a, b)
 
+NORMALS = [
+    (0, 0, 1), (0, 0, -1), (1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0),
+    (1, 1, 0), (-1, 1, 0), (1, 0, 1), (0, 1, 1), (1, 1, 1), (-1, -1, -1),
+    (3, 1, 2), (-3, 1, 2), (2, -1, 3), (1, 3, 2), (1, -2, -3), (3, 2, 1), (2, -3, 1), (-2, 3, -1),
+    (0.3, -0.7, 0.648), (1e-9, 1, 2), (5, 1e-12, -5),
+]
+
+
+def test_default_x_directions_as_cadquery():
+    """Planes and coordinate systems given only their normal take the same X direction."""
+    from OCP.gp import gp_Ax2, gp_Dir, gp_Pnt
+    from pykentron import gp as kgp
+
+    for n in NORMALS:
+        ours = pykentron.Plane((0, 0, 0), None, n).xDir.toTuple()
+        theirs = cadquery.Plane((0, 0, 0), None, n).xDir.toTuple()
+        assert all(abs(a - b) < 1e-15 for a, b in zip(ours, theirs)), (n, ours, theirs)
+        unit = gp_Dir(*n)
+        ours = kgp.gp_Ax2(kgp.gp_Pnt(0, 0, 0), kgp.gp_Dir(unit.X(), unit.Y(), unit.Z())).XDirection()
+        theirs = gp_Ax2(gp_Pnt(0, 0, 0), unit).XDirection()
+        got, expected = (ours.X(), ours.Y(), ours.Z()), (theirs.X(), theirs.Y(), theirs.Z())
+        assert all(abs(a - b) < 1e-15 for a, b in zip(got, expected)), (n, got, expected)
+    assert pykentron.Plane((0, 0, 0), None, (1, 0, 0)).xDir.toTuple() == (0, 0, 1)
+
+
 if __name__ == "__main__":
     import traceback
 
@@ -872,6 +897,12 @@ if __name__ == "__main__":
         except Exception as e:
             failed += 1
             print(f"FAILED  solved {name}: {type(e).__name__}: {e}")
+    try:
+        test_default_x_directions_as_cadquery()
+        print("ok      default_x_directions_as_cadquery")
+    except Exception as e:
+        failed += 1
+        print(f"FAILED  default_x_directions_as_cadquery: {type(e).__name__}: {e}")
     try:
         test_gyroid_plates_a_hundred_millionth_apart()
         print("ok      gyroid_plates_a_hundred_millionth_apart")

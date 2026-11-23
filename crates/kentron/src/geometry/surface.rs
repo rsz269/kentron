@@ -160,9 +160,28 @@ impl Plane {
         Self { frame }
     }
 
-    /// Clean-room rewrite pending: see cleanroom spec `surface_conventions.md`.
+    /// The plane `a·x + b·y + c·z + d = 0`; `None` if `(a, b, c)` is (near) zero.
+    ///
+    /// The normal is `(a, b, c)` normalized and the X axis the default one
+    /// [`Frame::from_z`] gives for that normal. The origin is where the plane crosses the
+    /// world axis of the largest coefficient (`d` need not be scaled to a unit normal).
     pub fn from_equation(a: f64, b: f64, c: f64, d: f64) -> Option<Self> {
-        todo!("clean-room rewrite")
+        let normal = Direction::try_new(a, b, c)?;
+        let (aa, ab, ac) = (a.abs(), b.abs(), c.abs());
+        let on_x = || Point::new(-d / a, 0.0, 0.0);
+        let on_y = || Point::new(0.0, -d / b, 0.0);
+        let on_z = || Point::new(0.0, 0.0, -d / c);
+        // The same case split as the default frame X axis, on the raw coefficients.
+        let (origin, hint) = if ab <= aa && ab <= ac {
+            if aa > ac { (on_x(), (-c, 0.0, a)) } else { (on_z(), (c, 0.0, -a)) }
+        } else if aa <= ab && aa <= ac {
+            if ab > ac { (on_y(), (0.0, -c, b)) } else { (on_z(), (0.0, c, -b)) }
+        } else if aa > ab {
+            (on_x(), (-b, a, 0.0))
+        } else {
+            (on_y(), (b, -a, 0.0))
+        };
+        Some(Self::from_frame(Frame::new(origin, normal, Direction::new(hint.0, hint.1, hint.2))))
     }
 
     /// Coefficients `(a, b, c, d)` of the plane's equation, with `(a, b, c)` the unit normal.
@@ -193,9 +212,11 @@ impl Plane {
         self.distance(p) <= tolerance
     }
 
-    /// Clean-room rewrite pending: see cleanroom spec `surface_conventions.md`.
+    /// The parameters `(u, v)` of `p` projected onto the plane: its coordinates along the
+    /// frame's X and Y axes.
     pub fn parameters(&self, p: Point) -> (f64, f64) {
-        todo!("clean-room rewrite")
+        let (x, y, _) = local_coordinates(&self.frame, p);
+        (x, y)
     }
 }
 
@@ -232,9 +253,11 @@ impl Cylinder {
         self.radius
     }
 
-    /// Clean-room rewrite pending: see cleanroom spec `surface_conventions.md`.
+    /// The parameters `(u, v)` of `p` on (or near) the cylinder: its angle around the axis
+    /// from the frame's X axis, in `[0, 2π)`, and its height along the axis.
     pub fn parameters(&self, p: Point) -> (f64, f64) {
-        todo!("clean-room rewrite")
+        let (x, y, z) = local_coordinates(&self.frame, p);
+        (angle_in_period(y.atan2(x)), z)
     }
 }
 
@@ -288,9 +311,25 @@ impl Cone {
         self.radius
     }
 
-    /// Clean-room rewrite pending: see cleanroom spec `surface_conventions.md`.
+    /// The parameters `(u, v)` of `p` on (or near) the cone: its angle around the axis
+    /// and its distance along the generating line from the reference circle.
+    ///
+    /// A point nearer the generating line opposite its own angle (beyond the apex) gets
+    /// the angle of that line, which is the point's angle plus π and may then reach up to
+    /// 3π; otherwise the angle is in `[0, 2π)`. A point on the axis gets angle 0.
     pub fn parameters(&self, p: Point) -> (f64, f64) {
-        todo!("clean-room rewrite")
+        let (x, y, z) = local_coordinates(&self.frame, p);
+        let rho = x.hypot(y);
+        let (sin, cos) = self.semi_angle_sin_cos;
+        let r = self.radius;
+        let u0 = if rho > 0.0 { angle_in_period(y.atan2(x)) } else { 0.0 };
+        // Distance of the point at signed radial coordinate s from the generating line.
+        let off_line = |s: f64| ((s - r) * cos - z * sin).abs();
+        if rho > 0.0 && off_line(-rho) < off_line(rho) {
+            (angle_in_period(u0 + std::f64::consts::PI), (-rho - r) * sin + z * cos)
+        } else {
+            (u0, (rho - r) * sin + z * cos)
+        }
     }
 
     /// The apex: where the generating lines meet, at `v = -radius / sin(semi_angle)`.
@@ -333,9 +372,14 @@ impl Sphere {
         self.radius
     }
 
-    /// Clean-room rewrite pending: see cleanroom spec `surface_conventions.md`.
+    /// The parameters `(u, v)` of `p` on (or near) the sphere: its longitude from the
+    /// frame's X axis, in `[0, 2π)` (0 on the poles' axis), and its latitude from the XY
+    /// plane, in `[-π/2, π/2]`.
     pub fn parameters(&self, p: Point) -> (f64, f64) {
-        todo!("clean-room rewrite")
+        let (x, y, z) = local_coordinates(&self.frame, p);
+        let rho = x.hypot(y);
+        let u = if rho > 0.0 { angle_in_period(y.atan2(x)) } else { 0.0 };
+        (u, z.atan2(rho))
     }
 }
 
@@ -359,14 +403,66 @@ pub struct TrimmedSurface {
 }
 
 impl TrimmedSurface {
-    /// Clean-room rewrite pending: see cleanroom spec `surface_conventions.md`.
+    /// The part of `basis` over `[u1, u2] x [v1, v2]`.
+    ///
+    /// In a periodic direction the second bound is moved by whole periods to lie just
+    /// above the first, at most one period (plus `tolerance::PARAMETRIC`) away; a full turn
+    /// such as `[0, 2π]` is kept as given. In a non-periodic direction a decreasing range
+    /// reverses the basis in that direction, so the trimmed surface covers the same points
+    /// with an increasing range (and the opposite normal). Panics on an empty range or,
+    /// in a non-periodic direction, a bound outside the basis' domain.
     pub fn new(basis: Surface, u1: f64, u2: f64, v1: f64, v2: f64) -> Self {
-        todo!("clean-room rewrite")
+        use super::ParametricSurface;
+        let mut basis = basis;
+        let (first_u, last_u, first_v, last_v) = basis.bounds();
+        let (u1, u2) = if basis.is_u_periodic() {
+            periodic_trim(u1, u2, basis.u_period().expect("periodic surface without a u period"))
+        } else {
+            if bounded_trim(u1, u2, first_u, last_u) {
+                // Reversed in place: the same points, now with an increasing range.
+                let range = (basis.u_reversed_parameter(u1), basis.u_reversed_parameter(u2));
+                basis.u_reverse();
+                range
+            } else {
+                (u1, u2)
+            }
+        };
+        let (v1, v2) = if basis.is_v_periodic() {
+            periodic_trim(v1, v2, basis.v_period().expect("periodic surface without a v period"))
+        } else {
+            if bounded_trim(v1, v2, first_v, last_v) {
+                // Reversed in place: the same points, now with an increasing range.
+                let range = (basis.v_reversed_parameter(v1), basis.v_reversed_parameter(v2));
+                basis.v_reverse();
+                range
+            } else {
+                (v1, v2)
+            }
+        };
+        Self { basis: Box::new(basis), u1, u2, v1, v2 }
     }
 
-    /// Clean-room rewrite pending: see cleanroom spec `surface_conventions.md`.
+    /// The part of `basis` over the rectangle between `(u1, v1)` and `(u2, v2)`, with the
+    /// trimmed surface's u direction running along the basis' if `u_sense` and against it
+    /// otherwise (likewise v), as a STEP rectangular trimmed surface gives it.
+    ///
+    /// In a periodic direction `u1` is brought into the basis' first period and `u2` within
+    /// one period above it; in a non-periodic one the bounds are sorted, a swap counting as
+    /// one more reversal. `None` for equal bounds, or bounds outside a non-periodic
+    /// direction's domain by more than `tolerance::PARAMETRIC`.
     pub fn with_senses(basis: Surface, u1: f64, u2: f64, v1: f64, v2: f64, u_sense: bool, v_sense: bool) -> Option<Self> {
-        todo!("clean-room rewrite")
+        use super::ParametricSurface;
+        let (first_u, last_u, first_v, last_v) = basis.bounds();
+        let (u1, u2, u_same) = sensed_trim(u1, u2, u_sense, first_u, last_u, basis.is_u_periodic())?;
+        let (v1, v2, v_same) = sensed_trim(v1, v2, v_sense, first_v, last_v, basis.is_v_periodic())?;
+        let mut trimmed = Self { basis: Box::new(basis), u1, u2, v1, v2 };
+        if !u_same {
+            trimmed.u_reverse();
+        }
+        if !v_same {
+            trimmed.v_reverse();
+        }
+        Some(trimmed)
     }
 
 
@@ -381,94 +477,175 @@ impl TrimmedSurface {
 }
 
 impl super::ParametricSurface for TrimmedSurface {
-    /// Clean-room rewrite pending: see cleanroom spec `surface_conventions.md`.
     fn bounds(&self) -> (f64, f64, f64, f64) {
-        todo!("clean-room rewrite")
+        (self.u1, self.u2, self.v1, self.v2)
     }
-    // As OCCT: a trimmed direction is not closed, but periodicity is the basis'.
-    /// Clean-room rewrite pending: see cleanroom spec `surface_conventions.md`.
+    // A trimmed direction is never closed, even a full turn of a periodic one; its
+    // periodicity, continuity and evaluation are the basis'.
     fn is_u_closed(&self) -> bool {
-        todo!("clean-room rewrite")
+        false
     }
-    /// Clean-room rewrite pending: see cleanroom spec `surface_conventions.md`.
     fn is_v_closed(&self) -> bool {
-        todo!("clean-room rewrite")
+        false
     }
-    /// Clean-room rewrite pending: see cleanroom spec `surface_conventions.md`.
     fn is_u_periodic(&self) -> bool {
-        todo!("clean-room rewrite")
+        self.basis.is_u_periodic()
     }
-    /// Clean-room rewrite pending: see cleanroom spec `surface_conventions.md`.
     fn is_v_periodic(&self) -> bool {
-        todo!("clean-room rewrite")
+        self.basis.is_v_periodic()
     }
-    /// Clean-room rewrite pending: see cleanroom spec `surface_conventions.md`.
     fn u_period(&self) -> Option<f64> {
-        todo!("clean-room rewrite")
+        self.basis.u_period()
     }
-    /// Clean-room rewrite pending: see cleanroom spec `surface_conventions.md`.
     fn v_period(&self) -> Option<f64> {
-        todo!("clean-room rewrite")
+        self.basis.v_period()
     }
-    /// Clean-room rewrite pending: see cleanroom spec `surface_conventions.md`.
     fn continuity(&self) -> super::Continuity {
-        todo!("clean-room rewrite")
+        self.basis.continuity()
     }
-    /// Clean-room rewrite pending: see cleanroom spec `surface_conventions.md`.
     fn is_cn_u(&self, n: u32) -> bool {
-        todo!("clean-room rewrite")
+        self.basis.is_cn_u(n)
     }
-    /// Clean-room rewrite pending: see cleanroom spec `surface_conventions.md`.
     fn is_cn_v(&self, n: u32) -> bool {
-        todo!("clean-room rewrite")
+        self.basis.is_cn_v(n)
     }
-    /// Clean-room rewrite pending: see cleanroom spec `surface_conventions.md`.
     fn point(&self, u: f64, v: f64) -> Point {
-        todo!("clean-room rewrite")
+        self.basis.point(u, v)
     }
-    /// Clean-room rewrite pending: see cleanroom spec `surface_conventions.md`.
     fn d1(&self, u: f64, v: f64) -> (Point, Vector, Vector) {
-        todo!("clean-room rewrite")
+        self.basis.d1(u, v)
     }
-    /// Clean-room rewrite pending: see cleanroom spec `surface_conventions.md`.
     fn d2(&self, u: f64, v: f64) -> super::SurfaceD2 {
-        todo!("clean-room rewrite")
+        self.basis.d2(u, v)
     }
-    /// Clean-room rewrite pending: see cleanroom spec `surface_conventions.md`.
     fn d3(&self, u: f64, v: f64) -> super::SurfaceD3 {
-        todo!("clean-room rewrite")
+        self.basis.d3(u, v)
     }
-    /// Clean-room rewrite pending: see cleanroom spec `surface_conventions.md`.
     fn dn(&self, u: f64, v: f64, nu: u32, nv: u32) -> Vector {
-        todo!("clean-room rewrite")
+        self.basis.dn(u, v, nu, nv)
     }
-    /// Clean-room rewrite pending: see cleanroom spec `surface_conventions.md`.
+    /// The basis' u-iso, limited to the trimmed v range.
     fn u_iso(&self, u: f64) -> Curve {
-        todo!("clean-room rewrite")
+        Curve::Trimmed(super::curve::TrimmedCurve::new(self.basis.u_iso(u), self.v1, self.v2))
     }
-    /// Clean-room rewrite pending: see cleanroom spec `surface_conventions.md`.
+    /// The basis' v-iso, limited to the trimmed u range.
     fn v_iso(&self, v: f64) -> Curve {
-        todo!("clean-room rewrite")
+        Curve::Trimmed(super::curve::TrimmedCurve::new(self.basis.v_iso(v), self.u1, self.u2))
     }
-    /// Clean-room rewrite pending: see cleanroom spec `surface_conventions.md`.
     fn u_reversed_parameter(&self, u: f64) -> f64 {
-        todo!("clean-room rewrite")
+        self.basis.u_reversed_parameter(u)
     }
-    /// Clean-room rewrite pending: see cleanroom spec `surface_conventions.md`.
     fn v_reversed_parameter(&self, v: f64) -> f64 {
-        todo!("clean-room rewrite")
+        self.basis.v_reversed_parameter(v)
     }
-    /// Clean-room rewrite pending: see cleanroom spec `surface_conventions.md`.
+    /// Reverses the basis in u; the trimmed range follows so the same points are covered.
     fn u_reverse(&mut self) {
-        todo!("clean-room rewrite")
+        let (u1, u2) = (self.basis.u_reversed_parameter(self.u2), self.basis.u_reversed_parameter(self.u1));
+        self.basis.u_reverse();
+        (self.u1, self.u2) = (u1, u2);
     }
-    /// Clean-room rewrite pending: see cleanroom spec `surface_conventions.md`.
+    /// Reverses the basis in v; the trimmed range follows so the same points are covered.
     fn v_reverse(&mut self) {
-        todo!("clean-room rewrite")
+        let (v1, v2) = (self.basis.v_reversed_parameter(self.v2), self.basis.v_reversed_parameter(self.v1));
+        self.basis.v_reverse();
+        (self.v1, self.v2) = (v1, v2);
     }
-    /// Clean-room rewrite pending: see cleanroom spec `surface_conventions.md`.
     fn resolution(&self, tolerance: f64) -> (f64, f64) {
-        todo!("clean-room rewrite")
+        self.basis.resolution(tolerance)
+    }
+}
+
+/// A trimming range `(t1, t2)` in a periodic direction: `t1` as given and `t2` moved by
+/// whole periods into `(t1, t1 + period + tolerance::PARAMETRIC]`. Panics on an empty range.
+fn periodic_trim(t1: f64, t2: f64, period: f64) -> (f64, f64) {
+    let eps = crate::tolerance::PARAMETRIC;
+    assert!((t1 - t2).abs() > eps, "empty trimming range [{t1}, {t2}]");
+    let mut t2 = t2;
+    if t2 <= t1 {
+        t2 += period * ((t1 - t2) / period).floor().max(0.0);
+        while t2 <= t1 {
+            t2 += period;
+        }
+    } else if t2 > t1 + period + eps {
+        t2 -= period * ((t2 - t1 - period - eps) / period).floor().max(0.0);
+        while t2 > t1 + period + eps {
+            t2 -= period;
+        }
+    }
+    (t1, t2)
+}
+
+/// Checks a trimming range in a non-periodic direction with domain `[first, last]` and
+/// tells whether it is decreasing. Panics on an empty range or a bound outside the domain.
+fn bounded_trim(t1: f64, t2: f64, first: f64, last: f64) -> bool {
+    let eps = crate::tolerance::PARAMETRIC;
+    assert!((t1 - t2).abs() > eps, "empty trimming range [{t1}, {t2}]");
+    for t in [t1, t2] {
+        assert!(first - eps <= t && t <= last + eps, "trimming bound {t} outside [{first}, {last}]");
+    }
+    t1 > t2
+}
+
+/// One direction of [`TrimmedSurface::with_senses`]: the stored range and whether the
+/// trimmed surface runs along the basis in that direction; `None` for an invalid range.
+fn sensed_trim(t1: f64, t2: f64, sense: bool, first: f64, last: f64, periodic: bool) -> Option<(f64, f64, bool)> {
+    let eps = crate::tolerance::PARAMETRIC;
+    if t1 == t2 {
+        return None;
+    }
+    if periodic {
+        let precision = ((t2 - t1).abs() / 2.0).min(eps);
+        let (a, b) = super::adaptor::adjust_periodic(first, last, precision, t1, t2);
+        return Some((a, b, sense));
+    }
+    let (lo, hi, same) = if t1 < t2 { (t1, t2, sense) } else { (t2, t1, !sense) };
+    if first - lo > eps || hi - last > eps {
+        return None;
+    }
+    Some((lo, hi, same))
+}
+
+/// A polynomial of degree at most four in `x, y, z`: `self.0[i][j][k]` is the coefficient
+/// of `xⁱ yʲ zᵏ`.
+#[derive(Default, Clone)]
+struct Quartic([[[f64; 5]; 5]; 5]);
+
+impl Quartic {
+    fn terms() -> impl Iterator<Item = (usize, usize, usize)> {
+        (0..5).flat_map(|i| (0..5 - i).flat_map(move |j| (0..5 - i - j).map(move |k| (i, j, k))))
+    }
+
+    fn plus(&self, other: &Quartic) -> Quartic {
+        let mut r = self.clone();
+        for (i, j, k) in Self::terms() {
+            r.0[i][j][k] += other.0[i][j][k];
+        }
+        r
+    }
+
+    fn scaled(&self, factor: f64) -> Quartic {
+        let mut r = self.clone();
+        for (i, j, k) in Self::terms() {
+            r.0[i][j][k] *= factor;
+        }
+        r
+    }
+
+    /// The product; terms beyond degree four (which the callers never produce) are dropped.
+    fn times(&self, other: &Quartic) -> Quartic {
+        let mut r = Quartic::default();
+        for (i, j, k) in Self::terms() {
+            let a = self.0[i][j][k];
+            if a == 0.0 {
+                continue;
+            }
+            for (l, m, n) in Self::terms() {
+                if i + j + k + l + m + n <= 4 {
+                    r.0[i + l][j + m][k + n] += a * other.0[l][m][n];
+                }
+            }
+        }
+        r
     }
 }
 
@@ -513,15 +690,79 @@ impl Torus {
         self.minor_radius
     }
 
-    /// Clean-room rewrite pending: see cleanroom spec `surface_conventions.md`.
+    /// The parameters `(u, v)` of `p` on (or near) the torus, both angles in `[0, 2π)`: `u`
+    /// around the main axis from the frame's X axis, `v` around the tube from the outside
+    /// of the XY plane.
+    ///
+    /// On a spindle torus (minor radius larger than the major one) a point can lie on the
+    /// tube around either side of the axis; it gets the angle of the side whose tube it is
+    /// nearer. A point on the tube's centre circle gets `v = 0`.
     pub fn parameters(&self, p: Point) -> (f64, f64) {
-        todo!("clean-room rewrite")
+        let (x, y, z) = local_coordinates(&self.frame, p);
+        let (big, small) = (self.major_radius, self.minor_radius);
+        let mut theta = y.atan2(x);
+        if big < small {
+            let (s, c) = theta.sin_cos();
+            let off_tube = |sign: f64| {
+                let (dx, dy) = (x - sign * big * c, y - sign * big * s);
+                (dx * dx + dy * dy + z * z - small * small).abs()
+            };
+            if off_tube(-1.0) < off_tube(1.0) {
+                theta += std::f64::consts::PI;
+            }
+        }
+        let u = angle_in_period(theta);
+        let (s, c) = u.sin_cos();
+        let a = x * c + y * s - big;
+        let v = if a.hypot(z) <= f64::MIN_POSITIVE { 0.0 } else { angle_in_period(z.atan2(a)) };
+        (u, v)
     }
 
-
-    /// Clean-room rewrite pending: see cleanroom spec `surface_conventions.md`.
+    /// The 35 coefficients of the torus' implicit quartic `F(x, y, z) = 0` in world
+    /// coordinates, in the monomial order
+    /// `x⁴, y⁴, z⁴, x³y, x³z, y³x, y³z, z³x, z³y, x²y², x²z², y²z², x²yz, xy²z, xyz²,
+    /// x³, y³, z³, x²y, x²z, y²x, y²z, z²x, z²y, xyz, x², y², z², xy, xz, yz, x, y, z, 1`.
+    ///
+    /// With `(ξ, η, ζ)` the point's coordinates in the torus' frame, major radius `R` and
+    /// minor radius `r`,
+    /// `F = (ξ² + η² + ζ²)² − 2(R² + r²)(ξ² + η²) + 2(R² − r²)ζ² + (R² − r²)²`,
+    /// which is zero on the torus, negative inside the tube and positive outside it.
     pub fn implicit_coefficients(&self) -> [f64; 35] {
-        todo!("clean-room rewrite")
+        let f = &self.frame;
+        let o = f.origin() - Point::ORIGIN;
+        // A local coordinate as an affine polynomial of the world coordinates.
+        let affine = |axis: Direction| {
+            let a = Vector::from(axis);
+            let mut q = Quartic::default();
+            q.0[1][0][0] = a.x;
+            q.0[0][1][0] = a.y;
+            q.0[0][0][1] = a.z;
+            q.0[0][0][0] = -a.dot(o);
+            q
+        };
+        let (xi, eta, zeta) = (affine(f.x()), affine(f.y()), affine(f.z()));
+        let (xi2, eta2, zeta2) = (xi.times(&xi), eta.times(&eta), zeta.times(&zeta));
+        let planar = xi2.plus(&eta2);
+        let squared_distance = planar.plus(&zeta2);
+        let (big2, small2) = (self.major_radius * self.major_radius, self.minor_radius * self.minor_radius);
+        let mut fq = squared_distance.times(&squared_distance);
+        fq = fq.plus(&planar.scaled(-2.0 * (big2 + small2)));
+        fq = fq.plus(&zeta2.scaled(2.0 * (big2 - small2)));
+        fq.0[0][0][0] += (big2 - small2) * (big2 - small2);
+        const ORDER: [(usize, usize, usize); 35] = [
+            (4, 0, 0), (0, 4, 0), (0, 0, 4),
+            (3, 1, 0), (3, 0, 1), (1, 3, 0), (0, 3, 1), (1, 0, 3), (0, 1, 3),
+            (2, 2, 0), (2, 0, 2), (0, 2, 2),
+            (2, 1, 1), (1, 2, 1), (1, 1, 2),
+            (3, 0, 0), (0, 3, 0), (0, 0, 3),
+            (2, 1, 0), (2, 0, 1), (1, 2, 0), (0, 2, 1), (1, 0, 2), (0, 1, 2),
+            (1, 1, 1),
+            (2, 0, 0), (0, 2, 0), (0, 0, 2),
+            (1, 1, 0), (1, 0, 1), (0, 1, 1),
+            (1, 0, 0), (0, 1, 0), (0, 0, 1),
+            (0, 0, 0),
+        ];
+        ORDER.map(|(i, j, k)| fq.0[i][j][k])
     }
 }
 
@@ -1359,5 +1600,219 @@ mod tests {
             assert!(surface.point(pu, pv).distance(p) < 1e-9, "({u}, {v}) came back as ({pu}, {pv})");
             assert!((pv - v).abs() < 1e-9);
         }
+    }
+}
+
+#[cfg(test)]
+mod convention_tests {
+    use super::*;
+    use crate::geometry::ParametricSurface;
+    use std::f64::consts::{PI, TAU};
+
+    #[test]
+    fn plane_from_equation_follows_the_default_frame() {
+        let cases = [
+            (1.0, 0.0, 0.0, -2.0),
+            (0.0, 1.0, 0.0, 3.0),
+            (0.0, 0.0, 1.0, -5.0),
+            (0.0, 0.0, -2.0, -5.0),
+            (1.0, 1.0, 0.0, -1.0),
+            (1.0, 0.0, 1.0, -1.0),
+            (0.0, 1.0, 1.0, -1.0),
+            (1.0, 1.0, 1.0, -1.0),
+            (3.0, 1.0, 2.0, 4.0),
+            (-1.0, 3.0, 2.0, 4.0),
+            (1.0, -2.0, -3.0, 4.0),
+            (-3.0, 2.0, 1.0, 4.0),
+            (2.0, -3.0, 1.0, 4.0),
+        ];
+        for (a, b, c, d) in cases {
+            let plane = Plane::from_equation(a, b, c, d).unwrap();
+            let n = Direction::new(a, b, c);
+            let o = plane.origin();
+            assert!((a * o.x + b * o.y + c * o.z + d).abs() < 1e-14, "{:?}", (a, b, c, d));
+            // On the axis of the largest coefficient.
+            assert_eq!([o.x, o.y, o.z].iter().filter(|&&t| t == 0.0).count(), 2);
+            assert_eq!(plane.normal(), n);
+            assert_eq!(plane.frame().x(), Frame::from_z(Point::ORIGIN, n).x());
+        }
+        assert_eq!(Plane::from_equation(0.0, 0.0, 1.0, -5.0).unwrap().origin(), Point::new(0.0, 0.0, 5.0));
+        assert_eq!(Plane::from_equation(2.0, 0.0, 0.0, -4.0).unwrap().origin(), Point::new(2.0, 0.0, 0.0));
+        assert!(Plane::from_equation(0.0, 0.0, 0.0, 1.0).is_none());
+    }
+
+    fn torus_f(coefficients: &[f64; 35], p: Point) -> f64 {
+        let (x, y, z) = (p.x, p.y, p.z);
+        let monomials = [
+            x * x * x * x, y * y * y * y, z * z * z * z,
+            x * x * x * y, x * x * x * z, y * y * y * x, y * y * y * z, z * z * z * x, z * z * z * y,
+            x * x * y * y, x * x * z * z, y * y * z * z,
+            x * x * y * z, x * y * y * z, x * y * z * z,
+            x * x * x, y * y * y, z * z * z,
+            x * x * y, x * x * z, y * y * x, y * y * z, z * z * x, z * z * y,
+            x * y * z,
+            x * x, y * y, z * z,
+            x * y, x * z, y * z,
+            x, y, z,
+            1.0,
+        ];
+        coefficients.iter().zip(monomials).map(|(c, m)| c * m).sum()
+    }
+
+    #[test]
+    fn torus_coefficients_vanish_on_the_torus() {
+        let tilted = Frame::new(Point::new(1.0, -2.0, 0.5), Direction::new(1.0, 2.0, 2.0), Direction::new(2.0, -1.0, 0.0));
+        for frame in [Frame::WORLD, tilted] {
+            for (big, small) in [(5.0, 1.5), (1.0, 2.0)] {
+                let torus = Torus::new(frame, big, small);
+                let k = torus.implicit_coefficients();
+                let scale: f64 = big * big * big * big;
+                for i in 0..12 {
+                    for j in 0..12 {
+                        let (u, v) = (i as f64 * TAU / 12.0, j as f64 * TAU / 12.0);
+                        let f = torus_f(&k, torus.point(u, v));
+                        assert!(f.abs() < 1e-12 * scale.max(small.powi(4)), "F = {f} at ({u}, {v})");
+                    }
+                }
+                let at = |x: f64, y: f64, z: f64| {
+                    frame.origin() + Vector::from(frame.x()) * x + Vector::from(frame.y()) * y + Vector::from(frame.z()) * z
+                };
+                assert!(torus_f(&k, at(100.0, 3.0, -50.0)) > 0.0);
+                // On the tube's centre circle (of a ring torus).
+                if big > small {
+                    assert!(torus_f(&k, at(0.0, big, 0.0)) < 0.0);
+                }
+            }
+        }
+        // World-aligned at the origin: only the even monomials remain.
+        let k = Torus::new(Frame::WORLD, 3.0, 1.0).implicit_coefficients();
+        let expected = {
+            let mut e = [0.0; 35];
+            (e[0], e[1], e[2]) = (1.0, 1.0, 1.0);
+            (e[9], e[10], e[11]) = (2.0, 2.0, 2.0);
+            (e[25], e[26], e[27]) = (-20.0, -20.0, 16.0);
+            e[34] = 64.0;
+            e
+        };
+        assert_eq!(k, expected);
+    }
+
+    fn round_trip(surface: &Surface, u: f64, v: f64) {
+        let p = surface.point(u, v);
+        let (pu, pv) = surface.parameters(p).unwrap();
+        assert!(surface.point(pu, pv).distance(p) < 1e-9, "{surface:?} at ({u}, {v}) -> ({pu}, {pv})");
+        // (2π itself where the angle is a rounding error below it.)
+        assert!((0.0..=TAU).contains(&pu) || matches!(surface, Surface::Plane(_) | Surface::Cone(_)), "u = {pu}");
+    }
+
+    #[test]
+    fn elementary_parameters_round_trip() {
+        let frame = Frame::new(Point::new(1.0, 2.0, 3.0), Direction::new(0.0, 1.0, 1.0), Direction::new(1.0, 0.0, 0.0));
+        let surfaces = [
+            Surface::Plane(Plane::from_frame(frame)),
+            Surface::Cylinder(Cylinder::new(frame, 2.0)),
+            Surface::Cone(Cone::new(frame, 0.4, 2.0)),
+            Surface::Cone(Cone::new(frame, -0.4, 2.0)),
+            Surface::Sphere(Sphere::new(frame, 2.0)),
+            Surface::Torus(Torus::new(frame, 3.0, 1.0)),
+            Surface::Torus(Torus::new(frame, 1.0, 2.0)),
+        ];
+        let us = [0.0, 1e-13, 0.7, PI, 4.0, TAU - 1e-13];
+        for s in &surfaces {
+            let vs: &[f64] = match s {
+                Surface::Sphere(_) => &[-PI / 2.0, -1.0, 0.0, 0.5, PI / 2.0],
+                Surface::Torus(_) => &[0.0, 0.5, PI, 4.0],
+                Surface::Cone(c) => &[-2.0 / c.semi_angle().sin().abs() - 1.0, -1.0, 0.0, 2.5],
+                _ => &[-1.0, 0.0, 2.5],
+            };
+            for &u in &us {
+                for &v in vs {
+                    round_trip(s, u, v);
+                }
+            }
+        }
+        // The cone's apex, the sphere's poles.
+        let cone = Cone::new(frame, 0.4, 2.0);
+        assert_eq!(cone.parameters(cone.apex()).0, 0.0);
+        let sphere = Sphere::new(Frame::WORLD, 2.0);
+        assert_eq!(sphere.parameters(Point::new(0.0, 0.0, 2.0)), (0.0, PI / 2.0));
+        assert_eq!(sphere.parameters(Point::new(0.0, 0.0, -2.0)), (0.0, -PI / 2.0));
+    }
+
+    #[test]
+    fn angles_a_rounding_error_below_zero_are_zero() {
+        let cylinder = Cylinder::new(Frame::WORLD, 1.0);
+        assert_eq!(cylinder.parameters(Point::new(1.0, -1e-17, 0.0)).0, 0.0);
+        assert!((cylinder.parameters(Point::new(1.0, -1e-9, 0.0)).0 - (TAU - 1e-9)).abs() < 1e-15);
+        assert_eq!(angle_in_period(-1e-17), 0.0);
+        // The inner equator of a torus.
+        let torus = Torus::new(Frame::WORLD, 3.0, 1.0);
+        let (u, v) = torus.parameters(Point::new(2.0, 0.0, 0.0));
+        assert_eq!((u, v), (0.0, PI));
+    }
+
+    #[test]
+    fn periodic_trims_move_by_whole_periods() {
+        let sphere = Surface::Sphere(Sphere::new(Frame::WORLD, 1.0));
+        let t = TrimmedSurface::new(sphere.clone(), 0.0, TAU, -1.0, 1.0);
+        assert_eq!(t.trim(), (0.0, TAU, -1.0, 1.0));
+        assert!(!t.is_u_closed() && t.is_u_periodic());
+        let t = TrimmedSurface::new(sphere.clone(), 1.0, 0.5, -1.0, 1.0);
+        assert!((t.trim().1 - (0.5 + TAU)).abs() < 1e-15);
+        let t = TrimmedSurface::new(sphere.clone(), 1.0, 1.5 + 3.0 * TAU, -1.0, 1.0);
+        assert!((t.trim().1 - 1.5).abs() < 1e-14);
+        let t = TrimmedSurface::new(sphere.clone(), 1.0, 1.0 + TAU, -1.0, 1.0);
+        assert_eq!(t.trim().1, 1.0 + TAU);
+    }
+
+    #[test]
+    #[should_panic]
+    fn an_empty_trim_panics() {
+        TrimmedSurface::new(Surface::Plane(Plane::XY), 1.0, 1.0, 0.0, 1.0);
+    }
+
+    fn normal(s: &dyn ParametricSurface, u: f64, v: f64) -> Vector {
+        let (_, du, dv) = s.d1(u, v);
+        du.cross(dv)
+    }
+
+    #[test]
+    fn a_decreasing_bounded_trim_reverses_the_basis() {
+        let cylinder = Surface::Cylinder(Cylinder::new(Frame::WORLD, 1.0));
+        let t = TrimmedSurface::new(cylinder.clone(), 0.0, 1.0, 3.0, 1.0);
+        let (u1, u2, v1, v2) = t.trim();
+        assert!(v1 < v2);
+        assert_eq!((u1, u2), (0.0, 1.0));
+        // The same points.
+        for (u, v) in [(u1, v1), (u2, v2), (0.5, 0.5 * (v1 + v2))] {
+            let p = t.point(u, v);
+            assert!((1.0 - 1e-12..=3.0 + 1e-12).contains(&p.z), "{p:?}");
+        }
+        assert!(normal(&t, 0.5, v1 + 0.1).dot(normal(&cylinder, 0.5, 2.0)) < 0.0);
+    }
+
+    #[test]
+    fn senses_reverse_the_trimmed_surface() {
+        let cylinder = Surface::Cylinder(Cylinder::new(Frame::WORLD, 1.0));
+        let same = TrimmedSurface::with_senses(cylinder.clone(), 0.0, 1.0, 0.0, 2.0, true, true).unwrap();
+        assert_eq!(same.trim(), (0.0, 1.0, 0.0, 2.0));
+        let flipped = TrimmedSurface::with_senses(cylinder.clone(), 0.0, 1.0, 0.0, 2.0, false, true).unwrap();
+        let (u1, u2, v1, v2) = flipped.trim();
+        assert!(u1 < u2 && (u2 - u1 - 1.0).abs() < 1e-14 && (v1, v2) == (0.0, 2.0));
+        // Same corners, opposite normal.
+        let a: Vec<Point> = [(0.0, 0.0), (1.0, 2.0)].iter().map(|&(u, v)| same.point(u, v)).collect();
+        let b: Vec<Point> = [(u2, 0.0), (u1, 2.0)].iter().map(|&(u, v)| flipped.point(u, v)).collect();
+        for (p, q) in a.iter().zip(&b) {
+            assert!(p.distance(*q) < 1e-12);
+        }
+        assert!(normal(&same, 0.5, 1.0).dot(normal(&flipped, flipped.u_reversed_parameter(0.5), 1.0)) < 0.0);
+        // A swapped non-periodic range with a false sense is the same as the straight one.
+        let swapped = TrimmedSurface::with_senses(cylinder.clone(), 0.0, 1.0, 2.0, 0.0, true, false).unwrap();
+        assert_eq!(swapped, same);
+        assert!(TrimmedSurface::with_senses(cylinder.clone(), 0.0, 1.0, 1.0, 1.0, true, true).is_none());
+        let plane = Surface::Plane(Plane::XY);
+        assert!(TrimmedSurface::with_senses(plane.clone(), 0.0, 1.0, 0.0, 1.0, true, true).is_some());
+        let sphere = Surface::Sphere(Sphere::new(Frame::WORLD, 1.0));
+        assert!(TrimmedSurface::with_senses(sphere, 0.0, 1.0, 0.0, 2.0, true, true).is_none());
     }
 }

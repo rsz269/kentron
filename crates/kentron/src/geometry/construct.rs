@@ -336,14 +336,26 @@ impl Cylinder {
         Ok(Self::new(frame, radius))
     }
 
-    /// Clean-room rewrite pending: see cleanroom spec `construct_cone.md`.
+    /// The cylinder of `radius` around `axis`, its frame at the axis' origin. Fails with
+    /// [`ConstructionError::NegativeRadius`] for a negative radius.
+    #[doc(alias = "gce_MakeCylinder")]
     pub fn from_axis(axis: Axis, radius: f64) -> Result<Cylinder> {
-        todo!("clean-room rewrite")
+        check_radius(radius)?;
+        Ok(Cylinder::new(constructed_frame(axis.origin, axis.direction), radius))
     }
 
-    /// Clean-room rewrite pending: see cleanroom spec `construct_cone.md`.
+    /// The cylinder whose axis runs through `p1` and `p2` and whose surface passes through
+    /// `p3`, its frame at `p1` with Z towards `p2`. Fails with
+    /// [`ConstructionError::ConfusedPoints`] when `p1` and `p2` coincide.
+    #[doc(alias = "gce_MakeCylinder")]
     pub fn from_three_points(p1: Point, p2: Point, p3: Point) -> Result<Cylinder> {
-        todo!("clean-room rewrite")
+        let axis = p2 - p1;
+        if axis.length() < crate::tolerance::RESOLUTION {
+            return Err(ConstructionError::ConfusedPoints);
+        }
+        let z = Direction::from_vector(axis);
+        let radius = super::curve::Line::new(p1, z).distance_to_point(p3);
+        Ok(Cylinder::new(constructed_frame(p1, z), radius))
     }
 }
 
@@ -386,21 +398,171 @@ impl Cone {
         Ok(Cone::new(*f, self.semi_angle(), radius))
     }
 
-    /// Clean-room rewrite pending: see cleanroom spec `construct_cone.md`.
+    /// The cone whose axis runs from `p1` to `p2`, with radius `r1` at `p1` and `r2` at
+    /// `p2`. Its frame is at `p1` with Z towards `p2`, and its reference radius is `r1`.
+    /// Fails with [`ConstructionError::NullAxis`] when the points coincide,
+    /// [`ConstructionError::NegativeRadius`] for a negative radius and
+    /// [`ConstructionError::BadAngle`] when the radii are equal (a cylinder) or the cone
+    /// would be flat.
+    #[doc(alias = "gce_MakeCone")]
     pub fn from_points_radii(p1: Point, p2: Point, r1: f64, r2: f64) -> Result<Cone> {
-        todo!("clean-room rewrite")
+        let axis = p2 - p1;
+        let length = axis.length();
+        if length < crate::tolerance::RESOLUTION {
+            return Err(ConstructionError::NullAxis);
+        }
+        if r1 < 0.0 || r2 < 0.0 {
+            return Err(ConstructionError::NegativeRadius);
+        }
+        let angle = check_cone_angle(((r1 - r2) / length).atan().abs())?;
+        let z = Direction::from_vector(axis);
+        let semi_angle = if r1 > r2 { -angle } else { angle };
+        Ok(Cone::new(constructed_frame(p1, z), semi_angle, r1))
     }
 
-    /// Clean-room rewrite pending: see cleanroom spec `construct_cone.md`.
+    /// The cone with its axis on the line through `p1` and `p2` whose surface passes
+    /// through `p3` and `p4`. Its frame is at the foot of `p3` on the axis with Z towards
+    /// the foot of `p4`, and its reference radius is the distance of `p3` from the axis.
+    ///
+    /// The heights of the feet are measured as unsigned distances from `p1`, so the
+    /// result only passes through both points when `p1` does not lie between the feet.
+    /// Fails with [`ConstructionError::ConfusedPoints`] when `p1` and `p2`, or `p3` and
+    /// `p4`, coincide, [`ConstructionError::BadAngle`] when the feet are equally far from
+    /// `p1` or the cone would be a cylinder or flat, and [`ConstructionError::NullAxis`]
+    /// when the feet coincide.
+    #[doc(alias = "gce_MakeCone")]
     pub fn from_four_points(p1: Point, p2: Point, p3: Point, p4: Point) -> Result<Cone> {
-        todo!("clean-room rewrite")
+        if (p2 - p1).length() < crate::tolerance::RESOLUTION || (p4 - p3).length() < crate::tolerance::RESOLUTION {
+            return Err(ConstructionError::ConfusedPoints);
+        }
+        let a = Direction::from_vector(p2 - p1);
+        let av = Vector::from(a);
+        let foot = |p: Point| p1 + av * (p - p1).dot(av);
+        let (f3, f4) = (foot(p3), foot(p4));
+        let (h3, h4) = ((f3 - p1).length(), (f4 - p1).length());
+        if (h3 - h4).abs() < crate::tolerance::RESOLUTION {
+            return Err(ConstructionError::BadAngle);
+        }
+        let line = super::curve::Line::new(p1, a);
+        let (d3, d4) = (line.distance_to_point(p3), line.distance_to_point(p4));
+        let angle = check_cone_angle(((d3 - d4) / (h3 - h4)).atan().abs())?;
+        let (r1, r2) = ((f3 - p3).length(), (f4 - p4).length());
+        let z = Direction::try_from_vector(f4 - f3).ok_or(ConstructionError::NullAxis)?;
+        let semi_angle = if r1 > r2 { -angle } else { angle };
+        Ok(Cone::new(constructed_frame(f3, z), semi_angle, r1))
     }
 }
 
+/// `angle` if it is usable as a cone's (unsigned) semi-angle: neither (near) zero nor
+/// (near) a right angle.
+fn check_cone_angle(angle: f64) -> Result<f64> {
+    let res = crate::tolerance::RESOLUTION;
+    if (std::f64::consts::FRAC_PI_2 - angle).abs() < res || angle < res {
+        Err(ConstructionError::BadAngle)
+    } else {
+        Ok(angle)
+    }
+}
+
+/// The frame of a cylinder or cone built from points: origin `origin`, main axis `z` and
+/// the X axis these constructors use by convention. It lies in the world XY plane whenever
+/// `z` has an x component, otherwise in the world YZ plane if `z` has a y component, and is
+/// world X when `z` is along world Z.
+fn constructed_frame(origin: Point, z: Direction) -> Frame {
+    let res = crate::tolerance::RESOLUTION;
+    let (p, q, r) = (z.x(), z.y(), z.z());
+    let hint = if p.abs() > res {
+        Direction::new(-q, p, 0.0)
+    } else if q.abs() > res {
+        Direction::new(0.0, -r, q)
+    } else {
+        Direction::new(r, 0.0, -p)
+    };
+    Frame::new(origin, z, hint)
+}
 
 /// The parameter (angle) of a point of a circle.
 fn circle_parameter(circle: &Circle, p: Point) -> f64 {
     let f = circle.frame();
     let d = p - f.origin();
     d.dot(Vector::from(f.y())).atan2(d.dot(Vector::from(f.x()))).rem_euclid(std::f64::consts::TAU)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::geometry::ParametricSurface;
+
+    fn xyz(d: Direction) -> (f64, f64, f64) {
+        (d.x(), d.y(), d.z())
+    }
+
+    #[test]
+    fn constructed_x_axes() {
+        let s2 = std::f64::consts::FRAC_1_SQRT_2;
+        let cases = [
+            ((0.0, 0.0, 1.0), (1.0, 0.0, 0.0)),
+            ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0)),
+            ((0.0, 1.0, 0.0), (0.0, 0.0, 1.0)),
+            ((0.0, 1.0, 1.0), (0.0, -s2, s2)),
+            ((1.0, 1.0, 0.0), (-s2, s2, 0.0)),
+        ];
+        for (z, x) in cases {
+            let axis = Axis::new(Point::new(1.0, 2.0, 3.0), Direction::new(z.0, z.1, z.2));
+            let c = Cylinder::from_axis(axis, 2.0).unwrap();
+            let got = xyz(c.frame().x());
+            for (g, e) in [(got.0, x.0), (got.1, x.1), (got.2, x.2)] {
+                assert!((g - e).abs() <= 1e-16, "X for z = {z:?}: {got:?}");
+            }
+            assert_eq!(c.frame().origin(), axis.origin);
+            assert!(c.frame().is_right_handed());
+        }
+        assert_eq!(Cylinder::from_axis(Axis::new(Point::ORIGIN, Direction::Z), -1.0), Err(ConstructionError::NegativeRadius));
+    }
+
+    #[test]
+    fn cylinder_through_three_points() {
+        let c = Cylinder::from_three_points(Point::ORIGIN, Point::new(0.0, 0.0, 7.0), Point::new(3.0, 4.0, 0.0)).unwrap();
+        assert_eq!(c.radius(), 5.0);
+        assert_eq!(xyz(c.frame().z()), (0.0, 0.0, 1.0));
+        assert_eq!(xyz(c.frame().x()), (1.0, 0.0, 0.0));
+        let p = Point::new(1.0, 1.0, 1.0);
+        assert_eq!(Cylinder::from_three_points(p, p, Point::ORIGIN), Err(ConstructionError::ConfusedPoints));
+    }
+
+    #[test]
+    fn cone_from_points_and_radii() {
+        let (p1, p2) = (Point::ORIGIN, Point::new(0.0, 0.0, 10.0));
+        let cone = Cone::from_points_radii(p1, p2, 4.0, 2.0).unwrap();
+        assert!((cone.semi_angle() + 0.2f64.atan()).abs() < 1e-15);
+        assert_eq!(cone.radius(), 4.0);
+        assert_eq!(xyz(cone.frame().x()), (1.0, 0.0, 0.0));
+        assert_eq!(cone.frame().origin(), p1);
+        let (u, v) = cone.parameters(Point::new(2.0, 0.0, 10.0));
+        assert!(cone.point(u, v).distance(Point::new(2.0, 0.0, 10.0)) < 1e-12);
+        let growing = Cone::from_points_radii(p1, p2, 2.0, 4.0).unwrap();
+        assert!(growing.semi_angle() > 0.0);
+        assert_eq!(Cone::from_points_radii(p1, p2, 3.0, 3.0), Err(ConstructionError::BadAngle));
+        assert_eq!(Cone::from_points_radii(p1, p1, 3.0, 2.0), Err(ConstructionError::NullAxis));
+        assert_eq!(Cone::from_points_radii(p1, p2, 3.0, -2.0), Err(ConstructionError::NegativeRadius));
+    }
+
+    #[test]
+    fn cone_from_four_points() {
+        let (p1, p2) = (Point::new(1.0, 1.0, 0.0), Point::new(1.0, 1.0, 1.0));
+        let (p3, p4) = (Point::new(4.0, 1.0, 2.0), Point::new(1.0, 2.0, 5.0));
+        let cone = Cone::from_four_points(p1, p2, p3, p4).unwrap();
+        for p in [p3, p4] {
+            let (u, v) = cone.parameters(p);
+            assert!(cone.point(u, v).distance(p) < 1e-12, "{p:?}");
+        }
+        assert_eq!(cone.frame().origin(), Point::new(1.0, 1.0, 2.0));
+        assert_eq!(cone.radius(), 3.0);
+        assert!(cone.semi_angle() < 0.0);
+        // Feet equally far from p1, on either side: no angle.
+        let p5 = Point::new(2.0, 1.0, -2.0);
+        assert_eq!(Cone::from_four_points(p1, p2, p3, p5), Err(ConstructionError::BadAngle));
+        assert_eq!(Cone::from_four_points(p1, p2, p3, p3), Err(ConstructionError::ConfusedPoints));
+        assert_eq!(Cone::from_four_points(p1, p1, p3, p4), Err(ConstructionError::ConfusedPoints));
+    }
 }

@@ -492,8 +492,17 @@ _NAMED_PLANES = {
 
 
 def _default_x(n: Vector) -> Vector:
-    """Clean-room rewrite pending: see cleanroom spec `pykentron_default_x.md`."""
-    raise NotImplementedError("clean-room rewrite")
+    """The default X direction (normalized) of a plane with normal `n`: the one kentron's
+    frames take when no X direction is given. `n` need not be normalized."""
+    x, y, z = n
+    a, b, c = abs(x), abs(y), abs(z)
+    if b <= a and b <= c:
+        hint = (-z, 0.0, x) if a > c else (z, 0.0, -x)
+    elif a <= b and a <= c:
+        hint = (0.0, -z, y) if b > c else (0.0, z, -y)
+    else:
+        hint = (-y, x, 0.0) if a > b else (y, -x, 0.0)
+    return Vector(*hint).normalized()
 
 
 def _named(name: str):
