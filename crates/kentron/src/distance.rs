@@ -58,6 +58,14 @@ pub fn distance_within(model: &mut Model, a: Shape, b: Shape, limit: f64) -> Res
             return Ok(ShapeDistance { value: 0.0, on_first: sample[0], on_second: sample[0] });
         }
     }
+    // A vertex and faces on elementary surfaces, or edges: exactly, without meshes.
+    let exactly = |model: &Model, v: Shape, s: Shape| vertex_to_faces(model, v, s).or_else(|| vertex_to_edges(model, v, s));
+    if let Some((value, near)) = exactly(model, a, b) {
+        return Ok(ShapeDistance { value, on_first: model.point(a), on_second: near });
+    }
+    if let Some((value, near)) = exactly(model, b, a) {
+        return Ok(ShapeDistance { value, on_first: near, on_second: model.point(b) });
+    }
     let size = |s: Shape, model: &Model| {
         model
             .derived(s.node, print(s), || {
@@ -142,6 +150,183 @@ pub fn distance_within(model: &mut Model, a: Shape, b: Shape, limit: f64) -> Res
     }
     let (value, on_first, on_second) = best.expect("the nearest pair is a candidate");
     Ok(ShapeDistance { value, on_first, on_second })
+}
+
+/// The distance from `vertex` to `faces` (a face, or a shell or compound holding faces only,
+/// none of them placed) on planes, cylinders, cones, spheres and tori, and the point of them
+/// nearest: as `BRepExtrema_DistShapeShape` finds it between a vertex and a face, the
+/// nearest of the point's extrema on each face's surface that lie inside the face
+/// (`BRepExtrema_ExtPF`, classified as `BRepClass_FaceClassifier` does) and of its nearest
+/// points on the faces' boundary edges (`BRepExtrema_ExtPC`, their ends included). `None`
+/// where it is not told so: other shapes or surfaces, edges on other curves than lines and
+/// circles (see [`edge_nearest`]), a point on a surface's axis or at its centre (its extrema
+/// not isolated there), or an extremum on a face's boundary (left to the meshes and the
+/// refinement on the exact geometry).
+#[doc(alias = "BRepExtrema_ExtPF")]
+fn vertex_to_faces(model: &Model, vertex: Shape, faces: Shape) -> Option<(f64, Point)> {
+    if vertex.kind() != NodeKind::Vertex {
+        return None;
+    }
+    // (Faces only, under shells and compounds.)
+    fn faces_only(model: &Model, s: Shape) -> bool {
+        match s.kind() {
+            NodeKind::Face => true,
+            NodeKind::Shell | NodeKind::Compound => model.children(s).all(|c| faces_only(model, c)),
+            _ => false,
+        }
+    }
+    if !faces_only(model, faces) {
+        return None;
+    }
+    let p = model.point(vertex);
+    let mut best: Option<(f64, Point)> = None;
+    let mut found = false;
+    for face in model.explore(faces, NodeKind::Face) {
+        found = true;
+        if face.placement != Transform::IDENTITY {
+            return None;
+        }
+        let extrema = surface_extrema(model.surface(face)?, p)?;
+        // Its boundary edges' nearest points (their ends included).
+        let mut nearest: Option<(f64, Point)> = None;
+        for edge in model.explore(face, NodeKind::Edge) {
+            let q = edge_nearest(model, edge, p)?;
+            let d = p.distance(q);
+            if nearest.is_none_or(|n| d < n.0) {
+                nearest = Some((d, q));
+            }
+        }
+        // The extrema nearer than those, inside the face (on its boundary: not told here).
+        let mut classifier: Option<PointClassifier> = None;
+        for q in extrema {
+            let d = p.distance(q);
+            if nearest.is_some_and(|n| d >= n.0) {
+                continue;
+            }
+            let c = match &classifier {
+                Some(c) => c,
+                None => classifier.insert(PointClassifier::new(model, face).ok()?),
+            };
+            match c.locate_on_faces(q) {
+                PointLocation::Inside => nearest = Some((d, q)),
+                PointLocation::Boundary => return None,
+                PointLocation::Outside => {}
+            }
+        }
+        let Some(nearest) = nearest else { return None };
+        if best.is_none_or(|b| nearest.0 < b.0) {
+            best = Some(nearest);
+        }
+    }
+    best.filter(|_| found)
+}
+
+/// The distance from `vertex` to `edges` (an edge, or a wire or compound holding edges only,
+/// on lines and circles) and the point of them nearest: the nearest of each edge's nearest
+/// point to it, its ends included (`BRepExtrema_ExtPC`), or of its vertex where it has no
+/// curve. `None` for other shapes and curves.
+fn vertex_to_edges(model: &Model, vertex: Shape, edges: Shape) -> Option<(f64, Point)> {
+    if vertex.kind() != NodeKind::Vertex {
+        return None;
+    }
+    fn edges_only(model: &Model, s: Shape) -> bool {
+        match s.kind() {
+            NodeKind::Edge => true,
+            NodeKind::Wire | NodeKind::Compound => model.children(s).all(|c| edges_only(model, c)),
+            _ => false,
+        }
+    }
+    if !edges_only(model, edges) {
+        return None;
+    }
+    let p = model.point(vertex);
+    let mut best: Option<(f64, Point)> = None;
+    for edge in model.explore(edges, NodeKind::Edge) {
+        let q = edge_nearest(model, edge, p)?;
+        let d = p.distance(q);
+        if best.is_none_or(|b| d < b.0) {
+            best = Some((d, q));
+        }
+    }
+    best
+}
+
+/// The point of `edge` nearest `p`, its ends included (its vertex where it has no curve):
+/// on a line or a circle, where the distance along it has one minimum its samples lead to
+/// surely; `None` on other curves (a free-form curve's samples may miss its nearest point,
+/// which its mesh finds).
+fn edge_nearest(model: &Model, edge: Shape, p: Point) -> Option<Point> {
+    match model.edge_curve(Shape { orientation: Orientation::Forward, ..edge }) {
+        Some((curve @ (Curve::Line(_) | Curve::Circle(_)), first, last)) => Some(crate::geometry::extrema::nearest_on_curve(p, &curve, first, last).point),
+        Some(_) => None,
+        None => Some(model.point(model.edge_vertices(edge).0)),
+    }
+}
+
+/// The points of `surface` (a plane, cylinder, cone, sphere or torus, whole) where the
+/// distance from `p` is stationary: its foot on a plane; on the others, in the plane through
+/// the axis (or centre) and `p`, the feet on the meridians there (both sides of the axis).
+/// `None` for other surfaces, and where `p` lies on the axis or at the centre (the extrema
+/// there not isolated).
+fn surface_extrema(surface: &Surface, p: Point) -> Option<Vec<Point>> {
+    let tiny = |d: Vector| d.length() <= 1e-12 * (1.0 + (p - Point::ORIGIN).length());
+    // `p` from the axis through `origin` along `z`: the unit direction away from it in the
+    // plane through the axis and `p`.
+    let away = |origin: Point, z: Vector| -> Option<Vector> {
+        let d = p - origin;
+        let radial = d - z * d.dot(z);
+        (!tiny(radial)).then(|| radial * (1.0 / radial.length()))
+    };
+    Some(match surface {
+        Surface::Plane(plane) => {
+            let f = plane.frame();
+            let n = Vector::from(f.x()).cross(Vector::from(f.y()));
+            vec![p - n * (p - f.origin()).dot(n)]
+        }
+        Surface::Cylinder(c) => {
+            let (o, z) = (c.frame().origin(), Vector::from(c.frame().z()));
+            let e = away(o, z)?;
+            let at = o + z * (p - o).dot(z);
+            vec![at + e * c.radius(), at - e * c.radius()]
+        }
+        Surface::Sphere(s) => {
+            let d = p - s.frame().origin();
+            if tiny(d) {
+                return None;
+            }
+            let e = d * (1.0 / d.length());
+            vec![s.frame().origin() + e * s.radius(), s.frame().origin() - e * s.radius()]
+        }
+        Surface::Cone(c) => {
+            // Each meridian line through the plane: from the circle at the frame, along the
+            // generator (both nappes).
+            let (o, z) = (c.frame().origin(), Vector::from(c.frame().z()));
+            let e = away(o, z)?;
+            let (sin, cos) = c.semi_angle_sin_cos();
+            [e, -e]
+                .iter()
+                .map(|&e| {
+                    let (start, along) = (o + e * c.radius(), e * sin + z * cos);
+                    start + along * (p - start).dot(along)
+                })
+                .collect()
+        }
+        Surface::Torus(t) => {
+            let (o, z) = (t.frame().origin(), Vector::from(t.frame().z()));
+            let e = away(o, z)?;
+            let mut found = Vec::with_capacity(4);
+            for centre in [o + e * t.major_radius(), o - e * t.major_radius()] {
+                let d = p - centre;
+                if tiny(d) {
+                    return None;
+                }
+                let d = d * (1.0 / d.length());
+                found.extend([centre + d * t.minor_radius(), centre - d * t.minor_radius()]);
+            }
+            found
+        }
+        _ => return None,
+    })
 }
 
 /// A face of a shape near a point, with its point nearest that point.
