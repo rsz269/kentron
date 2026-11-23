@@ -96,6 +96,8 @@ pub(crate) struct Searcher<'a> {
     breaks: Vec<f64>,
     /// An evaluation failed (non-finite values).
     pub failed: bool,
+    /// Samples taken of the span being sampled.
+    taken: usize,
 }
 
 /// A closure as a [`Function`].
@@ -139,7 +141,7 @@ impl<'a> Searcher<'a> {
         breaks.retain(|&b| b > lo + side_offset(b) && b < hi - side_offset(b));
         breaks.sort_by(f64::total_cmp);
         breaks.dedup_by(|b, a| (*b - *a).abs() <= side_offset(*a));
-        Searcher { curve, p, lo, hi, stretch, breaks, failed: false }
+        Searcher { curve, p, lo, hi, stretch, breaks, failed: false, taken: 0 }
     }
 
     /// Whether `u` is one of the breakpoints inside the range.
@@ -233,16 +235,16 @@ impl<'a> Searcher<'a> {
     /// direction from the point turns too much.
     fn samples(&mut self, lo: f64, hi: f64) -> Option<Vec<Sample>> {
         let n = INITIAL_SAMPLES;
+        self.taken = n + 1;
         let mut first = Vec::with_capacity(n + 1);
         for i in 0..=n {
             let u = if i == n { hi } else { lo + (hi - lo) * (i as f64 / n as f64) };
             first.push(self.sample(u)?);
         }
-        let min_width = (hi - lo) / (n as f64 * f64::from(1u32 << MAX_DEPTH));
         let mut out = Vec::with_capacity(4 * n);
         out.push(first[0]);
         for w in first.windows(2) {
-            self.refine(w[0], w[1], min_width, &mut out)?;
+            self.refine(w[0], w[1], 0, &mut out)?;
             out.push(w[1]);
         }
         Some(out)
@@ -252,7 +254,7 @@ impl<'a> Searcher<'a> {
     /// midpoint always, and the halves refined further while the tangent or the direction from
     /// the point turns by more than `MAX_TURN` across them (from the three points, or from the
     /// rates of turning at them).
-    fn refine(&mut self, a: Sample, b: Sample, min_width: f64, out: &mut Vec<Sample>) -> Option<()> {
+    fn refine(&mut self, a: Sample, b: Sample, depth: u32, out: &mut Vec<Sample>) -> Option<()> {
         let turn = |x: Vector, y: Vector| -> f64 {
             if x == Vector::ZERO || y == Vector::ZERO {
                 0.0
@@ -261,19 +263,21 @@ impl<'a> Searcher<'a> {
             }
         };
         let width = b.u - a.u;
-        if width <= min_width || out.len() >= MAX_SAMPLES {
+        let mid = 0.5 * (a.u + b.u);
+        if depth >= MAX_DEPTH || self.taken >= MAX_SAMPLES || !(mid > a.u && mid < b.u) {
             return Some(());
         }
-        let m = self.sample(0.5 * (a.u + b.u))?;
+        self.taken += 1;
+        let m = self.sample(mid)?;
         let smooth = |p: &Sample, q: &Sample| turn(p.tangent, q.tangent) <= MAX_TURN && turn(p.towards, q.towards) <= MAX_TURN;
         let slow = a.rate.max(m.rate).max(b.rate) * width <= 2.0 * MAX_TURN;
         if smooth(&a, &m) && smooth(&m, &b) && smooth(&a, &b) && slow {
             out.push(m);
             return Some(());
         }
-        self.refine(a, m, min_width, out)?;
+        self.refine(a, m, depth + 1, out)?;
         out.push(m);
-        self.refine(m, b, min_width, out)
+        self.refine(m, b, depth + 1, out)
     }
 
     /// A root of `F` bracketed by `[a, b]`, to full precision.

@@ -343,3 +343,52 @@ fn agrees_with_brute_force() {
     }
     assert!(cases > 80);
 }
+
+/// A range of a few hundred units in the last place, sampled to its bottom: the sampling
+/// stops where midpoints stop being new (it once recursed without end there).
+#[test]
+fn a_range_of_a_few_ulps() {
+    struct Fine(Wave);
+    impl CurveAdaptor for Fine {
+        fn first_parameter(&self) -> f64 {
+            0.0
+        }
+        fn last_parameter(&self) -> f64 {
+            10.0
+        }
+        fn intervals(&self, c: Continuity) -> Vec<f64> {
+            self.0.intervals(c)
+        }
+        fn is_periodic(&self) -> bool {
+            false
+        }
+        fn period(&self) -> f64 {
+            0.0
+        }
+        fn value(&self, u: f64) -> Point {
+            self.0.value(u)
+        }
+        fn d1(&self, u: f64) -> (Point, Vector) {
+            self.0.d1(u)
+        }
+        fn d2(&self, u: f64) -> (Point, Vector, Vector) {
+            self.0.d2(u)
+        }
+        fn d3(&self, u: f64) -> (Point, Vector, Vector, Vector) {
+            self.0.d3(u)
+        }
+        fn dn(&self, u: f64, n: u32) -> Vector {
+            self.0.dn(u, n)
+        }
+        fn resolution(&self, _: f64) -> f64 {
+            1e-300
+        }
+    }
+    let c = Fine(Wave { eps: 0.2, k: 25.0 });
+    let lo = 3.0;
+    let hi = lo + 300.0 * f64::EPSILON * lo;
+    // (The point beside the curve: the direction to it turns fast across the range.)
+    let p = c.value(0.5 * (lo + hi)) + Vector::new(0.0, 0.0, 1e-14);
+    // (No stretch tolerance: a list, whatever it holds.)
+    assert!(ext_pc_other(&c, p, lo, hi, 0.0).is_some());
+}
