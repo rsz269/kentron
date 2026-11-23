@@ -17,10 +17,20 @@
 //!
 //! For a slide, a turn or a screw (each a one-parameter group of motions) `V` is the same field
 //! at every `t`, so `W` and its curves are fixed on the body, and the curves' sweeps are the
-//! products of fixed curves and the motion: a slide sweeps a curve into its surface of linear
-//! extrusion, a turn into its surface of revolution (both exact), a screw into the B-spline
-//! surface whose columns follow its poles' helices (as [`super::screw_extrude`] sweeps an edge,
-//! within about 1e-10 of the body's size).
+//! products of fixed curves and the motion: a slide sweeps a curve into the B-spline surface
+//! of its extrusion, a turn into its surface of revolution (both exact), a screw into the
+//! B-spline surface whose columns follow its poles' helices (as [`super::screw_extrude`] sweeps
+//! an edge, within about 1e-10 of the body's size), in stages of at most a quarter turn. Edges
+//! are swept as the exact B-splines they convert to (a circle's arcs rational), their parameters
+//! mapped; characteristic curves that are lines or arcs (a cylinder's or cone's lines, a
+//! torus's circles) are cut exactly, others fitted within 1e-9 of the body's size.
+//!
+//! A general motion ([`RigidMotion::Carried`], given by its places) is taken where, over
+//! stretches of it, `W` stays where it is on the body (each face's `V·n` keeps its sign, or
+//! vanishes along curves that stay put, only scaled): a screw whose rise is any function of
+//! its turn, a body slid along a curve without turning. The stretches are swept as above, the
+//! curves carried by the motion, and joined in one product, faces passing into or out of `W`
+//! at a junction closing it there ([`carried`]).
 //!
 //! # Winding
 //!
@@ -32,7 +42,10 @@
 //! into itself it is the swept solid. Where it does (a fold, where the motion turns past the
 //! line it grazes along; a sheet a concave edge sweeps into the body; a turn coming back over
 //! where it began) its faces are split where they cross ([`crate::boolean::enclosed_solids`])
-//! and the pieces of space it winds round at least once are the swept solid, joined.
+//! and the pieces of space it winds round at least once are the swept solid, joined. Where a
+//! characteristic curve folds it is split at the fold and this is done; a fold whose sheets the
+//! split does not part is refused. (A tool that is a union, as a ball on a stem, can instead be
+//! swept a piece at a time: the sweep of a union is the union of the sweeps.)
 //!
 //! Nothing is tuned: the characteristic curves are followed within a tolerance taken from the
 //! body's size, and refusals are stated geometric conditions.
@@ -170,10 +183,13 @@ impl Steady {
 /// The solid `tool` passes through as `motion` carries it, `t` from 0 to 1: the union of
 /// `motion.at(t)·tool`.
 ///
-/// Taken: one solid of one shell, under a slide, a turn or a screw. A turn about an axis
-/// meeting the tool is refused (a point on the axis stands still there, and the curves where
-/// the motion grazes the tool meet at it), as is a turn of a whole turn or more (its ends would
-/// be one).
+/// Taken: one solid of one shell, under a slide, a turn, a screw or a carried motion (see the
+/// module's notes). A turn about an axis meeting the tool is refused (a point on the axis
+/// stands still there, and the curves where the motion grazes the tool meet at it), as is a
+/// turn of a whole turn or more (its ends would be one); so are carried motions under which
+/// the curves where they graze the tool move over it, or which turn while running along a face
+/// beside faces they carry out, and sweeps running into themselves where their faces are not
+/// split apart (see the module's notes).
 pub fn solid(model: &mut Model, tool: Shape, motion: &RigidMotion) -> Result<Shape> {
     let solids = model.unique_subshapes(tool, NodeKind::Solid);
     if solids.len() != 1 || model.unique_subshapes(solids[0], NodeKind::Shell).len() != 1 {
