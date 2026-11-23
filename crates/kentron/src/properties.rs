@@ -2,7 +2,6 @@
 //! properties of a shape's boundary at points (its outward normal and principal
 //! curvatures).
 
-mod gauss;
 mod local;
 
 pub use local::{curvatures, normals, PrincipalCurvatures, ON_BOUNDARY};
@@ -143,41 +142,9 @@ pub fn area_with(model: &Model, shape: Shape, options: Options) -> MassPropertie
     properties
 }
 
-/// The area of the faces of `shape`, its centre and its inertia, each face integrated by
-/// Gauss rules to the relative error `eps` (below 1): its intervals along the boundary
-/// bisected until their estimated errors come within it for `eps` in (0, 0.001), the
-/// error estimated for an `eps` below 0.001 (see `gauss::face_area`). Returns the largest
-/// error estimated over the faces, each relative to its own area. An `eps` of 1 or more
-/// integrates as [`area`] does, estimating none (0).
-#[doc(alias = "BRepGProp::SurfaceProperties")]
+/// Clean-room rewrite pending: see cleanroom spec `gauss_area_within.md`.
 pub fn area_within(model: &Model, shape: Shape, eps: f64) -> (MassProperties, f64) {
-    if eps >= 1.0 {
-        return (area(model, shape), 0.0);
-    }
-    // About the mean of the vertices (roughBaryCenter), as is each face.
-    let vertices: Vec<Point> = model.explore(shape, NodeKind::Vertex).map(|v| model.point(v)).collect();
-    let location = if vertices.is_empty() {
-        Point::ORIGIN
-    } else {
-        Point::ORIGIN + vertices.iter().fold(Vector::new(0.0, 0.0, 0.0), |sum, &p| sum + (p - Point::ORIGIN)) * (1.0 / vertices.len() as f64)
-    };
-    let mut total = Moments { origin: Some(location), ..Moments::default() };
-    let mut error_max = 0.0f64;
-    for face in model.explore(shape, NodeKind::Face) {
-        if model.surface(face).is_none() {
-            continue;
-        }
-        let (i, error) = gauss::face_area(model, face, location, eps);
-        error_max = error_max.max(error);
-        // (`Ixx = ∫ y² + z²` and so on: `∫ x² = (Iyy + Izz - Ixx) / 2`.)
-        let second = [
-            [(i.iyy + i.izz - i.ixx) / 2.0, i.ixy, i.ixz],
-            [i.ixy, (i.ixx + i.izz - i.iyy) / 2.0, i.iyz],
-            [i.ixz, i.iyz, (i.ixx + i.iyy - i.izz) / 2.0],
-        ];
-        total.merge(&Moments { origin: Some(location), measure: i.mass, first: Vector::new(i.ix, i.iy, i.iz), second }, 1.0);
-    }
-    (total.properties(), error_max)
+    todo!("clean-room rewrite")
 }
 
 /// Whether two planes are the same, either way round.
