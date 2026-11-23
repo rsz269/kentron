@@ -1,5 +1,5 @@
 //! Pipes along general spines: the profile moved rigidly along the spine, carried by a
-//! trihedron law (OCCT's corrected Frenet one by default, see `corrected`), a guide, a fixed
+//! trihedron law (a rotation-minimizing one by default, see `corrected`), a guide, a fixed
 //! direction, or turning with the tangent and no more (a rotation-minimizing frame).
 
 use std::collections::HashMap;
@@ -64,8 +64,7 @@ pub(super) enum Framing {
     Guide(super::guide::GuideFraming),
     /// Not turning at all (`GeomFill_Fixed`): tangent and normal.
     Fixed(Vector, Vector),
-    /// OCCT's corrected Frenet frame (`GeomFill_CorrectedFrenet`, its pipes' default),
-    /// each piece's.
+    /// The rotation-minimizing frame (the pipes' default), each piece's.
     Corrected(Vec<super::corrected::CorrectedFrenet>),
     /// The Frenet frame turned square to a fixed binormal (`GeomFill_ConstantBiNormal`).
     Binormal(Vec<super::trihedra::ConstantBinormalLaw>),

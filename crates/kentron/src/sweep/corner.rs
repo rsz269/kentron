@@ -719,7 +719,7 @@ fn carried(piece: &SpinePiece, from: f64, to: f64) -> Result<Transform> {
         Curve::Circle(c) => Ok(Transform::rotation(c.frame().z_axis(), at(to) - at(from))),
         _ => {
             let single = [SpinePiece { curve: piece.curve.clone(), first: piece.first, last: piece.last, gap: 0.0 }];
-            // (As the piece's pipe carries it: in OCCT's corrected Frenet frame.)
+            // (As the piece's pipe carries it: in the rotation-minimizing frame.)
             let framing = super::pipe::Framing::Corrected(vec![super::corrected::CorrectedFrenet::new(&piece.curve, piece.first, piece.last)?]);
             let (motions, _) = super::pipe::motions(&single, 16, (0, from), &framing)?;
             let transforms = &motions[0].transforms;

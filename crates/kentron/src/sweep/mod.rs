@@ -190,9 +190,9 @@ pub fn extrude(model: &mut Model, profile: Shape, v: Vector) -> Result<Sweep> {
 }
 
 /// Sweeps `profile` along the `spine` (an edge, or a wire of edges meeting smoothly),
-/// keeping its relation to the spine's tangent (OCCT's corrected Frenet trihedron: the
-/// profile turns with the tangent and, as near as OCCT's law for it comes, no more; its law
-/// ported, so that off a helix the profile turns as OCCT's does): along a straight spine the profile is
+/// keeping its relation to the spine's tangent (a rotation-minimizing frame: the profile
+/// turns with the tangent and no more; off a planar spine this differs from OCCT's corrected
+/// Frenet frame, by design): along a straight spine the profile is
 /// translated, along a circular arc it turns about the arc's axis, along other curves its
 /// faces sweep B-spline surfaces.
 #[doc(alias = "BRepOffsetAPI_MakePipe")]
@@ -265,27 +265,25 @@ fn framing(model: &Model, spine: Shape, pieces: &[pipe::SpinePiece], options: &P
     })
 }
 
-/// OCCT's corrected Frenet frames along `curve` from `first` to `last`, at fractions
-/// `fractions` of the way: tangent and normal each (`GeomFill_CorrectedFrenet::D0`). For
-/// checking the law against OCCT's.
+/// The default pipe frames (rotation-minimizing) along `curve` from `first` to `last`, at
+/// fractions `fractions` of the way: tangent and normal each. For checking the law.
 #[doc(hidden)]
 pub fn corrected_frenet_frames(curve: &Curve, first: f64, last: f64, fractions: &[f64]) -> Result<Vec<(Vector, Vector)>> {
     let law = corrected::CorrectedFrenet::new(curve, first, last)?;
     Ok(fractions.iter().map(|&f| law.at_fraction(f)).collect())
 }
 
-/// OCCT's Frenet frames (`GeomFill_Frenet::D0`, a pipe's Frenet mode) along `curve` from
-/// `first` to `last`, at fractions `fractions` of the way. For checking against OCCT's.
+/// The Frenet frames (a pipe's Frenet mode) along `curve` from `first` to `last`, at
+/// fractions `fractions` of the way. For checking the law.
 #[doc(hidden)]
 pub fn frenet_frames(curve: &Curve, first: f64, last: f64, fractions: &[f64]) -> Vec<(Vector, Vector)> {
     let law = corrected::FrenetLaw::new(curve, first, last);
     fractions.iter().map(|&f| law.at_fraction(f)).collect()
 }
 
-/// OCCT's guided trihedra (`GeomFill_GuideTrihedronAC` by curvilinear abscissa, else
-/// `GeomFill_GuideTrihedronPlan`, under `GeomFill_LocationGuide` as a pipe shell sets them)
-/// along each edge of `spine` towards `guide`, at fractions `fractions` of each edge's way:
-/// tangent and normal. For checking against OCCT's.
+/// The guided frames (by curvilinear abscissa, else by planes square to the spine) along
+/// each edge of `spine` towards `guide`, at fractions `fractions` of each edge's way:
+/// tangent and normal. For checking the laws.
 #[doc(hidden)]
 pub fn guided_frames(model: &Model, spine: Shape, guide: Shape, curvilinear: bool, fractions: &[f64]) -> Result<Vec<Vec<(Vector, Vector)>>> {
     let pieces = spine_pieces(model, spine)?;
@@ -452,7 +450,7 @@ pub fn pipe_through(model: &mut Model, sections: &[(Shape, PipeOptions)], spine:
 #[doc(alias = "GeomFill_Pipe")]
 pub fn pipe_evolving(model: &mut Model, first: Shape, last: Shape, spine: Shape) -> Result<Shape> {
     let pieces = spine_pieces(model, spine)?;
-    // (GeomFill_Pipe's trihedron: the corrected Frenet one.)
+    // (The default trihedron: the rotation-minimizing one.)
     let framing = framing(model, spine, &pieces, &PipeOptions::default())?;
     let (motion, _) = pipe::motions(&pieces, 64, (0, 0.0), &framing)?;
     let to_end = *motion.last().and_then(|m| m.transforms.last()).ok_or_else(|| Error::InvalidInput("a pipe needs a spine".into()))?;
@@ -1666,8 +1664,8 @@ mod tests {
     }
 
     /// A disc of `radius` about (`at`, 0, `at`) facing -y, swept along OCCT's helix (its
-    /// `makeHelix`, a B-spline) read from `text`: the solid and the helix's edge.
-    fn disc_along_occt_helix(model: &mut Model, text: &str, at: f64, radius: f64) -> (Shape, Shape) {
+    /// `makeHelix`, a B-spline) read from `text`: the solid, the helix's edge and the disc.
+    fn disc_along_occt_helix(model: &mut Model, text: &str, at: f64, radius: f64) -> (Shape, Shape, Shape) {
         use crate::geometry::curve::Circle;
         use crate::math::Frame;
         let helix = crate::io::brep::read(model, &mut text.as_bytes()).unwrap();
@@ -1677,44 +1675,72 @@ mod tests {
         let disc = make::planar_face(model, wire).unwrap();
         let swept = pipe(model, disc, helix).unwrap();
         let edge = model.unique_subshapes(helix, NodeKind::Edge)[0];
-        (swept.shape, edge)
+        (swept.shape, edge, disc)
     }
 
-    /// Along a spine neither planar nor analytic a pipe carries its profile in OCCT's
-    /// corrected Frenet frame (its pipes' default), not the rotation-minimizing one: off a
-    /// helix the two part by some 2% of the volume. OCCT's own helices, and its frames along
-    /// them (`GeomFill_CorrectedFrenet::D0`), volumes (`BRepGProp`, to 1e-10) and boxes
-    /// (`BRepBndLib::AddOptimal`) of the same sweeps (CadQuery's `circle().sweep(helix)`).
+    /// Along a spine neither planar nor analytic a pipe carries its profile in the
+    /// rotation-minimizing frame (kentron's default by design, 2026-11-23; OCCT's corrected
+    /// Frenet frame turns it otherwise off a helix, by some 2% of the volume here). Along
+    /// OCCT's helices (CadQuery's `makeHelix`, read from BREP): the law's frames against a
+    /// Runge–Kutta transport, and the swept solid against the disc carried in the
+    /// transported frames from where it stands on the spine: its volume as the flux of the
+    /// disc centroid's velocity through the disc (`A ∫ ċ·n`), its box from the carried
+    /// circle sampled densely.
     #[test]
-    fn a_profile_beside_a_helix_is_carried_in_occts_corrected_frenet_frame() {
-        let mut model = Model::new();
-        let (solid, edge) = disc_along_occt_helix(&mut model, include_str!("tests/occt_helix_pitch_3.brep"), 2.5, 0.4);
-        let (curve, first, last) = model.edge_curve(edge).unwrap();
-        let occt = [
-            (0.25, Vector::new(0.31499948868665395, 0.37944901927493924, -0.8699389426266839)),
-            (0.5, Vector::new(-0.33363955004636886, 0.41634923003874313, -0.8457765480852508)),
-            (0.75, Vector::new(0.9988536072977064, -0.004550482107215127, 0.047652537193206314)),
-            (1.0, Vector::new(-0.29563813987918497, -0.34168065793915303, 0.8921056093529748)),
-        ];
-        let fractions: Vec<f64> = occt.iter().map(|o| o.0).collect();
-        let frames = corrected_frenet_frames(&curve, first, last, &fractions).expect("a law");
-        for ((f, normal), (_, n)) in occt.iter().zip(frames) {
-            assert!(n.dot(*normal) > (1e-4f64).cos(), "at {f}: {n:?} vs OCCT's {normal:?}");
+    fn a_profile_beside_a_helix_is_carried_in_the_rotation_minimizing_frame() {
+        for (text, at, radius) in [(include_str!("tests/occt_helix_pitch_3.brep"), 2.5, 0.4), (include_str!("tests/occt_helix_pitch_minus_3.brep"), 3.5, 0.8)] {
+            let mut model = Model::new();
+            let (solid, edge, disc) = disc_along_occt_helix(&mut model, text, at, radius);
+            let (curve, first, last) = model.edge_curve(edge).unwrap();
+            let pieces = spine_pieces(&model, edge).unwrap();
+            let (_, placed) = pipe::section_placement(&model, disc, &pieces).unwrap();
+            let samples = 20_000;
+            let mut fractions: Vec<f64> = (0..=samples).map(|i| i as f64 / samples as f64).collect();
+            fractions.push(placed);
+            let reference = corrected::tests::rmf_reference(&curve, first, last, &fractions);
+            let law = corrected::CorrectedFrenet::new(&curve, first, last).unwrap();
+            for (i, &f) in fractions.iter().enumerate().step_by(97) {
+                let (t, n) = law.at_fraction(f);
+                let (et, en) = reference[i];
+                assert!(t.cross(et).length() < 1e-9 && n.cross(en).length() < 1e-9 && n.dot(en) > 0.0, "at {f}: {n:?} vs {en:?}");
+            }
+            // (The rigid motion from the frame where the disc stands to the frame at f.)
+            let at_fraction = |f: f64| first + (last - first) * f;
+            let rotation = |(t, n): (Vector, Vector)| [t, n, t.cross(n)];
+            let start = rotation(reference[samples + 1]);
+            let origin = curve.point(at_fraction(placed));
+            // (A vector at the disc turned with the frames, and a point carried with them.)
+            let turn = |k: usize, d: Vector| -> Vector {
+                let r = rotation(reference[k]);
+                r[0] * start[0].dot(d) + r[1] * start[1].dot(d) + r[2] * start[2].dot(d)
+            };
+            let carry = |k: usize, q: Point| curve.point(at_fraction(fractions[k])) + turn(k, q - origin);
+            let (centre, normal) = (Point::new(at, 0.0, at), Vector::new(0.0, -1.0, 0.0));
+            let centroid: Vec<Point> = (0..=samples).map(|k| carry(k, centre)).collect();
+            let normals: Vec<Vector> = (0..=samples).map(|k| turn(k, normal)).collect();
+            let flux: f64 = (0..samples).map(|k| (centroid[k + 1] - centroid[k]).dot((normals[k] + normals[k + 1]) * 0.5)).sum();
+            let volume = PI * radius * radius * flux.abs();
+            let (mut lo, mut hi) = (Vector::new(f64::INFINITY, f64::INFINITY, f64::INFINITY), Vector::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY));
+            let ring: Vec<Point> = (0..1440).map(|j| { let a = TAU * j as f64 / 1440.0; Point::new(at + radius * a.cos(), 0.0, at + radius * a.sin()) }).collect();
+            for k in 0..=samples {
+                for &q in &ring {
+                    let x = carry(k, q);
+                    lo = Vector::new(lo.x.min(x.x), lo.y.min(x.y), lo.z.min(x.z));
+                    hi = Vector::new(hi.x.max(x.x), hi.y.max(x.y), hi.z.max(x.z));
+                }
+            }
+            assert_valid_solid_near(&model, solid, volume, [lo.x, lo.y, lo.z, hi.x, hi.y, hi.z]);
         }
-        assert_valid_solid_near(&model, solid, 107.76652081612313, [-7.94207, -7.94002, 0.67953, 7.87341, 7.87957, 21.96415]);
-        let mut model = Model::new();
-        let (solid, _) = disc_along_occt_helix(&mut model, include_str!("tests/occt_helix_pitch_minus_3.brep"), 3.5, 0.8);
-        assert_valid_solid_near(&model, solid, 400.37211222834685, [-7.37863, -7.37045, 0.49192, 7.32225, 7.23529, 21.03103]);
     }
 
-    /// OCCT's trihedra along spines through each branch of their laws, as OCCT 8.1's
-    /// `GeomFill_CorrectedFrenet` / `GeomFill_Frenet::D0` give them (after `SetInterval` to
+    /// The Frenet frames (a pipe's Frenet mode) along a quintic and an offset curve run
+    /// backwards, as OCCT 8.1's `GeomFill_Frenet::D0` gives them (after `SetInterval` to
     /// the law's interval holding the parameter; a small C++ driver linked against OCCT
-    /// 8.1): a planar S (its inflection a singular point, the law constant there), the same S
-    /// lifted along z (curvature vanishing off any plane), a twisted Bezier curve, a cubic
-    /// with a C1 knot run both ways (a C2 knot met a rounding step short of it), a quintic in
-    /// Frenet mode run backwards, a periodic closed curve run backwards (read from BREP), and
-    /// an offset of the lifted S both ways (OCCT's offset derivatives).
+    /// 8.1); and the default (rotation-minimizing) frames along a planar S (its inflection a
+    /// singular point of the Frenet frame) and the same S lifted along a slope (still
+    /// planar), where they are OCCT's corrected Frenet frames too, and along a twisted Bézier
+    /// curve, a cubic with a C1 knot run both ways, a periodic closed curve run backwards
+    /// (read from BREP) and an offset of the lifted S, against the Runge–Kutta transport.
     #[test]
     fn trihedra_match_occts_through_every_branch() {
         use crate::geometry::curve::{BSplineCurve, BezierCurve, OffsetCurve};
@@ -1731,22 +1757,31 @@ mod tests {
         let (trefoil, t0, t1) = model.edge_curve(model.unique_subshapes(trefoil, NodeKind::Edge)[0]).unwrap();
         let v = Vector::new;
         let fractions = [0.2, 0.5, 0.85, 1.0];
-        // (Curve, first, last, Frenet mode, OCCT's normals at the fractions.)
-        let cases: [(&Curve, f64, f64, bool, [Vector; 4]); 9] = [
-            (&planar_s, 0.0, 3.0, false, [v(0.14393984571411012, -0.98958643928451151, 0.0), v(-0.93632917756904455, -0.3511234415883917, 0.0), v(0.59530327489411039, -0.80350109576798234, 0.0), v(0.89442719099991563, -0.44721359549995782, 0.0)]),
-            (&twisted_s, 3.0, 0.0, false, [v(-0.11539120007750971, 0.99164312566610391, -0.057695600038754923), v(0.82486281956234708, 0.38665444666985022, 0.41243140978117349), v(-0.49407365772832362, 0.83358504420586577, -0.2470368288641617), v(-0.7807200583588263, 0.48795003647426638, -0.39036002917941304)]),
-            (&bezier, 0.0, 1.0, false, [v(-0.059013810254719981, -0.86246853845778026, 0.50265832368490704), v(-0.58866019781665169, -0.71283091495526896, -0.38124960090535787), v(-0.47932398508855184, -0.3865008802908112, -0.78795024389440838), v(-0.41653147259890827, -0.36401601842903109, -0.83306294519781654)]),
-            (&c1_knot, 0.0, 3.0, false, [v(-0.27155846590856608, -0.9202982648347755, 0.28161516886611015), v(-0.69952359251072527, -0.68695417894114075, -0.1968773718744542), v(0.44116512268693941, -0.068400681830021348, -0.89481544535720103), v(0.76931925067137463, 0.32761509532915578, -0.54846717300026537)]),
-            (&c1_knot, 3.0, 0.0, false, [v(0.23337138671398772, -0.052408177792004518, 0.97097434505949343), v(0.63390421214024228, 0.32286318781563855, 0.70279784560311698), v(-0.39645987274054695, 0.91778943869055318, -0.021957129471497416), v(-0.87143975776521099, 0.43571987888260549, -0.22525748762835274)]),
-            (&quintic, 3.0, 0.0, true, [v(0.012886478081126584, -0.2163055536412698, -0.97624067019695915), v(-0.046436312174525041, -0.0010799142366168539, 0.99892066887059239), v(-0.042513435078050374, -0.96932146821463794, -0.24209192282288788), v(0.57735026918962562, -0.57735026918962584, 0.57735026918962573)]),
-            (&trefoil, t1, t0, false, [v(0.51009350609798065, 0.16723746272409046, 0.84370388531657092), v(-0.64035160270280889, -0.29418369043494774, 0.70951094508683854), v(0.97167861805061317, -0.08636954607535785, 0.21995673377731884), v(-0.043606258693758559, -0.95665733474674375, 0.28793269713248842)]),
-            (&offset, 0.0, 3.0, false, [v(0.23561582005798709, -0.9706575577864287, -0.048053000431690474), v(-0.65578399645203322, -0.36937200479437959, -0.65841603266595827), v(0.63848561091132616, -0.64036994370632572, -0.42692207703133395), v(0.87477172651876289, -0.35689598242895504, -0.32771891036291123)]),
-            (&offset, 3.0, 0.0, true, [v(-0.15908506708664333, 0.98574135213926573, 0.05482634506047751), v(0.060715256148868607, -0.16190734973030374, -0.98493637752602381), v(0.1257188228919669, -0.77174949529779679, 0.62337588506314101), v(0.75812656356950359, -0.48890901013889027, 0.43152299291614332)]),
+        // (Frenet mode, against OCCT's normals at the fractions.)
+        let frenet_cases: [(&Curve, f64, f64, [Vector; 4]); 2] = [
+            (&quintic, 3.0, 0.0, [v(0.012886478081126584, -0.2163055536412698, -0.97624067019695915), v(-0.046436312174525041, -0.0010799142366168539, 0.99892066887059239), v(-0.042513435078050374, -0.96932146821463794, -0.24209192282288788), v(0.57735026918962562, -0.57735026918962584, 0.57735026918962573)]),
+            (&offset, 3.0, 0.0, [v(-0.15908506708664333, 0.98574135213926573, 0.05482634506047751), v(0.060715256148868607, -0.16190734973030374, -0.98493637752602381), v(0.1257188228919669, -0.77174949529779679, 0.62337588506314101), v(0.75812656356950359, -0.48890901013889027, 0.43152299291614332)]),
         ];
-        for (k, (curve, first, last, frenet, occt)) in cases.iter().enumerate() {
-            let frames = if *frenet { frenet_frames(curve, *first, *last, &fractions) } else { corrected_frenet_frames(curve, *first, *last, &fractions).unwrap() };
-            for ((f, normal), (_, n)) in fractions.iter().zip(occt).zip(frames) {
-                assert!(n.dot(*normal) > (1e-7f64).cos(), "case {k} at {f}: {n:?} vs OCCT's {normal:?}");
+        for (k, (curve, first, last, occt)) in frenet_cases.iter().enumerate() {
+            for ((f, normal), (_, n)) in fractions.iter().zip(occt).zip(frenet_frames(curve, *first, *last, &fractions)) {
+                assert!(n.dot(*normal) > (1e-7f64).cos(), "Frenet case {k} at {f}: {n:?} vs OCCT's {normal:?}");
+            }
+        }
+        // (Planar: OCCT's corrected Frenet normals, which are rotation-minimizing there.)
+        let planar_cases: [(&Curve, f64, f64, [Vector; 4]); 2] = [
+            (&planar_s, 0.0, 3.0, [v(0.14393984571411012, -0.98958643928451151, 0.0), v(-0.93632917756904455, -0.3511234415883917, 0.0), v(0.59530327489411039, -0.80350109576798234, 0.0), v(0.89442719099991563, -0.44721359549995782, 0.0)]),
+            (&twisted_s, 3.0, 0.0, [v(-0.11539120007750971, 0.99164312566610391, -0.057695600038754923), v(0.82486281956234708, 0.38665444666985022, 0.41243140978117349), v(-0.49407365772832362, 0.83358504420586577, -0.2470368288641617), v(-0.7807200583588263, 0.48795003647426638, -0.39036002917941304)]),
+        ];
+        for (k, (curve, first, last, occt)) in planar_cases.iter().enumerate() {
+            for ((f, normal), (_, n)) in fractions.iter().zip(occt).zip(corrected_frenet_frames(curve, *first, *last, &fractions).unwrap()) {
+                assert!(n.dot(*normal) > (1e-7f64).cos(), "planar case {k} at {f}: {n:?} vs OCCT's {normal:?}");
+            }
+        }
+        let rmf_cases: [(&Curve, f64, f64); 6] = [(&planar_s, 0.0, 3.0), (&bezier, 0.0, 1.0), (&c1_knot, 0.0, 3.0), (&c1_knot, 3.0, 0.0), (&trefoil, t1, t0), (&offset, 0.0, 3.0)];
+        for (k, (curve, first, last)) in rmf_cases.iter().enumerate() {
+            let reference = corrected::tests::rmf_reference(curve, *first, *last, &fractions);
+            for ((f, (_, normal)), (_, n)) in fractions.iter().zip(reference).zip(corrected_frenet_frames(curve, *first, *last, &fractions).unwrap()) {
+                assert!(n.cross(normal).length() < 1e-9 && n.dot(normal) > 0.0, "case {k} at {f}: {n:?} vs {normal:?}");
             }
         }
     }
