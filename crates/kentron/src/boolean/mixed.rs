@@ -29,6 +29,10 @@ use super::graph::{Graph, Location};
 use super::split::{self, ArcOnFace, Piece, Region};
 use super::Operation;
 
+/// The regions of a face met by nothing, split keeping slits (see [`with_slits`]), kept in
+/// the model.
+struct SlitRegions(Vec<Region>);
+
 /// Where a part of one operand lies with respect to the other.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Place {
@@ -172,13 +176,30 @@ pub(super) fn run(model: &mut Model, mut graph: Graph, operation: Operation) -> 
         arcs_of.push(if free { graph.arcs_on_face(fi, &mut pieces, &of_edge, None) } else { Vec::new() });
     }
     let mut regions: Vec<(usize, Region, Place)> = Vec::new();
+    let keep_slits = KEEP_SLITS.with(|k| k.get());
     for (fi, arcs) in arcs_of.iter().enumerate() {
         let face = &graph.faces[fi];
         if face.solid {
             continue;
         }
         let scale = face.bbox.0.distance(face.bbox.1);
-        for region in split::split_face(arcs, &pieces, &face.polylines, scale, KEEP_SLITS.with(|k| k.get())) {
+        // A face met by nothing (its arcs its own edges, each whole, in order) is one region,
+        // the same each time: kept in the model with the face, as for solids (a sheet fused
+        // with others one by one is met by most of them nowhere).
+        let untouched = face.regions_key.filter(|_| {
+            arcs.len() == face.boundary.len()
+                && arcs.iter().zip(&face.boundary).all(|(a, b)| {
+                    let (p, e) = (&pieces[a.piece], &graph.edges[b.edge]);
+                    p.edge == b.edge && p.first == e.first && p.last == e.last
+                })
+        });
+        let split = || split::split_face(arcs, &pieces, &face.polylines, scale, keep_slits);
+        let found = match untouched {
+            Some(id) if keep_slits => (*model.derived(id.into(), model.face_fingerprint(id), || SlitRegions(split()))).0.clone(),
+            Some(id) => (*model.derived(id.into(), model.face_fingerprint(id), || super::FaceRegions(split()))).0.clone(),
+            None => split(),
+        };
+        for region in found {
             let p = geom::surface_point(&face.surface, region.interior);
             let place = graph.place(p, 1 - face.operand);
             regions.push((fi, region, place));
