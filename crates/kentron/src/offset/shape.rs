@@ -52,12 +52,13 @@ pub fn shape_with_faces(model: &mut Model, shape: Shape, distance: f64, faces: &
     if let Some(stepped) = stepped(model, shape, distance, &own, join)? {
         return Ok(stepped);
     }
-    let rounded = moved_and_rounded(model, shape, distance, &own, join);
+    let rounded = moved_then_rounded(model, shape, distance, &own, join);
     // (Joined by intersection, as by arcs where no edge is sharp: no faces' offsets part; and
     // inwards, a prism by its profile's offset, either way.)
     if own.is_empty() && (join == Join::Arc || distance < 0.0 || smooth_everywhere(model, shape)) {
         return or_fallbacks(model, rounded, shape, distance, Made::Offset, join);
     }
+    let rounded = rounded.and_then(|r| r.finished(model));
     // Outwards by intersection, a solid of planar faces with concave edges: also as the
     // space its pieces cover (super::cells), taken where moving its faces one by one fails
     // or encloses another volume (a notch closed or a face vanished, its neighbours' offsets
@@ -292,11 +293,44 @@ fn stepped(model: &mut Model, shape: Shape, distance: f64, own: &[(NodeId, f64)]
 /// [`shape_with_faces`] by its faces moved one by one, and the edges where they part
 /// rounded; with whether that is suspect (strained, a face turned inside out).
 pub(super) fn moved_and_rounded(model: &mut Model, shape: Shape, distance: f64, own: &[(NodeId, f64)], join: Join) -> Result<(Shape, bool)> {
+    moved_then_rounded(model, shape, distance, own, join)?.finished(model)
+}
+
+/// An offset made by moving the faces one by one, the edges where they part then rounded
+/// and the result regularized: done where it is sound so far; where it is strained (some
+/// faces' offsets meeting in no one point), the rounding left to be done only if wanted
+/// (taken last, after the other ways of finding the offset: see [`or_fallbacks`]).
+enum Rounding {
+    /// The offset, and whether it is strained.
+    Done(Shape, bool),
+    /// The faces moved (in `shape`, a solid or shell), the edges where they part (of
+    /// `moved`) still to round by `radius`, the result to be regularized: strained.
+    Strained { shape: Shape, moved: Moved, radius: f64 },
+}
+
+impl Rounding {
+    /// The offset made.
+    fn finished(self, model: &mut Model) -> Result<(Shape, bool)> {
+        match self {
+            Rounding::Done(shape, strained) => Ok((shape, strained)),
+            Rounding::Strained { shape, moved, radius } => {
+                let rounded = round_parting(model, shape, &moved, radius)?;
+                Ok((super::regularize::regularized(model, rounded)?, true))
+            }
+        }
+    }
+}
+
+/// [`moved_and_rounded`] with its rounding left undone where the offset is strained.
+fn moved_then_rounded(model: &mut Model, shape: Shape, distance: f64, own: &[(NodeId, f64)], join: Join) -> Result<Rounding> {
     let moved = offset_faces(model, shape, distance, own, &[], join)?;
     let result = rebuild(model, shape, &moved.faces, &moved.new_faces)?;
     let radius = moved.parting.first().map_or(0.0, |&(a, _)| own.iter().find(|(n, _)| *n == moved.faces[a].shape.node).map_or(distance, |(_, d)| *d).abs());
+    if moved.strained {
+        return Ok(Rounding::Strained { shape: result, moved, radius });
+    }
     let result = round_parting(model, result, &moved, radius)?;
-    Ok((super::regularize::regularized(model, result)?, moved.strained))
+    Ok(Rounding::Done(super::regularize::regularized(model, result)?, false))
 }
 
 /// `shape` (a solid) hollowed out to walls of `thickness`, open where `removed` (faces of
@@ -411,7 +445,7 @@ fn smooth_everywhere(model: &Model, shape: Shape) -> bool {
 
 /// [`thick_solid`] of a solid in place by its faces moved one by one (but the removed ones,
 /// `kept` where they are), and the edges where they part rounded.
-fn hollowed(model: &mut Model, shape: Shape, kept: &[NodeId], thickness: f64, join: Join) -> Result<(Shape, bool)> {
+fn hollowed(model: &mut Model, shape: Shape, kept: &[NodeId], thickness: f64, join: Join) -> Result<Rounding> {
     let moved = offset_faces(model, shape, thickness, &[], kept, join)?;
     // (A removed face whose outline, where its neighbours' offsets meet it, crosses itself
     // (where its own does not) or winds the other way round from its own: those offsets close on one another before they
@@ -460,19 +494,23 @@ fn hollowed(model: &mut Model, shape: Shape, kept: &[NodeId], thickness: f64, jo
     if cavity != shell {
         model.add(solid, cavity)?;
     }
+    if strained {
+        return Ok(Rounding::Strained { shape: solid, moved, radius: thickness.abs() });
+    }
     let solid = round_parting(model, solid, &moved, thickness.abs())?;
-    Ok((super::regularize::regularized(model, solid)?, strained))
+    Ok(Rounding::Done(super::regularize::regularized(model, solid)?, false))
 }
 
 /// `rounded` (an offset of `shape`, its faces moved and the edges where they part rounded)
 /// where that is sound; otherwise, inwards, a prism's by its profile's offset
 /// (super::prism), or the offset found as the points within the distance (joined by arcs,
 /// or by intersection where no edge is sharp), where either can be.
-fn or_fallbacks(model: &mut Model, rounded: Result<(Shape, bool)>, shape: Shape, distance: f64, made: Made, join: Join) -> Result<Shape> {
-    // (Unless it is strained: some faces' offsets meeting in no one point, as a face vanishing.)
+fn or_fallbacks(model: &mut Model, rounded: Result<Rounding>, shape: Shape, distance: f64, made: Made, join: Join) -> Result<Shape> {
+    // (Unless it is strained: some faces' offsets meeting in no one point, as a face vanishing.
+    // Then rounded only where it is wanted after all, last.)
     let rounded = match rounded {
-        Ok((r, false)) if crate::validity::check(model, r).errors().next().is_none() => return Ok(r),
-        other => other.map(|(r, _)| r),
+        Ok(Rounding::Done(r, false)) if crate::validity::check(model, r).errors().next().is_none() => return Ok(r),
+        other => other,
     };
     let by_profile = match made {
         Made::Offset => super::prism::offset(model, shape, distance, join),
@@ -484,11 +522,11 @@ fn or_fallbacks(model: &mut Model, rounded: Result<(Shape, bool)>, shape: Shape,
         }
     }
     if join != Join::Arc && !smooth_everywhere(model, shape) {
-        return rounded;
+        return rounded.and_then(|r| r.finished(model)).map(|(r, _)| r);
     }
     match super::within::offset(model, shape, distance, made) {
         Ok(Some(found)) => Ok(found),
-        _ => rounded,
+        _ => rounded.and_then(|r| r.finished(model)).map(|(r, _)| r),
     }
 }
 
