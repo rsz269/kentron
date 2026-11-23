@@ -42,7 +42,7 @@ pub(crate) struct ExtPCPoint {
 const MAX_TURN: f64 = 0.35;
 
 /// Sample intervals of a span at the start.
-const INITIAL_SAMPLES: usize = 8;
+const INITIAL_SAMPLES: usize = 4;
 
 /// Halvings of an initial sample interval at most.
 const MAX_DEPTH: u32 = 16;
@@ -79,9 +79,13 @@ struct Sample {
     tangent: Vector,
     /// The unit direction from the point (zero at the point).
     towards: Vector,
-    /// How fast (radians per unit parameter) the tangent and the direction from the point
-    /// turn.
-    rate: f64,
+    /// How fast (radians per unit parameter) the tangent turns, and the direction from the
+    /// point.
+    tangent_rate: f64,
+    towards_rate: f64,
+    /// The curve point and its distance from the point.
+    point: Point,
+    distance: f64,
 }
 
 /// The search for extrema of the distance from `p` to `curve` over `[lo, hi]`.
@@ -98,6 +102,8 @@ pub(crate) struct Searcher<'a> {
     pub failed: bool,
     /// Samples taken of the span being sampled.
     taken: usize,
+    /// Sample intervals are not refined below this width (extrema closer together may merge).
+    min_width: f64,
 }
 
 /// A closure as a [`Function`].
@@ -141,7 +147,8 @@ impl<'a> Searcher<'a> {
         breaks.retain(|&b| b > lo + side_offset(b) && b < hi - side_offset(b));
         breaks.sort_by(f64::total_cmp);
         breaks.dedup_by(|b, a| (*b - *a).abs() <= side_offset(*a));
-        Searcher { curve, p, lo, hi, stretch, breaks, failed: false, taken: 0 }
+        let min_width = 4.0 * parametric_tolerance(curve, lo, hi);
+        Searcher { curve, p, lo, hi, stretch, breaks, failed: false, taken: 0, min_width }
     }
 
     /// Whether `u` is one of the breakpoints inside the range.
@@ -157,12 +164,13 @@ impl<'a> Searcher<'a> {
         let s = d1.length();
         let wl = w.length();
         let towards = if wl > 0.0 { w / wl } else { Vector::ZERO };
-        let rate = if s > 0.0 { d1.cross(d2).length() / (s * s) } else { 0.0 } + if wl > 0.0 { towards.cross(d1).length() / wl } else { 0.0 };
+        let tangent_rate = if s > 0.0 { d1.cross(d2).length() / (s * s) } else { 0.0 };
+        let towards_rate = if wl > 0.0 { towards.cross(d1).length() / wl } else { 0.0 };
         let out = if s > 0.0 {
             let t = d1 / s;
             let f = w.dot(t);
             let df = s + w.dot(d2) / s - f * d1.dot(d2) / (s * s);
-            Sample { u, f, df, tangent: t, towards, rate }
+            Sample { u, f, df, tangent: t, towards, tangent_rate, towards_rate, point: c, distance: wl }
         } else {
             // (The tangent from the first derivative that does not vanish.)
             let mut t = d2;
@@ -171,7 +179,7 @@ impl<'a> Searcher<'a> {
             }
             let tl = t.length();
             let t = if tl > 0.0 { t / tl } else { Vector::ZERO };
-            Sample { u, f: w.dot(t), df: f64::NAN, tangent: t, towards, rate }
+            Sample { u, f: w.dot(t), df: f64::NAN, tangent: t, towards, tangent_rate, towards_rate, point: c, distance: wl }
         };
         let finite = out.f.is_finite() && c.x.is_finite() && c.y.is_finite() && c.z.is_finite();
         if !finite {
@@ -264,13 +272,18 @@ impl<'a> Searcher<'a> {
         };
         let width = b.u - a.u;
         let mid = 0.5 * (a.u + b.u);
-        if depth >= MAX_DEPTH || self.taken >= MAX_SAMPLES || !(mid > a.u && mid < b.u) {
+        if depth >= MAX_DEPTH || self.taken >= MAX_SAMPLES || width <= self.min_width || !(mid > a.u && mid < b.u) {
             return Some(());
         }
         self.taken += 1;
         let m = self.sample(mid)?;
-        let smooth = |p: &Sample, q: &Sample| turn(p.tangent, q.tangent) <= MAX_TURN && turn(p.towards, q.towards) <= MAX_TURN;
-        let slow = a.rate.max(m.rate).max(b.rate) * width <= 2.0 * MAX_TURN;
+        // (Across the point itself the direction from it turns by up to half a turn, and
+        // without bound near it: the root there is a sign change all the same, so the
+        // direction is followed only where the stretch is small beside its distance.)
+        let near = a.point.distance(b.point) >= 0.5 * a.distance.min(m.distance).min(b.distance);
+        let smooth = |p: &Sample, q: &Sample| turn(p.tangent, q.tangent) <= MAX_TURN && (near || turn(p.towards, q.towards) <= MAX_TURN);
+        let rate = |x: &Sample| x.tangent_rate + if near { 0.0 } else { x.towards_rate };
+        let slow = rate(&a).max(rate(&m)).max(rate(&b)) * width <= 2.0 * MAX_TURN;
         if smooth(&a, &m) && smooth(&m, &b) && smooth(&a, &b) && slow {
             out.push(m);
             return Some(());
