@@ -937,7 +937,9 @@ fn component(p: Point2, axis: usize) -> f64 {
 fn round_period(loops: &[(bool, Vec<Coedge>)], surface: &Surface) -> Option<usize> {
     let periods = [surface.u_period(), surface.v_period()];
     let open: Vec<usize> = (0..2)
-        .filter(|&axis| periods[axis].is_some_and(|p| loops.iter().any(|(_, c)| component(loop_shift(c), axis).abs() > 0.5 * p)))
+        // (By more than rounding: a loop between two meridians a half turn apart, run round a
+        // pole and back, ends half a period from its start either way.)
+        .filter(|&axis| periods[axis].is_some_and(|p| loops.iter().any(|(_, c)| component(loop_shift(c), axis).abs() > 0.5 * p * (1.0 + 1e-9))))
         .collect();
     (open.len() == 1).then(|| open[0])
 }
