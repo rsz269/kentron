@@ -197,16 +197,15 @@ fn vertex_to_faces(model: &Model, vertex: Shape, faces: Shape) -> Option<(f64, P
             }
         }
         // The extrema nearer than those, inside the face (on its boundary: not told here).
-        let mut classifier: Option<PointClassifier> = None;
+        // (The face's classifier kept in the model with it, as a solid's is.)
+        let mut classifier = None;
         for q in extrema {
             let d = p.distance(q);
             if nearest.is_some_and(|n| d >= n.0) {
                 continue;
             }
-            let c = match &classifier {
-                Some(c) => c,
-                None => classifier.insert(PointClassifier::new(model, face).ok()?),
-            };
+            let kept = classifier.get_or_insert_with(|| model.derived(face.node, model.shape_fingerprint(face), || KeptClassifier(PointClassifier::new(model, face))));
+            let Ok(c) = &kept.0 else { return None };
             match c.locate_on_faces(q) {
                 PointLocation::Inside => nearest = Some((d, q)),
                 PointLocation::Boundary => return None,
