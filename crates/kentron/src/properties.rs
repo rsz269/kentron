@@ -142,9 +142,95 @@ pub fn area_with(model: &Model, shape: Shape, options: Options) -> MassPropertie
     properties
 }
 
-/// Clean-room rewrite pending: see cleanroom spec `gauss_area_within.md`.
+/// Total area of the faces of `shape` (see [`area`]) to a relative precision `eps`, with the
+/// estimated relative error: the largest over the faces of the change of the face's area when
+/// its integration is refined (every Gauss piece halved), refining until that is at most
+/// `eps` (or a budget of 64 pieces a piece is spent). For `eps ≥ 1`, [`area`] itself and 0;
+/// for `1e-3 ≤ eps < 1`, one integration at twice the usual effort and `eps` as the error. A
+/// face that cannot be integrated (an unbounded one, or an edge without a curve on it) gives
+/// an infinite area and error.
+#[doc(alias = "BRepGProp::SurfaceProperties")]
 pub fn area_within(model: &Model, shape: Shape, eps: f64) -> (MassProperties, f64) {
-    todo!("clean-room rewrite")
+    if eps >= 1.0 {
+        return (area(model, shape), 0.0);
+    }
+    let precision = eps.abs();
+    let unbounded = || {
+        let infinite = crate::tolerance::INFINITE;
+        (MassProperties { mass: infinite, center_of_mass: Point::ORIGIN, inertia: Matrix3::ZERO }, infinite)
+    };
+    let mut total = Moments::default();
+    let mut worst: f64 = 0.0;
+    for face in model.explore(shape, NodeKind::Face) {
+        let Some(surface) = model.surface(face) else { continue };
+        let id = FaceId::from_index(face.node.index);
+        let record = model.get(id).expect("face in model");
+        let measure = |refine: usize| -> Moments {
+            let mut moments = Moments::default();
+            if record.wires.is_empty() {
+                natural_bounds_area(surface, &face.placement, refine, &mut |p, n, w| moments.add(p, n.length() * w, 1.0, 1.0));
+            } else {
+                integrate_face_refined(model, face, refine, |p, n, w| moments.add(p, n.length() * w, 1.0, 1.0));
+            }
+            moments
+        };
+        // Integrable: bounded, every edge with a curve on the surface.
+        if record.wires.is_empty() {
+            let (u0, u1, v0, v1) = surface.bounds();
+            if [u0, u1, v0, v1].iter().any(|b| !b.is_finite() || b.abs() >= 1e100) {
+                return unbounded();
+            }
+        } else {
+            for &w in &record.wires {
+                let wire = model.get(model.get(w).expect("wire use").wire).expect("wire");
+                for &c in &wire.coedges {
+                    match model.effective_pcurve(c) {
+                        Some((_, first, last)) if first.is_finite() && last.is_finite() && first.abs() < 1e100 && last.abs() < 1e100 => {}
+                        _ => return unbounded(),
+                    }
+                }
+            }
+        }
+        let mut coarse = measure(1);
+        let mut fine = measure(2);
+        let change = |a: &Moments, b: &Moments| if b.measure != 0.0 { (a.measure - b.measure).abs() / b.measure.abs() } else { 0.0 };
+        let mut error = change(&coarse, &fine);
+        if precision > 0.0 && precision < 1e-3 {
+            let mut refine = 2;
+            while error > precision && refine < 64 {
+                refine *= 2;
+                coarse = fine;
+                fine = measure(refine);
+                error = change(&coarse, &fine);
+            }
+        }
+        worst = worst.max(error);
+        // The sign follows the boundary's direction of travel; an area is positive.
+        total.merge_area(&fine, fine.measure.signum());
+    }
+    let error = if (1e-3..1.0).contains(&precision) { precision } else { worst };
+    (total.properties(), error)
+}
+
+/// Samples of the area of a face without boundary over its surface's (finite) bounds, as
+/// `integrate_face` gives them: Gauss–Legendre pieces in u and v, `8·refine` each way.
+fn natural_bounds_area(surface: &Surface, placement: &crate::math::Transform, refine: usize, sample: &mut dyn FnMut(Point, Vector, f64)) {
+    let (u0, u1, v0, v1) = surface.bounds();
+    let pieces = 8 * refine;
+    let (du, dv) = ((u1 - u0) / pieces as f64, (v1 - v0) / pieces as f64);
+    for i in 0..pieces {
+        for j in 0..pieces {
+            for &(a, wa) in &GAUSS_LEGENDRE {
+                for &(b, wb) in &GAUSS_LEGENDRE {
+                    let u = u0 + du * (i as f64 + (a + 1.0) / 2.0);
+                    let v = v0 + dv * (j as f64 + (b + 1.0) / 2.0);
+                    let (p, su, sv) = surface.d1(u, v);
+                    let n = su.transformed(placement).cross(sv.transformed(placement));
+                    sample(p.transformed(placement), n, wa * wb * du * dv / 4.0);
+                }
+            }
+        }
+    }
 }
 
 /// Whether two planes are the same, either way round.
@@ -289,7 +375,13 @@ fn faces(model: &Model, shape: Shape, options: Options) -> impl Iterator<Item = 
 /// The domain integral becomes a boundary integral by Green's theorem,
 /// `∫∫ g dudv = ∮ G dv` with `G(u, v) = ∫_{u0}^{u} g(s, v) ds`, both evaluated by
 /// Gauss–Legendre quadrature over short pieces of the pcurves and of the inner span.
-fn integrate_face(model: &Model, face: Shape, mut sample: impl FnMut(Point, Vector, f64)) {
+fn integrate_face(model: &Model, face: Shape, sample: impl FnMut(Point, Vector, f64)) {
+    integrate_face_refined(model, face, 1, sample)
+}
+
+/// [`integrate_face`] with every Gauss piece (along the boundary, along u inside, across v on
+/// a ruled face) split into `refine` pieces: the same integral, its error smaller.
+fn integrate_face_refined(model: &Model, face: Shape, refine: usize, mut sample: impl FnMut(Point, Vector, f64)) {
     let id = FaceId::from_index(face.node.index);
     let record = model.get(id).expect("face in model");
     let surface = &model.get(record.surface).expect("face with a surface").surface;
@@ -441,7 +533,7 @@ fn integrate_face(model: &Model, face: Shape, mut sample: impl FnMut(Point, Vect
         out
     };
     // The length of a parameter step that keeps each Gauss piece short in angle.
-    let pieces = |angular_span: f64| ((angular_span / MAX_ANGLE_STEP).ceil() as usize).clamp(1, 256);
+    let pieces = |angular_span: f64| ((angular_span / MAX_ANGLE_STEP).ceil() as usize).clamp(1, 256) * refine;
     // The normal from the placed derivatives: a scaling stretches the area element by its
     // square.
     let place = |p: Point, su: Vector, sv: Vector| {
@@ -630,10 +722,14 @@ fn integrate_face(model: &Model, face: Shape, mut sample: impl FnMut(Point, Vect
                         if outer_weight == 0.0 || span == 0.0 {
                             continue;
                         }
-                        for &(inner_node, inner_w) in rule {
-                            let (p, su, sv) = surface.d1(uv.x, v_start + span * (inner_node + 1.0) / 2.0);
-                            let (p, n) = place(p, su, sv);
-                            sample(p, n, outer_weight * inner_w * span / 2.0);
+                        let piece = span / refine as f64;
+                        for k in 0..refine {
+                            let v0 = v_start + piece * k as f64;
+                            for &(inner_node, inner_w) in rule {
+                                let (p, su, sv) = surface.d1(uv.x, v0 + piece * (inner_node + 1.0) / 2.0);
+                                let (p, n) = place(p, su, sv);
+                                sample(p, n, outer_weight * inner_w * piece / 2.0);
+                            }
                         }
                         continue;
                     }
@@ -675,15 +771,18 @@ fn integrate_face(model: &Model, face: Shape, mut sample: impl FnMut(Point, Vect
                             turning_breaks(c, e[0], e[1], &mut graded);
                             let mut s0 = e[0];
                             for &s1 in &graded {
-                                let inner_step = s1 - s0;
-                                for &(inner_node, inner_w) in inner_rule {
-                                    nodes.push((s0 + inner_step * (inner_node + 1.0) / 2.0, inner_w, inner_step));
+                                let inner_step = (s1 - s0) / refine as f64;
+                                for k in 0..refine {
+                                    let a = s0 + inner_step * k as f64;
+                                    for &(inner_node, inner_w) in inner_rule {
+                                        nodes.push((a + inner_step * (inner_node + 1.0) / 2.0, inner_w, inner_step));
+                                    }
                                 }
                                 s0 = s1;
                             }
                             continue;
                         }
-                        let inner = if straight_u { 1 } else { pieces((e[1] - e[0]).abs() * u_density * MAX_ANGLE_STEP) };
+                        let inner = if straight_u { refine } else { pieces((e[1] - e[0]).abs() * u_density * MAX_ANGLE_STEP) };
                         let inner_step = (e[1] - e[0]) / inner as f64;
                         for inner_piece in 0..inner {
                             let s0 = e[0] + inner_step * inner_piece as f64;
