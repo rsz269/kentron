@@ -189,8 +189,22 @@ pub(super) fn crosses_itself(polygons: &[Vec<Point2>]) -> bool {
         let t = if l > 0.0 { (((p.x - a.x) * ab.x + (p.y - a.y) * ab.y) / l).clamp(0.0, 1.0) } else { 0.0 };
         (Point2::new(a.x + t * ab.x, a.y + t * ab.y) - p).length()
     };
-    for (i, &(k1, j1, a, b)) in sides.iter().enumerate() {
-        for &(k2, j2, c, d) in &sides[i + 1..] {
+    // (Sides whose spans along x lie apart by more than they may be told apart by neither
+    // cross nor touch: each side met only with those after it in the order of their left
+    // ends that start before its right end, the rest left alone. Each pair's verdict is
+    // the same whichever side comes first.)
+    let left = |s: &(usize, usize, Point2, Point2)| s.2.x.min(s.3.x);
+    let right = |s: &(usize, usize, Point2, Point2)| s.2.x.max(s.3.x);
+    let mut order: Vec<usize> = (0..sides.len()).collect();
+    order.sort_by(|&i, &j| left(&sides[i]).total_cmp(&left(&sides[j])));
+    let apart = 2.0 * near + 1e-12 * (1.0 + lo.x.abs().max(hi.x.abs()));
+    for (o, &i) in order.iter().enumerate() {
+        let (k1, j1, a, b) = sides[i];
+        let reach = right(&sides[i]) + apart;
+        for &(k2, j2, c, d) in order[o + 1..].iter().map(|&j| &sides[j]) {
+            if c.x.min(d.x) > reach {
+                break;
+            }
             let n = polygons[k1].len();
             if k1 == k2 && (j1 + 1) % n == j2 || k1 == k2 && (j2 + 1) % n == j1 {
                 continue;
