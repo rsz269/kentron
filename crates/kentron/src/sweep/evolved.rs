@@ -178,7 +178,7 @@ fn enveloped(model: &mut Model, faces: &[Shape]) -> Result<Shape> {
 /// The cells joined: the faces two of them share are inside; faces left in pieces on one
 /// surface merged. Cells sharing no faces (in a chain) stay apart, as OCCT's: a compound of
 /// a solid for each group.
-fn joined(model: &mut Model, cells: &[Shape]) -> Result<Shape> {
+pub(super) fn joined(model: &mut Model, cells: &[Shape]) -> Result<Shape> {
     // The groups of cells sharing faces.
     let mut group: Vec<usize> = (0..cells.len()).collect();
     fn root(group: &mut [usize], mut i: usize) -> usize {

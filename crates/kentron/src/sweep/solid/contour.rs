@@ -83,7 +83,7 @@ fn grid_size(gauge: &Gauge, b: (f64, f64, f64, f64)) -> (usize, usize) {
 
 /// The root of `f` on `[0, 1]` where it changes sign between `fa = f(0)` and `fb = f(1)`
 /// (regula falsi, Illinois).
-fn root(f: &dyn Fn(f64) -> f64, mut fa: f64, mut fb: f64) -> f64 {
+pub(super) fn root(f: &dyn Fn(f64) -> f64, mut fa: f64, mut fb: f64) -> f64 {
     let (mut a, mut b) = (0.0f64, 1.0f64);
     let mut side = 0;
     for _ in 0..100 {
@@ -178,7 +178,7 @@ fn chains(gauge: &Gauge, b: (f64, f64, f64, f64), nu: usize, nv: usize) -> Vec<C
     // Walked: from the ends first, then round what is left (closed).
     let mut used = vec![false; count];
     let mut out = Vec::new();
-    let mut walk = |start: usize, used: &mut Vec<bool>| -> Chain {
+    let walk = |start: usize, used: &mut Vec<bool>| -> Chain {
         let mut chain = vec![start];
         used[start] = true;
         let mut at = start;
@@ -405,6 +405,12 @@ pub(super) fn cuts(model: &Model, face: Shape, steady: &Steady, tolerance: f64) 
             closed = false;
         }
         let extend = if closed { (false, false) } else { (on_held(b, held, points[0]), on_held(b, held, *points.last().unwrap())) };
+        if !closed {
+            if let Some(cut) = exact(&gauge, &points, extend, h, tolerance) {
+                out.push(cut);
+                continue;
+            }
+        }
         let fitted = fit(&gauge, points, closed, extend, h, tolerance)?;
         out.push(Cut { pcurve: Curve2::BSpline(fitted.pcurve), curve: Curve::BSpline(fitted.curve), first: fitted.first, last: fitted.last });
     }
@@ -417,4 +423,105 @@ fn on_held(b: (f64, f64, f64, f64), held: [bool; 4], q: Point2) -> bool {
     let (u0, u1, v0, v1) = b;
     let eps = 1e-9 * ((u1 - u0) + (v1 - v0));
     (held[0] && (q.x - u0).abs() <= eps) || (held[1] && (q.x - u1).abs() <= eps) || (held[2] && (q.y - v0).abs() <= eps) || (held[3] && (q.y - v1).abs() <= eps)
+}
+
+/// An open curve of the zero set that is a line or an arc of a circle in space (within a
+/// thousandth of the tolerance, at its points and at the zero set between them) and a straight
+/// line in the parameters, along the line's length or the arc's angle (an iso-line: a
+/// cylinder's or cone's line, a torus's or sphere's circle, a line across a plane): that cut,
+/// exactly. `None` for any other.
+fn exact(gauge: &Gauge, points: &[Point2], extend: (bool, bool), h: (f64, f64), tolerance: f64) -> Option<Cut> {
+    use crate::geometry::curve::{Circle, Line};
+    use crate::math::{Direction, Frame};
+    if points.len() < 3 {
+        return None;
+    }
+    let eps = 1e-3 * tolerance;
+    let mut samples: Vec<Point2> = points.to_vec();
+    for w in points.windows(2) {
+        samples.push(project(gauge, Point2::new(0.5 * (w[0].x + w[1].x), 0.5 * (w[0].y + w[1].y)), h)?);
+    }
+    let space: Vec<Point> = samples.iter().map(|q| gauge.surface.point(q.x, q.y)).collect();
+    let n = points.len();
+    let (a, m, z) = (space[0], space[n / 2], space[n - 1]);
+    // The curve and each sample's parameter on it.
+    let (curve, params): (Curve, Vec<f64>) = {
+        let d = z - a;
+        let length = d.length();
+        let on_line = length > tolerance && space.iter().all(|&p| (p - a).cross(d).length() <= eps * length);
+        if on_line {
+            let dir = Direction::from_vector(d);
+            (Curve::Line(Line::new(a, dir)), space.iter().map(|&p| (p - a).dot(Vector::from(dir))).collect())
+        } else {
+            let normal = (m - a).cross(z - a);
+            let unit = Direction::try_from_vector(normal).filter(|_| normal.length() > 0.0)?;
+            // The circle through the three: its centre in their plane.
+            let (u, v) = (m - a, z - a);
+            let (uu, vv, uv) = (u.dot(u), v.dot(v), u.dot(v));
+            let det = 2.0 * (uu * vv - uv * uv);
+            if !(det.abs() > 0.0) {
+                return None;
+            }
+            let (alpha, beta) = ((vv * (uu - uv)) / det, (uu * (vv - uv)) / det);
+            let centre = a + u * alpha + v * beta;
+            let radius = (a - centre).length();
+            let nz = Vector::from(unit);
+            if !space.iter().all(|&p| ((p - centre).length() - radius).abs() <= eps && (p - centre).dot(nz).abs() <= eps) {
+                return None;
+            }
+            let frame = Frame::new(centre, unit, Direction::try_from_vector(a - centre)?);
+            let (x, y) = (Vector::from(frame.x()), Vector::from(frame.y()));
+            let angle = |p: Point| (p - centre).dot(y).atan2((p - centre).dot(x));
+            // Unwrapped along the points; the circle turned to run the way they do.
+            let mut params = Vec::with_capacity(space.len());
+            let mut last = 0.0f64;
+            for (i, &p) in space[..n].iter().enumerate() {
+                let mut t = angle(p);
+                if i > 0 {
+                    while t - last > std::f64::consts::PI {
+                        t -= std::f64::consts::TAU;
+                    }
+                    while last - t > std::f64::consts::PI {
+                        t += std::f64::consts::TAU;
+                    }
+                }
+                params.push(t);
+                last = t;
+            }
+            if params[n - 1] < 0.0 {
+                return exact_reversed(gauge, points, extend, h, tolerance);
+            }
+            if params.windows(2).any(|w| !(w[1] > w[0])) || params[n - 1] >= std::f64::consts::TAU {
+                return None;
+            }
+            for &p in &space[n..] {
+                let mut t = angle(p);
+                if t < -1e-9 {
+                    t += std::f64::consts::TAU;
+                }
+                params.push(t);
+            }
+            (Curve::Circle(Circle::new(frame, radius)), params)
+        }
+    };
+    // Straight in the parameters, along the curve's parameter.
+    let (t0, t1) = (params[0], params[n - 1]);
+    let (q0, q1) = (samples[0], samples[n - 1]);
+    let along = |t: f64| q0 + (q1 - q0) * ((t - t0) / (t1 - t0));
+    let scale = (q1 - q0).length().max(1e-300);
+    if !samples.iter().zip(&params).all(|(&q, &t)| q.distance(along(t)) <= 1e-9 * scale) {
+        return None;
+    }
+    let reach = 0.02 * (t1 - t0);
+    let first = if extend.0 { t0 - reach } else { t0 };
+    let last = if extend.1 { t1 + reach } else { t1 };
+    let pcurve = crate::geometry::curve2::BSplineCurve2::try_new(vec![along(first), along(last)], vec![first, last], vec![2, 2], 1).ok()?;
+    Some(Cut { pcurve: Curve2::BSpline(pcurve), curve, first, last })
+}
+
+/// [`exact`] of the points the other way round.
+fn exact_reversed(gauge: &Gauge, points: &[Point2], extend: (bool, bool), h: (f64, f64), tolerance: f64) -> Option<Cut> {
+    let reversed: Vec<Point2> = points.iter().rev().copied().collect();
+    let cut = exact(gauge, &reversed, (extend.1, extend.0), h, tolerance)?;
+    Some(cut)
 }

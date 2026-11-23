@@ -47,8 +47,122 @@ pub(super) fn sweep(model: &mut Model, solid: Shape, steady: &Steady) -> Result<
     let faces = model.unique_subshapes(solid, NodeKind::Face);
     let speed = speed_bound(model, solid, steady);
     let sides: Vec<Side> = faces.iter().map(|&f| side(model, f, steady, speed)).collect::<Result<_>>()?;
-    let mut builder = Builder::new(model, *steady, size)?;
-    builder.product(&faces, &sides)
+    let folds = split_folds(model, &faces, &sides, steady)?;
+    // (How far the body reaches from a turn's axis: the farthest corner of its box.)
+    let reach = (0..8)
+        .map(|i| {
+            let p = Point::new(if i & 1 == 0 { bounds.min.x } else { bounds.max.x }, if i & 2 == 0 { bounds.min.y } else { bounds.max.y }, if i & 4 == 0 { bounds.min.z } else { bounds.max.z });
+            match steady {
+                Steady::Turn { axis, .. } | Steady::Screw { axis, .. } => {
+                    let r = p - axis.origin;
+                    (r - Vector::from(axis.direction) * r.dot(Vector::from(axis.direction))).length()
+                }
+                Steady::Slide { .. } => 0.0,
+            }
+        })
+        .fold(0.0, f64::max);
+    let mut builder = Builder::new(model, *steady, size, reach)?;
+    let product = builder.product(&faces, &sides)?;
+    if folds == 0 {
+        return Ok(product);
+    }
+    resolved(model, product)
+}
+
+/// The product where it runs into itself (see the module above): its faces split where they
+/// cross, the pieces of space it winds round at least once, joined. Itself where it does not.
+fn resolved(model: &mut Model, product: Shape) -> Result<Shape> {
+    let faces = model.unique_subshapes(product, NodeKind::Face);
+    let cells = crate::boolean::enclosed_solids(model, &faces)?;
+    let cells = model.unique_subshapes(cells, NodeKind::Solid);
+    if cells.is_empty() {
+        return Err(Error::Failed("a sweep running into itself, not split into pieces".into()));
+    }
+    if cells.len() == 1 {
+        return Ok(product);
+    }
+    let classifier = crate::boolean::PointClassifier::new(model, product)?;
+    let mut kept = Vec::new();
+    for &cell in &cells {
+        let p = crate::boolean::point_inside(model, cell)?.ok_or_else(|| Error::Failed("a piece of a sweep with no point inside".into()))?;
+        let winding = classifier.winding(p).ok_or_else(|| Error::Failed("how often a sweep winds round a point of it".into()))?;
+        if winding >= 1 {
+            kept.push(cell);
+        }
+    }
+    super::super::joined(model, &kept)
+}
+
+/// The edges between a face in `W` and one outside it (each with whether the face in `W` runs
+/// along the edge's curve), but degenerate ones: the boundary of `W`.
+fn boundary_edges(model: &Model, faces: &[Shape], sides: &[Side]) -> Result<Vec<(EdgeId, bool)>> {
+    // Each edge's uses: the face (by index) and whether it runs along the edge's curve.
+    let mut uses: HashMap<EdgeId, Vec<(usize, bool)>> = HashMap::new();
+    for (k, &face) in faces.iter().enumerate() {
+        let loops = crate::heal::face_loops(model, face).ok_or_else(|| Error::Failed("a face without pcurves".into()))?;
+        let reversed_face = face.orientation == Orientation::Reversed;
+        for u in loops.iter().flatten() {
+            uses.entry(u.edge).or_default().push((k, u.reversed == reversed_face));
+        }
+    }
+    let mut edges: Vec<EdgeId> = uses.keys().copied().collect();
+    edges.sort_by_key(|e| e.index());
+    let mut out = Vec::new();
+    for e in edges {
+        let list = &uses[&e];
+        let fronts: Vec<&(usize, bool)> = list.iter().filter(|(k, _)| sides[*k] == Side::Front).collect();
+        if list.len() != 2 || fronts.len() != 1 || list[0].0 == list[1].0 || model.is_degenerate(Shape::from(e)) {
+            continue;
+        }
+        out.push((e, fronts[0].1));
+    }
+    Ok(out)
+}
+
+/// Splits the edges bounding `W` where the surface they sweep folds: where the motion runs
+/// along the edge (its tangent crossed with the velocity, the swept surface's normal,
+/// vanishes and turns over), as a characteristic curve does where it turns past the direction
+/// of a slide. Each piece then sweeps a surface without a fold, meeting the next along the
+/// fold's path. Returns how many folds were found.
+fn split_folds(model: &mut Model, faces: &[Shape], sides: &[Side], steady: &Steady) -> Result<usize> {
+    let mut count = 0;
+    for (e, _) in boundary_edges(model, faces, sides)? {
+        let Some((curve, a, b)) = model.edge_curve(Shape::from(e)) else { continue };
+        let normal = |s: f64| {
+            let (p, d) = curve.d1(s);
+            d.cross(steady.velocity(p))
+        };
+        let samples = match &curve {
+            Curve::BSpline(bs) => 64.max(4 * bs.poles().len()),
+            _ => 64,
+        };
+        let inside = |at: f64| at - a > 1e-9 * (b - a) && b - at > 1e-9 * (b - a);
+        let mut roots = Vec::new();
+        let mut previous = (a, normal(a));
+        for i in 1..=samples {
+            let s = a + (b - a) * i as f64 / samples as f64;
+            let n = normal(s);
+            if n.dot(previous.1) < 0.0 {
+                let reference = previous.1;
+                let f = |x: f64| normal(previous.0 + (s - previous.0) * x).dot(reference);
+                let x = super::contour::root(&f, f(0.0), f(1.0));
+                let at = previous.0 + (s - previous.0) * x;
+                if inside(at) {
+                    roots.push(at);
+                    count += 1;
+                }
+            }
+            previous = (s, n);
+        }
+        roots.sort_by(f64::total_cmp);
+        let mut piece = e;
+        for at in roots {
+            let tolerance = model[piece].tolerance;
+            let v = model.add_vertex(curve.point(at), tolerance);
+            piece = model.split_edge(piece, v, at)?.1;
+        }
+    }
+    Ok(count)
 }
 
 /// The largest speed over the body's box.
@@ -92,37 +206,43 @@ fn side(model: &Model, face: Shape, steady: &Steady, speed: f64) -> Result<Side>
 
 /// Builds the product's faces: the paths of vertices, the copies at the end, the faces edges
 /// sweep.
+///
+/// A screw is built in stages of at most a quarter turn (each the same screw, carrying the
+/// copies the stage before ended at), so that no face winds round its axis: each is a strip
+/// short enough that a point's place on it is found from any start on it.
 struct Builder<'m> {
     model: &'m mut Model,
+    /// The motion of one stage.
     steady: Steady,
-    end: Transform,
-    /// The screw as the pipes' motions sample it (its points' paths quintics through them).
+    /// Where the stages start and the last ends: the motion's places.
+    junctions: Vec<Transform>,
+    /// A stage of the screw as the pipes' motions sample it (its points' paths quintics
+    /// through them).
     screw: Option<PieceMotion>,
     size: f64,
-    vertex_copies: HashMap<VertexId, VertexId>,
-    edge_copies: HashMap<EdgeId, EdgeId>,
-    paths: HashMap<VertexId, EdgeId>,
+    vertex_copies: HashMap<(VertexId, usize), VertexId>,
+    edge_copies: HashMap<(EdgeId, usize), EdgeId>,
+    paths: HashMap<(VertexId, usize), EdgeId>,
 }
 
 impl<'m> Builder<'m> {
-    fn new(model: &'m mut Model, steady: Steady, size: f64) -> Result<Builder<'m>> {
-        let screw = match steady {
-            Steady::Screw { axis, angle, rise } => Some(screw_motion(axis, angle, rise, size)?),
+    fn new(model: &'m mut Model, steady: Steady, size: f64, reach: f64) -> Result<Builder<'m>> {
+        let (stage, stages) = match steady {
+            Steady::Screw { axis, angle, rise } => {
+                let n = (angle / std::f64::consts::FRAC_PI_2).ceil().max(1.0);
+                (Steady::Screw { axis, angle: angle / n, rise: rise / n }, n as usize)
+            }
+            other => (other, 1),
+        };
+        let screw = match stage {
+            Steady::Screw { axis, angle, rise } => Some(screw_motion(axis, angle, rise, size, reach)?),
             _ => None,
         };
-        Ok(Builder { model, steady, end: steady.at(1.0), screw, size, vertex_copies: HashMap::new(), edge_copies: HashMap::new(), paths: HashMap::new() })
+        let junctions = (0..=stages).map(|k| steady.at(k as f64 / stages as f64)).collect();
+        Ok(Builder { model, steady: stage, junctions, screw, size, vertex_copies: HashMap::new(), edge_copies: HashMap::new(), paths: HashMap::new() })
     }
 
     fn product(&mut self, faces: &[Shape], sides: &[Side]) -> Result<Shape> {
-        // Each edge's uses: the face (by index) and whether it runs along the edge's curve.
-        let mut uses: HashMap<EdgeId, Vec<(usize, bool)>> = HashMap::new();
-        for (k, &face) in faces.iter().enumerate() {
-            let loops = crate::heal::face_loops(self.model, face).ok_or_else(|| Error::Failed("a face without pcurves".into()))?;
-            let reversed_face = face.orientation == Orientation::Reversed;
-            for u in loops.iter().flatten() {
-                uses.entry(u.edge).or_default().push((k, u.reversed == reversed_face));
-            }
-        }
         let shell = self.model.new_empty(NodeKind::Shell);
         // The faces outside W where the motion starts.
         for (k, &face) in faces.iter().enumerate() {
@@ -131,20 +251,12 @@ impl<'m> Builder<'m> {
             }
         }
         // What the boundary of W sweeps, and W at the end.
-        let mut edges: Vec<EdgeId> = uses.keys().copied().collect();
-        edges.sort_by_key(|e| e.index());
-        for e in edges {
-            let list = &uses[&e];
-            let fronts: Vec<&(usize, bool)> = list.iter().filter(|(k, _)| sides[*k] == Side::Front).collect();
-            if list.len() != 2 || fronts.len() != 1 || list[0].0 == list[1].0 {
-                continue;
+        let stages = self.junctions.len() - 1;
+        for (e, along) in boundary_edges(self.model, faces, sides)? {
+            for k in 0..stages {
+                let face = self.side_face(e, along, k)?;
+                self.model.add(shell, face)?;
             }
-            if self.model.is_degenerate(Shape::from(e)) {
-                continue;
-            }
-            let along = fronts[0].1;
-            let face = self.side_face(e, along)?;
-            self.model.add(shell, face)?;
         }
         for (k, &face) in faces.iter().enumerate() {
             if sides[k] == Side::Front {
@@ -158,29 +270,37 @@ impl<'m> Builder<'m> {
         Ok(solid)
     }
 
-    fn vertex_copy(&mut self, v: VertexId) -> VertexId {
-        if let Some(&c) = self.vertex_copies.get(&v) {
+    /// A vertex's copy at junction `k` (itself at the start).
+    fn vertex_copy(&mut self, v: VertexId, k: usize) -> VertexId {
+        if k == 0 {
+            return v;
+        }
+        if let Some(&c) = self.vertex_copies.get(&(v, k)) {
             return c;
         }
         let (p, tol) = (self.model[v].point, self.model[v].tolerance);
-        let c = self.model.add_vertex(p.transformed(&self.end), tol);
-        self.vertex_copies.insert(v, c);
+        let c = self.model.add_vertex(p.transformed(&self.junctions[k]), tol);
+        self.vertex_copies.insert((v, k), c);
         c
     }
 
-    fn edge_copy(&mut self, e: EdgeId) -> Result<EdgeId> {
-        if let Some(&c) = self.edge_copies.get(&e) {
+    /// An edge's copy at junction `k` (itself at the start).
+    fn edge_copy(&mut self, e: EdgeId, k: usize) -> Result<EdgeId> {
+        if k == 0 {
+            return Ok(e);
+        }
+        if let Some(&c) = self.edge_copies.get(&(e, k)) {
             return Ok(c);
         }
         let (a, b) = self.model.edge_end_vertices(e);
-        let (a, b) = (self.vertex_copy(a), self.vertex_copy(b));
+        let (a, b) = (self.vertex_copy(a, k), self.vertex_copy(b, k));
         let tol = self.model[e].tolerance;
         let c = self.model.add_edge(a, b, tol)?;
         if let Some((curve, first, last)) = self.model.edge_curve(Shape::from(e)) {
-            self.model.set_edge_curve(c.into(), curve.transformed(&self.end), tol)?;
+            self.model.set_edge_curve(c.into(), curve.transformed(&self.junctions[k]), tol)?;
             self.model.set_edge_range(c.into(), first, last)?;
         }
-        self.edge_copies.insert(e, c);
+        self.edge_copies.insert((e, k), c);
         Ok(c)
     }
 
@@ -189,7 +309,9 @@ impl<'m> Builder<'m> {
     fn face_copy(&mut self, face: Shape) -> Result<Shape> {
         let id = FaceId::from_index(face.node.index);
         let tol = self.model[id].tolerance;
-        let surface = self.model.face_surface(id).ok_or_else(|| Error::InvalidInput("a face without a surface".into()))?.transformed(&self.end);
+        let end = *self.junctions.last().expect("junctions");
+        let stages = self.junctions.len() - 1;
+        let surface = self.model.face_surface(id).ok_or_else(|| Error::InvalidInput("a face without a surface".into()))?.transformed(&end);
         let copy = self.model.new_empty(NodeKind::Face);
         self.model.set_face_surface(copy, surface, tol)?;
         for wire_use in self.model[id].wires.clone() {
@@ -197,7 +319,7 @@ impl<'m> Builder<'m> {
             let mut coedges = Vec::new();
             for coedge in self.model[wire].coedges.clone() {
                 let (edge, orientation) = (self.model[coedge].edge, self.model[coedge].orientation);
-                let moved = self.edge_copy(edge)?;
+                let moved = self.edge_copy(edge, stages)?;
                 let c = self.model.add_coedge(moved, orientation)?;
                 if let Some((pcurve, first, last)) = self.model.effective_pcurve(coedge) {
                     self.model.set_pcurve_with_range(c, pcurve, first, last)?;
@@ -210,15 +332,16 @@ impl<'m> Builder<'m> {
         Ok(Shape { orientation: face.orientation, ..copy })
     }
 
-    /// The edge a vertex's path makes, from it to its copy at the end.
-    fn vertex_path(&mut self, v: VertexId) -> Result<EdgeId> {
-        if let Some(&e) = self.paths.get(&v) {
+    /// The edge a vertex's path makes over stage `k`, from its copy at junction `k` to that at
+    /// the next.
+    fn vertex_path(&mut self, v: VertexId, k: usize) -> Result<EdgeId> {
+        if let Some(&e) = self.paths.get(&(v, k)) {
             return Ok(e);
         }
-        let end = self.vertex_copy(v);
-        let p = self.model[v].point;
+        let (start, end) = (self.vertex_copy(v, k), self.vertex_copy(v, k + 1));
+        let p = self.model[start].point;
         let tol = self.model[v].tolerance.max(tolerance::LINEAR);
-        let edge = self.model.add_edge(v, end, tol)?;
+        let edge = self.model.add_edge(start, end, tol)?;
         let (curve, first, last) = match self.steady {
             Steady::Slide { by } => (Curve::Line(Line::new(p, Direction::from_vector(by))), 0.0, by.length()),
             Steady::Turn { axis, angle } => (Curve::Circle(turn_circle(axis, p)?), 0.0, angle),
@@ -226,17 +349,18 @@ impl<'m> Builder<'m> {
         };
         self.model.set_edge_curve(edge.into(), curve, tol)?;
         self.model.set_edge_range(edge.into(), first, last)?;
-        self.paths.insert(v, edge);
+        self.paths.insert((v, k), edge);
         Ok(edge)
     }
 
-    /// The face edge `e` sweeps, used so that it bounds the sweep of the face in `W` beside
-    /// it: that face runs along the edge's curve if `along`.
-    fn side_face(&mut self, e: EdgeId, along: bool) -> Result<Shape> {
-        let (curve, a, b) = self.model.edge_curve(Shape::from(e)).ok_or_else(|| Error::Failed("an edge without a curve".into()))?;
+    /// The face edge `e` sweeps over stage `k`, used so that it bounds the sweep of the face
+    /// in `W` beside it: that face runs along the edge's curve if `along`.
+    fn side_face(&mut self, e: EdgeId, along: bool, k: usize) -> Result<Shape> {
         let (start, finish) = self.model.edge_end_vertices(e);
-        let (start_path, end_path) = (self.vertex_path(start)?, self.vertex_path(finish)?);
-        let top = self.edge_copy(e)?;
+        let (start_path, end_path) = (self.vertex_path(start, k)?, self.vertex_path(finish, k)?);
+        let top = self.edge_copy(e, k + 1)?;
+        let e = self.edge_copy(e, k)?;
+        let (curve, a, b) = self.model.edge_curve(Shape::from(e)).ok_or_else(|| Error::Failed("an edge without a curve".into()))?;
         let line = |x: f64, y: f64, dx: f64, dy: f64| Curve2::Line(Line2::new(Point2::new(x, y), Direction2::new(dx, dy)));
         // The surface; the (u, v) of the curve's point at s and moved to t; and the uses
         // round the face, counter-clockwise in (u, v).
@@ -274,10 +398,10 @@ impl<'m> Builder<'m> {
                     other => {
                         // The extrusion as the B-spline surface it is: the curve's poles and
                         // their copies at the end, joined straight.
-                        let profile = profile_spline(other, a, b, self.size)?;
-                        let surface = profiled_surface(&profile, &|q| Ok(vec![q, q + by]), KnotVector::new(vec![0.0, length], vec![2, 2], 1))?;
-                        let uses = rectangle_uses(e, top, start_path, end_path, a, b, length, true);
-                        (surface, Box::new(move |s, t| Point2::new(s, length * t)), uses)
+                        let profile = Profile::of(other, a, b, self.size)?;
+                        let surface = profiled_surface(&profile.spline, &|q| Ok(vec![q, q + by]), KnotVector::new(vec![0.0, length], vec![2, 2], 1))?;
+                        let uses = profile.uses(e, top, start_path, end_path, a, b, length);
+                        (surface, Box::new(move |s, t| Point2::new(profile.at(s), length * t)), uses)
                     }
                 }
             }
@@ -287,13 +411,13 @@ impl<'m> Builder<'m> {
                 (Surface::Revolution(revolution), Box::new(move |s, t| Point2::new(angle * t, s)), uses)
             }
             Steady::Screw { .. } => {
-                let profile = profile_spline(&curve, a, b, self.size)?;
+                let profile = Profile::of(&curve, a, b, self.size)?;
                 let motion = self.screw.as_ref().expect("a screw's motion");
                 let knots = path(motion, Point::ORIGIN)?;
                 let knots = KnotVector::new(knots.knots().to_vec(), knots.multiplicities().to_vec(), knots.degree());
-                let swept = profiled_surface(&profile, &|q| Ok(path(motion, q)?.poles().to_vec()), knots)?;
-                let uses = rectangle_uses(e, top, start_path, end_path, a, b, 1.0, true);
-                (swept, Box::new(move |s, t| Point2::new(s, t)), uses)
+                let swept = profiled_surface(&profile.spline, &|q| Ok(path(motion, q)?.poles().to_vec()), knots)?;
+                let uses = profile.uses(e, top, start_path, end_path, a, b, 1.0);
+                (swept, Box::new(move |s, t| Point2::new(profile.at(s), t)), uses)
             }
         };
         // Facing as the boundary of the sweep of the face beside it: along (the way that face
@@ -389,10 +513,10 @@ fn turn_circle(axis: crate::math::Axis, p: Point) -> Result<Circle> {
     Ok(Circle::new(Frame::new(foot, axis.direction, x), radial.length()))
 }
 
-/// The screw sampled as the pipes' motions are, finely enough that each point's path (the
-/// quintics through its places, velocities and accelerations) lies within 1e-10 of `size` of
-/// its helix.
-fn screw_motion(axis: crate::math::Axis, angle: f64, rise: f64, size: f64) -> Result<PieceMotion> {
+/// The screw sampled as the pipes' motions are, finely enough that the path of each point
+/// within `reach` of the axis (the quintics through its places, velocities and accelerations)
+/// lies within 1e-10 of `size` of its helix.
+fn screw_motion(axis: crate::math::Axis, angle: f64, rise: f64, size: f64, reach: f64) -> Result<PieceMotion> {
     let along = Vector::from(axis.direction);
     let at = move |f: f64| Transform::translation(along * (rise * f)) * Transform::rotation(axis, angle * f);
     let rates = move |f: f64, p: Point| -> (Vector, Vector) {
@@ -401,8 +525,8 @@ fn screw_motion(axis: crate::math::Axis, angle: f64, rise: f64, size: f64) -> Re
         let turning = along.cross(r);
         (turning * angle + along * rise, along.cross(turning) * (angle * angle))
     };
-    // (Probed at the farthest a point of the body could be from the axis.)
-    let far = axis.origin + Vector::from(perpendicular(axis.direction)) * (size + 1.0);
+    // (Probed at the farthest the body reaches from the axis.)
+    let far = axis.origin + Vector::from(perpendicular(axis.direction)) * reach;
     let mut samples = 4usize.max((angle / (std::f64::consts::PI / 8.0)).ceil() as usize);
     loop {
         let params: Vec<f64> = (0..=samples).map(|i| i as f64 / samples as f64).collect();
@@ -423,30 +547,169 @@ fn perpendicular(d: Direction) -> Direction {
     Direction::from_vector(v.cross(other))
 }
 
-/// An edge's curve over `[a, b]` as a B-spline with the same parameter: exactly where it
-/// converts so, else cubics through its points within 1e-10 of `size`.
-fn profile_spline(curve: &Curve, a: f64, b: f64, size: f64) -> Result<BSplineCurve> {
-    let exact = crate::geometry::convert::curve_to_bspline(&Curve::Trimmed(TrimmedCurve::new(curve.clone(), a, b)));
-    let keeps = |bs: &BSplineCurve| {
-        (bs.first_parameter() - a).abs() <= 1e-12 * (1.0 + a.abs())
-            && (bs.last_parameter() - b).abs() <= 1e-12 * (1.0 + b.abs())
-            && (0..=16).all(|i| {
+/// An edge's curve over `[a, b]` as a B-spline: exactly where it converts so (a circle's
+/// arcs as rational quadratics), else cubics through its points within 1e-10 of the size. Where
+/// the B-spline's parameter is not the edge's, `sigma` maps the edge's to it.
+struct Profile {
+    spline: BSplineCurve,
+    /// The B-spline's parameter (as the first coordinate) against the edge's, within 1e-12 of
+    /// the size in space; `None` where they are one.
+    sigma: Option<crate::geometry::curve2::BSplineCurve2>,
+}
+
+impl Profile {
+    fn of(curve: &Curve, a: f64, b: f64, size: f64) -> Result<Profile> {
+        let exact = crate::geometry::convert::curve_to_bspline(&Curve::Trimmed(TrimmedCurve::new(curve.clone(), a, b)));
+        if let Some(bs) = exact {
+            let same = (bs.first_parameter() - a).abs() <= 1e-12 * (1.0 + a.abs()) && (bs.last_parameter() - b).abs() <= 1e-12 * (1.0 + b.abs());
+            let keeps = (0..=16).all(|i| {
                 let t = a + (b - a) * i as f64 / 16.0;
                 curve.point(t).distance(bs.point(t)) <= 1e-12 * (1.0 + size)
-            })
-    };
-    if let Some(bs) = exact.filter(|bs| keeps(bs)) {
-        return Ok(bs);
-    }
-    let mut n = 32;
-    loop {
-        let params: Vec<f64> = (0..=n).map(|i| a + (b - a) * i as f64 / n as f64).collect();
-        let points: Vec<Point> = params.iter().map(|&t| curve.point(t)).collect();
-        let fit = crate::geometry::fit::interpolate_with_parameters(&points, &params)?;
-        let error = (0..n).map(|i| a + (b - a) * (i as f64 + 0.5) / n as f64).map(|t| curve.point(t).distance(fit.point(t))).fold(0.0, f64::max);
-        if error <= 1e-10 * size || n >= 8192 {
-            return Ok(fit);
+            });
+            if same && keeps {
+                return Ok(Profile { spline: bs, sigma: None });
+            }
+            if let Some(sigma) = reparametrization(curve, a, b, &bs, size) {
+                return Ok(Profile { spline: bs, sigma: Some(sigma) });
+            }
         }
-        n *= 2;
+        let mut n = 32;
+        loop {
+            let params: Vec<f64> = (0..=n).map(|i| a + (b - a) * i as f64 / n as f64).collect();
+            let points: Vec<Point> = params.iter().map(|&t| curve.point(t)).collect();
+            let fit = crate::geometry::fit::interpolate_with_parameters(&points, &params)?;
+            let error = (0..n).map(|i| a + (b - a) * (i as f64 + 0.5) / n as f64).map(|t| curve.point(t).distance(fit.point(t))).fold(0.0, f64::max);
+            if error <= 1e-10 * size || n >= 8192 {
+                return Ok(Profile { spline: fit, sigma: None });
+            }
+            n *= 2;
+        }
     }
+
+    /// The B-spline's parameter at the edge's `s`.
+    fn at(&self, s: f64) -> f64 {
+        match &self.sigma {
+            Some(sigma) => sigma.point(s).x,
+            None => s,
+        }
+    }
+
+    /// The uses round the side face of a surface with the B-spline's parameter along u and the
+    /// motion (`0..extent`) along v ([`rectangle_uses`], the edges' pcurves mapped).
+    #[allow(clippy::too_many_arguments)]
+    fn uses(&self, e: EdgeId, top: EdgeId, start_path: EdgeId, end_path: EdgeId, a: f64, b: f64, extent: f64) -> Vec<(EdgeId, Orientation, Curve2, f64, f64)> {
+        let mut uses = rectangle_uses(e, top, start_path, end_path, a, b, extent, true);
+        if let Some(sigma) = &self.sigma {
+            let (ua, ub) = (self.at(a), self.at(b));
+            let raised = {
+                let poles = sigma.poles().iter().map(|q| Point2::new(q.x, q.y + extent)).collect();
+                crate::geometry::curve2::BSplineCurve2::new(poles, sigma.knots().to_vec(), sigma.multiplicities().to_vec(), sigma.degree())
+            };
+            let line = |x: f64, dy: f64| Curve2::Line(Line2::new(Point2::new(x, 0.0), Direction2::new(0.0, dy)));
+            for u in &mut uses {
+                if u.0 == e {
+                    u.2 = Curve2::BSpline(sigma.clone());
+                } else if u.0 == top {
+                    u.2 = Curve2::BSpline(raised.clone());
+                } else if u.0 == start_path {
+                    u.2 = line(ua, extent.signum());
+                } else if u.0 == end_path {
+                    u.2 = line(ub, extent.signum());
+                }
+            }
+        }
+        uses
+    }
+}
+
+/// The map from `curve`'s parameter over `[a, b]` to that of `spline` (the same points), as
+/// cubics through samples, within 1e-12 of `size` in space, in pieces between the points of
+/// the spline's knots (the map is smooth only between them); `None` if it does not settle.
+fn reparametrization(curve: &Curve, a: f64, b: f64, spline: &BSplineCurve, size: f64) -> Option<crate::geometry::curve2::BSplineCurve2> {
+    let (u0, u1) = (spline.first_parameter(), spline.last_parameter());
+    let hair = 1e-12 * (1.0 + size);
+    // Newton on the distance: the parameter on one curve of the other's point.
+    let newton = |target: Point, guess: f64, lo: f64, hi: f64, on: &dyn Fn(f64) -> (Point, Vector)| -> Option<f64> {
+        let mut x = guess.clamp(lo, hi);
+        for _ in 0..50 {
+            let (p, d) = on(x);
+            let dd = d.dot(d);
+            if !(dd > 0.0) {
+                return None;
+            }
+            let step = (target - p).dot(d) / dd;
+            x = (x + step).clamp(lo, hi);
+            if step.abs() <= 1e-15 * (hi - lo) {
+                break;
+            }
+        }
+        (on(x).0.distance(target) <= hair).then_some(x)
+    };
+    let on_spline = |u: f64| spline.d1(u);
+    let on_curve = |s: f64| curve.d1(s);
+    // The pieces: between the edge's parameters of the spline's knots.
+    let mut breaks = vec![(a, u0)];
+    for &k in spline.knots() {
+        if k > u0 + 1e-12 * (u1 - u0) && k < u1 - 1e-12 * (u1 - u0) {
+            let guess = a + (b - a) * (k - u0) / (u1 - u0);
+            breaks.push((newton(spline.point(k), guess, a, b, &on_curve)?, k));
+        }
+    }
+    breaks.push((b, u1));
+    let mut pieces: Vec<crate::geometry::curve2::BSplineCurve2> = Vec::new();
+    for w in breaks.windows(2) {
+        let ((sa, ua), (sb, ub)) = (w[0], w[1]);
+        let mut n = 8;
+        let piece = loop {
+            if n > 4096 {
+                return None;
+            }
+            let params: Vec<f64> = (0..=n).map(|i| sa + (sb - sa) * i as f64 / n as f64).collect();
+            let mut us: Vec<f64> = Vec::with_capacity(params.len());
+            for (i, &x) in params.iter().enumerate() {
+                let u = if i == 0 {
+                    ua
+                } else if i == n {
+                    ub
+                } else {
+                    newton(curve.point(x), us[i - 1] + (ub - ua) / n as f64, ua, ub, &on_spline)?
+                };
+                us.push(u);
+            }
+            let points: Vec<Point2> = us.iter().map(|&u| Point2::new(u, 0.0)).collect();
+            let sigma = crate::geometry::fit::interpolate_with_parameters(&points, &params).ok()?;
+            let error = (0..n).map(|i| sa + (sb - sa) * (i as f64 + 0.5) / n as f64).map(|x| curve.point(x).distance(spline.point(sigma.point(x).x.clamp(u0, u1)))).fold(0.0, f64::max);
+            if error <= hair {
+                break sigma;
+            }
+            n *= 2;
+        };
+        pieces.push(piece);
+    }
+    joined_pieces(&pieces)
+}
+
+/// Cubic B-splines end to end (each clamped, each starting where the one before ends) as one,
+/// continuous across the joins.
+fn joined_pieces(pieces: &[crate::geometry::curve2::BSplineCurve2]) -> Option<crate::geometry::curve2::BSplineCurve2> {
+    let degree = pieces.first()?.degree();
+    if pieces.iter().any(|p| p.degree() != degree) {
+        return None;
+    }
+    let (mut poles, mut knots, mut multiplicities): (Vec<Point2>, Vec<f64>, Vec<usize>) = (Vec::new(), Vec::new(), Vec::new());
+    for (k, piece) in pieces.iter().enumerate() {
+        let (pk, pm) = (piece.knots(), piece.multiplicities());
+        let skip = if k == 0 { 0 } else { 1 };
+        poles.extend_from_slice(&piece.poles()[skip..]);
+        for (i, (&x, &m)) in pk.iter().zip(pm).enumerate() {
+            if i == 0 && k > 0 {
+                // (The join: as often as the degree.)
+                *multiplicities.last_mut()? = degree;
+                continue;
+            }
+            knots.push(x);
+            multiplicities.push(m);
+        }
+    }
+    crate::geometry::curve2::BSplineCurve2::try_new(poles, knots, multiplicities, degree).ok()
 }
