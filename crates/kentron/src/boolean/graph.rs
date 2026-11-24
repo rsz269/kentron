@@ -67,8 +67,8 @@ impl Vertices {
 /// [`Face`]).
 #[derive(Clone)]
 pub(super) struct FaceSample {
-    /// (Shared with the samples kept in the model, not copied: a face's may be long.)
-    pub polylines: std::sync::Arc<Vec<Vec<Uv>>>,
+    /// (Shared with the samples kept, not copied: a face's may be long.)
+    pub polylines: std::sync::Arc<Vec<geom::Polyline>>,
     pub u_range: (f64, f64),
     pub v_range: (f64, f64),
     pub bbox: (Point, Point),
@@ -219,7 +219,7 @@ pub(super) struct Face {
     pub outward: f64,
     pub boundary: Vec<BoundaryUse>,
     /// The boundary sampled in (u, v), for locating points.
-    pub polylines: std::sync::Arc<Vec<Vec<Uv>>>,
+    pub polylines: std::sync::Arc<Vec<geom::Polyline>>,
     pub u_period: Option<f64>,
     /// The period of `v` (a surface of revolution of a circle), if periodic.
     pub v_period: Option<f64>,
@@ -334,7 +334,7 @@ impl Face {
     /// Whether `uv` lies inside the face's boundary polylines ([`geom::inside_polylines`]; a
     /// long boundary indexed, as a face may be asked about many points).
     pub fn inside_polylines(&self, uv: Uv) -> bool {
-        if self.polylines.iter().map(Vec::len).sum::<usize>() < 64 {
+        if self.polylines.iter().map(|p| p.len()).sum::<usize>() < 64 {
             return geom::inside_polylines(&self.polylines, uv);
         }
         self.inside_index.get_or_init(|| geom::InsidePolylines::new(&self.polylines)).contains(&self.polylines, uv)
@@ -1213,11 +1213,12 @@ pub(super) fn align_wires(wires: &mut [Vec<(Curve2, f64, f64, bool)>], periods: 
     let middle = |(c, a, z, _): &(Curve2, f64, f64, bool)| c.point(0.5 * (a + z));
     let mut outer: Vec<Uv> = Vec::new();
     for (c, a, z, along) in first.iter() {
-        let mut p = geom::sample_pcurve_closely(c, *a, *z);
-        if !along {
-            p.reverse();
+        let p = geom::sample_pcurve_closely(c, *a, *z);
+        if *along {
+            outer.extend_from_slice(&p);
+        } else {
+            outer.extend(p.iter().rev());
         }
-        outer.extend(p);
     }
     // (Indexed where many points are asked about a long loop.)
     let outer = std::slice::from_ref(&outer);
@@ -1243,11 +1244,11 @@ pub(super) fn align_wires(wires: &mut [Vec<(Curve2, f64, f64, bool)>], periods: 
 /// and boxes.
 pub(super) fn sample_face(surface: &Surface, boundary: &[(&Curve2, f64, f64)]) -> FaceSample {
     {
-        let polylines: Vec<Vec<Uv>> = boundary.iter().map(|&(pcurve, first, last)| geom::sample_pcurve_closely(pcurve, first, last)).collect();
-        let us = polylines.iter().flatten().map(|p| p[0]);
-        let u_range = us.clone().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), u| (lo.min(u), hi.max(u)));
-        let vs = polylines.iter().flatten().map(|p| p[1]);
-        let v_range = vs.fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), v| (lo.min(v), hi.max(v)));
+        let sampled: Vec<(geom::Polyline, (Uv, Uv))> = boundary.iter().map(|&(pcurve, first, last)| geom::sample_pcurve_closely_boxed(pcurve, first, last)).collect();
+        // (From the polylines' boxes: the least and greatest of their points.)
+        let u_range = sampled.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), (_, b)| (lo.min(b.0[0]), hi.max(b.1[0])));
+        let v_range = sampled.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), (_, b)| (lo.min(b.0[1]), hi.max(b.1[1])));
+        let polylines: Vec<geom::Polyline> = sampled.into_iter().map(|(p, _)| p).collect();
         if polylines.is_empty() {
             // Without a boundary: the whole (unbounded) surface.
             let far = crate::tolerance::INFINITE;

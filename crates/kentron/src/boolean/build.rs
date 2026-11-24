@@ -682,8 +682,7 @@ fn assemble(
         let k = &kept[members[0]];
         let face = region_face(graph, k);
         let interior = if k.far {
-            let own: Vec<&[Uv]> = face.polygons.iter().map(|p| p.as_slice()).collect();
-            geom::interior_point_among(face.polygons, &geom::Obstacles::new(&own))
+            geom::interior_point_among(&face.polygons, &geom::Obstacles::new(&face.polygons))
         } else {
             k.region.interior
         };
@@ -717,7 +716,7 @@ fn assemble(
 struct RegionFace<'a> {
     surface: &'a crate::geometry::surface::Surface,
     bbox: (Point, Point),
-    polygons: &'a [Vec<Uv>],
+    polygons: Vec<&'a [Uv]>,
     periods: [Option<f64>; 2],
     ranges: ((f64, f64), (f64, f64)),
 }
@@ -726,10 +725,10 @@ fn region_face<'a>(graph: &'a Graph, k: &'a Kept) -> RegionFace<'a> {
     if k.far {
         let data = &graph.far[k.face].data;
         let sample = &data.sample;
-        RegionFace { surface: &data.surface, bbox: sample.bbox, polygons: &sample.polylines, periods: data.periods, ranges: (sample.u_range, sample.v_range) }
+        RegionFace { surface: &data.surface, bbox: sample.bbox, polygons: sample.polylines.iter().map(|p| &p[..]).collect(), periods: data.periods, ranges: (sample.u_range, sample.v_range) }
     } else {
         let face = &graph.faces[k.face];
-        RegionFace { surface: &face.surface, bbox: face.bbox, polygons: &k.region.polygons, periods: [face.u_period, face.v_period], ranges: (face.u_range, face.v_range) }
+        RegionFace { surface: &face.surface, bbox: face.bbox, polygons: k.region.polygons.iter().map(|p| &p[..]).collect(), periods: [face.u_period, face.v_period], ranges: (face.u_range, face.v_range) }
     }
 }
 
@@ -744,7 +743,7 @@ fn encloses(graph: &Graph, kept: &[Kept], members: &[usize], p: Point) -> bool {
             for t in hits {
                 let uv = geom::uv_of(face.surface, p + d * t);
                 let copies = super::graph::representatives(uv, face.periods, face.ranges.0, face.ranges.1);
-                if copies.into_iter().any(|uv| geom::inside_polylines(face.polygons, uv)) {
+                if copies.into_iter().any(|uv| geom::inside_polylines(&face.polygons, uv)) {
                     crossings += 1;
                 }
             }

@@ -562,7 +562,7 @@ impl Graph {
 /// With `keep_slits`, arcs that bound nothing (dangling, or with the same region on both
 /// sides) are kept as slits: loops along the arc and back, within the region holding them,
 /// so that a later operation meeting them splits there (as OCCT's internal edges).
-pub(super) fn split_face(arcs: &[ArcOnFace], pieces: &[Piece], face_polylines: &[Vec<Uv>], uv_scale: f64, keep_slits: bool) -> Vec<Region> {
+pub(super) fn split_face<P: AsRef<[Uv]>>(arcs: &[ArcOnFace], pieces: &[Piece], face_polylines: &[P], uv_scale: f64, keep_slits: bool) -> Vec<Region> {
     // Nodes: arc ends, merged when they are the same vertex at the same (u, v).
     let eps = 1e-7 * uv_scale.max(1.0);
     let mut nodes: Vec<(usize, Uv)> = Vec::new();
@@ -786,7 +786,7 @@ pub(super) fn split_face(arcs: &[ArcOnFace], pieces: &[Piece], face_polylines: &
     // apart, or the rim of a disc past a polygon's sides, has its point from its own
     // polylines, which may lie off the face's, sampled apart.)
     // (The face's boundary indexed where many regions are tested against a long one.)
-    let segments: usize = face_polylines.iter().map(Vec::len).sum();
+    let segments: usize = face_polylines.iter().map(|p| p.as_ref().len()).sum();
     let index = (regions.len() > 2 && segments >= 64).then(|| geom::InsidePolylines::new(face_polylines));
     let inside = |p: Uv| index.as_ref().map_or_else(|| geom::inside_polylines(face_polylines, p), |index| index.contains(face_polylines, p));
     // (A face without a boundary is its whole surface, as a whole plane: every region lies

@@ -27,6 +27,10 @@ pub(super) fn on_tol() -> f64 {
 /// A point in a surface's (u, v) parameter space.
 pub(super) type Uv = [f64; 2];
 
+/// A polyline in parameter space, shared (a face's boundary samples, kept from one
+/// operation to the next).
+pub(super) type Polyline = std::sync::Arc<[Uv]>;
+
 /// Signed distance from `p` to an elementary surface: along the normal for a plane, from
 /// the axis (centre) outwards for a cylinder (sphere).
 /// Whether [`signed_distance_with_gradient`] handles the surface.
@@ -909,29 +913,37 @@ pub(super) fn sample_pcurve(pcurve: &Curve2, first: f64, last: f64) -> Vec<Uv> {
 /// chords: for telling points close to the boundary on which side of it they lie.
 /// (A free-form pcurve's samples are kept for its curve and range: a face's boundary is
 /// sampled again by each operation on it, unchanged where the operation does not reach.)
-pub(super) fn sample_pcurve_closely(pcurve: &Curve2, first: f64, last: f64) -> Vec<Uv> {
+pub(super) fn sample_pcurve_closely(pcurve: &Curve2, first: f64, last: f64) -> Polyline {
+    sample_pcurve_closely_boxed(pcurve, first, last).0
+}
+
+/// [`sample_pcurve_closely`], with the samples' box ([`polyline_box`]).
+pub(super) fn sample_pcurve_closely_boxed(pcurve: &Curve2, first: f64, last: f64) -> (Polyline, (Uv, Uv)) {
+    let boxed = |points: Vec<Uv>| {
+        let b = polyline_box(&points);
+        (Polyline::from(points), b)
+    };
     if matches!(pcurve, Curve2::Line(_) | Curve2::Circle(_) | Curve2::Ellipse(_)) {
-        return sample_pcurve(pcurve, first, last);
+        return boxed(sample_pcurve(pcurve, first, last));
     }
-    let Some(key) = closely_key(pcurve, first, last) else { return sample_closely(pcurve, first, last) };
+    let Some(key) = closely_key(pcurve, first, last) else { return boxed(sample_closely(pcurve, first, last)) };
     let lock = || CLOSE_SAMPLES.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let same = |e: &CloseSamples| e.key == key && e.range == [first.to_bits(), last.to_bits()] && e.pcurve == *pcurve;
     if let Some(found) = lock().entries.iter().find(|e| same(e)) {
-        return found.points.as_ref().clone();
+        return (found.points.clone(), found.bounds);
     }
     // (Sampled outside the lock; another thread may sample it too.)
-    let points = std::sync::Arc::new(sample_closely(pcurve, first, last));
+    let (points, bounds) = boxed(sample_closely(pcurve, first, last));
     let mut cache = lock();
     if !cache.entries.iter().any(|e| same(e)) {
         cache.points += points.len();
-        cache.entries.push_back(CloseSamples { key, range: [first.to_bits(), last.to_bits()], pcurve: pcurve.clone(), points: points.clone() });
+        cache.entries.push_back(CloseSamples { key, range: [first.to_bits(), last.to_bits()], pcurve: pcurve.clone(), points: points.clone(), bounds });
         while cache.points > CLOSE_SAMPLES_POINTS || cache.entries.len() > CLOSE_SAMPLES_ENTRIES {
             let Some(old) = cache.entries.pop_front() else { break };
             cache.points -= old.points.len();
         }
     }
-    drop(cache);
-    std::sync::Arc::unwrap_or_clone(points)
+    (points, bounds)
 }
 
 /// Free-form pcurves' samples kept lately ([`sample_pcurve_closely`]), shared by the threads
@@ -948,7 +960,8 @@ struct CloseSamples {
     key: u64,
     range: [u64; 2],
     pcurve: Curve2,
-    points: std::sync::Arc<Vec<Uv>>,
+    points: Polyline,
+    bounds: (Uv, Uv),
 }
 
 static CLOSE_SAMPLES: std::sync::Mutex<CloseSampleCache> = std::sync::Mutex::new(CloseSampleCache { entries: std::collections::VecDeque::new(), points: 0 });
@@ -1046,11 +1059,11 @@ pub(super) fn signed_area(points: &[Uv]) -> f64 {
 /// Even-odd point location against closed polylines: true if inside. The ray is cast at
 /// an odd angle, so that it does not pass exactly through polyline vertices at "round"
 /// coordinates (where nearly coincident ends of adjacent polylines would count twice).
-pub(super) fn inside_polylines(polylines: &[Vec<Uv>], p: Uv) -> bool {
+pub(super) fn inside_polylines<P: AsRef<[Uv]>>(polylines: &[P], p: Uv) -> bool {
     let p = ray_turn(p);
     let mut inside = false;
     for poly in polylines {
-        for w in poly.windows(2) {
+        for w in poly.as_ref().windows(2) {
             if crosses_ray(ray_turn(w[0]), ray_turn(w[1]), p) {
                 inside = !inside;
             }
@@ -1161,9 +1174,9 @@ impl Strips {
 const ASKED_BEFORE_STRIPS: usize = 8;
 
 impl InsidePolylines {
-    pub fn new(polylines: &[Vec<Uv>]) -> Self {
+    pub fn new<P: AsRef<[Uv]>>(polylines: &[P]) -> Self {
         let mut runs = Vec::new();
-        for (polyline, poly) in polylines.iter().enumerate() {
+        for (polyline, poly) in polylines.iter().map(AsRef::as_ref).enumerate() {
             let mut from = 0;
             while from + 1 < poly.len() {
                 let to = (from + RUN).min(poly.len() - 1);
@@ -1181,7 +1194,7 @@ impl InsidePolylines {
     }
 
     /// Whether `p` lies inside `polylines` (those this was made for).
-    pub fn contains(&self, polylines: &[Vec<Uv>], p: Uv) -> bool {
+    pub fn contains<P: AsRef<[Uv]>>(&self, polylines: &[P], p: Uv) -> bool {
         let p = ray_turn(p);
         let mut crossings = 0;
         for run in &self.runs {
@@ -1196,7 +1209,7 @@ impl InsidePolylines {
             if p[0] > run.along.1 + margin {
                 continue;
             }
-            let points = &polylines[run.polyline][run.from..=run.to];
+            let points = &polylines[run.polyline].as_ref()[run.from..=run.to];
             let strips = match run.strips.get() {
                 Some(strips) => Some(strips),
                 None if run.asked.fetch_add(1, std::sync::atomic::Ordering::Relaxed) >= ASKED_BEFORE_STRIPS => Some(run.strips.get_or_init(|| Strips::new(points))),
@@ -1260,15 +1273,15 @@ impl<'a> Obstacles<'a> {
 }
 
 /// [`interior_point_avoiding`], with the obstacles indexed.
-pub(super) fn interior_point_among(polylines: &[Vec<Uv>], obstacles: &Obstacles) -> Uv {
+pub(super) fn interior_point_among<P: AsRef<[Uv]>>(polylines: &[P], obstacles: &Obstacles) -> Uv {
     // Only obstacles meeting the region's box can cut it.
     let region_box = polylines.iter().fold(([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]), |(lo, hi), p| {
-        let (a, b) = polyline_box(p);
+        let (a, b) = polyline_box(p.as_ref());
         ([lo[0].min(a[0]), lo[1].min(a[1])], [hi[0].max(b[0]), hi[1].max(b[1])])
     });
     let obstacles = obstacles.meeting(region_box);
     // The boundary's segments, then the obstacles': one list, seen in its two parts.
-    let mut segments: Vec<(Uv, Uv)> = polylines.iter().flat_map(|p| p.windows(2).map(|w| (w[0], w[1]))).collect();
+    let mut segments: Vec<(Uv, Uv)> = polylines.iter().flat_map(|p| p.as_ref().windows(2).map(|w| (w[0], w[1]))).collect();
     let boundary_count = segments.len();
     segments.extend(obstacles.iter().flat_map(|o| o.windows(2).map(|w| (w[0], w[1]))));
     let (boundary, blocking) = segments.split_at(boundary_count);
@@ -1337,7 +1350,7 @@ pub(super) fn interior_point_among(polylines: &[Vec<Uv>], obstacles: &Obstacles)
     if best.1 >= (1e-3 * size).min(narrow) {
         return best.0;
     }
-    let mut ys: Vec<f64> = polylines.iter().flatten().map(|p| p[1]).collect();
+    let mut ys: Vec<f64> = polylines.iter().flat_map(|p| p.as_ref()).map(|p| p[1]).collect();
     ys.extend(obstacles.iter().flat_map(|o| o.iter().map(|p| p[1])));
     ys.sort_by(f64::total_cmp);
     ys.dedup();
@@ -1583,6 +1596,6 @@ mod tests {
         let q = [c[0] + 0.5 * (0.5 * (a[0] + b[0]) - c[0]), c[1] + 0.5 * (0.5 * (a[1] + b[1]) - c[1])];
         let outline = |arc: Vec<Uv>| vec![arc, vec![[10.0, 0.0], [0.0, 0.0]]];
         assert!(!inside_polylines(&outline(sample_pcurve(&arch, 0.0, 1.0)), q));
-        assert!(inside_polylines(&outline(sample_pcurve_closely(&arch, 0.0, 1.0)), q));
+        assert!(inside_polylines(&outline(sample_pcurve_closely(&arch, 0.0, 1.0).to_vec()), q));
     }
 }

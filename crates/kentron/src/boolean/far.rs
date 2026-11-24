@@ -383,7 +383,7 @@ pub(super) fn states(graph: &graph::Graph) -> Option<Vec<super::classify::State>
     let classify = |i: usize| {
         let f = &graph.far[i];
         let polylines = &f.data.sample.polylines;
-        let own: Vec<&[geom::Uv]> = polylines.iter().map(|p| p.as_slice()).collect();
+        let own: Vec<&[geom::Uv]> = polylines.iter().map(|p| &p[..]).collect();
         let uv = geom::interior_point_among(polylines, &geom::Obstacles::new(&own));
         let p = geom::surface_point(&f.data.surface, uv);
         let outward = geom::normal_at(&f.data.surface, uv) * f.outward;
