@@ -28,7 +28,7 @@
 //!   own edges are not tested against it; another face's own lines are, with its larger
 //!   `TolZ`.
 //!
-//! What is not ported: OCCT sorts the interferences into transitions (`HLRBRep_EdgeIList`,
+//! Where this differs from OCCT: OCCT sorts the interferences into transitions (`HLRBRep_EdgeIList`,
 //! `HLRBRep_EdgeBuilder`) to find which stretches lie inside a face's projection and
 //! classifies only those (always, `IsSuspicion` being set); here every stretch is
 //! classified, which `Classify` answers alike for a stretch outside the projection. Outlines

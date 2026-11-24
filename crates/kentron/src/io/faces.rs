@@ -454,9 +454,9 @@ pub(crate) fn follows(pcurve: &Curve2, edge: &CurveSpan, surface: &Surface) -> b
 /// back on), `precision` the file's (OCCT's reading precision). An edge off the surface is
 /// projected all the same, as OCCT's readers do, its tolerance then covering the gap.
 ///
-/// Off planes, as OCCT's readers add pcurves (`ShapeFix_Edge::FixAddPCurve`): by its
-/// `ShapeConstruct_ProjectCurveOnSurface`, ported, the edge's vertices' tolerances the
-/// precision; then remade where it strays from the curve at the same parameters
+/// Off planes, where OCCT's readers add pcurves (`ShapeFix_Edge::FixAddPCurve`): by
+/// kentron's own projector ([`PCurveProjector`](crate::geometry::pcurve_projection)), the
+/// edge's vertices' tolerances the precision; then remade where it strays from the curve at the same parameters
 /// ([`same_parameter`](crate::geometry::same_parameter::same_parameter)).
 pub(crate) fn project(edge: &CurveSpan, surface: &Surface, has_pcurve: bool, precision: f64) -> Result<Curve2> {
     // (An edge running its curve backwards: the pcurve over the range the other way round, at
