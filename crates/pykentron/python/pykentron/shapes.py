@@ -1097,8 +1097,7 @@ class Mixin1D:
         return [Vector(d[0]) for d in self._derivatives(us)]
 
     def sample(self, n) -> Tuple[List[Vector], List[float]]:
-        """Points along the curve and their parameters: `n` of them spread evenly, or (`n` a
-        float) as many as keep the chords within deflection `n` of the curve, found as OCCT's
+        # CLEAN-ROOM GAP: 2 lines removed; rewrite from the cleanroom spec `quasi_uniform_sampling.md (docstring lines)`.
         GCPnts_QuasiUniformDeflection finds them (halving where the chord strays too far)."""
         first, last, closed, _, _ = self._info()
         if isinstance(n, int):
@@ -1505,59 +1504,7 @@ def _helix_spans(turns: float, radius: float, tolerance: float = 5e-7, max_degre
         spans *= 2
 
 
-def _quasi_uniform_deflection(edge: "Edge", deflection: float, u1: float, u2: float) -> List[float]:
-    """The parameters OCCT's GCPnts_QuasiUniformDeflection takes along `edge` over [`u1`, `u2`]
-    (its curve continuous in tangent): from the start, each next point where the chord to it
-    strays within `deflection` of the curve, the step halved until it does (the stray
-    estimated from the turn of the tangent, else measured midway)."""
-    kind = edge.geomType()
-    if kind == "LINE":
-        return [u1, u2]
-    if kind == "CIRCLE":
-        step = 2.0 * math.acos(max(1.0 - deflection / edge.radius(), 0.0))
-        count = int((u2 - u1) / step) + 2
-        return [u1 + (u2 - u1) * i / (count - 1) for i in range(count)]
-    point = lambda u: Vector(edge._derivatives([u])[0][0])
-    d1 = lambda u: (lambda d: (Vector(d[0]), Vector(d[1])))(edge._derivatives([u])[0])
-    # (OCCT's tolerance in the parameter: 1e-7 over the curve's speed.)
-    speed = max(Vector(d[1]).Length for d in edge._derivatives([u1 + (u2 - u1) * i / 8 for i in range(9)]))
-    eps2 = (1e-7 / max(speed, 1e-300)) ** 2
-    d2 = deflection * deflection
-    out = [u1]
-    calls = [0]
-
-    def fleche(ua, pa, va, ub, pb, vb, nbmin, count):
-        calls[0] += 1
-        if calls[0] >= 2000 or (calls[0] > 100 and count() < 2):
-            calls[0] -= 1
-            return
-        before = count()
-        du = ub - ua
-        if nbmin > 2:
-            du /= nbmin - 1
-            pd, vd = d1(ua + du)
-        else:
-            pd, vd = pb, vb
-        norm = (pd - pa).Length ** 2
-        f, ok = 0.0, False
-        if norm > eps2 and va.Length ** 2 > eps2 and vd.Length ** 2 > eps2:
-            diff = (va.normalized() - vd.normalized()).Length ** 2
-            if diff > eps2:
-                f, ok = diff * norm / 64.0, True
-        if not ok:
-            f = ((pa + pd) * 0.5 - point(ua + du * 0.5)).Length ** 2
-        if f < d2:
-            out.append(ua + du)
-        else:
-            fleche(ua, pa, va, ua + du, pd, vd, 3, count)
-        if nbmin > 2:
-            fleche(ua + du, pd, vd, ub, pb, vb, nbmin - (count() - before), count)
-        calls[0] -= 1
-
-    pa, va = d1(u1)
-    pb, vb = d1(u2 - abs(u2) * 2.2e-16 * 10.0 if u2 else u2)
-    fleche(u1, pa, va, u2, pb, vb, 2, lambda: len(out))
-    return out
+# CLEAN-ROOM GAP: 53 lines removed; rewrite from the cleanroom spec `quasi_uniform_sampling.md`.
 
 
 def _start_vertex(edge: Edge) -> Vertex:

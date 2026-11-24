@@ -655,41 +655,7 @@ fn torus_elementary(torus: &crate::geometry::surface::Torus, other: &Surface, to
     if circles.is_empty() { Q::Empty } else { Q::Circles(circles) }
 }
 
-/// A sphere with its centre on a cone's axis meets the cone in circles about the axis, a
-/// circle of no size being a point (the apex on the sphere), as OCCT's
-/// IntAna_QuadQuadGeo::Perform(gp_Sphere, gp_Cone): with x along the axis from the
-/// sphere's centre away from the apex, d the apex's distance from the centre and t the
-/// tangent of the cone's half-angle, x² + y² = R² and y = t (x + d), so
-/// (1 + t²) x² + 2 t² d x + t² d² - R² = 0.
-fn sphere_cone(sphere: &crate::geometry::surface::Sphere, cone: &crate::geometry::surface::Cone) -> QuadricIntersection {
-    use QuadricIntersection as Q;
-    let center = sphere.frame().origin();
-    let apex = cone.apex();
-    let d = center.distance(apex);
-    let axis = if d > f64::EPSILON { Direction::from_vector(center - apex) } else { cone.frame().z() };
-    let radius = sphere.radius();
-    let (sin, cos) = cone.semi_angle_sin_cos();
-    let t2 = (sin / cos).powi(2);
-    let roots = crate::geometry::polynomial_roots::PolynomialRoots::quadratic(1.0 + t2, 2.0 * t2 * d, t2 * d * d - radius * radius);
-    let (mut circles, mut points) = (Vec::new(), Vec::new());
-    for &x in &roots.roots {
-        let along = d + x;
-        let c = apex + Vector::from(axis) * along;
-        let r = (sin / cos * along).abs();
-        // (OCCT's least circle radius, myEPSILON_MINI_CIRCLE_RADIUS.)
-        if r <= 0.01 * crate::tolerance::LINEAR {
-            points.push(c);
-        } else {
-            circles.push(Circle::new(Frame::from_z(c, axis), r));
-        }
-    }
-    match (circles.is_empty(), points.is_empty()) {
-        (true, true) => Q::Empty,
-        (false, true) => Q::Circles(circles),
-        (true, false) => Q::Points(points),
-        (false, false) => Q::CirclesAndPoints(circles, points),
-    }
-}
+// CLEAN-ROOM GAP: 35 lines removed; rewrite from the cleanroom spec `sphere_cone.md`.
 
 /// Two cones on one axis meet in circles: where their meridians (lines in the plane of
 /// height along the axis and signed radius) give the same distance from the axis. `None`

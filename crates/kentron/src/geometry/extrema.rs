@@ -127,35 +127,7 @@ fn norm(a: [f64; 3]) -> f64 {
     dot(a, a).sqrt()
 }
 
-/// An interval `[lo, hi]` (empty when `lo > hi`), as OCCT's `Bnd_Range`.
-#[derive(Clone, Copy)]
-struct Range {
-    lo: f64,
-    hi: f64,
-}
-
-impl Range {
-    const EMPTY: Range = Range { lo: f64::INFINITY, hi: f64::NEG_INFINITY };
-    fn of(a: f64, b: f64) -> Range {
-        Range { lo: a.min(b), hi: a.max(b) }
-    }
-    fn add(&mut self, x: f64) {
-        self.lo = self.lo.min(x);
-        self.hi = self.hi.max(x);
-    }
-    fn common(self, other: Range) -> Range {
-        Range { lo: self.lo.max(other.lo), hi: self.hi.min(other.hi) }
-    }
-    fn is_void(self) -> bool {
-        self.lo > self.hi
-    }
-    fn delta(self) -> f64 {
-        if self.is_void() { 0.0 } else { self.hi - self.lo }
-    }
-    fn middle(self) -> f64 {
-        0.5 * (self.lo + self.hi)
-    }
-}
+// CLEAN-ROOM GAP: 29 lines removed; rewrite from the cleanroom spec `extrema_parallel.md`.
 
 /// The extrema of two curves (2D or 3D): parallel and concentric lines and circles by
 /// OCCT's rules (`Extrema_ExtCC`), other pairs by Newton steps from a grid of parameters.
@@ -192,51 +164,7 @@ where
         CurveCurveExtrema::Isolated(v)
     };
     match (ka, kb) {
-        (Kind::Line { origin: oa, direction: da }, Kind::Line { origin: ob, direction: db }) if norm(cross(*da, *db)) <= 1e-12 => {
-            // Parallel lines: as many solutions where the ranges face each other.
-            let distance = norm(cross(minus(*oa, *ob), *db));
-            if (infinite(u11) && infinite(u12)) || (infinite(u21) && infinite(u22)) {
-                return CurveCurveExtrema::Parallel { distance };
-            }
-            let opposite = dot(*da, *db) < 0.0;
-            let on_b = |t: f64| dot(minus(a.point(t).coords(), *ob), *db);
-            let mut projected = Range::EMPTY;
-            let big = crate::tolerance::INFINITE;
-            projected.add(if infinite(u11) { if opposite { big } else { -big } } else { on_b(u11) });
-            projected.add(if infinite(u12) { if opposite { -big } else { big } } else { on_b(u12) });
-            let common = Range::of(u21, u22).common(projected);
-            if common.delta() > confusion {
-                CurveCurveExtrema::Parallel { distance }
-            } else if !common.is_void() {
-                let t2 = common.middle();
-                let t1 = dot(minus(b.point(t2).coords(), *oa), *da);
-                isolated(vec![make(t1, t2)])
-            } else {
-                isolated(ends().into_iter().collect())
-            }
-        }
-        (Kind::Line { origin, direction }, Kind::Circle { center, normal, radius, .. })
-        | (Kind::Circle { center, normal, radius, .. }, Kind::Line { origin, direction })
-            if norm(cross(*direction, *normal)) <= 1e-12 && norm(cross(minus(*center, *origin), *direction)) <= confusion =>
-        {
-            // A circle round the line: parallel if the circle's plane crosses the line's
-            // range.
-            let line_first = matches!(ka, Kind::Line { .. });
-            let (lo, hi) = if line_first { (u11, u12) } else { (u21, u22) };
-            let on_line = dot(minus(*center, *origin), *direction);
-            match on_line >= lo - confusion && on_line <= hi + confusion {
-                true => CurveCurveExtrema::Parallel { distance: *radius },
-                false => isolated(Vec::new()),
-            }
-        }
-        (
-            Kind::Circle { center: ca, normal: na, radius: ra, .. },
-            Kind::Circle { center: cb, x: xb, y: yb, normal: nb, radius: rb },
-        ) if norm(cross(*na, *nb)) <= 1e-12 && norm(cross(minus(*cb, *ca), *na)) <= confusion => {
-            let height = dot(minus(*cb, *ca), *na);
-            let square_distance = (ra - rb).powi(2) + height * height;
-            concentric(a, b, (u11, u12, u21, u22), (*cb, *xb, *yb), square_distance, *ra, *rb, &make, ends)
-        }
+        // CLEAN-ROOM GAP: 45 lines removed; rewrite from the cleanroom spec `extrema_parallel.md (three arms of curves_extrema)`.
         _ => {
             let mut found: Vec<CurveExtremum<C::Point>> = stationary_pairs(a, b, ka, kb).into_iter().map(|(t1, t2)| make(t1, t2)).collect();
             // Beyond lines and conics, the global minimum too where it is at an end (as
@@ -279,104 +207,7 @@ where
     best
 }
 
-/// Coaxial circles (OCCT's circle-circle `PrepareParallelResult`): parallel where the
-/// arcs face each other, else the touching or closest pairs.
-#[allow(clippy::too_many_arguments)]
-fn concentric<C>(
-    a: &C,
-    b: &C,
-    (u11, u12, u21, u22): (f64, f64, f64, f64),
-    (cb, xb, yb): ([f64; 3], [f64; 3], [f64; 3]),
-    square_distance: f64,
-    ra: f64,
-    rb: f64,
-    make: &dyn Fn(f64, f64) -> CurveExtremum<C::Point>,
-    ends: impl Fn() -> Option<CurveExtremum<C::Point>>,
-) -> CurveCurveExtrema<C::Point>
-where
-    C: ParametricCurve,
-    C::Point: ControlPoint<Vector = C::Vector>,
-{
-    use std::f64::consts::PI;
-    let period = 2.0 * PI;
-    let in_period = |x: f64, lo: f64| lo + (x - lo).rem_euclid(period);
-    // The angle of a point about circle b.
-    let angle_on_b = |p: [f64; 3]| {
-        let r = minus(p, cb);
-        dot(r, yb).atan2(dot(r, xb)).rem_euclid(period)
-    };
-    let precision = (ra.abs() * f64::EPSILON).max(rb.abs() * f64::EPSILON);
-    let angular = 1e-12;
-    let confusion = crate::tolerance::LINEAR;
-    let (p11, tangent1) = a.d1(u11);
-    let p12 = a.point(u12);
-    let range = Range::of(u21, u22);
-    let par1 = in_period(angle_on_b(p11.coords()), u21);
-    let tangent2 = b.d1(par1).1;
-    let opposite = dot(C::Point::vector_coords(tangent1), C::Point::vector_coords(tangent2)) < 0.0;
-    let mut par2 = in_period(angle_on_b(p12.coords()), u21);
-    if opposite {
-        if range.delta() > angular && par1 - par2 < angular {
-            par2 -= period;
-        }
-    } else if range.delta() > angular && par2 - par1 < angular {
-        par2 += period;
-    }
-    let mut projected = Range::EMPTY;
-    projected.add(par1 - period);
-    projected.add(par2 - period);
-    // The extrema from a point of circle b to arc a.
-    let from_b = |t2: f64| -> Vec<PointExtremum<C::Point>> {
-        PointCurveSearch::with_domain(a, u11, u12).find(b.point(t2), confusion).map(|r| r.extrema).unwrap_or_default()
-    };
-    let mut parallel: Option<f64> = None;
-    let mut found: Vec<CurveExtremum<C::Point>> = Vec::new();
-    let mut min_square = f64::INFINITY;
-    for _ in 0..3 {
-        let common = projected.common(range);
-        if common.delta() > confusion {
-            let extrema = from_b(common.middle());
-            if let Some(min) = extrema.iter().map(|e| e.square_distance).reduce(f64::min) {
-                if min <= min_square + (1.0 + min) * precision {
-                    found.clear();
-                    parallel = Some(min);
-                    let delta = min - square_distance;
-                    if delta * delta < 4.0 * min.max(square_distance) * confusion * confusion {
-                        break;
-                    }
-                }
-            }
-        } else if !common.is_void() {
-            let t2 = common.middle();
-            let extrema = from_b(t2);
-            let nearer = parallel.is_none() || extrema.iter().any(|e| e.square_distance < min_square);
-            if nearer {
-                found.clear();
-                parallel = None;
-                for e in &extrema {
-                    found.push(make(e.parameter, t2));
-                    min_square = min_square.min(e.square_distance);
-                }
-            }
-        } else if let Some(e) = ends() {
-            let d = e.distance * e.distance;
-            if d <= min_square + (1.0 + d) * precision {
-                parallel = None;
-                found = vec![e];
-                min_square = min_square.min(d);
-            }
-        }
-        projected.lo += PI;
-        projected.hi += PI;
-    }
-    match parallel {
-        Some(d) => CurveCurveExtrema::Parallel { distance: d.sqrt() },
-        None => {
-            found.sort_by(|x, y| x.distance.total_cmp(&y.distance));
-            CurveCurveExtrema::Isolated(found)
-        }
-    }
-}
+// CLEAN-ROOM GAP: 98 lines removed; rewrite from the cleanroom spec `extrema_parallel.md`.
 
 /// The parameters of the stationary pairs of the distance between two curves (minima,
 /// maxima and saddles), within their ranges: Newton steps on `(A - B)·A' = 0` and

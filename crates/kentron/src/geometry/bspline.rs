@@ -600,38 +600,7 @@ impl<P: ControlPoint> BSplineCurve<P> {
     }
 
     /// Moves knot `i` to `value`; panics if that breaks the knots' increasing order.
-    /// The curve reversed as OCCT's `Geom_BSplineCurve::Reverse` reverses it, its knots by
-    /// `BSplCLib::Reverse` (each the previous plus the original step, from either end: not
-    /// `first + last - knot`, whose roundings differ).
-    pub(crate) fn reverse_as_occt(&mut self) {
-        let original = self.knots.clone();
-        self.reverse();
-        let mut knots = original.clone();
-        let (mut first, mut last) = (0usize, original.len() - 1);
-        let (mut kfirst, mut klast) = (original[first], original[last]);
-        let (mut tfirst, mut tlast) = (kfirst, klast);
-        first += 1;
-        last -= 1;
-        while first <= last {
-            tfirst += klast - original[last];
-            tlast -= original[first] - kfirst;
-            kfirst = original[first];
-            klast = original[last];
-            knots[first] = tfirst;
-            knots[last] = tlast;
-            first += 1;
-            if last == 0 {
-                break;
-            }
-            last -= 1;
-        }
-        self.knots = knots;
-        self.flat = match self.periodic {
-            true => periodic_flatten(&self.knots, &self.multiplicities, self.degree),
-            false => flatten(&self.knots, &self.multiplicities),
-        };
-        self.segments = Default::default();
-    }
+    // CLEAN-ROOM GAP: 32 lines removed; rewrite from the cleanroom spec `bspline_adapted.md`.
 
     pub fn set_knot(&mut self, i: usize, value: f64) {
         let last = self.knots.len() - 1;
@@ -795,124 +764,9 @@ impl<P: ControlPoint> BSplineCurve<P> {
         self.set_periodic_form(super::knots::Periodic { degree: self.degree, knots, multiplicities, poles });
     }
 
-    /// Moves the curve so that the point at `u` becomes `target`, changing only poles
-    /// `first_pole..=last_pole`. Returns the range of poles actually modified, or `None`
-    /// if that was not possible.
-    pub fn move_point(&mut self, u: f64, target: P, first_pole: usize, last_pole: usize) -> Option<(usize, usize)> {
-        // As OCCT's BSplCLib::MovePoint: the poles round the most influential one move,
-        // less the further they are from it.
-        if self.periodic || first_pole > last_pole || last_pole >= self.poles.len() {
-            return None;
-        }
-        let (start, basis) = nonzero_basis(&self.flat, self.degree, u)?;
-        let along = Influence::new(start, &basis, first_pole, last_pole)?;
-        let (mut d1, mut d2) = (0.0, 0.0);
-        for (k, &b) in basis.iter().enumerate() {
-            let i = start + k;
-            let h = if self.is_rational() { self.weight(i) * b } else { b };
-            d2 += h;
-            if along.covers(i) {
-                d1 += h / (along.distance(i) + 1.0);
-            }
-        }
-        if !(d1 > 0.0) {
-            return None;
-        }
-        let coef = if self.is_rational() { d2 / d1 } else { 1.0 / d1 };
-        let (now, goal) = (self.point(u).coords(), target.coords());
-        for i in along.first..=along.last {
-            let f = coef / (along.distance(i) + 1.0);
-            let c = self.poles[i].coords();
-            self.set_pole(i, P::from_coords([0, 1, 2].map(|a| c[a] + f * (goal[a] - now[a]))));
-        }
-        Some((along.first, along.last))
-    }
+    // CLEAN-ROOM GAP: 32 lines removed; rewrite from the cleanroom spec `bspline_adapted.md`.
 
-    /// Changes the poles so that the curve passes through `target` at `u` with derivative
-    /// `tangent` there, as OCCT's `MovePointAndTangent`: two smooth bumps over the poles
-    /// (cubic in the poles' Greville abscissae, peaking at the abscissae nearest `u`)
-    /// carry the corrections. The first `starting + 1` and last `ending + 1` poles stay
-    /// put (each from -1, none, up to the degree); `u` must lie within `tolerance` inside
-    /// the ends unless they are free. `None` (the curve unchanged) where there is not
-    /// enough freedom, or for a periodic curve.
-    #[doc(alias = "Geom_BSplineCurve::MovePointAndTangent")]
-    pub fn move_point_and_tangent(&mut self, u: f64, target: P, tangent: P::Vector, tolerance: f64, starting: i32, ending: i32) -> Option<()> {
-        if self.periodic {
-            return None;
-        }
-        let degree = self.degree as i32;
-        let flat = self.flat.clone();
-        let n = self.poles.len();
-        if !((-1..=degree).contains(&starting) && (-1..=degree).contains(&ending) && (starting + ending + 4) as usize <= n) {
-            return None;
-        }
-        // (1-based indices, as OCCT's.)
-        let knot = |i: usize| flat[i - 1];
-        let (start, end) = (self.degree + 1, flat.len() - self.degree);
-        let inside_start = if starting == -1 { knot(start) <= u } else { knot(start) + tolerance < u };
-        let inside_end = if ending == -1 { knot(end) >= u } else { knot(end) - tolerance > u };
-        if !(inside_start && inside_end) {
-            return None;
-        }
-        // The Greville (Schoenberg) abscissae of the poles.
-        let s: Vec<f64> = (1..=n).map(|i| (1..=self.degree).map(|j| knot(i + j)).sum::<f64>() / self.degree as f64).collect();
-        let at = |i: usize| s[i - 1];
-        let (first, last) = ((starting + 2) as usize, n - ending as usize - 1);
-        let index = locate_in(&s, u, first, last);
-        let other = if index == first {
-            index + 1
-        } else if index == last {
-            index - 1
-        } else if u - knot(index) < knot(index + 1) - u {
-            index - 1
-        } else {
-            index + 1
-        };
-        let start_value = if first == 1 { at(1) - (at(n) - at(1)) } else { at(first - 1) };
-        let end_value = if last == n { at(n) + (at(n) - at(1)) } else { at(last + 1) };
-        // A bump over the poles first..=last, 1 at the pole `peak`.
-        let bump = |peak: usize| {
-            let mut f = vec![0.0; n + 1];
-            let rise = 1.0 / (at(peak) - start_value);
-            for (i, fi) in f.iter_mut().enumerate().take(peak + 1).skip(first) {
-                *fi = ((at(i) - start_value) * rise).powi(3);
-            }
-            let fall = 1.0 / (end_value - at(peak));
-            for (i, fi) in f.iter_mut().enumerate().take(last + 1).skip(peak) {
-                *fi = ((end_value - at(i)) * fall).powi(3);
-            }
-            f
-        };
-        let (f1, f2) = (bump(index), bump(other));
-        // Each bump's value and derivative at u, as a function on the curve's basis (and
-        // weights).
-        let as_function = |f: &[f64]| -> Option<(f64, f64)> {
-            let poles: Vec<crate::math::Point2> = f[1..].iter().map(|&x| crate::math::Point2::new(x, 0.0)).collect();
-            let mut c = BSplineCurve::<crate::math::Point2>::try_new(poles, self.knots.clone(), self.multiplicities.clone(), self.degree).ok()?;
-            if let Some(w) = &self.weights {
-                c = c.with_weights(w.clone());
-            }
-            let (p, d) = c.d1(u);
-            Some((p.x, d.x))
-        };
-        let ((v1, d1), (v2, d2)) = (as_function(&f1)?, as_function(&f2)?);
-        // [v1 d1; v2 d2]⁻¹ applied to (Δ point, Δ derivative).
-        let det = v1 * d2 - d1 * v2;
-        if det.abs() <= 1e-300 {
-            return None;
-        }
-        let (now, slope) = self.d1(u);
-        let (now, slope, goal, tangent) = (now.coords(), P::vector_coords(slope), target.coords(), P::vector_coords(tangent));
-        let delta: [f64; 3] = std::array::from_fn(|k| goal[k] - now[k]);
-        let delta_d: [f64; 3] = std::array::from_fn(|k| tangent[k] - slope[k]);
-        let a: [f64; 3] = std::array::from_fn(|k| (d2 * delta[k] - v2 * delta_d[k]) / det);
-        let b: [f64; 3] = std::array::from_fn(|k| (-d1 * delta[k] + v1 * delta_d[k]) / det);
-        for i in 0..n {
-            let c = self.poles[i].coords();
-            self.set_pole(i, P::from_coords(std::array::from_fn(|k| c[k] + f1[i + 1] * a[k] + f2[i + 1] * b[k])));
-        }
-        Some(())
-    }
+    // CLEAN-ROOM GAP: 85 lines removed; rewrite from the cleanroom spec `bspline_adapted.md`.
 
     /// The knots bounding `u`: `(i, i)` if `u` is knot `i` within `tolerance`, otherwise
     /// `(i, i + 1)` with `knot(i) < u < knot(i + 1)`.
@@ -2167,51 +2021,7 @@ impl BSplineSurface {
         }
     }
 
-    /// See [`BSplineCurve::move_point`]; pole ranges are given per direction and the
-    /// modified ranges `(u_first, u_last, v_first, v_last)` are returned.
-    pub fn move_point(
-        &mut self,
-        u: f64,
-        v: f64,
-        target: Point,
-        u_poles: (usize, usize),
-        v_poles: (usize, usize),
-    ) -> Option<(usize, usize, usize, usize)> {
-        // As OCCT's BSplSLib::MovePoint.
-        let (rows, cols) = (self.poles.len(), self.poles[0].len());
-        if self.u.periodic || self.v.periodic || u_poles.0 > u_poles.1 || v_poles.0 > v_poles.1 || u_poles.1 >= rows || v_poles.1 >= cols {
-            return None;
-        }
-        let (u_start, u_basis) = nonzero_basis(&flatten(&self.u.knots, &self.u.multiplicities), self.u.degree, u)?;
-        let (v_start, v_basis) = nonzero_basis(&flatten(&self.v.knots, &self.v.multiplicities), self.v.degree, v)?;
-        let along_u = Influence::new(u_start, &u_basis, u_poles.0, u_poles.1)?;
-        let along_v = Influence::new(v_start, &v_basis, v_poles.0, v_poles.1)?;
-        let rational = self.weights.is_some();
-        let (mut d1, mut d2) = (0.0, 0.0);
-        for (a, &bu) in u_basis.iter().enumerate() {
-            for (b, &bv) in v_basis.iter().enumerate() {
-                let (i, j) = (u_start + a, v_start + b);
-                let h = if rational { self.weight(i, j) * bu * bv } else { bu * bv };
-                d2 += h;
-                if along_u.covers(i) && along_v.covers(j) {
-                    d1 += h / (along_u.distance(i) + along_v.distance(j) + 1.0);
-                }
-            }
-        }
-        if !(d1 > 0.0) {
-            return None;
-        }
-        let coef = if rational { d2 / d1 } else { 1.0 / d1 };
-        let displacement = target - super::ParametricSurface::point(self, u, v);
-        for i in along_u.first..=along_u.last {
-            for j in along_v.first..=along_v.last {
-                let f = coef / (along_u.distance(i) + along_v.distance(j) + 1.0);
-                let moved = self.poles[i][j] + displacement * f;
-                self.set_pole(i, j, moved);
-            }
-        }
-        Some((along_u.first, along_u.last, along_v.first, along_v.last))
-    }
+    // CLEAN-ROOM GAP: 45 lines removed; rewrite from the cleanroom spec `bspline_adapted.md`.
 
     /// See [`BSplineCurve::locate`].
     pub fn locate_u(&self, u: f64, tolerance: f64) -> (usize, usize) {
@@ -2311,73 +2121,9 @@ impl BSplineSurface {
     }
 }
 
-/// The first pole index whose basis function of degree `p` is non-zero at `u`, and the
-/// `p + 1` values from there.
-fn nonzero_basis(flat: &[f64], p: usize, u: f64) -> Option<(usize, Vec<f64>)> {
-    let m = flat.len();
-    if m < 2 * p + 2 || !u.is_finite() {
-        return None;
-    }
-    // The span: flat[s] <= u < flat[s + 1], within the domain's spans.
-    let s = flat.partition_point(|&k| k <= u).saturating_sub(1).clamp(p, m - p - 2);
-    let mut n = vec![0.0; p + 1];
-    let (mut left, mut right) = (vec![0.0; p + 1], vec![0.0; p + 1]);
-    n[0] = 1.0;
-    for j in 1..=p {
-        left[j] = u - flat[s + 1 - j];
-        right[j] = flat[s + j] - u;
-        let mut saved = 0.0;
-        for r in 0..j {
-            let denom = right[r + 1] + left[j - r];
-            let t = if denom != 0.0 { n[r] / denom } else { 0.0 };
-            n[r] = saved + right[r + 1] * t;
-            saved = left[j - r] * t;
-        }
-        n[j] = saved;
-    }
-    Some((s - p, n))
-}
+// CLEAN-ROOM GAP: 26 lines removed; rewrite from the cleanroom spec `bspline_adapted.md`.
 
-/// Which poles a point move shifts (OCCT's BSplCLib::MovePoint): those allowed and
-/// non-zero at the point, by their index distance from the one or two with the largest
-/// basis value.
-struct Influence {
-    first: usize,
-    last: usize,
-    peak: (usize, usize),
-}
-
-impl Influence {
-    fn new(start: usize, basis: &[f64], allowed_first: usize, allowed_last: usize) -> Option<Self> {
-        let first = start.max(allowed_first);
-        let last = (start + basis.len() - 1).min(allowed_last);
-        if first > last {
-            return None;
-        }
-        let (mut peak, mut best) = (first, 0.0);
-        for i in first..=last {
-            if basis[i - start] > best {
-                (peak, best) = (i, basis[i - start]);
-            }
-        }
-        let second = if peak + 1 <= last && (basis[peak + 1 - start] - best).abs() < 1e-10 { peak + 1 } else { peak };
-        Some(Self { first, last, peak: (peak, second) })
-    }
-
-    fn covers(&self, i: usize) -> bool {
-        (self.first..=self.last).contains(&i)
-    }
-
-    fn distance(&self, i: usize) -> f64 {
-        if i < self.peak.0 {
-            (self.peak.0 - i) as f64
-        } else if i > self.peak.1 {
-            (i - self.peak.1) as f64
-        } else {
-            0.0
-        }
-    }
-}
+// CLEAN-ROOM GAP: 40 lines removed; rewrite from the cleanroom spec `bspline_adapted.md`.
 
 /// The knots bounding `x` (see [`BSplineCurve::locate`]).
 fn locate_knot(knots: &[f64], x: f64, tolerance: f64) -> (usize, usize) {
@@ -2933,19 +2679,4 @@ mod fast_evaluation_tests {
     }
 }
 
-/// The interval of `u` among the increasing `values` (1-based, as OCCT's
-/// `BSplCLib::LocateParameter`): the last `i` with `values[i] <= u` (a value equal to `u`
-/// within rounding counting as below), kept within `first..last` and past empty intervals.
-fn locate_in(values: &[f64], u: f64, first: usize, last: usize) -> usize {
-    let at = |i: usize| values[i - 1];
-    let eps = (values[values.len() - 1].abs().min(u.abs()) * f64::EPSILON).max(f64::MIN_POSITIVE);
-    let mut index = values.partition_point(|&x| x <= u);
-    if index < values.len() && (u - at(index + 1)).abs() <= eps {
-        index += 1;
-    }
-    index = index.clamp(first, last - 1);
-    while index != last - 1 && index < values.len() && (at(index + 1) - at(index)).abs() <= eps {
-        index += 1;
-    }
-    index
-}
+// CLEAN-ROOM GAP: 16 lines removed; rewrite from the cleanroom spec `bspline_adapted.md`.
