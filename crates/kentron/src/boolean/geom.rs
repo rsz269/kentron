@@ -797,6 +797,11 @@ pub(super) fn project_among(curve: &Curve, first: f64, last: f64, samples: Optio
         let t = clamp((p - line.origin).dot(Vector::from(line.direction)));
         return (t, curve.point(t).distance(p));
     }
+    // Conics in closed form: the nearest point within the range is one of the curve's
+    // critical points of the distance there, or an end.
+    if let Some(found) = conic_foot(curve, first, last, p) {
+        return found;
+    }
     // Coarse sampling, then Newton steps on (C(t) - p)·C'(t) = 0.
     let n = PROJECTION_SAMPLES;
     let mut best = (first, f64::INFINITY);
@@ -807,14 +812,7 @@ pub(super) fn project_among(curve: &Curve, first: f64, last: f64, samples: Optio
             best = (t, d);
         }
     };
-    let near = match curve {
-        Curve::Circle(circle) => circle_samples_near(circle, first, last, n, p),
-        _ => None,
-    };
-    match near {
-        Some(near) => near.into_iter().for_each(&mut sample),
-        None => (0..=n).for_each(&mut sample),
-    }
+    (0..=n).for_each(&mut sample);
     // Over a whole period of a periodic curve the parameter wraps round (a point just
     // before the curve's origin is not stuck at the range's start).
     let (lo, hi) = (first.min(last), first.max(last));
@@ -842,38 +840,152 @@ pub(super) fn project_among(curve: &Curve, first: f64, last: f64, samples: Optio
     if d < best.1 { (t, d) } else { best }
 }
 
-/// The samples `i` of `0..=n` (at `first + (last - first) i / n`) of a circle that can be
-/// nearest to `p`, in order: those next to the angle of `p` (and the ends), when all others
-/// are farther by much more than rounding (so that the samples' nearest is the same as
-/// among all); `None` where that is not clear (`p` near the axis, short steps).
-fn circle_samples_near(circle: &crate::geometry::curve::Circle, first: f64, last: f64, n: usize, p: Point) -> Option<Vec<usize>> {
-    let f = circle.frame();
-    let q = p - f.origin();
-    let (x, y) = (q.dot(Vector::from(f.x())), q.dot(Vector::from(f.y())));
-    let (r, rho) = (circle.radius(), x.hypot(y));
-    let step = (last - first) / n as f64;
-    // Samples 2.5 steps from the angle of p are farther than one half a step from it by
-    // about 2.5 r ρ step² / distance; required to dwarf the rounding of the distances.
-    let distance = (q.dot(q) + r * r).sqrt();
-    let scale = (f.origin() - Point::ORIGIN).length() + r + (p - Point::ORIGIN).length();
-    let gap = 2.5 * r * rho * step * step / distance.max(1e-300);
-    if !(gap > 1e-9 * scale) || (last - first).abs() > 4.0 * std::f64::consts::PI || n < 8 {
+/// [`project_among`] on a circle or an ellipse in closed form: the parameter in
+/// `[first, last]` of the point of `curve` nearest to `p`, and the distance; `None` for other
+/// curves and degenerate conics.
+///
+/// Measured in the conic's plane (the height above it adds the same to every point). The
+/// nearest point of the whole conic is taken where it lies in the range; elsewhere the
+/// nearest is at an end or at another minimum of the distance within the range (a circle has
+/// none; an ellipse one where the point is inside its evolute, see [`ellipse_feet`]).
+pub(super) fn conic_foot(curve: &Curve, first: f64, last: f64, p: Point) -> Option<(f64, f64)> {
+    let (lo, hi) = (first.min(last), first.max(last));
+    let tau = std::f64::consts::TAU;
+    let (frame, a, b) = match curve {
+        Curve::Circle(c) => (c.frame(), c.radius(), c.radius()),
+        Curve::Ellipse(e) => (e.frame(), e.major_radius(), e.minor_radius()),
+        _ => return None,
+    };
+    if !(b > 0.0) || !(a.is_finite() && lo.is_finite() && hi.is_finite()) {
         return None;
     }
-    let angle = y.atan2(x);
-    let tau = std::f64::consts::TAU;
-    let mut near = vec![0, 1, 2, n - 2, n - 1, n];
-    let lowest = ((first.min(last) - angle) / tau).floor() as i64;
-    for k in lowest - 1..=lowest + 3 {
-        let at = (angle + tau * k as f64 - first) / step;
-        if at > -4.0 && at < n as f64 + 4.0 {
-            let centre = at.round() as i64;
-            near.extend((centre - 3..=centre + 3).filter(|&i| i >= 0 && i <= n as i64).map(|i| i as usize));
+    let q = p - frame.origin();
+    let (x, y) = (q.dot(Vector::from(frame.x())), q.dot(Vector::from(frame.y())));
+    // The first turn of an angle at or past the range's start, if within the range.
+    let wrap = |angle: f64| {
+        let t = lo + (angle - lo).rem_euclid(tau);
+        if t <= hi {
+            Some(t)
+        } else {
+            // (Rounding in the wrap.)
+            (t - tau >= lo).then_some(t - tau)
+        }
+    };
+    let at = |t: f64| (t, curve.point(t).distance(p));
+    let mut feet = [0.0f64; 6];
+    let (nearest, count) = if a == b {
+        // (On the axis every point is as near: the range's start is taken.)
+        if x == 0.0 && y == 0.0 {
+            return Some(at(lo));
+        }
+        feet[0] = y.atan2(x);
+        (1, 1)
+    } else {
+        ellipse_feet(a, b, x, y, false, &mut feet)
+    };
+    // The nearest of the whole conic, where within the range.
+    if let Some(t) = feet[..nearest].iter().find_map(|&angle| wrap(angle)) {
+        return Some(at(t));
+    }
+    let (nearest, count) = if a == b { (nearest, count) } else { ellipse_feet(a, b, x, y, true, &mut feet) };
+    let mut best = at(lo);
+    for t in feet[nearest..count].iter().filter_map(|&angle| wrap(angle)).chain([hi]) {
+        let found = at(t);
+        if found.1 < best.1 {
+            best = found;
         }
     }
-    near.sort_unstable();
-    near.dedup();
-    Some(near)
+    Some(best)
+}
+
+/// The angles `t` of the ellipse `(a cos t, b sin t)` (`a > b > 0`) where the distance to
+/// the point `(x, y)` of its plane can be least, written to `out`: first those of the nearest
+/// point (two where `y = 0` puts it on either side of the major axis), then the others (a
+/// local minimum and the maximum beside it); returns how many are nearest and how many there
+/// are in all (only the nearest unless `all`).
+///
+/// At a foot point `(X, Y)` the gap to the point is along the normal: with a multiplier `s`,
+/// `X = a² x / (s + d)` and `Y = b² y / s` where `d = a² - b²`, the foot lying on the ellipse
+/// where `F(s) = (a x / (s + d))² + (b y / s)² = 1`. `F` falls from +∞ to 0 over `s > 0` (one
+/// root: the nearest point), is convex over `-d < s < 0` (two roots where the point is inside
+/// the evolute, `(a x)^⅔ + (b y)^⅔ < d^⅔`, else none) and rises over `s < -d` (the farthest
+/// point, not wanted). Each root is reached by Newton steps from a side where `F > 1`, which
+/// approach it without overshooting (`F` is convex). Where `y = 0` the roots near `s = 0` run
+/// into the pole there: the feet are then `X = a² x / d` with either sign of `Y`.
+pub(super) fn ellipse_feet(a: f64, b: f64, x: f64, y: f64, all: bool, out: &mut [f64; 6]) -> (usize, usize) {
+    let d = (a - b) * (a + b);
+    let (ax, by) = (a * x, b * y);
+    let (aa, bb) = (ax * ax, by * by);
+    // Newton steps on F(s) = 1 from `s` (where F(s) > 1), towards the root.
+    let root = |mut s: f64| {
+        for _ in 0..200 {
+            let (u, v) = (ax / (s + d), by / s);
+            let f = u * u + v * v - 1.0;
+            let df = -2.0 * (u * u / (s + d) + v * v / s);
+            if !(f > 0.0) || !(df != 0.0) || !df.is_finite() {
+                break;
+            }
+            let next = s - f / df;
+            if !next.is_finite() || next == s {
+                break;
+            }
+            s = next;
+        }
+        s
+    };
+    let mut n = 0;
+    let push = |xx: f64, yy: f64, n: &mut usize, out: &mut [f64; 6]| {
+        if xx.is_finite() && yy.is_finite() && *n < out.len() {
+            out[*n] = (yy / b).atan2(xx / a);
+            *n += 1;
+        }
+    };
+    let foot = |s: f64| (a * a * x / (s + d), b * b * y / s);
+    // Where F <= 1 at the pole (y = 0 inside the evolute's span, or the centre): the feet at
+    // the pole.
+    let start = by.abs().max(ax.abs() - d);
+    if start > 0.0 {
+        let (xx, yy) = foot(root(start));
+        push(xx, yy, &mut n, out);
+    } else {
+        let xx = (a * a * x / d).clamp(-a, a);
+        let yy = b * (1.0 - (xx / a).powi(2)).max(0.0).sqrt();
+        push(xx, yy, &mut n, out);
+        push(xx, -yy, &mut n, out);
+    }
+    let nearest = n;
+    // Inside the evolute: the other minimum and the maximum beside it.
+    if all && aa.cbrt() + bb.cbrt() < d.cbrt().powi(2) {
+        if aa > 0.0 {
+            // From the left of F's least value (at `s + d = a|x| / 2`, F >= 4).
+            let (xx, yy) = foot(root(-d + 0.5 * ax.abs()));
+            push(xx, yy, &mut n, out);
+        }
+        if bb > 0.0 {
+            // From its right (at `s = -b|y| / 2`).
+            let (xx, yy) = foot(root(-0.5 * by.abs()));
+            push(xx, yy, &mut n, out);
+        }
+    }
+    // Polish the others (found less precisely near the poles): Newton steps on
+    // g(t) = (E(t) - p)·E'(t).
+    let k = b * b - a * a;
+    for t in &mut out[nearest..n] {
+        for _ in 0..4 {
+            let (sn, cs) = t.sin_cos();
+            let g = k * sn * cs + ax * sn - by * cs;
+            let dg = k * (cs * cs - sn * sn) + ax * cs + by * sn;
+            let step = g / dg;
+            if !(step.abs() < 0.1) {
+                break;
+            }
+            *t -= step;
+            if step.abs() <= 1e-15 {
+                break;
+            }
+        }
+    }
+    (nearest, n)
 }
 
 /// Sample parameters along `[first, last]` of a curve, fine enough to approximate it in
@@ -1507,6 +1619,113 @@ pub(super) fn box_contains(b: &(Point, Point), p: Point) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The nearest point of a curve over a range by brute force: dense samples, then golden
+    /// section steps about the best.
+    fn nearest_by_samples(curve: &Curve, lo: f64, hi: f64, p: Point) -> (f64, f64) {
+        let n = 20000;
+        let step = (hi - lo) / n as f64;
+        let mut best = (lo, f64::INFINITY);
+        for i in 0..=n {
+            let t = lo + step * i as f64;
+            let d = curve.point(t).distance(p);
+            if d < best.1 {
+                best = (t, d);
+            }
+        }
+        let (mut x, mut y) = ((best.0 - step).max(lo), (best.0 + step).min(hi));
+        let ratio = 0.618_033_988_749_895;
+        for _ in 0..100 {
+            let (x1, x2) = (y - ratio * (y - x), x + ratio * (y - x));
+            if curve.point(x1).distance(p) < curve.point(x2).distance(p) {
+                y = x2;
+            } else {
+                x = x1;
+            }
+        }
+        let t = 0.5 * (x + y);
+        let d = curve.point(t).distance(p);
+        if d < best.1 { (t, d) } else { best }
+    }
+
+    /// Circles and ellipses (round, slender, flat to a sliver) projected onto in closed form
+    /// find the nearest point found by dense sampling, over whole turns and arcs (across the
+    /// angle's seam too), for points about them, on their axes (and the centre), on them,
+    /// inside the ellipse's evolute and on its major and minor axes there, and off the plane.
+    #[test]
+    fn conics_project_in_closed_form_as_dense_sampling_does() {
+        use crate::geometry::curve::{Circle, Ellipse};
+        use crate::math::{Direction, Frame};
+        let mut seed = 977u64;
+        let mut next = || {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (seed >> 11) as f64 / (1u64 << 53) as f64
+        };
+        let frame = Frame::new(Point::new(1.0, -2.0, 0.5), Direction::new(0.3, -0.4, 0.85), Direction::new(1.0, 0.2, 0.0));
+        let (x, y, z) = (Vector::from(frame.x()), Vector::from(frame.y()), Vector::from(frame.z()));
+        let curves = [
+            Curve::Circle(Circle::new(frame, 2.5)),
+            Curve::Ellipse(Ellipse::new(frame, 3.0, 2.0)),
+            Curve::Ellipse(Ellipse::new(frame, 5.0, 0.7)),
+            Curve::Ellipse(Ellipse::new(frame, 4.0, 0.01)),
+            Curve::Ellipse(Ellipse::new(frame, 1.0, 1.0 - 1e-9)),
+        ];
+        let tau = std::f64::consts::TAU;
+        let ranges = [(0.0, tau), (-1.0, tau - 1.0), (0.3, 2.0), (5.5, 7.0), (-3.0, -2.5), (2.0, 4.5)];
+        for curve in &curves {
+            let (a, b) = match curve {
+                Curve::Circle(c) => (c.radius(), c.radius()),
+                Curve::Ellipse(e) => (e.major_radius(), e.minor_radius()),
+                _ => unreachable!(),
+            };
+            let at = |u: f64, v: f64, h: f64| frame.origin() + x * u + y * v + z * h;
+            let mut points = vec![at(0.0, 0.0, 0.0), at(0.0, 0.0, 1.5), at(a, 0.0, 0.0), at(-a, 0.0, 0.3), at(0.0, b, 0.0), at(0.0, -b, 0.0)];
+            // Inside the evolute, on and beside the axes.
+            let d = (a * a - b * b) / a;
+            for f in [0.1, 0.5, 0.9, 0.999] {
+                points.extend([at(f * d, 0.0, 0.0), at(-f * d, 0.0, 0.2), at(f * d, 1e-12, 0.0), at(f * d, -1e-7, 0.0)]);
+                let e = ((a * a - b * b) / b).min(2.0 * a);
+                points.extend([at(0.0, f * e, 0.0), at(1e-12, f * e, 0.0), at(0.3 * f * d, 0.2 * f * e, 0.0)]);
+            }
+            for _ in 0..300 {
+                let (u, v, h) = ((2.0 * next() - 1.0) * 1.6 * a, (2.0 * next() - 1.0) * 1.6 * a, (2.0 * next() - 1.0) * a);
+                points.push(at(u, v, if next() < 0.5 { 0.0 } else { h }));
+            }
+            // On the curve.
+            for k in 0..40 {
+                points.push(curve.point(k as f64 * 0.1618 * tau));
+            }
+            for &(lo, hi) in &ranges {
+                for &p in &points {
+                    let (t, dist) = conic_foot(curve, lo, hi, p).unwrap();
+                    assert!(t >= lo && t <= hi, "{curve:?} {p:?}: {t} outside {lo}..{hi}");
+                    // (A distance to a point of the curve within the range: none nearer.)
+                    assert!((curve.point(t).distance(p) - dist).abs() <= 1e-12 * (1.0 + dist));
+                    let (_, brute) = nearest_by_samples(curve, lo, hi, p);
+                    assert!(dist <= brute + 1e-12 * (1.0 + a), "{curve:?} {p:?} over {lo}..{hi}: {dist} farther than sampled {brute}");
+                }
+            }
+        }
+    }
+
+    /// The feet of an ellipse's critical points: the distance's derivative vanishes at each,
+    /// and the nearest is listed first.
+    #[test]
+    fn ellipse_feet_are_critical_points() {
+        let (a, b) = (3.0, 1.0);
+        let mut out = [0.0; 6];
+        for &(x, y) in &[(0.5, 0.2), (2.0, 0.1), (0.0, 0.3), (0.7, 0.0), (5.0, 4.0), (-0.3, -0.1), (2.5, 0.0), (0.0, 0.0), (1e-9, 1e-9)] {
+            let (nearest, all) = ellipse_feet(a, b, x, y, true, &mut out);
+            assert!(nearest >= 1 && all >= nearest);
+            let dist = |t: f64| (a * t.cos() - x).hypot(b * t.sin() - y);
+            for &t in &out[..all] {
+                let g = (b * b - a * a) * t.sin() * t.cos() + a * x * t.sin() - b * y * t.cos();
+                assert!(g.abs() <= 1e-9, "({x}, {y}): g({t}) = {g}");
+            }
+            let least = (0..100000).map(|i| dist(std::f64::consts::TAU * i as f64 / 100000.0)).fold(f64::INFINITY, f64::min);
+            assert!(dist(out[0]) <= least + 1e-12, "({x}, {y}): {} > {least}", dist(out[0]));
+        }
+    }
     use crate::geometry::curve2::BezierCurve2;
     use crate::math::Point2;
 

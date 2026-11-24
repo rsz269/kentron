@@ -19,6 +19,7 @@ use super::graph::{Chords, Edge, Face, Graph, Location};
 const TANGENT_SINE: f64 = 0.05;
 
 /// How a curve meets a surface.
+#[derive(Debug)]
 enum Contact {
     /// The curve lies on the surface.
     On,
@@ -172,9 +173,18 @@ struct ContactKey {
 }
 
 fn surface_contact(curve: &Curve, first: f64, last: f64, surface: &Surface, tolerance: f64) -> Contact {
-    if let Some(contact) = plane_contact(curve, first, last, surface).or_else(|| coaxial_contact(curve, first, last, surface)).or_else(|| extrusion_contact(curve, first, surface)) {
+    if let Some(contact) = plane_contact(curve, first, last, surface)
+        .or_else(|| coaxial_contact(curve, first, last, surface))
+        .or_else(|| extrusion_contact(curve, first, surface))
+        .or_else(|| line_quadric_contact(curve, first, last, surface))
+    {
         return contact;
     }
+    sampled_contact(curve, first, last, surface, tolerance)
+}
+
+/// [`surface_contact`] by the signed distances at samples along the curve.
+fn sampled_contact(curve: &Curve, first: f64, last: f64, surface: &Surface, tolerance: f64) -> Contact {
     // (As many as the surface's sampling has, at least: one winding round many times may be
     // crossed as often.)
     let n = if matches!(curve, Curve::Line(_)) { 32 } else { 128 }.max(geom::winding_samples(surface));
@@ -512,7 +522,103 @@ fn extrusion_contact(curve: &Curve, first: f64, surface: &Surface) -> Option<Con
     }
 }
 
-/// [`surface_contact`] in closed form for a line or a circle against a plane.
+/// [`surface_contact`] in closed form for a line against a cylinder or a sphere, where the
+/// sampling would find the same: the distance from the axis (centre) along the line is the
+/// root of a quadratic, `ρ(t)² = α (t - t*)² + ρ*²`, so the signed distance `ρ - r` is convex
+/// along it, least at `t*`. The line crosses the surface where `ρ = r` and touches it at `t*`
+/// where `ρ*` is within [`TOL`] of `r`. `None` (the sampling decides) where a sample of the
+/// line's would itself lie within that of the surface near a root, where the line touches or
+/// dips through it in the first or last stretch between samples, where it would lie along it
+/// for a stretch of samples, or where it is about as far inside it as the classifying
+/// distance.
+fn line_quadric_contact(curve: &Curve, first: f64, last: f64, surface: &Surface) -> Option<Contact> {
+    let Curve::Line(line) = curve else { return None };
+    let d = Vector::from(line.direction);
+    let (centre, axis, r) = match surface {
+        Surface::Cylinder(c) => (c.frame().origin(), Some(Vector::from(c.frame().z())), c.radius()),
+        Surface::Sphere(s) => (s.frame().origin(), None, s.radius()),
+        _ => return None,
+    };
+    let across = |v: Vector| axis.map_or(v, |z| v - z * v.dot(z));
+    let (w, dp) = (across(line.origin - centre), across(d));
+    let alpha = dp.dot(dp);
+    let g = |t: f64| geom::signed_distance(surface, curve.point(t));
+    let (lo, hi) = (first.min(last), first.max(last));
+    if !(alpha > 1e-20) {
+        // Along a cylinder's axis: as far from it all along.
+        return Some(if g(first).abs() <= on_tol() { Contact::On } else { Contact::At(Vec::new()) });
+    }
+    // The samples the sampling would take.
+    let n = 32usize.max(geom::winding_samples(surface));
+    let sample = |i: usize| first + (last - first) * i as f64 / n as f64;
+    let spacing = (last - first).abs() / n as f64;
+    let star = -w.dot(dp) / alpha;
+    let rho_star = (w.dot(w) - w.dot(dp) * w.dot(dp) / alpha).max(0.0).sqrt();
+    let least = g(star.clamp(lo, hi));
+    let (g_lo, g_hi) = (g(lo), g(hi));
+    // (Within the classifying distance all along: on it. About as far inside as that
+    // distance: left to the sampling, which may step over the dip.)
+    let on = g_lo.abs() <= on_tol() && g_hi.abs() <= on_tol();
+    if on && least >= -on_tol() {
+        return Some(Contact::On);
+    }
+    if on && least >= -2.0 * on_tol() {
+        return None;
+    }
+    // (Lying within the classifying distance over two samples' spacing: the sampling may
+    // find it along the surface.)
+    // (Where `ρ` is within it of `r`: `|t - t*|` between these, one stretch about `t*` or one
+    // about each crossing.)
+    let away = |rho: f64| ((rho * rho - rho_star * rho_star).max(0.0) / alpha).sqrt();
+    let (inner_reach, outer_reach) = (if rho_star < r - on_tol() { away(r - on_tol()) } else { 0.0 }, away(r + on_tol()));
+    let width = if inner_reach > 0.0 { outer_reach - inner_reach } else { 2.0 * outer_reach };
+    if rho_star <= r + on_tol() && width >= 1.9 * spacing {
+        return None;
+    }
+    let within = |t: f64| t >= lo - 1e-12 * (1.0 + t.abs()) && t <= hi + 1e-12 * (1.0 + t.abs());
+    let inner = |t: f64| {
+        let (a, b) = (sample(1).min(sample(n - 1)), sample(1).max(sample(n - 1)));
+        t > a && t < b
+    };
+    // (A sample within the tolerance of the surface beside a root: the sampling takes it.)
+    let sample_on = |t: f64| {
+        let k = ((t - first) / (last - first) * n as f64).floor() as i64;
+        (k - 1..=k + 2).filter(|&i| i > 0 && i < n as i64).any(|i| g(sample(i as usize)).abs() <= TOL)
+    };
+    let mut roots: Vec<f64> = [first, last].into_iter().filter(|&t| g(t).abs() <= TOL).collect();
+    if (rho_star - r).abs() <= TOL {
+        // Touching (or dipping through within the tolerance) at the nearest point.
+        if within(star) {
+            if !inner(star) || sample_on(star) {
+                return None;
+            }
+            roots.push(star.clamp(lo, hi));
+        }
+    } else if rho_star < r {
+        let half = ((r * r - rho_star * rho_star) / alpha).sqrt();
+        let (t0, t1) = (star - half, star + half);
+        // (Both in one stretch between samples at either end: the sampling misses the dip.)
+        let k = |t: f64| ((t - first) / (last - first) * n as f64).floor() as i64;
+        let (k0, k1) = (k(t0), k(t1));
+        if k0 == k1 && (k0 <= 0 || k0 >= n as i64 - 1) && (within(t0) || within(t1)) {
+            return None;
+        }
+        for t in [t0, t1] {
+            if within(t) {
+                if sample_on(t) {
+                    return None;
+                }
+                roots.push(t.clamp(lo, hi));
+            }
+        }
+    }
+    roots.sort_by(f64::total_cmp);
+    let resolution = 1e-9 * (last - first).abs().max(1e-12);
+    roots.dedup_by(|b, a| (*b - *a).abs() <= resolution);
+    Some(Contact::At(roots))
+}
+
+/// [`surface_contact`] in closed form for a line, a circle or an ellipse against a plane.
 fn plane_contact(curve: &Curve, first: f64, last: f64, surface: &Surface) -> Option<Contact> {
     let Surface::Plane(plane) = surface else { return None };
     let g = |t: f64| geom::signed_distance(surface, curve.point(t));
@@ -535,12 +641,17 @@ fn plane_contact(curve: &Curve, first: f64, last: f64, surface: &Surface) -> Opt
                 roots.push(t.clamp(lo, hi));
             }
         }
-        Curve::Circle(circle) => {
-            let f = circle.frame();
-            let (a, b) = (normal.dot(Vector::from(f.x())) * circle.radius(), normal.dot(Vector::from(f.y())) * circle.radius());
-            let c = (circle.center() - plane.origin()).dot(normal);
+        Curve::Circle(_) | Curve::Ellipse(_) => {
+            // (A circle's radius both ways; an ellipse's radii along its axes.)
+            let (f, rx, ry) = match curve {
+                Curve::Circle(c) => (*c.frame(), c.radius(), c.radius()),
+                Curve::Ellipse(e) => (*e.frame(), e.major_radius(), e.minor_radius()),
+                _ => unreachable!(),
+            };
+            let (a, b) = (normal.dot(Vector::from(f.x())) * rx, normal.dot(Vector::from(f.y())) * ry);
+            let c = (f.origin() - plane.origin()).dot(normal);
             let amplitude = a.hypot(b);
-            if amplitude <= 1e-12 * circle.radius().max(1.0) {
+            if amplitude <= 1e-12 * rx.max(1.0) {
                 // In a plane parallel to the surface.
                 return Some(if c.abs() <= on_tol() { Contact::On } else { Contact::At(roots) });
             }
@@ -1357,8 +1468,8 @@ impl Section {
     fn project(&self, p: Point) -> (f64, f64) {
         match self {
             Section::Open(c, a, b) => geom::project(c, *a, *b, p),
-            // (A circle's projection looks at few samples; an ellipse's at all.)
-            Section::Closed(c @ Curve::Circle(_), _) => geom::project(c, 0.0, TAU, p),
+            // (A circle's and an ellipse's projections are in closed form.)
+            Section::Closed(c @ (Curve::Circle(_) | Curve::Ellipse(_)), _) => geom::project(c, 0.0, TAU, p),
             Section::Closed(c, samples) => {
                 let period = closed_period(c);
                 geom::project_among(c, 0.0, period, Some(samples.get_or_init(|| geom::projection_samples(c, 0.0, period))), p)
@@ -1550,6 +1661,12 @@ impl Section {
             Section::Closed(c, _) => (c, 0.0, closed_period(c), true),
             _ => return self.project(p),
         };
+        // (A whole circle's distance has one minimum: found in closed form.)
+        if periodic && matches!(curve, Curve::Circle(_)) {
+            if let Some(found) = geom::conic_foot(curve, lo, hi, p) {
+                return found;
+            }
+        }
         let mut t = seed;
         for _ in 0..12 {
             let (c, d1, d2) = curve.d2(t);
@@ -3224,8 +3341,13 @@ impl Graph {
         let other_curve = other.curve.as_ref()?;
         let (mut s, mut u) = (nearest.2, t);
         for _ in 0..16 {
+            let before = (u, s);
             u = geom::project(curve, first, last, other_curve.point(s)).0;
             s = geom::project(other_curve, other.first, other.last, curve.point(u)).0;
+            // (A round leaving both as they were: so would the next.)
+            if (u, s) == before {
+                break;
+            }
         }
         // (Then, on a free-form face whose edges stray from it by more than the classifying
         // distance, where they run at a slight angle, Gauss-Newton on both at once: alternate
@@ -4166,6 +4288,214 @@ fn circles_apart(a: &Section, b: &Section) -> bool {
     between.dot(nq).abs() > reach(rp, np, nq) + slack || between.dot(np).abs() > reach(rq, nq, np) + slack
 }
 
+/// [`section_crossings`] of a section against a line or a conic, by the distances from
+/// samples of `a` to `b`, refined at their least.
+fn scanned_crossings(a: &Section, b: &Section) -> Vec<Point> {
+    let (lo, hi) = a.range();
+    let n = 720;
+    let step = (hi - lo) / n as f64;
+    // (An open section on a curve other than a line or a circle is projected onto by its
+    // samples: found once for all the points projected onto it here.)
+    let open_samples = match b {
+        Section::Open(c, first, last) if !matches!(c, Curve::Line(_) | Curve::Circle(_) | Curve::Ellipse(_)) => Some(geom::projection_samples(c, *first, *last)),
+        _ => None,
+    };
+    let project_b = |q: Point| match (b, &open_samples) {
+        (Section::Open(c, first, last), Some(samples)) => geom::project_among(c, *first, *last, Some(samples), q),
+        _ => b.project(q),
+    };
+    // Distances from samples of `a`, with the feet on `b`.
+    let samples: Vec<(f64, f64, f64)> = (0..=n + 1)
+        .map(|i| {
+            let t = lo + (hi - lo) * i as f64 / n as f64;
+            let (s, d) = project_b(a.point(t));
+            (t, s, d)
+        })
+        .collect();
+    // Local minima of the distance; where the curves (nearly) coincide there are many,
+    // and the deepest are enough.
+    let mut minima: Vec<usize> = (1..samples.len() - 1)
+        .filter(|&i| samples[i].2 < samples[i - 1].2 && samples[i].2 <= samples[i + 1].2)
+        .collect();
+    minima.sort_by(|&x, &y| samples[x].2.total_cmp(&samples[y].2));
+    minima.truncate(64);
+    let mut out: Vec<Point> = Vec::new();
+    for i in minima {
+        let (t, seed, _) = samples[i];
+        // The distance to `b` near the sample's foot (Newton from it).
+        let gap = |x: f64| b.project_seeded(a.point(x), seed).1;
+        let (mut x, mut y) = (t - step, t + step);
+        let ratio = 0.618_033_988_749_895;
+        for _ in 0..80 {
+            let (x1, x2) = (y - ratio * (y - x), x + ratio * (y - x));
+            if gap(x1) < gap(x2) {
+                y = x2;
+            } else {
+                x = x1;
+            }
+        }
+        let p = a.point(0.5 * (x + y));
+        if b.project(p).1 <= on_tol() && !out.iter().any(|q| q.distance(p) <= on_tol()) {
+            out.push(p);
+        }
+    }
+    out
+}
+
+/// [`section_crossings`] of two lines or conics (circles, ellipses) in closed form: the points
+/// of `a` where it comes within the tolerance of `b`, at the least gaps between them; `None`
+/// where that is not clear (planes nearly parallel, a curve nearly in the other's plane, a
+/// crossing at a range's end), to be found by sampling.
+///
+/// A point of `a` within the tolerance of a planar `b` is as near `b`'s plane: about where
+/// `a` crosses that plane (its height above it, a sinusoid along a conic or linear along a
+/// line, vanishes), or where its height is least without vanishing. A conic within the
+/// tolerance of a line is so about where the line crosses the conic's plane; two lines about
+/// their nearest points. From each of these, the nearest points of the two curves by Newton
+/// steps on the squared gap.
+fn conic_crossings(a: &Section, b: &Section) -> Option<Vec<Point>> {
+    // The curve, its range, and whether that is its whole period.
+    fn conic(s: &Section) -> Option<(&Curve, f64, f64, bool)> {
+        match s {
+            Section::Open(c @ (Curve::Line(_) | Curve::Circle(_) | Curve::Ellipse(_)), first, last) => Some((c, first.min(*last), first.max(*last), false)),
+            Section::Closed(c @ (Curve::Circle(_) | Curve::Ellipse(_)), _) => Some((c, 0.0, TAU, true)),
+            _ => None,
+        }
+    }
+    let (ca, alo, ahi, aclosed) = conic(a)?;
+    let (cb, blo, bhi, bclosed) = conic(b)?;
+    // A conic's frame and radii along its X and Y axes.
+    let frame = |c: &Curve| match c {
+        Curve::Circle(c) => Some((*c.frame(), c.radius(), c.radius())),
+        Curve::Ellipse(e) => Some((*e.frame(), e.major_radius(), e.minor_radius())),
+        _ => None,
+    };
+    let unit = |v: Vector| v * (1.0 / v.length());
+    let normal = |f: &Frame| unit(Vector::from(f.x()).cross(Vector::from(f.y())));
+    // (Heights or gaps as small as this, against a tolerance a thousand times smaller, leave
+    // the nearest points to be found by sampling.)
+    let shallow = 1e3 * on_tol();
+    let mut seeds: Vec<f64> = Vec::new();
+    match (ca, frame(ca), cb, frame(cb)) {
+        (_, Some((fa, ra, sa)), _, Some((fb, _, _))) => {
+            // A conic against a conic's plane: h(t) = h0 + h1 cos t + h2 sin t.
+            let n = normal(&fb);
+            let h0 = (fa.origin() - fb.origin()).dot(n);
+            let (h1, h2) = (ra * Vector::from(fa.x()).dot(n), sa * Vector::from(fa.y()).dot(n));
+            let amplitude = h1.hypot(h2);
+            if !(amplitude > shallow) {
+                return None;
+            }
+            let phase = h2.atan2(h1);
+            if h0.abs() <= amplitude {
+                let half = (-h0 / amplitude).clamp(-1.0, 1.0).acos();
+                seeds.extend([phase + half, phase - half]);
+            }
+            // (The height's extremes, where they come near the plane.)
+            if (h0 + amplitude).abs() <= 2.0 * on_tol() {
+                seeds.push(phase);
+            }
+            if (h0 - amplitude).abs() <= 2.0 * on_tol() {
+                seeds.push(phase + PI);
+            }
+        }
+        (Curve::Line(l), None, _, Some((fb, _, _))) => {
+            let n = normal(&fb);
+            let slope = Vector::from(l.direction).dot(n);
+            if !(slope.abs() > 1e-3) {
+                return None;
+            }
+            seeds.push(-(l.origin - fb.origin()).dot(n) / slope);
+        }
+        (_, Some((fa, _, _)), Curve::Line(l), None) => {
+            // Where the line crosses the conic's plane, and the conic's point nearest there.
+            let n = normal(&fa);
+            let slope = Vector::from(l.direction).dot(n);
+            if !(slope.abs() > 1e-3) {
+                return None;
+            }
+            let x = l.origin + Vector::from(l.direction) * (-(l.origin - fa.origin()).dot(n) / slope);
+            seeds.push(geom::conic_foot(ca, 0.0, TAU, x)?.0);
+        }
+        (Curve::Line(la), None, Curve::Line(lb), None) => {
+            // The nearest points of the two lines.
+            let (u, v) = (Vector::from(la.direction), Vector::from(lb.direction));
+            let w = la.origin - lb.origin;
+            let (uv, uw, vw) = (u.dot(v), u.dot(w), v.dot(w));
+            let den = 1.0 - uv * uv;
+            if !(den > 1e-6) {
+                return None;
+            }
+            seeds.push((uv * vw - uw) / den);
+        }
+        _ => return None,
+    }
+    let step = (ahi - alo) / 720.0;
+    let mut out: Vec<Point> = Vec::new();
+    for seed in seeds {
+        let mut s = if aclosed { seed.rem_euclid(TAU) } else { seed };
+        if !aclosed && (s < alo - step || s > ahi + step) {
+            continue;
+        }
+        // Alternate projections onto either curve (within their ranges) towards their nearest
+        // points about the seed; clear of each other there, they do not cross about it.
+        let mut t = b.project(ca.point(s)).0;
+        for _ in 0..4 {
+            s = a.project(cb.point(t)).0;
+            t = b.project(ca.point(s)).0;
+        }
+        if ca.point(s).distance(cb.point(t)) > shallow {
+            continue;
+        }
+        // Newton steps on the gradient of |A(s) - B(t)|² / 2.
+        let mut done = false;
+        for _ in 0..30 {
+            let (pa, da, dda) = ca.d2(s);
+            let (pb, db, ddb) = cb.d2(t);
+            let gap = pa - pb;
+            let (g1, g2) = (gap.dot(da), -gap.dot(db));
+            let (h11, h12, h22) = (da.dot(da) + gap.dot(dda), -da.dot(db), db.dot(db) - gap.dot(ddb));
+            let det = h11 * h22 - h12 * h12;
+            if !(det > 0.0 && h11 > 0.0) {
+                break;
+            }
+            let (ds, dt) = ((h22 * g1 - h12 * g2) / det, (h11 * g2 - h12 * g1) / det);
+            if !(ds.is_finite() && dt.is_finite()) || ds.abs() > 0.5 || dt.abs() > 0.5 {
+                break;
+            }
+            s -= ds;
+            t -= dt;
+            // (Converged to rounding; or, where the steps stall at rounding's level, close.)
+            let size = (ds.abs() / (1.0 + s.abs())).max(dt.abs() / (1.0 + t.abs()));
+            done = size <= 1e-12;
+            if size <= 1e-15 {
+                break;
+            }
+        }
+        if !done {
+            return None;
+        }
+        if aclosed {
+            s = s.rem_euclid(TAU);
+        }
+        if bclosed {
+            t = t.rem_euclid(TAU);
+        }
+        let p = ca.point(s);
+        if cb.point(t).distance(p) > on_tol() {
+            continue;
+        }
+        // (At or past either range's end: the sampling decides.)
+        if (!aclosed && !(s > alo && s < ahi)) || (!bclosed && !(t > blo && t < bhi)) {
+            return None;
+        }
+        if b.project(p).1 <= on_tol() && !out.iter().any(|q| q.distance(p) <= on_tol()) {
+            out.push(p);
+        }
+    }
+    Some(out)
+}
+
 /// Points where two section curves meet.
 fn section_crossings(a: &Section, b: &Section) -> Vec<Point> {
     if circles_apart(a, b) {
@@ -4280,8 +4610,13 @@ fn section_crossings(a: &Section, b: &Section) -> Vec<Point> {
             // Alternate projections between the curves.
             let mut q = a.point(lo + step * i as f64);
             for _ in 0..30 {
+                let before = q;
                 q = b.point(b.project(q).0);
                 q = a.point(a.project(q).0);
+                // (A round leaving the point as it was: so would the next.)
+                if q == before {
+                    break;
+                }
             }
             if b.project(q).1 <= on_tol() && !out.iter().any(|x| x.distance(q) <= on_tol()) {
                 out.push(q);
@@ -4299,55 +4634,7 @@ fn section_crossings(a: &Section, b: &Section) -> Vec<Point> {
         return section_crossings(b, a);
     }
     if exact(b) {
-        let (lo, hi) = a.range();
-        let n = 720;
-        let step = (hi - lo) / n as f64;
-        // (An open section on a curve other than a line or a circle is projected onto by its
-        // samples: found once for all the points projected onto it here.)
-        let open_samples = match b {
-            Section::Open(c, first, last) if !matches!(c, Curve::Line(_) | Curve::Circle(_)) => Some(geom::projection_samples(c, *first, *last)),
-            _ => None,
-        };
-        let project_b = |q: Point| match (b, &open_samples) {
-            (Section::Open(c, first, last), Some(samples)) => geom::project_among(c, *first, *last, Some(samples), q),
-            _ => b.project(q),
-        };
-        // Distances from samples of `a`, with the feet on `b`.
-        let samples: Vec<(f64, f64, f64)> = (0..=n + 1)
-            .map(|i| {
-                let t = lo + (hi - lo) * i as f64 / n as f64;
-                let (s, d) = project_b(a.point(t));
-                (t, s, d)
-            })
-            .collect();
-        // Local minima of the distance; where the curves (nearly) coincide there are many,
-        // and the deepest are enough.
-        let mut minima: Vec<usize> = (1..samples.len() - 1)
-            .filter(|&i| samples[i].2 < samples[i - 1].2 && samples[i].2 <= samples[i + 1].2)
-            .collect();
-        minima.sort_by(|&x, &y| samples[x].2.total_cmp(&samples[y].2));
-        minima.truncate(64);
-        let mut out: Vec<Point> = Vec::new();
-        for i in minima {
-            let (t, seed, _) = samples[i];
-            // The distance to `b` near the sample's foot (Newton from it).
-            let gap = |x: f64| b.project_seeded(a.point(x), seed).1;
-            let (mut x, mut y) = (t - step, t + step);
-            let ratio = 0.618_033_988_749_895;
-            for _ in 0..80 {
-                let (x1, x2) = (y - ratio * (y - x), x + ratio * (y - x));
-                if gap(x1) < gap(x2) {
-                    y = x2;
-                } else {
-                    x = x1;
-                }
-            }
-            let p = a.point(0.5 * (x + y));
-            if b.project(p).1 <= on_tol() && !out.iter().any(|q| q.distance(p) <= on_tol()) {
-                out.push(p);
-            }
-        }
-        return out;
+        return conic_crossings(a, b).unwrap_or_else(|| scanned_crossings(a, b));
     }
     // Two chains (slow to project onto): distances from samples of `a` to a polyline of
     // `b`, then, where they are least, the nearest points of the curves from there (see
@@ -4587,6 +4874,119 @@ fn edge_crossings(e1: &Edge, e2: &Edge, tolerance: f64) -> Vec<(f64, f64)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Lines against cylinders and spheres, and ellipses against planes, in closed form find
+    /// what the sampling finds: crossing, touching (tangent, and dipping through within the
+    /// tolerance), missing, lying on and along the axis; where left to it, the sampling.
+    #[test]
+    fn closed_form_contacts_match_the_sampled_ones() {
+        use crate::geometry::curve::Ellipse;
+        use crate::geometry::surface::{Cylinder, Plane, Sphere};
+        let cylinder = Surface::Cylinder(Cylinder::new(Frame::new(Point::new(0.5, -0.2, 1.0), Direction::new(0.1, 0.2, 1.0), Direction::new(1.0, 0.0, 0.0)), 2.0));
+        let sphere = Surface::Sphere(Sphere::new(Frame::new(Point::new(-1.0, 0.3, 0.2), Direction::new(0.0, 0.0, 1.0), Direction::new(1.0, 0.0, 0.0)), 1.5));
+        let mut seed = 4242u64;
+        let mut next = || {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (seed >> 11) as f64 / (1u64 << 53) as f64
+        };
+        let same = |a: &Contact, b: &Contact| match (a, b) {
+            (Contact::On, Contact::On) => true,
+            (Contact::At(x), Contact::At(y)) | (Contact::Along(x), Contact::Along(y)) => x.len() == y.len() && x.iter().zip(y).all(|(p, q)| (p - q).abs() <= 1e-9 * (1.0 + p.abs())),
+            _ => false,
+        };
+        let (mut closed, mut total) = (0, 0);
+        for surface in [&cylinder, &sphere] {
+            let (centre, axis, r) = match surface {
+                Surface::Cylinder(c) => (c.frame().origin(), Vector::from(c.frame().z()), c.radius()),
+                Surface::Sphere(s) => (s.frame().origin(), Vector::new(0.0, 0.0, 1.0), s.radius()),
+                _ => unreachable!(),
+            };
+            let side = Vector::from(Direction::from_vector(axis.cross(Vector::new(1.0, 0.0, 0.0))));
+            let across = axis.cross(side);
+            let mut lines: Vec<(Line, f64, f64)> = Vec::new();
+            for _ in 0..400 {
+                let o = centre + Vector::new(next() - 0.5, next() - 0.5, next() - 0.5) * (4.0 * r);
+                let d = Direction::new(next() - 0.5, next() - 0.5, next() - 0.5);
+                lines.push((Line::new(o, d), -6.0 * next(), 6.0 * next()));
+            }
+            // Tangent, dipping within the tolerance, missing by it; along the axis on the
+            // surface and off it; short ones lying on it.
+            for (gap, along) in [(0.0, 0.0), (-0.5 * TOL, 0.0), (0.5 * TOL, 0.3), (3.0 * TOL, 0.0), (-3.0 * TOL, 0.1), (0.5, 0.0), (-1e-3, 0.0)] {
+                lines.push((Line::new(centre + side * (r + gap), Direction::from_vector(across + axis * along)), -3.3, 4.1));
+            }
+            lines.push((Line::new(centre + side * r, Direction::from_vector(axis)), -1.0, 2.0));
+            lines.push((Line::new(centre + side * (r + 0.1), Direction::from_vector(axis)), -1.0, 2.0));
+            lines.push((Line::new(centre + side * r, Direction::from_vector(across)), -1e-4, 1e-4));
+            for (line, first, last) in lines {
+                let curve = Curve::Line(line);
+                total += 1;
+                if let Some(found) = line_quadric_contact(&curve, first, last, surface) {
+                    closed += 1;
+                    let sampled = sampled_contact(&curve, first, last, surface, TOL);
+                    assert!(same(&found, &sampled), "{line:?} {first}..{last} on {surface:?}: {found:?}, sampled {sampled:?}");
+                }
+            }
+        }
+        // (Most in closed form.)
+        assert!(closed * 10 >= total * 9, "{closed} of {total} in closed form");
+        // Ellipses against planes.
+        let ellipse = Curve::Ellipse(Ellipse::new(Frame::new(Point::new(0.2, 0.1, 0.0), Direction::new(0.3, -0.2, 1.0), Direction::new(1.0, 0.0, 0.0)), 3.0, 1.2));
+        for _ in 0..300 {
+            let plane = Surface::Plane(Plane::new(Point::ORIGIN + Vector::new(next() - 0.5, next() - 0.5, next() - 0.5) * 6.0, Direction::new(next() - 0.5, next() - 0.5, next() - 0.5)));
+            let (first, last) = if next() < 0.5 { (0.0, TAU) } else { (-3.0 * next(), 3.0 * next()) };
+            let found = plane_contact(&ellipse, first, last, &plane).unwrap();
+            let sampled = sampled_contact(&ellipse, first, last, &plane, TOL);
+            assert!(same(&found, &sampled), "{plane:?} {first}..{last}: {found:?}, sampled {sampled:?}");
+        }
+    }
+
+    /// Crossings of lines and conics found in closed form are those the sampling finds:
+    /// the ellipses two equal cylinders meet in, circles and an arc across each other's
+    /// planes, lines through an ellipse and a circle, lines crossing and passing within the
+    /// tolerance; coplanar conics are left to the sampling.
+    #[test]
+    fn conic_crossings_match_the_sampled_ones() {
+        use crate::geometry::curve::Ellipse;
+        let dir = |x: f64, y: f64, z: f64| Direction::new(x, y, z);
+        let s2 = std::f64::consts::SQRT_2;
+        let closed = |c: Curve| Section::Closed(c, Default::default());
+        let ellipse = |o: Point, z: Direction, x: Direction, a: f64, b: f64| Curve::Ellipse(Ellipse::new(Frame::new(o, z, x), a, b));
+        let circle = |o: Point, z: Direction, x: Direction, r: f64| Curve::Circle(Circle::new(Frame::new(o, z, x), r));
+        let line = |o: Point, d: Direction| Curve::Line(Line::new(o, d));
+        let o = Point::ORIGIN;
+        let cases: Vec<(Section, Section, usize)> = vec![
+            // Equal cylinders along X and Y: ellipses in the planes x = y and x = -y.
+            (closed(ellipse(o, dir(1.0, -1.0, 0.0), dir(1.0, 1.0, 0.0), 2.0 * s2, 2.0)), closed(ellipse(o, dir(1.0, 1.0, 0.0), dir(1.0, -1.0, 0.0), 2.0 * s2, 2.0)), 2),
+            // Tilted and moved.
+            (
+                closed(ellipse(Point::new(0.3, 0.1, -0.2), dir(1.0, -1.0, 0.2), dir(1.0, 1.0, 0.0), 2.5, 1.5)),
+                closed(circle(Point::new(0.3, 0.1, -0.2), dir(0.2, 1.0, 1.0), dir(1.0, 0.0, 0.0), 1.9)),
+                0,
+            ),
+            (closed(circle(o, dir(0.0, 0.0, 1.0), dir(1.0, 0.0, 0.0), 1.0)), closed(circle(o, dir(0.0, 1.0, 0.0), dir(1.0, 0.0, 0.0), 1.0)), 2),
+            (closed(circle(o, dir(0.0, 0.0, 1.0), dir(1.0, 0.0, 0.0), 1.0)), Section::Open(circle(o, dir(0.0, 1.0, 0.0), dir(1.0, 0.0, 0.0), 1.0), -0.5, 0.5), 1),
+            (closed(circle(o, dir(0.0, 0.0, 1.0), dir(0.0, 1.0, 0.0), 1.0)), closed(circle(Point::new(0.0, 0.0, 0.0), dir(0.0, 1.0, 0.0), dir(1.0, 0.0, 0.0), 1.0)), 2),
+            (Section::Open(line(Point::new(1.8, 0.0, 0.0), dir(0.0, 0.6, 0.8)), -5.0, 5.0), closed(ellipse(o, dir(0.0, 0.0, 1.0), dir(1.0, 0.0, 0.0), 2.0, 1.0)), 0),
+            (Section::Open(line(Point::new(2.0, 0.0, -1.0), dir(0.0, 0.0, 1.0)), -5.0, 5.0), closed(ellipse(o, dir(0.0, 0.0, 1.0), dir(1.0, 0.0, 0.0), 2.0, 1.0)), 1),
+            (closed(ellipse(o, dir(0.0, 0.3, 1.0), dir(1.0, 0.0, 0.0), 2.0, 1.0)), Section::Open(line(Point::new(-2.0, 0.0, -1.0), dir(0.0, 0.0, 1.0)), -5.0, 5.0), 1),
+            (Section::Open(line(Point::new(-1.0, 0.0, 0.0), dir(1.0, 0.0, 0.0)), -5.0, 5.0), Section::Open(line(Point::new(0.0, -1.0, 0.0), dir(0.2, 1.0, 0.0)), -5.0, 5.0), 1),
+            (Section::Open(line(Point::new(-1.0, 0.0, 0.0), dir(1.0, 0.0, 0.0)), -5.0, 5.0), Section::Open(line(Point::new(0.0, -1.0, 3e-7), dir(0.0, 1.0, 0.0)), -5.0, 5.0), 1),
+            (Section::Open(line(Point::new(-1.0, 0.0, 0.0), dir(1.0, 0.0, 0.0)), -5.0, 5.0), Section::Open(line(Point::new(0.0, -1.0, 1e-4), dir(0.0, 1.0, 0.0)), -5.0, 5.0), 0),
+        ];
+        for (k, (a, b, count)) in cases.iter().enumerate() {
+            let found = conic_crossings(a, b).unwrap_or_else(|| panic!("case {k}: left to sampling"));
+            let sampled = scanned_crossings(a, b);
+            assert_eq!(found.len(), *count, "case {k}: {found:?}");
+            assert_eq!(sampled.len(), *count, "case {k}: sampled {sampled:?}");
+            for p in &found {
+                assert!(sampled.iter().any(|q| q.distance(*p) <= 1e-9), "case {k}: {p:?} not among {sampled:?}");
+            }
+        }
+        // Coplanar: left to the sampling.
+        let a = closed(circle(o, dir(0.0, 0.0, 1.0), dir(1.0, 0.0, 0.0), 1.0));
+        let b = closed(ellipse(Point::new(0.5, 0.0, 0.0), dir(0.0, 0.0, 1.0), dir(1.0, 0.0, 0.0), 1.0, 0.5));
+        assert!(conic_crossings(&a, &b).is_none());
+    }
 
     /// Samples running along a line and turning up from it: the turn found (and none among a
     /// circle's samples, 48 of them).
