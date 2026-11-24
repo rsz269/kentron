@@ -627,6 +627,8 @@ pub(crate) fn align_periods(coedges: &mut [(EdgeId, bool, Curve2, f64, f64)], su
         // (First the way that closes the loop (its end where it starts, those after following
         // it): round a pole the seam's two uses run the latitudes' period one way and the
         // pole's edge the other; then the way that meets the neighbours better.)
+        // (With it, how wide the loop then is along the shift: the face between a seam's two
+        // uses spans one period, its other pcurves between them, not run out past either.)
         let closure = |d: crate::math::Vector2| {
             use crate::math::Transformable2;
             let mut trial = coedges.to_vec();
@@ -634,12 +636,24 @@ pub(crate) fn align_periods(coedges: &mut [(EdgeId, bool, Curve2, f64, f64)], su
             for k in i + 1..n {
                 follow(&mut trial, k);
             }
-            ends(&trial[0]).0.distance(ends(&trial[n - 1]).1)
+            let along = |p: Point2| if d.x != 0.0 { p.x } else { p.y };
+            let (lo, hi) = trial.iter().flat_map(|c| [0.0, 0.25, 0.5, 0.75, 1.0].map(|s| along(c.2.point(c.3 + (c.4 - c.3) * s)))).fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), x| (lo.min(x), hi.max(x)));
+            (ends(&trial[0]).0.distance(ends(&trial[n - 1]).1), hi - lo)
         };
-        let scored: Vec<(crate::math::Vector2, f64, f64)> = shifts.into_iter().map(|d| (d, closure(d), gap(d))).collect();
-        if let Some(&(d, _, _)) = scored.iter().min_by(|a, b| {
+        let scored: Vec<(crate::math::Vector2, f64, f64, f64)> = shifts
+            .into_iter()
+            .map(|d| {
+                let (closes, width) = closure(d);
+                (d, closes, gap(d), width)
+            })
+            .collect();
+        if let Some(&(d, _, _, _)) = scored.iter().min_by(|a, b| {
             let close = |c: f64| (c * 1e6).round();
-            close(a.1).total_cmp(&close(b.1)).then(a.2.total_cmp(&b.2))
+            // (Gaps equal but for rounding (the seam's use as far from its neighbours either
+            // way) say nothing: then the narrower loop.)
+            let level = 1e-9 * (1.0 + a.0.x.abs().max(a.0.y.abs()) + a.2.max(b.2));
+            let gaps = if (a.2 - b.2).abs() <= level { std::cmp::Ordering::Equal } else { a.2.total_cmp(&b.2) };
+            close(a.1).total_cmp(&close(b.1)).then(gaps).then(a.3.total_cmp(&b.3))
         }) {
             use crate::math::Transformable2;
             coedges[i].2 = coedges[i].2.transformed(&crate::math::Transform2::translation(d));

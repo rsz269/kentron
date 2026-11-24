@@ -178,7 +178,7 @@ impl<'a> PCurveProjector<'a> {
                 }
                 Some(prev) => {
                     let predicted = if self.inverse.is_elementary() { prev.uv } else { predict(prev, t, setting) };
-                    self.foot_near(p, predicted, setting)
+                    self.foot_near(p, predicted, predicted, setting)
                 }
             };
             if !(uv[0].is_finite() && uv[1].is_finite()) {
@@ -196,15 +196,15 @@ impl<'a> PCurveProjector<'a> {
         Some(nodes)
     }
 
-    /// The foot of `p` searched near `hint` (unwrapped parameters), unwrapped next to it.
-    fn foot_near(&mut self, p: Point, hint: [f64; 2], setting: &Setting) -> ([f64; 2], f64) {
+    /// The foot of `p` searched near `hint` (unwrapped parameters), unwrapped next to `near`.
+    fn foot_near(&mut self, p: Point, hint: [f64; 2], near: [f64; 2], setting: &Setting) -> ([f64; 2], f64) {
         let inside = setting.wrap(hint);
         let max_gap = 10.0 * setting.tol;
         let (uv, gap) = self.inverse.nearest_from(Point2::new(inside[0], inside[1]), p, self.preci, max_gap);
         let mut uv = [uv.x, uv.y];
         for k in 0..2 {
             if let Some(r) = setting.repeat[k] {
-                uv[k] += period_shift(uv[k], hint[k], r.period);
+                uv[k] += period_shift(uv[k], near[k], r.period);
             }
             if let Some(b) = setting.snapped[k] {
                 uv[k] = b;
@@ -492,9 +492,18 @@ impl<'a> PCurveProjector<'a> {
                 let probe = |this: &mut Self, s: f64| {
                     let t = a.t + (b.t - a.t) * s;
                     let guess = hermite(a.t, a.uv, tangents[i].1, b.t, b.uv, tangents[i + 1].0, t);
-                    let node = this.node_at(curve, t, guess, setting, first, last);
+                    // (Unwrapped next to the chord between the span's feet, not the guess: where
+                    // the feet turn fast (close by a pole) the interpolant may overshoot by
+                    // more than half a period.)
+                    let chord = [0, 1].map(|k| a.uv[k] + (b.uv[k] - a.uv[k]) * s);
+                    let node = this.node_at(curve, t, guess, chord, setting, first, last);
                     let (g, f) = (setting.wrap(guess), setting.wrap(node.uv));
-                    let error = this.surface.point(g[0], g[1]).distance(this.surface.point(f[0], f[1]));
+                    let mut error = this.surface.point(g[0], g[1]).distance(this.surface.point(f[0], f[1]));
+                    // (The interpolant a period or more away from the foot (the same point in
+                    // 3D): the span swings round the period, to be cut.)
+                    if (0..2).any(|k| setting.repeat[k].is_some_and(|r| (guess[k] - node.uv[k]).abs() > 0.5 * r.period)) {
+                        error = f64::INFINITY;
+                    }
                     (node, error)
                 };
                 let (n1, e1) = probe(self, 1.0 / 3.0);
@@ -528,11 +537,11 @@ impl<'a> PCurveProjector<'a> {
         setting.places.iter().position(|place| p.distance(place.point) <= setting.tol + place.spread || foot.distance(place.point) <= setting.tol + place.spread)
     }
 
-    /// The node at `t`, its foot searched from `guess` (on a singular place, `guess` itself
-    /// with any snapped coordinate).
-    fn node_at(&mut self, curve: &Curve, t: f64, guess: [f64; 2], setting: &Setting, first: f64, last: f64) -> Node {
+    /// The node at `t`, its foot searched from `guess` and unwrapped next to `near` (on a
+    /// singular place, `guess` itself with any snapped coordinate).
+    fn node_at(&mut self, curve: &Curve, t: f64, guess: [f64; 2], near: [f64; 2], setting: &Setting, first: f64, last: f64) -> Node {
         let p = curve.point(t);
-        let (uv, _) = self.foot_near(p, guess, setting);
+        let (uv, _) = self.foot_near(p, guess, near, setting);
         if let Some(k) = self.place_of(setting, p, uv) {
             // (The free coordinate made up: the interpolant's.)
             let free = if setting.places[k].fixed_is_u { 1 } else { 0 };

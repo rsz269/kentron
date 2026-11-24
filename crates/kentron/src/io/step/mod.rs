@@ -2303,6 +2303,40 @@ mod tests {
         assert!((area - expected).abs() < 1e-6 * expected, "area {area}");
     }
 
+    /// The union of two overlapping spheres written to STEP and read back: each sphere face
+    /// is bounded by its seam and the circle where the spheres meet, and the file's faces
+    /// must come back as the same closed solid (each seam used once each way).
+    #[test]
+    fn overlapping_spheres_united_survive_a_step_round_trip() {
+        let pairs = [
+            ((0.0, 0.0, 0.0), 6.970206342575126, (6.16614245398121, 0.0, 0.0), 8.485729167539326),
+            ((0.0, 0.0, 0.0), 4.809489987041219, (9.20208212539753, 0.0, 0.0), 6.182951684345641),
+            ((1.0e5, -2.0e4, 3.0e3), 5.0, (1.0e5 + 6.0, -2.0e4, 3.0e3), 4.0),
+            ((0.0, 0.0, 0.0), 8.075289590805117, (7.487190571825656, 0.0, 0.0), 2.9274240678128933),
+        ];
+        for ((ax, ay, az), ra, (bx, by, bz), rb) in pairs {
+            let mut model = Model::new();
+            let a = crate::primitives::Sphere::new(ra)
+                .with_frame(Frame::new(Point::new(ax, ay, az), Direction::Z, Direction::X))
+                .build(&mut model)
+                .unwrap();
+            let b = crate::primitives::Sphere::new(rb)
+                .with_frame(Frame::new(Point::new(bx, by, bz), Direction::Z, Direction::X))
+                .build(&mut model)
+                .unwrap();
+            let union = crate::boolean::union(&mut model, a, b).unwrap();
+            let volume = crate::properties::volume(&model, union).mass;
+            let mut text = Vec::new();
+            write(&model, union, "union", None, &mut text).unwrap();
+            let mut read_model = Model::new();
+            let back = read(&mut read_model, &mut text.as_slice()).unwrap();
+            let report = crate::validity::check(&read_model, back);
+            assert!(report.is_valid(), "radii {ra} {rb}: {report:?}");
+            let read_volume = crate::properties::volume(&read_model, back).mass;
+            assert!((read_volume - volume).abs() < 1e-6 * volume, "radii {ra} {rb}: volume {read_volume} against {volume}");
+        }
+    }
+
     /// An AP242 file of one part whose shape is the tessellated items `items` (entities
     /// numbered from #20, the last the item of the representation).
     fn tessellated_file(items: &[String]) -> String {
