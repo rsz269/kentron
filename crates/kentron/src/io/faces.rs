@@ -665,7 +665,11 @@ pub(crate) fn align_periods(coedges: &mut [(EdgeId, bool, Curve2, f64, f64)], su
             let size = 1.0 + pa.x.abs().max(pa.y.abs()).max(pa.z.abs());
             a.distance(b) > 1e-9 && pa.distance(pb) <= 1e-9 * size && pa.distance(pm) <= 1e-9 * size
         };
-        let shifted = (whole(gap.x, pu) && gap.y.abs() <= 1e-9) || (whole(gap.y, pv) && gap.x.abs() <= 1e-9);
+        // (The other parameter's gap at rounding level of its values: a generator's range
+        // in a file may end a few digits short of the circle it meets.)
+        let level = |p: Point2| 1e-9 * (1.0 + p.x.abs().max(p.y.abs()));
+        let near = level(start).max(level(end));
+        let shifted = (whole(gap.x, pu) && gap.y.abs() <= near) || (whole(gap.y, pv) && gap.x.abs() <= near);
         // (Or two consecutive edges meeting at a pole, the edge along it left out: those after
         // the pole moved over, the pole's edge added across the gap then running round.)
         let at_pole = |i: usize| {

@@ -239,7 +239,12 @@ fn infinite(x: f64) -> bool {
 
 impl<'a> SurfaceInverse<'a> {
     pub(crate) fn new(surface: &'a Surface) -> Self {
-        let basis = untrimmed(surface);
+        // (An offset of an elementary surface shares its normal lines, so its feet: inverted
+        // by the basis's closed form, but a torus turned through its tube's middle.)
+        let basis = match untrimmed(surface) {
+            Surface::Offset(o) if !matches!(o.basis(), Surface::Torus(_)) => untrimmed(o.basis()),
+            s => s,
+        };
         let kind = match basis {
             Surface::Plane(_) => Kind::Plane,
             Surface::Cylinder(_) | Surface::Cone(_) | Surface::Sphere(_) => Kind::Quadric,
