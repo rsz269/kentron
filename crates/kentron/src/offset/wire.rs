@@ -311,7 +311,7 @@ fn curvature_features(curve: &Curve2, lo: f64, hi: f64) -> Vec<f64> {
             }
             bounds.push(hi);
             for w in bounds.windows(2) {
-                out.extend(numeric_curvature_features(curve, w[0], w[1]));
+                out.extend(numeric_curvature_features(curve, w[0], w[1], 16));
             }
             // A knot where the curve turns a corner (only C0 there, its tangent turning):
             // all its turn of curvature at one place.
@@ -328,7 +328,7 @@ fn curvature_features(curve: &Curve2, lo: f64, hi: f64) -> Vec<f64> {
                 }
             }
         }
-        _ => out.extend(numeric_curvature_features(curve, lo, hi)),
+        _ => out.extend(numeric_curvature_features(curve, lo, hi, 64)),
     }
     out.sort_by(f64::total_cmp);
     out.dedup();
@@ -336,32 +336,38 @@ fn curvature_features(curve: &Curve2, lo: f64, hi: f64) -> Vec<f64> {
 }
 
 /// The parameters strictly inside `(a, b)` where the signed curvature or its derivative
-/// changes sign, bracketed on a uniform sampling and bisected to full precision. Values
+/// changes sign, bracketed on a uniform sampling (`samples` intervals: fewer on a
+/// polynomial span of a B-spline than on a whole curve) and bisected to full precision. Values
 /// negligible against the stretch's size and curvature (a straight or circular stretch,
 /// rounding noise) are no sign.
-fn numeric_curvature_features(curve: &Curve2, a: f64, b: f64) -> Vec<f64> {
-    const SAMPLES: usize = 64;
+fn numeric_curvature_features(curve: &Curve2, a: f64, b: f64, samples: usize) -> Vec<f64> {
+    let samples = samples.max(2);
     if !(b > a) {
         return Vec::new();
     }
     // The signed curvature and its derivative along the arc length.
-    let measures = |t: f64| -> (f64, f64) {
-        let (_, d1, d2, d3) = curve.d3(t);
+    let measured = |t: f64| -> (f64, f64, Point2) {
+        let (p, d1, d2, d3) = curve.d3(t);
         let speed = d1.length();
         if !(speed > 0.0) {
-            return (0.0, 0.0);
+            return (0.0, 0.0, p);
         }
         let cross = d1.x * d2.y - d1.y * d2.x;
         let kappa = cross / speed.powi(3);
         let dk = (d1.x * d3.y - d1.y * d3.x) / speed.powi(3) - 3.0 * cross * d1.dot(d2) / speed.powi(5);
-        (kappa, dk / speed)
+        (kappa, dk / speed, p)
+    };
+    let measures = |t: f64| -> (f64, f64) {
+        let (k, dk, _) = measured(t);
+        (k, dk)
     };
     // (The ends a hair inside, so that a knot at either end is not evaluated on the next
     // span: the curvature's derivative jumps there.)
     let inset = 1e-9 * (b - a);
-    let ts: Vec<f64> = (0..=SAMPLES).map(|i| if i == SAMPLES { b - inset } else if i == 0 { a + inset } else { a + (b - a) * i as f64 / SAMPLES as f64 }).collect();
-    let values: Vec<(f64, f64)> = ts.iter().map(|&t| measures(t)).collect();
-    let points: Vec<Point2> = ts.iter().map(|&t| curve.point(t)).collect();
+    let ts: Vec<f64> = (0..=samples).map(|i| if i == samples { b - inset } else if i == 0 { a + inset } else { a + (b - a) * i as f64 / samples as f64 }).collect();
+    let found: Vec<(f64, f64, Point2)> = ts.iter().map(|&t| measured(t)).collect();
+    let values: Vec<(f64, f64)> = found.iter().map(|v| (v.0, v.1)).collect();
+    let points: Vec<Point2> = found.iter().map(|v| v.2).collect();
     let length: f64 = points.windows(2).map(|w| w[0].distance(w[1])).sum();
     if !(length > 0.0) {
         return Vec::new();
