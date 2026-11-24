@@ -342,9 +342,17 @@ pub(crate) struct NearFace {
 /// the point's projection onto the face's surface where the face holds it
 /// (`BRepExtrema_ExtPF`, with `BRepClass_FaceClassifier`) and its projections onto the
 /// face's boundary edges (`BRepExtrema_ExtPC`, their ends included). The faces' meshes only
-/// pick which faces and edges to project onto. Faces without a surface are left out.
+/// pick which faces and edges to project onto, and tell whether a face holds a projection by
+/// its boundary; on faces on planes, cylinders, cones, spheres and tori, they are made only
+/// where needed for that (see [`nearest_elementary_faces`]). Faces without a surface are
+/// left out.
 #[doc(alias = "BRepExtrema_ExtPF")]
 pub(crate) fn nearest_faces(model: &mut Model, shape: Shape, p: Point, slack: f64) -> Result<Vec<NearFace>> {
+    nearest_faces_by(model, shape, p, slack, true)
+}
+
+/// [`nearest_faces`]; without `exact_first`, always through the meshes.
+fn nearest_faces_by(model: &mut Model, shape: Shape, p: Point, slack: f64, exact_first: bool) -> Result<Vec<NearFace>> {
     let print = model.shape_fingerprint(shape);
     let size = model
         .derived(shape.node, print, || {
@@ -355,6 +363,11 @@ pub(crate) fn nearest_faces(model: &mut Model, shape: Shape, p: Point, slack: f6
     let scale = size.max(1e-9);
     // (Meshed as finely as for `distance`, so that the meshes serve both.)
     let options = MeshOptions { deflection: 1e-3 * scale, angle: 0.3, relative: false };
+    if exact_first {
+        if let Some(found) = nearest_elementary_faces(model, shape, print, p, slack, scale, options.deflection)? {
+            return Ok(found);
+        }
+    }
     let kept = Triangles::kept(model, shape, options, print)?;
     let t = &kept.0;
     let Some(bvh) = kept.1.as_ref() else { return Ok(Vec::new()) };
@@ -412,6 +425,193 @@ pub(crate) fn nearest_faces(model: &mut Model, shape: Shape, p: Point, slack: f6
         found.retain(|f| f.distance <= least + slack);
     }
     Ok(found)
+}
+
+/// A shape's faces on planes, cylinders, cones, spheres and tori, with their boundary edges
+/// and boxes, kept in the model with it (`None` where a face lies on another surface).
+struct KeptElementaryFaces(Option<(Vec<ElementaryFace>, Vec<BoundaryEdge>)>);
+
+struct ElementaryFace {
+    face: Shape,
+    /// Its surface, placed.
+    surface: Surface,
+    /// A box around it (its vertices, edges and surface).
+    bounds: BoundingBox,
+    /// Its boundary edges with curves (indices into the shape's edges), each once.
+    edges: Vec<usize>,
+    /// Those of them it bounds on one side only (not its seams).
+    rims: Vec<usize>,
+}
+
+struct BoundaryEdge {
+    curve: Curve,
+    first: f64,
+    last: f64,
+    bounds: BoundingBox,
+}
+
+impl KeptElementaryFaces {
+    fn gather(model: &Model, shape: Shape) -> KeptElementaryFaces {
+        let mut faces = Vec::new();
+        let mut edges: Vec<BoundaryEdge> = Vec::new();
+        let mut known: HashMap<(crate::topology::NodeId, [[u64; 4]; 3]), usize> = HashMap::new();
+        for face in model.explore(shape, NodeKind::Face) {
+            let local = Shape { orientation: Orientation::Forward, placement: Transform::IDENTITY, ..face };
+            let Some(surface) = model.surface(local) else { continue };
+            if !matches!(surface, Surface::Plane(_) | Surface::Cylinder(_) | Surface::Cone(_) | Surface::Sphere(_) | Surface::Torus(_)) {
+                return KeptElementaryFaces(None);
+            }
+            let surface = surface.transformed(&face.placement);
+            // (Each edge with how many times the face uses it: twice, a seam.)
+            let mut boundary: Vec<(usize, usize)> = Vec::new();
+            for edge in model.explore(face, NodeKind::Edge) {
+                let rows = edge.placement.rows().map(|r| r.map(f64::to_bits));
+                let i = match known.get(&(edge.node, rows)) {
+                    Some(&i) => i,
+                    None => {
+                        let Some((curve, first, last)) = model.edge_curve(edge) else { continue };
+                        known.insert((edge.node, rows), edges.len());
+                        edges.push(BoundaryEdge { curve, first, last, bounds: crate::properties::bounding_box(model, edge) });
+                        edges.len() - 1
+                    }
+                };
+                match boundary.iter_mut().find(|(e, _)| *e == i) {
+                    Some((_, uses)) => *uses += 1,
+                    None => boundary.push((i, 1)),
+                }
+            }
+            faces.push(ElementaryFace {
+                face,
+                surface,
+                bounds: crate::properties::bounding_box(model, face),
+                edges: boundary.iter().map(|&(e, _)| e).collect(),
+                rims: boundary.iter().filter(|&&(_, uses)| uses == 1).map(|&(e, _)| e).collect(),
+            });
+        }
+        KeptElementaryFaces(Some((faces, edges)))
+    }
+}
+
+/// [`nearest_faces`] on a shape whose faces all lie on planes, cylinders, cones, spheres and
+/// tori (`None` for other shapes, and where a face's classifier cannot be made), on the
+/// faces' exact geometry alone: the point's projections onto those surfaces are found in
+/// closed form, so no mesh is needed to pick the faces and edges to project onto; the
+/// faces' and edges' boxes (and the distance to each face's whole surface) rule out those
+/// that cannot be near enough, and the face's classifier tells whether it holds the
+/// projection onto its surface.
+fn nearest_elementary_faces(model: &mut Model, shape: Shape, print: u64, p: Point, slack: f64, scale: f64, deflection: f64) -> Result<Option<Vec<NearFace>>> {
+    let model: &Model = model;
+    let kept = model.derived(shape.node, print, || KeptElementaryFaces::gather(model, shape));
+    let Some((faces, edges)) = &kept.0 else { return Ok(None) };
+    // (The boxes sample curved edges and surfaces, with margins: by a little more still,
+    // as the meshes' deviations are allowed for.)
+    let margin = 1e-3 * scale;
+    // How far from a face's rims its mesh may tell otherwise than its classifier whether
+    // it holds a point: the rims' polylines and its mesh each deviate by up to
+    // `deflection`, and a point within twice its mesh's deviation of it counts as on it.
+    let band = 4.0 * deflection + 1e-9 * scale;
+    let below = |b: &BoundingBox| if b.is_empty() { 0.0 } else { (b.distance_to_point(p) - margin).max(0.0) };
+    let mut order: Vec<(f64, usize)> = faces.iter().enumerate().map(|(i, f)| (below(&f.bounds), i)).collect();
+    order.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+    let mut least = f64::INFINITY;
+    let mut found: Vec<(usize, NearFace)> = Vec::new();
+    for (lower, i) in order {
+        // No face further on comes within `slack` of the nearest.
+        if lower > least + slack {
+            break;
+        }
+        let f = &faces[i];
+        let (u, v, _) = crate::geometry::extrema::nearest_on_surface(p, &f.surface, None);
+        let q = f.surface.point(u, v);
+        // None of the face (on its surface) is nearer than its surface.
+        if q.distance(p) > least + slack + 1e-9 * scale {
+            continue;
+        }
+        // Whether the face holds the projection onto its surface: inside it, as its
+        // classifier finds it. By its boundary (within the classifier's tolerance), and by
+        // its rims within what the meshes may deviate from them, it is as its mesh tells
+        // (`None`, left open); but a plane's mesh is the polygon of its rims' polylines,
+        // whose sides on straight rims are those rims themselves.
+        let classifier = model.derived(f.face.node, model.shape_fingerprint(f.face), || KeptClassifier(PointClassifier::new(model, f.face)));
+        let Ok(classifier) = &classifier.0 else { return Ok(None) };
+        let planar = matches!(f.surface, Surface::Plane(_));
+        let by_rim = || {
+            f.rims.iter().any(|&e| {
+                let edge = &edges[e];
+                !(planar && matches!(edge.curve, Curve::Line(_)))
+                    && (edge.bounds.is_empty() || edge.bounds.distance_to_point(q) <= band)
+                    && crate::geometry::extrema::nearest_on_curve(q, &edge.curve, edge.first, edge.last).point.distance(q) <= band
+            })
+        };
+        let holds = match classifier.locate_on_faces(q) {
+            PointLocation::Boundary => None,
+            _ if by_rim() => None,
+            PointLocation::Inside => Some(true),
+            PointLocation::Outside => Some(false),
+        };
+        if holds == Some(false) && interior_minimum_elsewhere(&f.surface, p, q, scale, |x| classifier.locate_on_faces(x) != PointLocation::Outside) {
+            // The face's nearest point may lie inside it away from the surface's nearest:
+            // left to the meshes.
+            return Ok(None);
+        }
+        // Its boundary edges' nearest point (the first of the nearest), those that cannot
+        // come nearer passed over.
+        let mut on_edges: Option<(f64, Point)> = None;
+        for &e in &f.edges {
+            let edge = &edges[e];
+            if on_edges.is_some_and(|b| below(&edge.bounds) >= b.0) {
+                continue;
+            }
+            let x = crate::geometry::extrema::nearest_on_curve(p, &edge.curve, edge.first, edge.last).point;
+            let d = x.distance(p);
+            if on_edges.is_none_or(|b| d < b.0) {
+                on_edges = Some((d, x));
+            }
+        }
+        // The projection where the face holds it, unless an edge comes nearer still. Left
+        // open, where the edges' nearest point is the projection but for rounding (as on a
+        // crease), as though it held it (the two the same but for rounding); otherwise
+        // left to the meshes.
+        let holds = match holds {
+            Some(holds) => holds,
+            None if on_edges.is_some_and(|(_, x)| x.distance(q) <= 1e-12 * scale) => true,
+            None => return Ok(None),
+        };
+        let d = q.distance(p);
+        let best = match on_edges {
+            Some(e) if !holds || e.0 < d => Some(e),
+            _ if holds => Some((d, q)),
+            _ => None,
+        };
+        if let Some((distance, point)) = best {
+            least = least.min(distance);
+            found.push((i, NearFace { face: f.face, point, distance }));
+        }
+    }
+    // In the shape's order, then (stably) nearest first.
+    found.sort_by_key(|&(i, _)| i);
+    let mut found: Vec<NearFace> = found.into_iter().map(|(_, f)| f).collect();
+    found.sort_by(|a, b| a.distance.total_cmp(&b.distance));
+    if let Some(least) = found.first().map(|f| f.distance) {
+        found.retain(|f| f.distance <= least + slack);
+    }
+    Ok(Some(found))
+}
+
+/// Whether a face on `surface` (an elementary one) whose `holds` tells its points may have
+/// its point nearest `p` inside it other than `q`, the surface's point nearest `p` (which
+/// the face does not hold). Off the surface's nearest point, its distance from `p` has a
+/// local minimum only on a cone, at the foot on the other generator on `p`'s side of the
+/// axis (the stationary points on the far side, and a sphere's, cylinder's or torus's
+/// other ones, are passes or maxima, going round the axis or centre towards `p`); and
+/// where `p` lies on the axis or at the centre, the nearest points are not isolated.
+fn interior_minimum_elsewhere(surface: &Surface, p: Point, q: Point, scale: f64, holds: impl Fn(Point) -> bool) -> bool {
+    let Some(extrema) = surface_extrema(surface, p) else { return true };
+    let Surface::Cone(c) = surface else { return false };
+    let (o, z) = (c.frame().origin(), Vector::from(c.frame().z()));
+    let d = p - o;
+    let away = d - z * d.dot(z);
+    extrema.into_iter().any(|x| (x - o).dot(away) > 0.0 && x.distance(q) > 1e-9 * scale && holds(x))
 }
 
 /// The nearest points of two pieces' exact geometry, from the meshes' nearest points `p` and
@@ -955,6 +1155,64 @@ mod tests {
     use super::*;
     use crate::math::{Direction, Frame};
     use crate::primitives::{Cuboid, Cylinder, Sphere};
+
+    /// The nearest faces of shapes on elementary surfaces, found without meshes where that
+    /// can be told, are those the meshes find: from points all about them, by their edges
+    /// and corners (within the classifiers' tolerance and the meshes' deviations), and
+    /// across a cone's apex (where the surface's nearest point is on its other nappe).
+    #[test]
+    fn nearest_faces_without_meshes_are_those_the_meshes_find() {
+        use crate::primitives::{Cone, Torus};
+        let tilted = Frame::new(Point::new(1.5, -2.0, 0.7), Direction::new(0.3, 0.4, 0.86), Direction::X);
+        let mut model = Model::new();
+        let mut shapes = vec![
+            Cuboid::new(5.0, 7.0, 3.0).build(&mut model).unwrap(),
+            Cylinder::new(2.5, 6.0).with_frame(tilted).build(&mut model).unwrap(),
+            Cone::new(3.0, 0.0, 5.0).build(&mut model).unwrap(),
+            Sphere::new(2.75).with_frame(tilted).build(&mut model).unwrap(),
+            Torus::new(6.0, 2.0).with_frame(tilted).build(&mut model).unwrap(),
+        ];
+        let block = Cuboid::from_corners(Point::new(0.5, -10.0, -10.0), Point::new(10.0, 10.0, 10.0)).build(&mut model).unwrap();
+        let ball = Sphere::new(3.0).build(&mut model).unwrap();
+        shapes.push(crate::boolean::difference(&mut model, ball, block).unwrap());
+        let mut state = 0x9e3779b97f4a7c15u64;
+        let mut random = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state >> 11) as f64 / (1u64 << 53) as f64
+        };
+        let (mut exact, mut total) = (0, 0);
+        for shape in shapes {
+            let b = crate::properties::bounding_box(&model, shape);
+            let mut points: Vec<Point> = (0..60)
+                .map(|_| {
+                    let t = [random() * 1.4 - 0.2, random() * 1.4 - 0.2, random() * 1.4 - 0.2];
+                    Point::new(b.min.x + (b.max.x - b.min.x) * t[0], b.min.y + (b.max.y - b.min.y) * t[1], b.min.z + (b.max.z - b.min.z) * t[2])
+                })
+                .collect();
+            for edge in model.unique_subshapes(shape, NodeKind::Edge) {
+                let Some((c, first, last)) = model.edge_curve(edge) else { continue };
+                for k in 0..=4 {
+                    let x = c.point(first + (last - first) * k as f64 / 4.0);
+                    for h in [0.0, 1e-7, 1e-4, 0.1] {
+                        points.push(x + Vector::new(random() - 0.5, random() - 0.5, random() - 0.5) * h);
+                    }
+                }
+            }
+            points.push(Point::new(0.9232894240000435, 3.0863540094379074, 5.211782089823887));
+            for p in points {
+                let meshed = nearest_faces_by(&mut model, shape, p, crate::tolerance::LINEAR, false).unwrap();
+                assert_eq!(nearest_faces(&mut model, shape, p, crate::tolerance::LINEAR).unwrap(), meshed, "{p:?}");
+                let print = model.shape_fingerprint(shape);
+                let scale = model.derived(shape.node, print, || KeptSize(0.0)).0.max(1e-9);
+                total += 1;
+                exact += nearest_elementary_faces(&mut model, shape, print, p, crate::tolerance::LINEAR, scale, 1e-3 * scale).unwrap().is_some() as usize;
+            }
+        }
+        // (Most without meshes.)
+        assert!(2 * exact > total, "{exact} of {total}");
+    }
 
     /// Points inside a face 10.4 x 40.1, by its edges (as a hole's corner just inside the
     /// outline it is cut from): on the face, at no distance; by its corner outside, as far
