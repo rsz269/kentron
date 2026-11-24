@@ -139,8 +139,12 @@ impl Bounded {
                     let step = (last - first) / (l.len() - 1) as f64;
                     for (i, w) in l.windows(2).enumerate() {
                         // (Near a curve its samples stray from, its own points: within their
-                        // sag a point is told from the loop by the loop itself.)
-                        if gap(w[0], w[1], q) <= 0.25 * w[0].distance(w[1]) + self.uv_tolerance {
+                        // sag a point is told from the loop by the loop itself. Not near where
+                        // `q` lies outside the segment's box grown by more than that.)
+                        let (dx, dy) = ((w[1].x - w[0].x).abs(), (w[1].y - w[0].y).abs());
+                        let grown = 0.25 * (dx + dy) + self.uv_tolerance;
+                        let boxed = q.x >= w[0].x.min(w[1].x) - grown && q.x <= w[0].x.max(w[1].x) + grown && q.y >= w[0].y.min(w[1].y) - grown && q.y <= w[0].y.max(w[1].y) + grown;
+                        if boxed && gap(w[0], w[1], q) <= 0.25 * w[0].distance(w[1]) + self.uv_tolerance {
                             const FINE: usize = 128;
                             let at = |j: usize| if j == 0 { w[0] } else if j == FINE { w[1] } else { pcurve.point(first + step * (i as f64 + j as f64 / FINE as f64)) };
                             let mut a = w[0];
