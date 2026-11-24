@@ -6,7 +6,7 @@ use crate::tolerance::ANGULAR;
 use super::curve::{Circle, Curve, Ellipse, Hyperbola, Line, Parabola, TrimmedCurve};
 use super::{ParametricCurve, ParametricSurface};
 use super::curve2::{BSplineCurve2, Circle2, Curve2, Ellipse2, Line2};
-use super::surface::{Cone, Cylinder, Plane, Sphere, Surface};
+use super::surface::{Cone, Cylinder, Plane, Sphere, Surface, Torus};
 
 /// Projects `curve` onto `plane` along `direction`. Conics stay conics of the same kind
 /// where possible (a projected trimmed curve stays trimmed); other curves become
@@ -190,7 +190,8 @@ pub fn analytic_pcurve(curve: &Curve, surface: &Surface) -> Option<Curve2> {
         Surface::Cylinder(cylinder) => curve_on_cylinder_parameters(curve, cylinder),
         Surface::Sphere(sphere) => curve_on_sphere_parameters(curve, sphere),
         Surface::Cone(cone) => curve_on_cone_parameters(curve, cone),
-        // Others (tori, surfaces of revolution, ...) have no closed form here yet.
+        Surface::Torus(torus) => curve_on_torus_parameters(curve, torus),
+        // Others (surfaces of revolution, ...) have no closed form here yet.
         _ => None,
     }
 }
@@ -288,6 +289,51 @@ fn curve_on_sphere_parameters(curve: &Curve, sphere: &Sphere) -> Option<Curve2> 
     }
     let (u0, _) = sphere.parameters(c.center() + cx * c.radius());
     line((u0, 0.0), (0.0, cy.dot(z).signum()))
+}
+
+/// `v = const` lines of parallels (circles about the axis), `u = const` lines of meridians
+/// (the tube's own circles, in planes through the axis). Not on a spindle torus (its
+/// parameters ambiguous about the axis).
+fn curve_on_torus_parameters(curve: &Curve, torus: &Torus) -> Option<Curve2> {
+    let f = torus.frame();
+    let z = Vector::from(f.z());
+    let tol = crate::tolerance::LINEAR;
+    let (big, small) = (torus.major_radius(), torus.minor_radius());
+    if !(big > small + tol) {
+        return None;
+    }
+    let Curve::Circle(c) = curve else { return None };
+    let line = |o: (f64, f64), d: (f64, f64)| Some(Curve2::Line(Line2::new(Point2::new(o.0, o.1), Direction2::new(d.0, d.1))));
+    let (cx, cy) = (Vector::from(c.frame().x()), Vector::from(c.frame().y()));
+    let cz = circle_axis(c);
+    let offset = c.center() - f.origin();
+    let height = offset.dot(z);
+    let start = c.center() + cx * c.radius();
+    let normal = cz.dot(z);
+    if (normal.abs() - 1.0).abs() <= ANGULAR.sqrt() {
+        // A parallel: centered on the axis, its radius and height those of one latitude of
+        // the tube.
+        if (offset - z * height).length() > tol || (c.radius() - big).hypot(height) - small > tol || (c.radius() - big).hypot(height) - small < -tol {
+            return None;
+        }
+        let (u0, v) = torus.parameters(start);
+        return line((u0, v), (normal.signum(), 0.0));
+    }
+    // A meridian: in the plane through the axis, about the tube's centre there.
+    let radial = offset - z * height;
+    let rho = radial.length();
+    if height.abs() > tol || (rho - big).abs() > tol || (c.radius() - small).abs() > tol || cz.dot(radial).abs() > ANGULAR.sqrt() * rho || normal.abs() > ANGULAR.sqrt() {
+        return None;
+    }
+    let (u, v0) = torus.parameters(start);
+    // (Round the tube the way v grows, or against it.)
+    let out = radial * (1.0 / rho);
+    let tangent = out * -v0.sin() + z * v0.cos();
+    let along = cy.dot(tangent);
+    if (along.abs() - 1.0).abs() > ANGULAR.sqrt() {
+        return None;
+    }
+    line((u, v0), (0.0, along.signum()))
 }
 
 /// `v = const` lines of circles about the axis, `u = const` lines of generators.
@@ -1165,6 +1211,55 @@ fn fitted_pcurve(curve: &Curve, surface: &Surface, tolerance: f64, projecting: b
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A torus's parallels (on the outside, the inside equator, top and bottom, either way
+    /// round, from any start) and meridians (from any start round the tube, either way) have
+    /// line pcurves holding all along; circles off it, tilted, or not about its axis none.
+    #[test]
+    fn circles_on_a_torus_have_line_pcurves() {
+        use crate::geometry::curve::Circle;
+        let frame = Frame::new(Point::new(1.0, -0.5, 2.0), Direction::new(0.2, -0.1, 1.0), Direction::new(1.0, 0.3, 0.0));
+        let torus = Torus::new(frame, 5.0, 1.5);
+        let surface = Surface::Torus(torus);
+        let (x, y, z) = (Vector::from(frame.x()), Vector::from(frame.y()), Vector::from(frame.z()));
+        let o = frame.origin();
+        let check = |circle: Circle| {
+            let curve = Curve::Circle(circle);
+            let pcurve = analytic_pcurve(&curve, &surface).unwrap_or_else(|| panic!("no pcurve for {circle:?}"));
+            for i in 0..=48 {
+                let t = -1.0 + 9.0 * i as f64 / 48.0;
+                let uv = pcurve.point(t);
+                let gap = surface.point(uv.x, uv.y).distance(curve.point(t));
+                assert!(gap <= 1e-12, "{circle:?} at {t}: {gap}");
+            }
+        };
+        for v in [0.0, std::f64::consts::PI, 0.7, -2.0, std::f64::consts::FRAC_PI_2, -std::f64::consts::FRAC_PI_2] {
+            let (h, rho) = (1.5 * v.sin(), 5.0 + 1.5 * v.cos());
+            for start in [0.0f64, 2.5, -1.0] {
+                let hint = x * start.cos() + y * start.sin();
+                for sign in [1.0, -1.0] {
+                    check(Circle::new(Frame::new(o + z * h, Direction::from_vector(z * sign), Direction::from_vector(hint)), rho));
+                }
+            }
+        }
+        for u in [0.0f64, 1.0, 3.5, -0.4] {
+            let out = x * u.cos() + y * u.sin();
+            let side = z.cross(out);
+            for start in [0.0f64, 1.2, std::f64::consts::PI, -2.0] {
+                let hint = out * start.cos() + z * start.sin();
+                for sign in [1.0, -1.0] {
+                    check(Circle::new(Frame::new(o + out * 5.0, Direction::from_vector(side * sign), Direction::from_vector(hint)), 1.5));
+                }
+            }
+        }
+        // Off the torus, tilted, off-centre.
+        let none = |circle: Circle| assert!(analytic_pcurve(&Curve::Circle(circle), &surface).is_none(), "{circle:?}");
+        none(Circle::new(Frame::new(o, Direction::from_vector(z), Direction::from_vector(x)), 6.0));
+        none(Circle::new(Frame::new(o, Direction::from_vector(z + x * 0.01), Direction::from_vector(x)), 6.5));
+        none(Circle::new(Frame::new(o + x * 0.01, Direction::from_vector(z), Direction::from_vector(x)), 6.5));
+        none(Circle::new(Frame::new(o + x * 5.0, Direction::from_vector(y), Direction::from_vector(x)), 1.4));
+        none(Circle::new(Frame::new(o + x * 5.0, Direction::from_vector(y + x * 0.1), Direction::from_vector(x)), 1.5));
+    }
     use crate::geometry::ParametricSurface;
     use crate::math::{Direction, Frame};
 
