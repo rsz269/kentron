@@ -10,7 +10,7 @@ use crate::hashing::FastMap as HashMap;
 use std::fmt::Write as _;
 use std::io::Write;
 
-use super::parse::real;
+use super::parse::{push_real, real};
 use crate::error::{Error, Result};
 use crate::geometry::curve::Curve;
 use crate::geometry::surface::Surface;
@@ -54,15 +54,34 @@ pub fn write_assembly_in(model: &Model, roots: &[Node], unit: LengthUnit, out: &
         let name = w.escape(&name);
         w.add(format!("PRESENTATION_LAYER_ASSIGNMENT('{name}','visible',({list}))"));
     }
-    let mut text = String::new();
-    text.push_str("ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION(('kentron model'),'2;1');\n");
-    let _ = writeln!(text, "FILE_NAME('{}','',(''),(''),'kentron','kentron','');", w.escape(roots.first().map_or("", |r| r.name.as_str())));
-    text.push_str("FILE_SCHEMA(('AUTOMOTIVE_DESIGN { 1 0 10303 214 1 1 1 1 }'));\nENDSEC;\nDATA;\n");
-    for (i, line) in w.lines.iter().enumerate() {
-        let _ = writeln!(text, "#{} = {};", i + 1, line);
+    // (Written as it goes rather than gathered first: a file of large B-splines runs to
+    // hundreds of megabytes.)
+    let mut out = std::io::BufWriter::with_capacity(1 << 16, out);
+    let mut written = || -> std::io::Result<()> {
+        out.write_all(b"ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION(('kentron model'),'2;1');\n")?;
+        writeln!(out, "FILE_NAME('{}','',(''),(''),'kentron','kentron','');", w.escape(roots.first().map_or("", |r| r.name.as_str())))?;
+        out.write_all(b"FILE_SCHEMA(('AUTOMOTIVE_DESIGN { 1 0 10303 214 1 1 1 1 }'));\nENDSEC;\nDATA;\n")?;
+        for (i, line) in w.lines.iter().enumerate() {
+            writeln!(out, "#{} = {};", i + 1, line)?;
+        }
+        out.write_all(b"ENDSEC;\nEND-ISO-10303-21;\n")?;
+        out.flush()
+    };
+    written().map_err(|e| Error::InvalidInput(format!("writing STEP: {e}")))
+}
+
+/// `head` and three reals, closed: `head1.,2.,3.))`.
+fn triple(head: &str, v: [f64; 3]) -> String {
+    let mut line = String::with_capacity(head.len() + 72);
+    line.push_str(head);
+    for (i, &x) in v.iter().enumerate() {
+        if i > 0 {
+            line.push(',');
+        }
+        push_real(&mut line, x);
     }
-    text.push_str("ENDSEC;\nEND-ISO-10303-21;\n");
-    out.write_all(text.as_bytes()).map_err(|e| Error::InvalidInput(format!("writing STEP: {e}")))
+    line.push_str("))");
+    line
 }
 
 
@@ -645,11 +664,11 @@ impl<'a> Writer<'a> {
     }
 
     fn point(&mut self, p: Point) -> usize {
-        self.add(format!("CARTESIAN_POINT('',({},{},{}))", real(p.x), real(p.y), real(p.z)))
+        self.add(triple("CARTESIAN_POINT('',(", [p.x, p.y, p.z]))
     }
 
     fn direction(&mut self, d: Direction) -> usize {
-        self.add(format!("DIRECTION('',({},{},{}))", real(d.x()), real(d.y()), real(d.z())))
+        self.add(triple("DIRECTION('',(", [d.x(), d.y(), d.z()]))
     }
 
     /// `AXIS2_PLACEMENT_3D` of a frame, right-handed: the main direction is `x × y`.

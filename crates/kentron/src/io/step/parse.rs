@@ -271,30 +271,49 @@ impl Exchange {
 /// an exponent, as OCCT writes them: plain within [0.1, 1000) (`1.`, `2.5`), otherwise with
 /// a signed exponent of at least two digits (`5.E-03`, `1.5E+04`).
 pub(super) fn real(v: f64) -> String {
+    let mut out = String::with_capacity(24);
+    push_real(&mut out, v);
+    out
+}
+
+/// [`real`] put at the end of `out` (formatted there, without a string of its own: files hold
+/// millions of them).
+pub(super) fn push_real(out: &mut String, v: f64) {
+    use std::fmt::Write;
     if !v.is_finite() || v == 0.0 {
-        return "0.".into();
+        out.push_str("0.");
+        return;
     }
+    let start = out.len();
     let plain = (0.1..1000.0).contains(&v.abs());
-    let s = if plain { format!("{v:?}") } else { format!("{v:e}") };
-    let (mantissa, exponent) = match s.split_once('e') {
-        Some((m, e)) => (m.to_string(), Some(e.to_string())),
-        None => (s, None),
-    };
+    let _ = if plain { write!(out, "{v:?}") } else { write!(out, "{v:e}") };
+    // The exponent (`e-3`) taken off, kept aside: a sign and a few digits.
+    let mut exponent: Option<(bool, [u8; 8], usize)> = None;
+    if let Some(at) = out[start..].find('e') {
+        let at = start + at;
+        let e = &out.as_bytes()[at + 1..];
+        let (negative, digits) = match e.split_first() {
+            Some((b'-', rest)) => (true, rest),
+            _ => (false, e),
+        };
+        let mut kept = [0u8; 8];
+        kept[..digits.len()].copy_from_slice(digits);
+        exponent = Some((negative, kept, digits.len()));
+        out.truncate(at);
+    }
     // (`1.` rather than `1.0`.)
-    let mantissa = match mantissa.strip_suffix(".0") {
-        Some(whole) => format!("{whole}."),
-        None if mantissa.contains('.') => mantissa,
-        None => format!("{mantissa}."),
-    };
-    match exponent {
-        Some(e) => {
-            let (sign, digits) = match e.strip_prefix('-') {
-                Some(d) => ('-', d),
-                None => ('+', e.as_str()),
-            };
-            format!("{mantissa}E{sign}{digits:0>2}")
+    if out[start..].ends_with(".0") {
+        out.pop();
+    } else if !out[start..].contains('.') {
+        out.push('.');
+    }
+    if let Some((negative, digits, count)) = exponent {
+        out.push('E');
+        out.push(if negative { '-' } else { '+' });
+        for _ in count..2 {
+            out.push('0');
         }
-        None => mantissa,
+        out.push_str(std::str::from_utf8(&digits[..count]).expect("digits"));
     }
 }
 
@@ -697,6 +716,7 @@ fn decode(raw: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
 
     #[test]
