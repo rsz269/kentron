@@ -771,14 +771,11 @@ class Color:
 
     @classmethod
     def _parse(cls, text: str):
-        """The linear components of a colour named (OCCT's names, then X11's) or given in hex,
-        and its alpha."""
+        """The linear components of a colour named (X11's names, with a few more CadQuery knows)
+        or given in hex, and its alpha."""
         from ._colors import NAMED
-        from .occ_impl._occt_colors import BY_NAME
 
         name = text.lower().replace(" ", "").replace("_", "")
-        if name in BY_NAME:
-            return BY_NAME[name], 1.0
         if name in NAMED:
             return tuple(_to_linear(c) for c in NAMED[name]), 1.0
         if text.startswith("#") and len(text) in (4, 5, 7, 9):

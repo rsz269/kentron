@@ -100,14 +100,10 @@ def importStep(assy, path: str, unit: str = "MM") -> None:
 
 
 def importXbf(assy, path: str) -> None:
-    """Fills `assy` from an OCAF binary document (XBF, as CadQuery's)."""
-    from ..xbf import read_xbf
-
-    read_xbf(assy, str(path))
+    """OCAF documents are not supported (kept for CadQuery's name): always raises."""
+    raise NotImplementedError("OCAF documents (XML, XBF) are not supported: they are OCCT's own application format, read only by OCCT-based software. Read assemblies from STEP; write them as STEP, glTF, VRML, VTK.js or STL.")
 
 
 def importXml(assy, path: str) -> None:
-    """Fills `assy` from an OCAF XML document (as CadQuery's)."""
-    from ..ocaf import read_xml
-
-    read_xml(assy, str(path))
+    """OCAF documents are not supported (kept for CadQuery's name): always raises."""
+    raise NotImplementedError("OCAF documents (XML, XBF) are not supported: they are OCCT's own application format, read only by OCCT-based software. Read assemblies from STEP; write them as STEP, glTF, VRML, VTK.js or STL.")

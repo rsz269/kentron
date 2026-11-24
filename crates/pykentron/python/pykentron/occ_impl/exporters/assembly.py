@@ -117,20 +117,8 @@ def exportStepMeta(assy, path: str, unit: str = "MM", outputUnit=None, **kwargs)
 
 
 def exportCAF(assy, path: str, binary: bool = False) -> bool:
-    """Writes the assembly as an OCAF document (as CadQuery's `toCAF` makes it): OCCT's
-    binary format (XBF) or its XML one."""
-    import os
-
-    folder = os.path.dirname(os.path.abspath(str(path)))
-    if not os.path.isdir(folder):
-        return False
-    if binary:
-        from ..xbf import write_xbf
-
-        return write_xbf(assy, str(path))
-    from ..ocaf import write_xml
-
-    return write_xml(assy, str(path))
+    """OCAF documents are not supported (kept for CadQuery's name): always raises."""
+    raise NotImplementedError("OCAF documents (XML, XBF) are not supported: they are OCCT's own application format, read only by OCCT-based software. Save the assembly as STEP, glTF, VRML, VTK.js or STL.")
 
 
 def exportVRML(assy, path: str, tolerance: float = 1e-3, angularTolerance: float = 0.1) -> None:

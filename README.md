@@ -37,8 +37,8 @@ independently: OCCT is not a dependency.
   [`docs/occt-mapping.md`](docs/occt-mapping.md) maps OCCT's concepts to them.
 - All topology lives in one arena (`topology::Model`) addressed by typed ids, without
   reference counting.
-- Out of scope for now: visualization, hidden-line removal. OCAF documents: only an
-  assembly's, in OCCT's binary and XML formats (pykentron).
+- Out of scope for now: visualization, hidden-line removal. OCAF documents (OCCT's own
+  application format, XML and XBF) are not read or written.
 - Not done yet: OCCT's classic construction of evolved shapes, from the spine's bisector
   loci (kentron's evolved solids are OCCT's volume mode). Rare pathological inputs can run
   very slowly or fail to converge. Known gaps: [`docs/known-gaps.md`](docs/known-gaps.md).
@@ -50,7 +50,7 @@ Code), with a human setting the direction and judging the results. Every change 
 against the tests below before it is committed.
 
 <!-- effort -->
-So far (2026-09-25 to 2026-11-24): about 359 hours of the agent's active work, 28.4 million
+So far (2026-09-25 to 2026-11-24): about 359 hours of the agent's active work, 28.5 million
 tokens written by it, and 11.6 billion tokens processed in all (nearly all of them its
 conversation's context, read back from the cache).
 <!-- /effort -->
@@ -65,8 +65,9 @@ About 13,510 tests run. About 1,040 of them are known gaps, marked as expected f
 - **OCCT's GTests** for geometry and topology, translated by hand.
 - **USD BRep's tests:** 212 cases, translated.
 - **BRL-CAD:** STEP files from its source tree and its `libbg` geometry tests.
-- **CadQuery 2.8.0's test suite,** unchanged: 738 of 739 pass. 28 tests of OCCT internals
-  are left out ([list](crates/pykentron/tests/cadquery_excluded.txt)).
+- **CadQuery 2.8.0's test suite,** unchanged: 700 of 701 pass. 29 tests of OCCT internals
+  and 37 of OCAF documents, which pykentron does not support, are left out
+  ([list](crates/pykentron/tests/cadquery_excluded.txt)).
 - **809 CadQuery scripts from 154 public projects:** of the 794 whose results don't depend
   on a kernel's face order, 727 build as on CadQuery, 27 differ only where CadQuery's result
   is wrong, 2 fail where no valid result exists (CadQuery's results are invalid), and 38 fail
@@ -139,7 +140,7 @@ Third-party parts keep their own licences:
 |---|---|---|
 | [`constraints/slsqp.rs`](crates/kentron/src/constraints/slsqp.rs) | translated from NLopt's SLSQP | BSD-3-Clause and MIT ([`LICENSE-SLSQP`](LICENSE-SLSQP)) |
 | [`cadquery_shim/cadquery`](crates/pykentron/python/pykentron/cadquery_shim/cadquery), [`occ_impl/exporters`](crates/pykentron/python/pykentron/occ_impl/exporters) | copied from CadQuery 2.8.0 | Apache-2.0 |
-| [`occ_impl/_occt_colors.py`](crates/pykentron/python/pykentron/occ_impl/_occt_colors.py) | colour values from X11's `rgb.txt` (X.Org); the names' order, which OCAF XML files store, as OCCT reports it | MIT/X11 (the colour values) |
+| [`pykentron/_colors.py`](crates/pykentron/python/pykentron/_colors.py) | colour values from X11's `rgb.txt` (X.Org) | MIT/X11 |
 | [`crates/occt-tests`](crates/occt-tests) | translated from OCCT's and BRL-CAD's tests | LGPL-2.1 (OCCT's with the Open CASCADE exception) |
 | [`occt-tests/cases/usd_brep`](crates/occt-tests/cases/usd_brep) | translated from USD BRep's tests | Apache-2.0 |
 | [`pykentron/tests/found`](crates/pykentron/tests/found) | CadQuery scripts from public projects | each project's own: MIT, Apache-2.0, BSD-3-Clause, Unlicense or CC0-1.0 ([`cases.tsv`](crates/pykentron/tests/found/cases.tsv)) |

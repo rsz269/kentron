@@ -650,59 +650,19 @@ def test_gltf_assembly_as_cadquery(tmp_path, suffix):
 
 
 
-def _xml_assembly(cq):
-    """An assembly placed, with a placed sub-assembly, coloured parts (one shared) and a
-    sub-shape named, coloured and layered."""
-    box = cq.Workplane().box(10, 20, 30)
-    sub = cq.Assembly(name="sub").add(cq.Solid.makeSphere(4), name="ball", color=cq.Color("green"))
-    sub.add(box, name="box_again", loc=cq.Location((0, 0, 40)))
-    assy = cq.Assembly(name="top").add(box, name="box", color=cq.Color(0.3, 0.4, 0.5))
-    assy.add(cq.Solid.makeCylinder(3, 5), name="cyl", loc=cq.Location((20, 0, 0), (1, 0, 0), 30), color=cq.Color("red"))
-    assy["box"].addSubshape(box.faces(">Z").val(), name="lid", color=cq.Color("blue"), layer="lids")
-    assy.add(sub, loc=cq.Location((0, 30, 0), (0, 0, 1), 45))
-    return assy
+def test_ocaf_documents_refused():
+    # (OCAF's documents, XML and binary (XBF), are OCCT's own application format: not
+    # supported, refused with a reason rather than written wrongly.)
+    from pykentron.occ_impl.exporters.assembly import exportCAF
+    from pykentron.occ_impl.importers.assembly import importXbf, importXml
 
-
-def _assembly_summary(assy):
-    out = []
-    for name, node in sorted(assy.objects.items()):
-        t, angles = node.loc.toTuple()
-        shape = node.obj if node.obj is None or hasattr(node.obj, "Volume") else node.obj.val()
-        volume = round(shape.Volume(), 6) if shape is not None else None
-        color = tuple(round(c, 4) for c in node.color.toTuple()) if node.color is not None else None
-        subs = sorted((v, round(k.Area(), 6)) for k, v in node._subshape_names.items())
-        layers = sorted(node._subshape_layers.values())
-        colors = sorted(tuple(round(c, 4) for c in v.toTuple()) for v in node._subshape_colors.values())
-        out.append((name, tuple(round(x, 9) for x in t + angles), volume, color, subs, layers, colors, [c.name for c in node.children]))
-    return out
-
-
-def test_xml_assembly_read_as_cadquery_reads_its_own(tmp_path, suffix=".xml"):
-    # (OCAF's documents, XML and binary (XBF): written by each, read by each; CadQuery reading
-    # pykentron's file and pykentron reading CadQuery's both give what CadQuery gives reading
-    # its own. pykentron's side through the CadQuery shim, in a process of its own.)
-    import json
-    import subprocess
-
-    here = Path(__file__).resolve().parent
-    theirs, ours = tmp_path / f"theirs{suffix}", tmp_path / f"ours{suffix}"
-    _xml_assembly(cadquery).export(str(theirs))
-    run = (
-        "import sys, json; sys.path[:0] = [%r, %r]; import pykentron.shim; import cadquery as cq; import test_against_cadquery as t\n"
-        "t._xml_assembly(cq).export(%r)\n"
-        "print(json.dumps([t._assembly_summary(cq.Assembly.load(p)) for p in (%r, %r)]))\n"
-    ) % (str(here.parent / "python"), str(here), str(ours), str(theirs), str(ours))
-    done = subprocess.run([sys.executable, "-c", run], capture_output=True, text=True)
-    assert done.returncode == 0, done.stderr[-2000:]
-    read_theirs, read_ours = json.loads(done.stdout.strip().splitlines()[-1])
-    expected = json.loads(json.dumps(_assembly_summary(cadquery.Assembly.load(str(theirs)))))
-    assert json.loads(json.dumps(_assembly_summary(cadquery.Assembly.load(str(ours))))) == expected
-    assert read_theirs == expected
-    assert read_ours == expected
-
-
-def test_xbf_assembly_read_as_cadquery_reads_its_own(tmp_path):
-    test_xml_assembly_read_as_cadquery_reads_its_own(tmp_path, ".xbf")
+    for call in (lambda: exportCAF(None, "a.xml"), lambda: exportCAF(None, "a.xbf", True), lambda: importXml(None, "a.xml"), lambda: importXbf(None, "a.xbf")):
+        try:
+            call()
+        except NotImplementedError as e:
+            assert "OCAF" in str(e)
+        else:
+            raise AssertionError("an OCAF document was not refused")
 
 
 # Constraint solving: the same CadQuery code (`cq` the module) run on CadQuery (IPOPT through
@@ -909,13 +869,11 @@ if __name__ == "__main__":
     except Exception as e:
         failed += 1
         print(f"FAILED  gyroid_plates_a_hundred_millionth_apart: {type(e).__name__}: {str(e)[:300]}")
-    for suffix in (".xml", ".xbf"):
-        with tempfile.TemporaryDirectory() as folder:
-            try:
-                test_xml_assembly_read_as_cadquery_reads_its_own(Path(folder), suffix)
-                print(f"ok      assembly{suffix}_read_as_cadquery_reads_its_own")
-            except Exception as e:
-                failed += 1
-                print(f"FAILED  assembly{suffix}_read_as_cadquery_reads_its_own: {type(e).__name__}: {str(e)[:300]}")
-    print(f"{len(CASES) + len(FOUND) + 5 + len(SOLVES) - failed} passed, {failed} failed")
+    try:
+        test_ocaf_documents_refused()
+        print("ok      ocaf_documents_refused")
+    except Exception as e:
+        failed += 1
+        print(f"FAILED  ocaf_documents_refused: {type(e).__name__}: {e}")
+    print(f"{len(CASES) + len(FOUND) + 4 + len(SOLVES) - failed} passed, {failed} failed")
     sys.exit(1 if failed else 0)
