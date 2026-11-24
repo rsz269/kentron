@@ -907,10 +907,91 @@ pub(super) fn sample_pcurve(pcurve: &Curve2, first: f64, last: f64) -> Vec<Uv> {
 
 /// [`sample_pcurve`], with free-form spans halved while their midpoints stray from their
 /// chords: for telling points close to the boundary on which side of it they lie.
+/// (A free-form pcurve's samples are kept for its curve and range: a face's boundary is
+/// sampled again by each operation on it, unchanged where the operation does not reach.)
 pub(super) fn sample_pcurve_closely(pcurve: &Curve2, first: f64, last: f64) -> Vec<Uv> {
     if matches!(pcurve, Curve2::Line(_) | Curve2::Circle(_) | Curve2::Ellipse(_)) {
         return sample_pcurve(pcurve, first, last);
     }
+    let Some(key) = closely_key(pcurve, first, last) else { return sample_closely(pcurve, first, last) };
+    let lock = || CLOSE_SAMPLES.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let same = |e: &CloseSamples| e.key == key && e.range == [first.to_bits(), last.to_bits()] && e.pcurve == *pcurve;
+    if let Some(found) = lock().entries.iter().find(|e| same(e)) {
+        return found.points.as_ref().clone();
+    }
+    // (Sampled outside the lock; another thread may sample it too.)
+    let points = std::sync::Arc::new(sample_closely(pcurve, first, last));
+    let mut cache = lock();
+    if !cache.entries.iter().any(|e| same(e)) {
+        cache.points += points.len();
+        cache.entries.push_back(CloseSamples { key, range: [first.to_bits(), last.to_bits()], pcurve: pcurve.clone(), points: points.clone() });
+        while cache.points > CLOSE_SAMPLES_POINTS || cache.entries.len() > CLOSE_SAMPLES_ENTRIES {
+            let Some(old) = cache.entries.pop_front() else { break };
+            cache.points -= old.points.len();
+        }
+    }
+    drop(cache);
+    std::sync::Arc::unwrap_or_clone(points)
+}
+
+/// Free-form pcurves' samples kept lately ([`sample_pcurve_closely`]), shared by the threads
+/// of operations: oldest first.
+struct CloseSampleCache {
+    entries: std::collections::VecDeque<CloseSamples>,
+    /// The points they hold, in all.
+    points: usize,
+}
+
+struct CloseSamples {
+    /// A hash of the pcurve (its definition, by bits) and range, to tell entries apart
+    /// quickly; then compared whole.
+    key: u64,
+    range: [u64; 2],
+    pcurve: Curve2,
+    points: std::sync::Arc<Vec<Uv>>,
+}
+
+static CLOSE_SAMPLES: std::sync::Mutex<CloseSampleCache> = std::sync::Mutex::new(CloseSampleCache { entries: std::collections::VecDeque::new(), points: 0 });
+
+/// Points kept at most in all (16 bytes each), and pcurves (each looked through on a lookup).
+const CLOSE_SAMPLES_POINTS: usize = 1 << 21;
+const CLOSE_SAMPLES_ENTRIES: usize = 4096;
+
+/// [`CloseSamples::key`] for a B-spline or Bézier pcurve (others are not kept).
+fn closely_key(pcurve: &Curve2, first: f64, last: f64) -> Option<u64> {
+    use std::hash::Hasher;
+    let mut h = crate::hashing::FastHasher::default();
+    let mut put = |x: f64| h.write_u64(x.to_bits());
+    put(first);
+    put(last);
+    let (poles, weights) = match pcurve {
+        Curve2::BSpline(b) => {
+            for &k in b.knots() {
+                put(k);
+            }
+            for &m in b.multiplicities() {
+                put(m as f64);
+            }
+            put(b.degree() as f64);
+            (b.poles(), b.weights())
+        }
+        Curve2::Bezier(b) => {
+            put(b.degree() as f64);
+            (b.poles(), b.weights())
+        }
+        _ => return None,
+    };
+    for p in poles {
+        put(p.x);
+        put(p.y);
+    }
+    for &w in weights.unwrap_or(&[]) {
+        put(w);
+    }
+    Some(h.finish())
+}
+
+fn sample_closely(pcurve: &Curve2, first: f64, last: f64) -> Vec<Uv> {
     let n = 64;
     let mut params: Vec<f64> = (0..=n).map(|i| first + (last - first) * i as f64 / n as f64).collect();
     let mut points: Vec<Uv> = pcurve.points_along(&params).into_iter().map(|p| [p.x, p.y]).collect();
@@ -990,38 +1071,143 @@ fn crosses_ray(a: Uv, b: Uv, p: Uv) -> bool {
     (a[1] > p[1]) != (b[1] > p[1]) && p[0] < a[0] + (p[1] - a[1]) * (b[0] - a[0]) / (b[1] - a[1])
 }
 
-/// [`inside_polylines`] for many points of the same polylines: their segments (turned) in
-/// strips across the ray, each point testing only those of its strip (the same segments
-/// that can cross its ray, so the same answers).
+/// [`inside_polylines`] for many points of the same polylines (given again with each
+/// point): the polylines in runs of consecutive segments, each with its box (turned), and,
+/// once a few points' rays may have crossed it, its segments (turned) in strips across the
+/// ray, each point testing only those of its strip (the same segments that can cross its
+/// ray, so the same answers). A face's boundary may be long (many holes, finely sampled)
+/// and the points asked about all near one part of it.
 pub(super) struct InsidePolylines {
+    runs: Vec<Run>,
+}
+
+/// Segments of [`InsidePolylines`] at most in a run.
+const RUN: usize = 256;
+
+/// A run of consecutive segments of one polyline: those between its points `from` and
+/// `to` (included).
+struct Run {
+    polyline: usize,
+    from: usize,
+    to: usize,
+    /// The range of its points (turned) across the ray, and along it.
+    across: (f64, f64),
+    along: (f64, f64),
+    /// Points whose rays may cross it, so far: its strips are made once a few have been
+    /// tested segment by segment.
+    asked: std::sync::atomic::AtomicUsize,
+    strips: std::sync::OnceLock<Strips>,
+}
+
+/// A polyline's segments (by the index of their first point) in strips across the ray
+/// (turned): strip `k`'s are `segments[starts[k]..starts[k + 1]]`.
+struct Strips {
     low: f64,
     width: f64,
-    strips: Vec<Vec<(Uv, Uv)>>,
+    starts: Vec<u32>,
+    segments: Vec<u32>,
 }
+
+impl Strips {
+    fn new(poly: &[Uv]) -> Self {
+        let across = |q: Uv| ray_turn(q)[1];
+        let (low, high) = poly.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), &q| (lo.min(across(q)), hi.max(across(q))));
+        let count = (poly.len() / 4).max(1);
+        let width = if high > low { (high - low) / count as f64 } else { 1.0 };
+        // (A cast rounds down past zero, and up to it from below, as `floor` and `max(0.0)`
+        // would, with no call.)
+        let strip = |y: f64| (((y - low) / width) as usize).min(count - 1);
+        let spans: Vec<(u32, u32)> = poly
+            .windows(2)
+            .map(|w| {
+                let (a, b) = (across(w[0]), across(w[1]));
+                (strip(a.min(b)) as u32, strip(a.max(b)) as u32)
+            })
+            .collect();
+        // (Counted first, then placed.)
+        let mut starts = vec![0u32; count + 1];
+        for &(lo, hi) in &spans {
+            for k in lo..=hi {
+                starts[k as usize + 1] += 1;
+            }
+        }
+        for k in 0..count {
+            starts[k + 1] += starts[k];
+        }
+        let mut next = starts.clone();
+        let mut segments = vec![0u32; starts[count] as usize];
+        for (i, &(lo, hi)) in spans.iter().enumerate() {
+            for k in lo..=hi {
+                segments[next[k as usize] as usize] = i as u32;
+                next[k as usize] += 1;
+            }
+        }
+        Strips { low, width, starts, segments }
+    }
+
+    /// How many of the segments of `poly` (this was made for) cross the ray from `p`
+    /// (turned).
+    fn crossings(&self, poly: &[Uv], p: Uv) -> usize {
+        if !(p[1] >= self.low) {
+            return 0;
+        }
+        let k = (((p[1] - self.low) / self.width) as usize).min(self.starts.len() - 2);
+        let (from, to) = (self.starts[k] as usize, self.starts[k + 1] as usize);
+        self.segments[from..to].iter().filter(|&&i| crosses_ray(ray_turn(poly[i as usize]), ray_turn(poly[i as usize + 1]), p)).count()
+    }
+}
+
+/// Points tested against a polyline segment by segment before its strips are made.
+const ASKED_BEFORE_STRIPS: usize = 8;
 
 impl InsidePolylines {
     pub fn new(polylines: &[Vec<Uv>]) -> Self {
-        let segments: Vec<(Uv, Uv)> = polylines.iter().flat_map(|poly| poly.windows(2).map(|w| (ray_turn(w[0]), ray_turn(w[1])))).collect();
-        let (low, high) = segments.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), (a, b)| (lo.min(a[1]).min(b[1]), hi.max(a[1]).max(b[1])));
-        let count = (segments.len() / 2).clamp(1, 4096);
-        let width = if high > low { (high - low) / count as f64 } else { 1.0 };
-        let mut strips = vec![Vec::new(); count];
-        let strip = |y: f64| (((y - low) / width).floor().max(0.0) as usize).min(count - 1);
-        for &(a, b) in &segments {
-            for k in strip(a[1].min(b[1]))..=strip(a[1].max(b[1])) {
-                strips[k].push((a, b));
+        let mut runs = Vec::new();
+        for (polyline, poly) in polylines.iter().enumerate() {
+            let mut from = 0;
+            while from + 1 < poly.len() {
+                let to = (from + RUN).min(poly.len() - 1);
+                let (mut across, mut along) = ((f64::INFINITY, f64::NEG_INFINITY), (f64::INFINITY, f64::NEG_INFINITY));
+                for &q in &poly[from..=to] {
+                    let t = ray_turn(q);
+                    along = (along.0.min(t[0]), along.1.max(t[0]));
+                    across = (across.0.min(t[1]), across.1.max(t[1]));
+                }
+                runs.push(Run { polyline, from, to, across, along, asked: Default::default(), strips: std::sync::OnceLock::new() });
+                from = to;
             }
         }
-        InsidePolylines { low, width, strips }
+        InsidePolylines { runs }
     }
 
-    pub fn contains(&self, p: Uv) -> bool {
+    /// Whether `p` lies inside `polylines` (those this was made for).
+    pub fn contains(&self, polylines: &[Vec<Uv>], p: Uv) -> bool {
         let p = ray_turn(p);
-        if self.strips.is_empty() || !(p[1] >= self.low) {
-            return false;
+        let mut crossings = 0;
+        for run in &self.runs {
+            // (A segment crosses the ray only between its ends across it, and ahead of `p`
+            // only if some of it is: none of a run below, above or behind it, a margin left
+            // for the crossing's rounding.)
+            let (lo, hi) = run.across;
+            if !(p[1] >= lo && p[1] < hi) {
+                continue;
+            }
+            let margin = 1e-9 * (run.along.1.abs() + run.along.0.abs() + 1.0);
+            if p[0] > run.along.1 + margin {
+                continue;
+            }
+            let points = &polylines[run.polyline][run.from..=run.to];
+            let strips = match run.strips.get() {
+                Some(strips) => Some(strips),
+                None if run.asked.fetch_add(1, std::sync::atomic::Ordering::Relaxed) >= ASKED_BEFORE_STRIPS => Some(run.strips.get_or_init(|| Strips::new(points))),
+                None => None,
+            };
+            crossings += match strips {
+                Some(strips) => strips.crossings(points, p),
+                None => points.windows(2).filter(|w| crosses_ray(ray_turn(w[0]), ray_turn(w[1]), p)).count(),
+            };
         }
-        let k = (((p[1] - self.low) / self.width).floor() as usize).min(self.strips.len() - 1);
-        self.strips[k].iter().filter(|(a, b)| crosses_ray(*a, *b, p)).count() % 2 == 1
+        crossings % 2 == 1
     }
 }
 
@@ -1310,6 +1496,45 @@ mod tests {
     use super::*;
     use crate::geometry::curve2::BezierCurve2;
     use crate::math::Point2;
+
+    /// The index answers as testing every segment does, for points asked many times over
+    /// (its strips made) and few, near and on long polylines and short ones.
+    #[test]
+    fn indexed_polylines_answer_as_every_segment_does() {
+        let circle = |c: Uv, r: f64, n: usize, wobble: f64| -> Vec<Uv> {
+            (0..=n).map(|i| {
+                let t = std::f64::consts::TAU * (i % n) as f64 / n as f64;
+                let r = r * (1.0 + wobble * (7.0 * t).sin());
+                [c[0] + r * t.cos(), c[1] + r * t.sin()]
+            }).collect()
+        };
+        let mut polylines = vec![circle([0.0, 0.0], 10.0, 3000, 0.1)];
+        for k in 0..12 {
+            let a = k as f64 * 0.5;
+            polylines.push(circle([5.0 * a.cos(), 5.0 * a.sin()], 0.8, 700 + 37 * k, 0.05));
+        }
+        // An open polyline and a single segment, as stretches of boundary are.
+        polylines.push(vec![[-3.0, -9.0], [3.0, -8.5], [4.0, -7.0]]);
+        polylines.push(vec![[-3.0, -9.0], [4.0, -7.0]]);
+        let index = InsidePolylines::new(&polylines);
+        let mut seed = 12345u64;
+        let mut next = || {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (seed >> 11) as f64 / (1u64 << 53) as f64
+        };
+        for round in 0..4 {
+            for _ in 0..2000 {
+                let p = [-12.0 + 24.0 * next(), -12.0 + 24.0 * next()];
+                assert_eq!(index.contains(&polylines, p), inside_polylines(&polylines, p), "{p:?} in round {round}");
+            }
+            // The polylines' own points, on the boundary.
+            for poly in &polylines {
+                for &q in poly.iter().step_by(17) {
+                    assert_eq!(index.contains(&polylines, q), inside_polylines(&polylines, q), "{q:?}");
+                }
+            }
+        }
+    }
 
     /// A band winding a turn and a half round an axis, as a thread's flank (its turns 8 apart,
     /// 88 round): every point on it found on it, on its own turn, not held on the next turn

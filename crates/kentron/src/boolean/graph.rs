@@ -67,7 +67,8 @@ impl Vertices {
 /// [`Face`]).
 #[derive(Clone)]
 pub(super) struct FaceSample {
-    pub polylines: Vec<Vec<Uv>>,
+    /// (Shared with the samples kept in the model, not copied: a face's may be long.)
+    pub polylines: std::sync::Arc<Vec<Vec<Uv>>>,
     pub u_range: (f64, f64),
     pub v_range: (f64, f64),
     pub bbox: (Point, Point),
@@ -218,7 +219,7 @@ pub(super) struct Face {
     pub outward: f64,
     pub boundary: Vec<BoundaryUse>,
     /// The boundary sampled in (u, v), for locating points.
-    pub polylines: Vec<Vec<Uv>>,
+    pub polylines: std::sync::Arc<Vec<Vec<Uv>>>,
     pub u_period: Option<f64>,
     /// The period of `v` (a surface of revolution of a circle), if periodic.
     pub v_period: Option<f64>,
@@ -336,7 +337,7 @@ impl Face {
         if self.polylines.iter().map(Vec::len).sum::<usize>() < 64 {
             return geom::inside_polylines(&self.polylines, uv);
         }
-        self.inside_index.get_or_init(|| geom::InsidePolylines::new(&self.polylines)).contains(uv)
+        self.inside_index.get_or_init(|| geom::InsidePolylines::new(&self.polylines)).contains(&self.polylines, uv)
     }
 
     /// Where `p` (on the face's surface) lies with respect to the face: on its boundary
@@ -1218,6 +1219,10 @@ pub(super) fn align_wires(wires: &mut [Vec<(Curve2, f64, f64, bool)>], periods: 
         }
         outer.extend(p);
     }
+    // (Indexed where many points are asked about a long loop.)
+    let outer = std::slice::from_ref(&outer);
+    let index = (outer[0].len() >= 64 && rest.len() > 2).then(|| geom::InsidePolylines::new(outer));
+    let inside = |p: Uv| index.as_ref().map_or_else(|| geom::inside_polylines(outer, p), |index| index.contains(outer, p));
     for wire in rest.iter_mut().filter(|w| !w.is_empty()) {
         let probe = middle(&wire[0]);
         let mut shifts: Vec<[f64; 2]> = vec![[0.0, 0.0]];
@@ -1225,7 +1230,7 @@ pub(super) fn align_wires(wires: &mut [Vec<(Curve2, f64, f64, bool)>], periods: 
             shifts.extend(periods[0].map(|p| [k * p, 0.0]));
             shifts.extend(periods[1].map(|p| [0.0, k * p]));
         }
-        let d = shifts.into_iter().find(|d| geom::inside_polylines(std::slice::from_ref(&outer), [probe.x + d[0], probe.y + d[1]])).unwrap_or([0.0, 0.0]);
+        let d = shifts.into_iter().find(|d| inside([probe.x + d[0], probe.y + d[1]])).unwrap_or([0.0, 0.0]);
         if d != [0.0, 0.0] {
             for u in wire.iter_mut() {
                 u.0 = shift_by(&u.0, d);
@@ -1247,7 +1252,7 @@ pub(super) fn sample_face(surface: &Surface, boundary: &[(&Curve2, f64, f64)]) -
             // Without a boundary: the whole (unbounded) surface.
             let far = crate::tolerance::INFINITE;
             let bbox = (Point::new(-far, -far, -far), Point::new(far, far, far));
-            return FaceSample { polylines, u_range: (-far, far), v_range: (-far, far), bbox, extent: bbox };
+            return FaceSample { polylines: Default::default(), u_range: (-far, far), v_range: (-far, far), bbox, extent: bbox };
         }
         // The box of a grid over the face's parameter rectangle (a curved face may bulge
         // beyond its boundary).
@@ -1294,7 +1299,7 @@ pub(super) fn sample_face(surface: &Surface, boundary: &[(&Curve2, f64, f64)]) -
         };
         let extent = geom::bounding_box(points.iter().copied(), bulge + geom::LOOSE_ON_TOL);
         let bbox = geom::bounding_box(points, margin);
-        FaceSample { polylines, u_range, v_range, bbox, extent }
+        FaceSample { polylines: std::sync::Arc::new(polylines), u_range, v_range, bbox, extent }
     }
 }
 

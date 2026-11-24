@@ -788,7 +788,7 @@ pub(super) fn split_face(arcs: &[ArcOnFace], pieces: &[Piece], face_polylines: &
     // (The face's boundary indexed where many regions are tested against a long one.)
     let segments: usize = face_polylines.iter().map(Vec::len).sum();
     let index = (regions.len() > 2 && segments >= 64).then(|| geom::InsidePolylines::new(face_polylines));
-    let inside = |p: Uv| index.as_ref().map_or_else(|| geom::inside_polylines(face_polylines, p), |index| index.contains(p));
+    let inside = |p: Uv| index.as_ref().map_or_else(|| geom::inside_polylines(face_polylines, p), |index| index.contains(face_polylines, p));
     // (A face without a boundary is its whole surface, as a whole plane: every region lies
     // on it, as `BOPAlgo_BuilderFace::PerformAreas` keeps every growth loop of such a face.
     // The part outside them, of hole loops only, is not built: docs/known-gaps.md.)
