@@ -161,9 +161,11 @@ pub(super) fn region(candidates: &[Candidate], cover: &dyn Cover, outline: Outli
     let eps = 1e-11 * size;
     let in_region = |p: P2| outline.inside(p) > 0.0 && cover.depth(p) < 0.0;
     let mut pieces: Vec<Piece> = Vec::new();
-    for (index, candidate) in candidates.iter().enumerate() {
-        let kept = |p: P2| outline.inside(p) > 0.0 && cover.depth(p) <= eps;
-        for (from, to) in kept_intervals(candidate, &kept, size) {
+    let kept = |p: P2| outline.inside(p) > 0.0 && cover.depth(p) <= eps;
+    // (Each candidate's on its own: taken together.)
+    let kept_on = crate::parallel::map(candidates, |candidate| kept_intervals(candidate, &kept, size));
+    for (index, intervals) in kept_on.into_iter().enumerate() {
+        for (from, to) in intervals {
             let piece = Piece::Candidate { index, from, to };
             // Run with the region on its left (dropped if it has the region on neither side
             // or both: where the swept set only touches itself).
@@ -187,8 +189,10 @@ pub(super) fn region(candidates: &[Candidate], cover: &dyn Cover, outline: Outli
     // (Candidates may coincide where the tool's symmetry makes two of its corners or sides
     // run along the same curve: such a piece is kept once.)
     let mut unique: Vec<Piece> = Vec::with_capacity(pieces.len());
+    let mut samples: Vec<Samples> = Vec::with_capacity(pieces.len());
     for piece in pieces {
-        if !unique.iter().any(|kept| lies_on(candidates, &piece, kept, 1e-9 * size)) {
+        if !unique.iter().zip(&samples).any(|(kept, along)| lies_on(candidates, &piece, kept, along, 1e-9 * size)) {
+            samples.push(Samples::of(candidates, &piece));
             unique.push(piece);
         }
     }
@@ -226,20 +230,40 @@ pub(super) fn region(candidates: &[Candidate], cover: &dyn Cover, outline: Outli
     chain(candidates, pieces, size)
 }
 
-/// True if all of piece `a` lies within `tolerance` of piece `b`: sampled, each sample's
-/// nearest point on `b` found among `b`'s samples and then by golden section.
-fn lies_on(candidates: &[Candidate], a: &Piece, b: &Piece, tolerance: f64) -> bool {
-    let n = 2048;
-    let along: Vec<P2> = (0..=n).map(|i| b.point(candidates, i as f64 / n as f64)).collect();
-    let (lo, hi) = along.iter().fold(([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]), |(lo, hi), p| {
-        ([lo[0].min(p[0]), lo[1].min(p[1])], [hi[0].max(p[0]), hi[1].max(p[1])])
-    });
+/// A piece's points, even in its parameter, and the box holding them: what `lies_on` searches
+/// for a nearest point.
+struct Samples {
+    points: Vec<P2>,
+    lo: P2,
+    hi: P2,
+}
+
+impl Samples {
+    const COUNT: usize = 2048;
+
+    fn of(candidates: &[Candidate], piece: &Piece) -> Samples {
+        let n = Self::COUNT;
+        let points: Vec<P2> = (0..=n).map(|i| piece.point(candidates, i as f64 / n as f64)).collect();
+        let (lo, hi) = points.iter().fold(([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]), |(lo, hi), p| {
+            ([lo[0].min(p[0]), lo[1].min(p[1])], [hi[0].max(p[0]), hi[1].max(p[1])])
+        });
+        Samples { points, lo, hi }
+    }
+}
+
+/// True if all of piece `a` lies within `tolerance` of piece `b` (whose samples are `along`):
+/// sampled, each sample's nearest point on `b` found among `b`'s samples and then by golden
+/// section.
+fn lies_on(candidates: &[Candidate], a: &Piece, b: &Piece, along: &Samples, tolerance: f64) -> bool {
+    let n = Samples::COUNT;
+    let (lo, hi) = (along.lo, along.hi);
     (0..=16).all(|k| {
         let p = a.point(candidates, k as f64 / 16.0);
         if p[0] < lo[0] - tolerance || p[1] < lo[1] - tolerance || p[0] > hi[0] + tolerance || p[1] > hi[1] + tolerance {
             return false;
         }
-        let nearest = (0..=n).min_by(|&i, &j| norm(sub(along[i], p)).total_cmp(&norm(sub(along[j], p)))).expect("samples");
+        let distances: Vec<f64> = along.points.iter().map(|&q| norm(sub(q, p))).collect();
+        let nearest = (0..=n).min_by(|&i, &j| distances[i].total_cmp(&distances[j])).expect("samples");
         let distance = |f: f64| norm(sub(b.point(candidates, f), p));
         let (mut x, mut y) = ((nearest.max(1) - 1) as f64 / n as f64, ((nearest + 1).min(n)) as f64 / n as f64);
         let g = 0.5 * (5f64.sqrt() - 1.0);
@@ -348,6 +372,18 @@ fn kept_intervals(candidate: &Candidate, kept: &(dyn Fn(P2) -> bool + Sync), siz
         }
         0.5 * (lo + hi)
     };
+    // The transitions between neighbouring defined samples whose states differ (each found
+    // on its own: taken together, keyed by the first sample).
+    let pairs: Vec<(usize, usize)> = (0..defined.len())
+        .filter(|&w| candidate.closed || w + 1 < defined.len())
+        .map(|w| (defined[w], defined[(w + 1) % defined.len()]))
+        .filter(|&(i, j)| state(i) != state(j))
+        .collect();
+    let mut found = vec![f64::NAN; n];
+    for (&(i, _), s) in pairs.iter().zip(crate::parallel::map(&pairs, |&(i, j)| transition(i, j))) {
+        found[i] = s;
+    }
+    let transition = |i: usize, _: usize| found[i];
     let mut intervals = Vec::new();
     if candidate.closed {
         // Start from a sample not kept, if any.
@@ -461,21 +497,98 @@ fn chain(candidates: &[Candidate], pieces: Vec<Piece>, size: f64) -> Result<Vec<
     Ok(loops)
 }
 
+/// A sure bound on how fast a function of the motion's parameter changes: `over(t0, t1)` no
+/// less than |f′| anywhere on [t0, t1] (not a sampled estimate: derived from the motion), and
+/// `margin` no less than the rounding in a value of f. With it `largest` passes over spans
+/// where f provably stays below zero.
+pub(super) struct Rate<'a> {
+    pub over: &'a dyn Fn(f64, f64) -> f64,
+    pub margin: f64,
+}
+
 /// The largest of `f` over `[a, b]` (or round a period from `a` if `periodic`): `f` sampled
 /// at spacing `step` (within which it changes by no more than `slope` a unit), then each
 /// sample's neighbourhood that could hold more than the best found searched by golden
 /// section. Stops early once more than `enough` is found.
-pub(super) fn largest(f: &dyn Fn(f64) -> f64, a: f64, b: f64, step: f64, slope: f64, periodic: bool, enough: f64) -> f64 {
+///
+/// With a sure `rate`, the samples whose neighbourhoods `f` provably keeps below zero are
+/// passed over (found by halving the samples' range, each half bounded from the value at its
+/// middle sample): every value the search would take there is negative, so passing them over
+/// changes neither whether the result is negative nor whether it is more than `enough` (which
+/// is all a depth is asked); a negative result is then only a bound.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn largest(f: &dyn Fn(f64) -> f64, a: f64, b: f64, step: f64, slope: f64, periodic: bool, enough: f64, rate: Option<&Rate>) -> f64 {
     let n = (((b - a) / step).ceil() as usize).max(4);
     let h = (b - a) / n as f64;
     let count = if periodic { n } else { n + 1 };
-    let values: Vec<f64> = (0..count).map(|i| f(a + h * i as f64)).collect();
-    let mut best = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    let time = |i: usize| a + h * i as f64;
+    // (NaN where not taken.)
+    let mut values = vec![f64::NAN; count];
+    let mut live = vec![true; count];
+    let mut best = f64::NEG_INFINITY;
+    if let Some(rate) = rate {
+        live.fill(false);
+        let mut ceiling = f64::NEG_INFINITY;
+        // The span of what the search takes for samples lo..=hi: their neighbourhoods.
+        let span = |lo: usize, hi: usize| {
+            (if periodic || lo > 0 { time(lo) - h } else { time(lo) }, if periodic || hi + 1 < count { time(hi) + h } else { time(hi) })
+        };
+        let mut stack = vec![(0usize, count - 1)];
+        while let Some((lo, hi)) = stack.pop() {
+            let mid = (lo + hi) / 2;
+            if values[mid].is_nan() {
+                values[mid] = f(time(mid));
+            }
+            let v = values[mid];
+            best = best.max(v);
+            if v > enough {
+                // (A sample's: so would the samples' largest be.)
+                return v;
+            }
+            let (t0, t1) = span(lo, hi);
+            let reach = (time(mid) - t0).max(t1 - time(mid));
+            let cap = v + (rate.over)(t0, t1) * reach + rate.margin;
+            if cap < 0.0 {
+                ceiling = ceiling.max(cap);
+                continue;
+            }
+            if lo == hi {
+                live[mid] = true;
+                continue;
+            }
+            stack.push((mid + 1, hi));
+            stack.push((lo, mid));
+        }
+        if !live.iter().any(|&l| l) {
+            return ceiling;
+        }
+        // The live samples' neighbours, for telling their local largest.
+        for i in 0..count {
+            if !live[i] {
+                continue;
+            }
+            let neighbours = if periodic { [Some((i + count - 1) % count), Some((i + 1) % count)] } else { [i.checked_sub(1), Some(i + 1).filter(|&j| j < count)] };
+            for j in neighbours.into_iter().flatten().chain([i]) {
+                if values[j].is_nan() {
+                    values[j] = f(time(j));
+                    best = best.max(values[j]);
+                }
+            }
+        }
+    } else {
+        for i in 0..count {
+            values[i] = f(time(i));
+            best = best.max(values[i]);
+        }
+    }
     if best > enough {
         return best;
     }
     let reach = slope * h;
     for i in 0..count {
+        if !live[i] {
+            continue;
+        }
         let v = values[i];
         let (before, after) = if periodic {
             (values[(i + count - 1) % count], values[(i + 1) % count])
@@ -485,7 +598,7 @@ pub(super) fn largest(f: &dyn Fn(f64) -> f64, a: f64, b: f64, step: f64, slope: 
         if v < before || v < after || v + reach < best {
             continue;
         }
-        let s = a + h * i as f64;
+        let s = time(i);
         let (mut lo, mut hi) = (if periodic || i > 0 { s - h } else { s }, if periodic || i + 1 < count { s + h } else { s });
         let g = 0.5 * (5f64.sqrt() - 1.0);
         let (mut x1, mut x2) = (hi - g * (hi - lo), lo + g * (hi - lo));

@@ -506,7 +506,11 @@ fn planar_cut(model: &mut Model, blank_frame: &Frame, radius: f64, height: f64, 
     let planar = Planar { motion, plane, body };
     let (candidates, slope) = planar.candidates(size)?;
     let tool_size = planar.body.iter().map(|&p| norm(sub(p, planar.body[0]))).fold(0.0, f64::max);
-    let cover = PlanarCover { planar: &planar, step: 0.02 * tool_size / slope, slope, enough: 1e-11 * size };
+    // (Depths are taken in world coordinates: rounding grows with their size.)
+    let extent = length3(plane.origin)
+        + planar.body.iter().map(|&p| norm(p)).fold(0.0, f64::max)
+        + motion.steps.iter().map(|s| length3(pt(s.axis.origin)) + s.advance.abs() * motion.from.abs().max(motion.to.abs())).sum::<f64>();
+    let cover = PlanarCover { planar: &planar, step: 0.02 * tool_size / slope, slope, enough: 1e-11 * size, margin: 1e-9 * (size + extent) };
     let loops = section::region(&candidates, &cover, Outline::Disc { centre: [0.0, 0.0], radius })?;
     let map = PlaneMap { origin: plane.origin, x: plane.x, y: plane.y, splines: false };
     let faces = section_faces(model, &candidates, &loops, &map, size)?;
@@ -627,6 +631,43 @@ struct PlanarCover<'a> {
     step: f64,
     slope: f64,
     enough: f64,
+    /// More than the rounding in a depth.
+    margin: f64,
+}
+
+impl PlanarCover<'_> {
+    /// No less than how fast the point `p` moves over the tool (so how fast its depth in the
+    /// tool changes, a signed distance) at any t in [t0, t1]: the motion's velocity at the
+    /// tool's point there, |v| ≤ Σ (|turn|·ρ + |advance|) over the steps, ρ the distance from a
+    /// step's axis of where that step leaves the point. Those places bounded by discs, from
+    /// `p` itself back through the steps in reverse: a turn taken back through the angles of
+    /// [t0, t1] carries a disc round its axis (by at most the angle's spread times its centre's
+    /// distance, or anywhere on the circle), a slide by its advances.
+    fn rate(&self, p: P2, t0: f64, t1: f64) -> f64 {
+        let (mid, half) = (0.5 * (t0 + t1), 0.5 * (t1 - t0));
+        let (mut centre, mut radius) = (p, 0.0f64);
+        let mut rate = 0.0;
+        for step in self.planar.motion.steps.iter().rev() {
+            if step.turn != 0.0 {
+                let o = self.planar.flat(pt(step.axis.origin));
+                let distance = norm(sub(centre, o));
+                rate += step.turn.abs() * (distance + radius) + step.advance.abs();
+                let swung = radius + step.turn.abs() * half * distance;
+                if swung < distance + radius {
+                    centre = self.planar.flat(Rigid::step(step, mid).unapply(self.planar.lift(centre)));
+                    radius = swung;
+                } else {
+                    (centre, radius) = (o, distance + radius);
+                }
+            } else {
+                rate += step.advance.abs();
+                centre = self.planar.flat(Rigid::step(step, mid).unapply(self.planar.lift(centre)));
+                radius += step.advance.abs() * half;
+            }
+        }
+        // (With a little over, for the rounding.)
+        rate * (1.0 + 1e-9)
+    }
 }
 
 impl Cover for PlanarCover<'_> {
@@ -634,7 +675,9 @@ impl Cover for PlanarCover<'_> {
         let q = self.planar.lift(p);
         let motion = self.planar.motion;
         let at = |t: f64| polygon_depth(&self.planar.body, self.planar.flat(motion.rigid(t).unapply(q)));
-        section::largest(&at, motion.from, motion.to, self.step, self.slope, false, self.enough)
+        let over = |t0: f64, t1: f64| self.rate(p, t0, t1);
+        let rate = section::Rate { over: &over, margin: self.margin + 1e-9 * norm(p) };
+        section::largest(&at, motion.from, motion.to, self.step, self.slope, false, self.enough, Some(&rate))
     }
 }
 
@@ -946,13 +989,19 @@ struct QuotientCover<'a> {
     periodic: bool,
     step_length: f64,
     enough: f64,
+    /// More than the rounding in a depth.
+    margin: f64,
 }
 
 impl Cover for QuotientCover<'_> {
     fn depth(&self, p: P2) -> f64 {
         let speed = self.quotient.speed(p).max(1e-300);
         let at = |s: f64| self.tool.depth(self.quotient.lift(p, s));
-        section::largest(&at, self.range.0, self.range.1, self.step_length / speed, speed, self.periodic, self.enough)
+        // (The lifted point moves at `speed` exactly, and the depth, a signed distance in the
+        // meridian's half-plane, changes no faster than it.)
+        let over = |_: f64, _: f64| speed * (1.0 + 1e-9);
+        let rate = section::Rate { over: &over, margin: self.margin + 1e-9 * norm(p) };
+        section::largest(&at, self.range.0, self.range.1, self.step_length / speed, speed, self.periodic, self.enough, Some(&rate))
     }
 }
 
@@ -1260,7 +1309,8 @@ fn screw_cut(model: &mut Model, blank_frame: &Frame, radius: f64, height: f64, t
     let (s0, s1) = ((low / k).min(high / k), (low / k).max(high / k));
     let margin = 1e-3 * (s1 - s0) + 1e-9;
     let tool_size = 2.0 * tool.reach(tool.axis).max(tool.reach(tool.e1));
-    let cover = QuotientCover { tool, quotient, range: (s0 - margin, s1 + margin), periodic: false, step_length: 0.02 * tool_size, enough: 1e-11 * size };
+    let extent = size + tool_size + length3(blank.origin) + length3(tool.centre) + (k * s0).abs().max((k * s1).abs());
+    let cover = QuotientCover { tool, quotient, range: (s0 - margin, s1 + margin), periodic: false, step_length: 0.02 * tool_size, enough: 1e-11 * size, margin: 1e-9 * extent };
     let loops = section::region(&candidates, &cover, Outline::Disc { centre: [0.0, 0.0], radius })?;
     let map = PlaneMap { origin: blank.origin, x: blank.x, y: blank.y, splines: true };
     let faces = section_faces(model, &candidates, &loops, &map, size)?;
@@ -1324,7 +1374,8 @@ fn turn_cut(model: &mut Model, blank_frame: &Frame, radii: [f64; 2], heights: [f
     let field = Field { origin: pt(step.axis.origin), axis: a, k: 0.0 };
     let candidates = revolved_candidates(tool, field, quotient);
     let tool_size = 2.0 * tool.reach(tool.axis).max(tool.reach(tool.e1));
-    let cover = QuotientCover { tool, quotient, range: (-PI, PI), periodic: true, step_length: 0.02 * tool_size, enough: 1e-11 * size };
+    let extent = size + tool_size + length3(blank.origin) + length3(tool.centre) + radii[1] + heights[0].abs().max(heights[1].abs());
+    let cover = QuotientCover { tool, quotient, range: (-PI, PI), periodic: true, step_length: 0.02 * tool_size, enough: 1e-11 * size, margin: 1e-9 * extent };
     let loops = section::region(&candidates, &cover, Outline::Rectangle { min: [radii[0], heights[0]], max: [radii[1], heights[1]] })?;
     let (s, c) = angles[0].sin_cos();
     let map = PlaneMap { origin: blank.origin, x: add3(scale3(blank.x, c), scale3(blank.y, s)), y: blank.z, splines: false };
