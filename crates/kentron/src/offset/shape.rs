@@ -42,6 +42,13 @@ pub fn shape_with_faces(model: &mut Model, shape: Shape, distance: f64, faces: &
     if let Some(passed) = passing_beyond(model, shape, distance, &own) {
         return Err(Error::InvalidInput(passed));
     }
+    // (A convex polyhedron, or a right prism growing regularly, grown with rounded joins:
+    // built directly, see super::grown.)
+    if join == Join::Arc && own.is_empty() && distance > 0.0 {
+        if let Ok(Some(grown)) = super::grown::polyhedron_grown(model, shape, distance) {
+            return Ok(grown);
+        }
+    }
     // (A partial solid of revolution whose side planes move off a pole or apex on its axis.)
     if join == Join::Intersection {
         let distance_of = |n: NodeId| own.iter().find(|(m, _)| *m == n).map_or(distance, |&(_, d)| d);
@@ -499,6 +506,14 @@ fn hollowed(model: &mut Model, shape: Shape, kept: &[NodeId], thickness: f64, jo
     }
     let solid = round_parting(model, solid, &moved, thickness.abs())?;
     Ok(Rounding::Done(super::regularize::regularized(model, solid)?, false))
+}
+
+/// [`shape`] grown with rounded joins the general way, never built directly (to compare
+/// with super::grown).
+#[cfg(test)]
+pub(super) fn grown_the_general_way(model: &mut Model, shape: Shape, distance: f64) -> Result<Shape> {
+    let rounded = moved_then_rounded(model, shape, distance, &[], Join::Arc);
+    or_fallbacks(model, rounded, shape, distance, Made::Offset, Join::Arc)
 }
 
 /// `rounded` (an offset of `shape`, its faces moved and the edges where they part rounded)

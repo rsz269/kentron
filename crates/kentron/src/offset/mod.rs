@@ -8,6 +8,7 @@
 //! * [`thicken`]: the solid a face or an open shell sweeps moving along its normals.
 
 mod cells;
+mod grown;
 mod prism;
 mod regularize;
 mod revolved;

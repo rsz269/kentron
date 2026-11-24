@@ -3393,7 +3393,7 @@ pub(crate) fn convex_solid(model: &mut Model, points: &[Point]) -> Result<Option
 }
 
 /// The solid tetrahedron with corners `points`.
-fn tetrahedron(model: &mut Model, points: [Point; 4]) -> Result<Shape> {
+pub(crate) fn tetrahedron(model: &mut Model, points: [Point; 4]) -> Result<Shape> {
     let mut faces = Vec::with_capacity(4);
     for [a, b, c] in [[0, 1, 2], [0, 3, 1], [1, 3, 2], [2, 3, 0]] {
         let (a, b, c) = (points[a], points[b], points[c]);
