@@ -267,26 +267,18 @@ pub(super) fn winding(polygons: &[Vec<Point2>], q: Point2) -> i32 {
     w
 }
 
-/// A point inside `face` in its parameters: just inside the middle of one of its outer
-/// loop's sides (to the left, where a face's loops have it).
+/// A point inside `face` in its parameters, well clear of its loops (as far from them as
+/// the face's polygons sampled along them may stray from the curves).
 fn interior_point(model: &Model, face: Shape) -> Option<Point2> {
     let loops = face_loops(model, Shape { orientation: Orientation::Forward, ..face })?;
     let polygons: Vec<Vec<Point2>> = loops.iter().map(|l| l.iter().flat_map(|u| (0..32).map(move |i| u.at(i as f64 / 32.0))).collect()).collect();
-    let outer = polygons.first()?;
-    let size = outer.iter().fold(0.0f64, |m, p| m.max((*p - outer[0]).length()));
-    for i in 0..outer.len() {
-        let (a, b) = (outer[i], outer[(i + 1) % outer.len()]);
-        let along = b - a;
-        if along.length() <= 1e-12 * size {
-            continue;
-        }
-        let k = 1e-4 * size / along.length();
-        let q = Point2::new(0.5 * (a.x + b.x) - along.y * k, 0.5 * (a.y + b.y) + along.x * k);
-        if winding(&polygons, q) != 0 {
-            return Some(q);
-        }
+    let closed: Vec<Vec<[f64; 2]>> = polygons.iter().filter(|p| !p.is_empty()).map(|p| p.iter().chain(&p[..1]).map(|q| [q.x, q.y]).collect()).collect();
+    if closed.is_empty() {
+        return None;
     }
-    None
+    let [x, y] = crate::boolean::interior_uv(&closed);
+    let q = Point2::new(x, y);
+    (q.x.is_finite() && q.y.is_finite() && winding(&polygons, q) != 0).then_some(q)
 }
 
 /// The solid the `pieces` (faces of `solid` reshaped, one each) bound, sewn into as many

@@ -31,6 +31,13 @@ mod far;
 mod fuse;
 mod fuzzy;
 mod geom;
+
+/// A point well inside the region closed polylines (each ending where it starts, in a
+/// surface's parameters) bound: of the middles of its spans along a few lines across it, the
+/// one farthest from the boundary.
+pub(crate) fn interior_uv(polylines: &[Vec<[f64; 2]>]) -> [f64; 2] {
+    geom::interior_point(polylines)
+}
 mod graph;
 mod interference;
 mod intersect;

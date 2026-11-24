@@ -2344,4 +2344,30 @@ mod tests {
         let top = model.unique_subshapes(b, NodeKind::Face).into_iter().find(|&f| crate::properties::bounding_box(&model, f).min.z > 1.999).unwrap();
         assert!(shape_with_faces(&mut model, b, 0.0, &[(top, -2.5)], Join::Intersection).is_err());
     }
+    /// A plate drilled through by two holes, both walls offset into the plate until the holes
+    /// overlap: the plate less the union of the two wider holes, one opening, the parts of
+    /// each wall inside the other hole gone.
+    #[test]
+    fn two_holes_widened_until_they_merge() {
+        let mut model = Model::new();
+        let block = Cuboid::from_corners(Point::new(0.0, 0.0, 0.0), Point::new(40.0, 30.0, 8.0)).build(&mut model).unwrap();
+        let mut plate = block;
+        for x in [15.0, 25.0] {
+            let frame = crate::math::Frame::new(Point::new(x, 15.0, -1.0), crate::math::Direction::Z, crate::math::Direction::X);
+            let drill = Cylinder::new(3.0, 10.0).with_frame(frame).build(&mut model).unwrap();
+            plate = crate::boolean::difference(&mut model, plate, drill).unwrap();
+        }
+        let walls: Vec<(Shape, f64)> = model.unique_subshapes(plate, NodeKind::Face).into_iter().filter(|&f| matches!(model.surface(f), Some(Surface::Cylinder(_)))).map(|f| (f, -3.0)).collect();
+        assert_eq!(walls.len(), 2);
+        let widened = shape_with_faces(&mut model, plate, 0.0, &walls, Join::Intersection).unwrap();
+        valid(&model, widened);
+        let alpha = (5.0f64 / 6.0).acos();
+        let pi = std::f64::consts::PI;
+        let union = 72.0 * (pi - alpha) + 10.0 * 11f64.sqrt();
+        let v = volume(&model, widened).mass;
+        assert!((v - 8.0 * (1200.0 - union)).abs() < 1e-6 * v, "{v}");
+        let a = crate::properties::area(&model, widened).mass;
+        let expected = 3520.0 + 48.0 * (pi - alpha) - 20.0 * 11f64.sqrt();
+        assert!((a - expected).abs() < 1e-6 * a, "{a}");
+    }
 }

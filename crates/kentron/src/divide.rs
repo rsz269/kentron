@@ -532,8 +532,27 @@ pub fn divide_face(model: &mut Model, face: Shape, cuts: &[Cut]) -> Result<Vec<S
             let n = node(&mut nodes, v, start);
             stops = vec![(c.first, n), (c.last, n)];
         }
-        for w in stops.windows(2) {
-            let ((ta, na), (tb, nb)) = (w[0], w[1]);
+        // (A closed cut crossed somewhere: also its piece from the last crossing round
+        // through its start and end to the first. On a periodic curve, one piece past its
+        // last parameter by a period; else two, meeting at a vertex where it closes.)
+        let mut pieces: Vec<((f64, usize), (f64, usize))> = stops.windows(2).map(|w| (w[0], w[1])).collect();
+        let closed = start.distance(end) <= node_eps;
+        if let (true, Some(&first), Some(&last)) = (closed, stops.first(), stops.last()) {
+            let span = c.last - c.first;
+            let periodic = [c.curve.period(), c.pcurve.period()].iter().all(|p| p.is_some_and(|p| (p - span).abs() <= 1e-9 * span.abs().max(1.0)));
+            if periodic {
+                pieces.push((last, (first.0 + span, first.1)));
+            } else {
+                let seam = nodes.iter().position(|&(_, q)| q.distance(start) <= node_eps.max(1e-6 * scale)).unwrap_or_else(|| {
+                    let v = model.add_vertex(c.curve.point(c.first), tolerance);
+                    node(&mut nodes, v, start)
+                });
+                pieces.push((last, (c.last, seam)));
+                pieces.push(((c.first, seam), first));
+            }
+        }
+        for (a, b) in pieces {
+            let ((ta, na), (tb, nb)) = (a, b);
             if tb - ta <= 1e-12 * (c.last - c.first).abs() || (na == nb && stops.len() > 2) {
                 continue;
             }
