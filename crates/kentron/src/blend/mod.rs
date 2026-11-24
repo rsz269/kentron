@@ -2794,8 +2794,9 @@ pub enum ChamferSize {
 ///
 /// Supported where the edge is straight or circular and the faces' cross-sections there
 /// are lines or circles, as for [`fillet`]; edges continuing an edge tangentially are
-/// chamfered too. Two chamfered edges meeting at a vertex meet in a mitre; three meet at
-/// the point where their faces do. The result is a compound of solids, like a boolean
+/// chamfered too. Two chamfered edges meeting at a vertex meet in a mitre; three or more,
+/// every face at the vertex between two of them, are closed by a flat polygon through where
+/// each two meet their common face (where those points lie on one plane; else in a mitre). The result is a compound of solids, like a boolean
 /// operation's.
 #[doc(alias = "BRepFilletAPI_MakeChamfer")]
 pub fn chamfer(model: &mut Model, shape: Shape, edges: &[Shape], distance: f64) -> Result<Shape> {
@@ -3146,10 +3147,12 @@ fn chamfer_in_turn(model: &mut Model, shape: Shape, chains: &[(Shape, f64)], edg
     Err(failure.expect("a failure"))
 }
 
-/// Where three convex chamfers of straight edges between planes meet at a vertex, the
-/// corner OCCT closes with a triangle: through the points where each two chamfers meet
-/// their common face. The tools cutting it: pyramids from the triangle to a point just
-/// outside the vertex (their sides within what the chamfers took away).
+/// Where three or more convex chamfers of straight edges between planes meet at a vertex,
+/// every face there between two of them, the corner closed by a flat polygon (a triangle for
+/// three, as OCCT closes it): through the points where each two chamfers meet their common
+/// face, where those lie on one plane (four or more need not: elsewhere the chamfers are left
+/// to meet as they cross, a mitre). The tools cutting it: pyramids from the polygon to a point
+/// just outside the vertex (their sides within what the chamfers took away).
 fn chamfer_corner_tools(model: &mut Model, corners: &[(Corner, [f64; 2])]) -> Result<Vec<Shape>> {
     let planar = |c: &Corner| c.convex && matches!(c.path, Path::Line { .. }) && c.traces.iter().all(|t| matches!(t, Trace::Line));
     let mut vertices: Vec<(Point, Vec<usize>)> = Vec::new();
@@ -3163,7 +3166,7 @@ fn chamfer_corner_tools(model: &mut Model, corners: &[(Corner, [f64; 2])]) -> Re
     }
     let mut tools = Vec::new();
     for (v, at) in vertices {
-        if at.len() != 3 || !at.iter().all(|&i| planar(&corners[i].0)) {
+        if at.len() < 3 || !at.iter().all(|&i| planar(&corners[i].0)) {
             continue;
         }
         // The point where chamfers `a` and `b` meet their common face.
@@ -3183,15 +3186,48 @@ fn chamfer_corner_tools(model: &mut Model, corners: &[(Corner, [f64; 2])]) -> Re
             let s = (r.dot(ta) * bb - r.dot(tb) * ab) / det;
             Some(pa + ta * s)
         };
-        let [a, b, c] = [at[0], at[1], at[2]];
-        let (Some(p), Some(q), Some(r)) = (meeting(a, b), meeting(b, c), meeting(c, a)) else { continue };
-        let size = corners[a].1.iter().chain(&corners[b].1).chain(&corners[c].1).fold(0.0f64, |m, &d| m.max(d));
-        let inward = Point::barycenter(&[(p, 1.0), (q, 1.0), (r, 1.0)]) - v;
+        // The chamfers in turn round the vertex, each two in turn sharing a face: each with
+        // two neighbours, and as many such pairs as chamfers.
+        let shares = |a: usize, b: usize| (0..2).any(|k| (0..2).any(|l| corners[a].0.faces[k].0 == corners[b].0.faces[l].0));
+        let mut pairs = Vec::new();
+        for x in 0..at.len() {
+            for y in x + 1..at.len() {
+                if shares(at[x], at[y]) {
+                    pairs.push((at[x], at[y]));
+                }
+            }
+        }
+        let neighbours = |i: usize| pairs.iter().filter(|&&(a, b)| a == i || b == i).count();
+        if pairs.len() != at.len() || !at.iter().all(|&i| neighbours(i) == 2) {
+            continue;
+        }
+        let Some(points) = pairs.iter().map(|&(a, b)| meeting(a, b)).collect::<Option<Vec<Point>>>() else { continue };
+        let size = at.iter().flat_map(|&i| corners[i].1).fold(0.0f64, f64::max);
+        let weighted: Vec<(Point, f64)> = points.iter().map(|&p| (p, 1.0)).collect();
+        let inward = Point::barycenter(&weighted) - v;
         if inward.length() <= tolerance::LINEAR {
             continue;
         }
         let apex = v - inward.normalized() * size;
-        tools.push(tetrahedron(model, [p, q, r, apex])?);
+        if let [p, q, r] = points[..] {
+            tools.push(tetrahedron(model, [p, q, r, apex])?);
+            continue;
+        }
+        // (More than three: the cap only where their meeting points lie on one plane.)
+        let (a, b, c) = (points[0], points[1], points[2]);
+        let normal = (b - a).cross(c - a);
+        if !(normal.length() > tolerance::LINEAR * (b - a).length().max((c - a).length())) {
+            continue;
+        }
+        let normal = normal.normalized();
+        if points.iter().any(|&p| (p - a).dot(normal).abs() > tolerance::LINEAR) {
+            continue;
+        }
+        let mut hull = points;
+        hull.push(apex);
+        if let Some(pyramid) = convex_solid(model, &hull)? {
+            tools.push(pyramid);
+        }
     }
     Ok(tools)
 }
@@ -6312,6 +6348,29 @@ mod tests {
         let area = properties::area(&model, corner_face).mass;
         // An equilateral triangle of side d√2.
         assert!((area - 3f64.sqrt() / 4.0 * 2.0 * d * d).abs() < 1e-12, "{area}");
+    }
+
+    #[test]
+    fn chamfered_octahedron_corners_are_closed_by_squares() {
+        // The octahedron |x| + |y| + |z| <= 10, all twelve edges chamfered at once by √6 (the
+        // planes |x| + |y| <= 8 and the like): four chamfers meet at each corner, their
+        // meeting points on one plane, and a square closes it (|x| <= 6 and the like), not a
+        // mitre to a point.
+        let mut model = Model::new();
+        let a = 10.0;
+        let tips = [Point::new(a, 0.0, 0.0), Point::new(-a, 0.0, 0.0), Point::new(0.0, a, 0.0), Point::new(0.0, -a, 0.0), Point::new(0.0, 0.0, a), Point::new(0.0, 0.0, -a)];
+        let octahedron = convex_solid(&mut model, &tips).unwrap().unwrap();
+        let edges = model.unique_subshapes(octahedron, NodeKind::Edge);
+        assert_eq!(edges.len(), 12);
+        let bevelled = chamfer(&mut model, octahedron, &edges, 6f64.sqrt()).unwrap();
+        let report = validity::check(&model, bevelled);
+        assert!(report.problems.is_empty(), "{report:?}");
+        assert_eq!(model.unique_subshapes(bevelled, NodeKind::Face).len(), 8 + 12 + 6);
+        let volume = properties::volume(&model, bevelled).mass;
+        assert!((volume - 2752.0 / 3.0).abs() < 1e-9, "{volume}");
+        let area = properties::area(&model, bevelled).mass;
+        let expected = 64.0 * 3f64.sqrt() + 192.0 * 2f64.sqrt() + 96.0;
+        assert!((area - expected).abs() < 1e-9, "{area}");
     }
 
     #[test]
