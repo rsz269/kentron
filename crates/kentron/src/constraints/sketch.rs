@@ -1,8 +1,9 @@
 //! Sketch constraints: the lines and arcs of a planar sketch moved to best satisfy
 //! constraints on them (CadQuery's `Sketch.solve`).
 //!
-//! The problem is CadQuery's, solved by its own method, nlopt's SLSQP, ported step for step
-//! ([`solve`]; or by least squares, [`solve_by_least_squares`]):
+//! The problem is CadQuery's, solved by its own method, SLSQP (kentron's own minimiser after
+//! Kraft's published method, [`super::slsqp`]; [`solve`]), or by least squares
+//! ([`solve_by_least_squares`]):
 //! a line's variables are its start and end, (x₁, y₁, x₂, y₂); an arc's its centre, radius,
 //! start angle and sweep, (x, y, r, a, da), its point at angle t being
 //! (x + r sin t, y + r cos t) (angles from +y towards +x, as CadQuery has them), the radius
@@ -79,8 +80,8 @@ pub struct Solution {
     pub evaluations: usize,
     /// Whether the minimization converged (not stopped for taking too many steps).
     pub converged: bool,
-    /// nlopt's result code for how it ended (4: XTOL_REACHED, as CadQuery's solves end;
-    /// negative: a failure nlopt raises as an error).
+    /// The result code for how it ended, nlopt's codes as CadQuery reports them (4:
+    /// XTOL_REACHED, as CadQuery's solves end; negative: a failure nlopt raises as an error).
     pub status: i32,
 }
 
@@ -88,8 +89,8 @@ pub struct Solution {
 const N: usize = 10;
 type D = Dual<N>;
 
-/// `entities` moved to best satisfy `constraints`, as CadQuery's solver moves them: nlopt's
-/// SLSQP ([`super::slsqp`], step for step) on CadQuery's objective and finite-difference
+/// `entities` moved to best satisfy `constraints`, as CadQuery's solver moves them: SLSQP
+/// ([`super::slsqp`], Kraft's method, as nlopt's) on CadQuery's objective and finite-difference
 /// gradient ([`super::sketch_costs`]), with CadQuery's settings (no tolerance on the
 /// objective's change, 1e-9 relative and 1e-12 absolute on the variables'), the radii kept at
 /// or above 0.

@@ -138,9 +138,9 @@ Third-party parts keep their own licences:
 
 | Part | Origin | Licence |
 |---|---|---|
-| [`constraints/slsqp.rs`](crates/kentron/src/constraints/slsqp.rs) | translated from NLopt's SLSQP | BSD-3-Clause and MIT ([`LICENSE-SLSQP`](LICENSE-SLSQP)) |
 | [`cadquery_shim/cadquery`](crates/pykentron/python/pykentron/cadquery_shim/cadquery), [`occ_impl/exporters`](crates/pykentron/python/pykentron/occ_impl/exporters) | copied from CadQuery 2.8.0 | Apache-2.0 |
-| [`pykentron/_colors.py`](crates/pykentron/python/pykentron/_colors.py) | colour values from X11's `rgb.txt` (X.Org) | MIT/X11 |
 | [`crates/occt-tests`](crates/occt-tests) | translated from OCCT's and BRL-CAD's tests | LGPL-2.1 (OCCT's with the Open CASCADE exception) |
 | [`occt-tests/cases/usd_brep`](crates/occt-tests/cases/usd_brep) | translated from USD BRep's tests | Apache-2.0 |
 | [`pykentron/tests/found`](crates/pykentron/tests/found) | CadQuery scripts from public projects | each project's own: MIT, Apache-2.0, BSD-3-Clause, Unlicense or CC0-1.0 ([`cases.tsv`](crates/pykentron/tests/found/cases.tsv)) |
+
+pykentron's colour names take their values from X11's public colour list (`rgb.txt`, X.Org).

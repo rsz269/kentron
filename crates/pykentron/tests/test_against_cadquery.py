@@ -668,9 +668,9 @@ def test_ocaf_documents_refused():
 # Constraint solving: the same CadQuery code (`cq` the module) run on CadQuery (IPOPT through
 # casadi, nlopt's SLSQP) and on pykentron's shim (kentron's solvers) in a process of its own,
 # their solved placements and sketch variables compared. Where constraints leave a part (or a
-# sketch) free to move, CadQuery's choice is compared too: kentron solves as IPOPT and nlopt
-# step. (Sketches within 1e-6: CadQuery's finite-difference gradients move its own answer
-# that much when its start moves by 1e-12.)
+# sketch) free to move, CadQuery's choice is compared too: kentron solves as IPOPT steps, and
+# by its own SLSQP (Kraft's method, as nlopt's). (Sketches within 1e-6: CadQuery's
+# finite-difference gradients move its own answer that much when its start moves by 1e-12.)
 SOLVES = {
     "tips_free_to_turn_about_their_axes": """
 iron = cq.Workplane().box(20, 20, 4)

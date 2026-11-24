@@ -5,8 +5,8 @@ IPOPT through casadi) and `cadquery.occ_impl.sketch_solver` (sketches, solved by
 SLSQP). The shim's copies of those modules end by handing their solver classes to
 `assembly_solver` and `sketch_solver` here, which put in their place classes taking the same
 arguments and giving the same kind of result, the problems solved by kentron as CadQuery's
-solvers solve them (IPOPT's Newton steps for assemblies, nlopt's SLSQP for sketches), without
-casadi, nlopt or numpy.
+solvers solve them (IPOPT's Newton steps for assemblies; for sketches kentron's own SLSQP
+minimiser, the method nlopt's SLSQP implements), without casadi, nlopt or numpy.
 
 `PYKENTRON_SOLVER=cadquery` keeps CadQuery's own solvers (casadi and nlopt then needed), to
 compare the two on the same geometry.
@@ -163,7 +163,7 @@ def sketch_solver(original, arc_first, arc_last, arc_point):
 
     class SketchConstraintSolver:
         """CadQuery's sketch constraint problem (`cadquery.occ_impl.sketch_solver`), solved by
-        kentron's port of nlopt's SLSQP on CadQuery's objective and finite-difference gradient."""
+        kentron's SLSQP minimiser on CadQuery's objective and finite-difference gradient."""
 
         def __init__(self, entities, constraints, geoms):
             self.entities = list(entities)

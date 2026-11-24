@@ -7,12 +7,10 @@ name = "pykentron"
 description = "kentron, a B-rep CAD kernel in Rust, from Python, with a CadQuery-compatible API: CadQuery scripts run on it unchanged."
 readme = "README.md"
 requires-python = ">=3.10"
-# (pykentron's own code is AGPL-3.0-or-later; the CadQuery code it includes is Apache-2.0;
-# kentron's SLSQP optimizer, translated from NLopt's, is BSD-3-Clause and MIT.)
-license = "AGPL-3.0-or-later AND Apache-2.0 AND BSD-3-Clause AND MIT"
+# (pykentron's own code is AGPL-3.0-or-later; the CadQuery code it includes is Apache-2.0.)
+license = "AGPL-3.0-or-later AND Apache-2.0"
 license-files = [
     "LICENSE",
-    "LICENSE-SLSQP",
     "python/pykentron/cadquery_shim/cadquery/LICENSE.CadQuery",
     "python/pykentron/occ_impl/exporters/LICENSE.CadQuery",
 ]
