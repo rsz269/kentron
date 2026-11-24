@@ -122,12 +122,24 @@ An existing CadQuery script runs unchanged with `pykentron-run script.py`, or af
 
 ## Licence
 
-[AGPL-3.0-or-later](LICENSE). Third-party parts keep their own licences:
+[AGPL-3.0-or-later](LICENSE).
+
+- **No OCCT code.** kentron contains no code derived from OCCT's source. Releases up to
+  0.19.3 held parts translated from OCCT (LGPL-2.1); since then they have been written again,
+  clean-room: one agent wrote behavioural specifications from them, and others, who had not
+  seen them or OCCT's source, wrote the new code from those specifications. OCCT is still used
+  as a reference for behaviour, run as a separate program.
+- **Not shipped:** [`crates/occt-tests`](crates/occt-tests) is a test crate only: it is not
+  published, and nothing in kentron or pykentron depends on it, so it is in no build of
+  either.
+
+Third-party parts keep their own licences:
 
 | Part | Origin | Licence |
 |---|---|---|
 | [`constraints/slsqp.rs`](crates/kentron/src/constraints/slsqp.rs) | translated from NLopt's SLSQP | BSD-3-Clause and MIT ([`LICENSE-SLSQP`](LICENSE-SLSQP)) |
 | [`cadquery_shim/cadquery`](crates/pykentron/python/pykentron/cadquery_shim/cadquery), [`occ_impl/exporters`](crates/pykentron/python/pykentron/occ_impl/exporters) | copied from CadQuery 2.8.0 | Apache-2.0 |
+| [`occ_impl/_occt_colors.py`](crates/pykentron/python/pykentron/occ_impl/_occt_colors.py) | colour values from X11's `rgb.txt` (X.Org); the names' order, which OCAF XML files store, as OCCT reports it | MIT/X11 (the colour values) |
 | [`crates/occt-tests`](crates/occt-tests) | translated from OCCT's and BRL-CAD's tests | LGPL-2.1 (OCCT's with the Open CASCADE exception) |
 | [`occt-tests/cases/usd_brep`](crates/occt-tests/cases/usd_brep) | translated from USD BRep's tests | Apache-2.0 |
 | [`pykentron/tests/found`](crates/pykentron/tests/found) | CadQuery scripts from public projects | each project's own: MIT, Apache-2.0, BSD-3-Clause, Unlicense or CC0-1.0 ([`cases.tsv`](crates/pykentron/tests/found/cases.tsv)) |
