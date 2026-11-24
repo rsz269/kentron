@@ -217,7 +217,204 @@ fn build_open(model: &mut Model, plane: &Plane, chains: &[Vec<Piece>]) -> Result
     }
 }
 
-// CLEAN-ROOM GAP: 169 lines removed; rewrite from the cleanroom spec `wire_offset_cuts.md`.
+/// The wire's pieces cut where their curvature has an extremum or changes sign (each part
+/// to be offset as one edge): an ellipse at its vertices, a parabola or hyperbola at its
+/// vertex, a B-spline at the parameters found numerically within each stretch between its
+/// knots where it is less than C³ (as any other curve over its range) and at its knots
+/// where it turns a corner; a circle not, nor a line. Cuts too near one another or the ends are dropped; a half circle or more is never
+/// cut. A wire of one piece is cut all the same: at a third of its range where it has no
+/// such place, and at the middle of the longer side of a lone one too.
+fn cut_spine(path: Vec<Piece>) -> Vec<Piece> {
+    let single = path.len() == 1;
+    let mut out = Vec::with_capacity(path.len());
+    for piece in path {
+        let (lo, hi) = (piece.first.min(piece.last), piece.first.max(piece.last));
+        let mut basis = &piece.curve;
+        while let Curve2::Trimmed(t) = basis {
+            basis = t.basis();
+        }
+        let whole_circle = matches!(basis, Curve2::Circle(_)) && hi - lo >= std::f64::consts::PI;
+        let mut cuts = if whole_circle { Vec::new() } else { curvature_features(basis, lo, hi) };
+        if single && !whole_circle {
+            match cuts[..] {
+                [] => cuts = vec![lo + (hi - lo) / 3.0],
+                [c] => cuts = if c > 0.5 * (lo + hi) { vec![0.5 * (lo + c), c] } else { vec![c, 0.5 * (c + hi)] },
+                _ => {}
+            }
+        }
+        let cuts = spaced_cuts(basis, lo, hi, cuts);
+        let mut bounds = vec![lo];
+        bounds.extend(cuts);
+        bounds.push(hi);
+        let parts: Vec<Piece> = bounds.windows(2).map(|w| Piece { first: w[0], last: w[1], ..piece.clone() }).collect();
+        if piece.last < piece.first {
+            out.extend(parts.into_iter().rev().map(|p| p.reversed()));
+        } else {
+            out.extend(parts);
+        }
+    }
+    out
+}
+
+/// The cuts kept, in increasing order: each away from the last kept one (or `lo`), by more
+/// than a parametric confusion and ten linear tolerances; the first too near `hi` ends them.
+fn spaced_cuts(curve: &Curve2, lo: f64, hi: f64, mut cuts: Vec<f64>) -> Vec<f64> {
+    use crate::tolerance::{LINEAR, PARAMETRIC};
+    cuts.sort_by(f64::total_cmp);
+    cuts.dedup();
+    let end = curve.point(hi);
+    let (mut last, mut last_point) = (lo, curve.point(lo));
+    let mut out = Vec::new();
+    for c in cuts {
+        if c <= lo {
+            continue;
+        }
+        let p = curve.point(c);
+        if (hi - c).abs() <= PARAMETRIC || c >= hi || p.distance(end) <= 10.0 * LINEAR {
+            break;
+        }
+        if (c - last).abs() <= PARAMETRIC || p.distance(last_point) <= 10.0 * LINEAR {
+            continue;
+        }
+        out.push(c);
+        (last, last_point) = (c, p);
+    }
+    out
+}
+
+/// The parameters in `[lo, hi]` where `curve`'s curvature has an extremum or changes sign.
+fn curvature_features(curve: &Curve2, lo: f64, hi: f64) -> Vec<f64> {
+    use std::f64::consts::{FRAC_PI_2, TAU};
+    let mut out = Vec::new();
+    match curve {
+        Curve2::Line(_) | Curve2::Circle(_) => {}
+        Curve2::Ellipse(_) => {
+            for k in 0..4 {
+                let t = lo + (k as f64 * FRAC_PI_2 - lo).rem_euclid(TAU);
+                if t <= hi {
+                    out.push(t);
+                }
+            }
+        }
+        Curve2::Parabola(_) | Curve2::Hyperbola(_) => {
+            if (lo..=hi).contains(&0.0) {
+                out.push(0.0);
+            }
+        }
+        Curve2::BSpline(b) => {
+            let degree = b.degree() as isize;
+            let mut bounds = vec![lo];
+            for (&k, &m) in b.knots().iter().zip(b.multiplicities()) {
+                if k > lo && k < hi && m as isize > degree - 3 {
+                    bounds.push(k);
+                }
+            }
+            bounds.push(hi);
+            for w in bounds.windows(2) {
+                out.extend(numeric_curvature_features(curve, w[0], w[1]));
+            }
+            // A knot where the curve turns a corner (only C0 there, its tangent turning):
+            // all its turn of curvature at one place.
+            for w in bounds.windows(3) {
+                let k = w[1];
+                let m = b.multiplicities()[b.knots().iter().position(|&x| x == k).unwrap_or(0)];
+                if (m as isize) < degree {
+                    continue;
+                }
+                let (before, after) = (curve.d1(k - 1e-9 * (k - w[0])).1, curve.d1(k + 1e-9 * (w[2] - k)).1);
+                let (lb, la) = (before.length(), after.length());
+                if lb > 0.0 && la > 0.0 && (before * (1.0 / lb)).cross(after * (1.0 / la)).abs() > 1e-9 {
+                    out.push(k);
+                }
+            }
+        }
+        _ => out.extend(numeric_curvature_features(curve, lo, hi)),
+    }
+    out.sort_by(f64::total_cmp);
+    out.dedup();
+    out
+}
+
+/// The parameters strictly inside `(a, b)` where the signed curvature or its derivative
+/// changes sign, bracketed on a uniform sampling and bisected to full precision. Values
+/// negligible against the stretch's size and curvature (a straight or circular stretch,
+/// rounding noise) are no sign.
+fn numeric_curvature_features(curve: &Curve2, a: f64, b: f64) -> Vec<f64> {
+    const SAMPLES: usize = 64;
+    if !(b > a) {
+        return Vec::new();
+    }
+    // The signed curvature and its derivative along the arc length.
+    let measures = |t: f64| -> (f64, f64) {
+        let (_, d1, d2, d3) = curve.d3(t);
+        let speed = d1.length();
+        if !(speed > 0.0) {
+            return (0.0, 0.0);
+        }
+        let cross = d1.x * d2.y - d1.y * d2.x;
+        let kappa = cross / speed.powi(3);
+        let dk = (d1.x * d3.y - d1.y * d3.x) / speed.powi(3) - 3.0 * cross * d1.dot(d2) / speed.powi(5);
+        (kappa, dk / speed)
+    };
+    // (The ends a hair inside, so that a knot at either end is not evaluated on the next
+    // span: the curvature's derivative jumps there.)
+    let inset = 1e-9 * (b - a);
+    let ts: Vec<f64> = (0..=SAMPLES).map(|i| if i == SAMPLES { b - inset } else if i == 0 { a + inset } else { a + (b - a) * i as f64 / SAMPLES as f64 }).collect();
+    let values: Vec<(f64, f64)> = ts.iter().map(|&t| measures(t)).collect();
+    let points: Vec<Point2> = ts.iter().map(|&t| curve.point(t)).collect();
+    let length: f64 = points.windows(2).map(|w| w[0].distance(w[1])).sum();
+    if !(length > 0.0) {
+        return Vec::new();
+    }
+    let k_max = values.iter().map(|v| v.0.abs()).fold(0.0, f64::max);
+    let k_min_signed = values.iter().map(|v| v.0).fold(f64::INFINITY, f64::min);
+    let k_max_signed = values.iter().map(|v| v.0).fold(f64::NEG_INFINITY, f64::max);
+    let scale = k_max + 1.0 / length;
+    // Negligible: a curvature below 1e-9 of the stretch's own scale, a curvature derivative
+    // below 1e-8 of it per length, or a curvature that hardly varies at all (by less than
+    // 1e-5 of it: polynomial splines fitted to circular arcs vary by about 1e-7).
+    let k_zero = 1e-9 * scale;
+    let varies = k_max_signed - k_min_signed > 1e-5 * scale;
+    let dk_zero = 1e-8 * scale / length;
+    let mut out = Vec::new();
+    for (which, zero) in [(0usize, k_zero), (1, dk_zero)] {
+        if which == 1 && !varies {
+            continue;
+        }
+        let pick = |v: (f64, f64)| if which == 0 { v.0 } else { v.1 };
+        let mut prev: Option<(f64, f64)> = None;
+        for (i, &t) in ts.iter().enumerate() {
+            let v = pick(values[i]);
+            if v.abs() <= zero {
+                continue;
+            }
+            if let Some((pt, pv)) = prev {
+                if (pv < 0.0) != (v < 0.0) {
+                    // Bisection on the sign.
+                    let (mut x0, mut x1) = (pt, t);
+                    for _ in 0..200 {
+                        let m = 0.5 * (x0 + x1);
+                        if m <= x0 || m >= x1 {
+                            break;
+                        }
+                        let vm = pick(measures(m));
+                        if (vm < 0.0) == (pv < 0.0) {
+                            x0 = m;
+                        } else {
+                            x1 = m;
+                        }
+                    }
+                    let root = 0.5 * (x0 + x1);
+                    if root > a && root < b {
+                        out.push(root);
+                    }
+                }
+            }
+            prev = Some((t, v));
+        }
+    }
+    out
+}
 
 /// An edge of the wire, along the wire.
 struct WireEdge {
@@ -1027,6 +1224,60 @@ mod tests {
         assert_eq!(edges.len(), 1);
         let (a, b) = model.edge_vertices(edges[0]);
         assert!(model.point(a).distance(Point::new(0.0, 1.0, 0.0)) < 1e-9 && model.point(b).distance(Point::new(10.0, 1.0, 0.0)) < 1e-9);
+    }
+
+    fn piece(curve: Curve2, first: f64, last: f64) -> Piece {
+        Piece { curve, first, last, origin: 0 }
+    }
+
+    fn ranges(pieces: &[Piece]) -> Vec<(f64, f64)> {
+        pieces.iter().map(|p| (p.first, p.last)).collect()
+    }
+
+    /// Where pieces are cut before offsetting: an ellipse at its vertices, a lone piece
+    /// without features at a third, a half circle never, a reversed piece's parts in reverse
+    /// order.
+    #[test]
+    fn pieces_are_cut_at_their_curvatures_extrema() {
+        use crate::geometry::curve2::{Circle2, Ellipse2};
+        use crate::math::Frame2;
+        use std::f64::consts::{FRAC_PI_2, PI};
+        let ellipse = Curve2::Ellipse(Ellipse2::new(Frame2::WORLD, 3.0, 1.0));
+        let line = Curve2::Line(Line2::new(Point2::new(0.0, 0.0), Direction2::new(1.0, 0.0)));
+        let other = piece(line.clone(), 0.0, 1.0);
+        // An arc of the ellipse between other pieces: at π/2 only.
+        let cut = cut_spine(vec![piece(ellipse.clone(), 0.1, 3.0), other.clone()]);
+        assert_eq!(ranges(&cut), [(0.1, FRAC_PI_2), (FRAC_PI_2, 3.0), (0.0, 1.0)]);
+        // The whole ellipse alone: at its three inner vertices.
+        let cut = cut_spine(vec![piece(ellipse.clone(), 0.0, 2.0 * PI)]);
+        assert_eq!(ranges(&cut), [(0.0, FRAC_PI_2), (FRAC_PI_2, PI), (PI, 3.0 * FRAC_PI_2), (3.0 * FRAC_PI_2, 2.0 * PI)]);
+        // Reversed: the same parts, each reversed, from the far end.
+        let cut = cut_spine(vec![piece(ellipse, 3.0, 0.1), other.clone()]);
+        assert_eq!(ranges(&cut), [(3.0, FRAC_PI_2), (FRAC_PI_2, 0.1), (0.0, 1.0)]);
+        // A lone quarter circle at a third; a half circle never; a circle among others not.
+        let circle = Curve2::Circle(Circle2::new(Frame2::WORLD, 2.0));
+        let cut = cut_spine(vec![piece(circle.clone(), 0.0, FRAC_PI_2)]);
+        assert_eq!(cut.len(), 2);
+        assert!((cut[0].last - FRAC_PI_2 / 3.0).abs() < 1e-15);
+        assert_eq!(cut_spine(vec![piece(circle.clone(), 0.0, PI)]).len(), 1);
+        assert_eq!(cut_spine(vec![piece(circle, 0.0, 1.0), other]).len(), 2);
+        // A lone segment: at a third.
+        let cut = cut_spine(vec![piece(line, 0.0, 9.0)]);
+        assert_eq!(ranges(&cut), [(0.0, 3.0), (3.0, 9.0)]);
+    }
+
+    /// A cubic S-curve is cut at its inflection, in the middle by symmetry, and at its two
+    /// curvature extrema, symmetric about it; a straight B-spline nowhere.
+    #[test]
+    fn a_spline_is_cut_at_its_inflection() {
+        let s = |poles: Vec<Point2>| Curve2::BSpline(BSplineCurve2::try_new(poles, vec![0.0, 1.0], vec![4, 4], 3).unwrap());
+        let curve = s(vec![Point2::new(0.0, 0.0), Point2::new(1.0, 1.0), Point2::new(2.0, -1.0), Point2::new(3.0, 0.0)]);
+        let found = curvature_features(&curve, 0.0, 1.0);
+        assert_eq!(found.len(), 3, "{found:?}");
+        assert!((found[1] - 0.5).abs() < 1e-12, "{found:?}");
+        assert!((found[0] + found[2] - 1.0).abs() < 1e-9, "{found:?}");
+        let straight = s(vec![Point2::new(0.0, 0.0), Point2::new(1.0, 0.5), Point2::new(2.5, 1.25), Point2::new(3.0, 1.5)]);
+        assert!(curvature_features(&straight, 0.0, 1.0).is_empty());
     }
 
     #[test]

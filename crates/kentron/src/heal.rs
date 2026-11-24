@@ -461,7 +461,238 @@ fn pin(pcurve: &crate::geometry::curve2::Curve2, along_u: bool, at: f64) -> crat
     }
 }
 
-// CLEAN-ROOM GAP: 252 lines removed; rewrite from the cleanroom spec `heal_adapted.md`.
+/// An edge as a wire runs it: its coedge, its curve over `[first, last]`, and whether the
+/// wire runs it against the curve's direction.
+struct Run {
+    coedge: CoEdgeId,
+    edge: EdgeId,
+    curve: crate::geometry::curve::Curve,
+    first: f64,
+    last: f64,
+    reversed: bool,
+}
+
+impl Run {
+    /// The curve parameter where the run ends (`at_end`) or starts.
+    fn end(&self, at_end: bool) -> f64 {
+        if at_end != self.reversed { self.last } else { self.first }
+    }
+
+    /// The unit tangent along the run at its end (`at_end`) or start.
+    fn tangent(&self, at_end: bool) -> Option<crate::math::Vector> {
+        let d = self.curve.d1(self.end(at_end)).1;
+        let d = if self.reversed { -d } else { d };
+        (d.length() > 0.0).then(|| d.normalized())
+    }
+
+    /// The vertex where the run ends (`at_end`) or starts.
+    fn vertex(&self, model: &Model, at_end: bool) -> VertexId {
+        let (start, end) = model.edge_end_vertices(self.edge);
+        if at_end != self.reversed { end } else { start }
+    }
+
+    fn distance_to(&self, p: crate::math::Point) -> f64 {
+        crate::geometry::extrema::nearest_on_curve(p, &self.curve, self.first, self.last).distance
+    }
+}
+
+/// What a tail's cut does to one of its two edges.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum TailCut {
+    /// Nothing of it is cut.
+    Nothing,
+    /// It is split at this curve parameter, the piece towards the tip dropped.
+    Split(f64),
+    /// It is dropped whole.
+    Whole,
+}
+
+/// Cuts the tails off the wires of `shape`'s faces (in place; returns `shape`): where two
+/// consecutive edges of a wire leave their common vertex within `max_angle` of folding
+/// back on each other (more exactly, at an angle whose sine is at most `max_angle`'s, the
+/// two running the same way) and then run within `max_width` of each other, the stretch
+/// over which they do is cut from both, and what remains of them meets at one vertex. An
+/// edge lying within the width all along is dropped whole, but a wire keeps at least one
+/// edge. Once a tail is cut, what is left of the spike at the same vertex is cut whatever
+/// its angle. Each wire is scanned again from its start after each cut.
+#[doc(alias = "ShapeFix_Wire::FixTails")]
+#[doc(alias = "ShapeAnalysis_Wire::CheckTail")]
+pub fn fix_wire_tails(model: &mut Model, shape: Shape, max_angle: f64, max_width: f64) -> Result<Shape> {
+    let sin_max = max_angle.sin().max(0.0);
+    for face in model.unique_subshapes(shape, NodeKind::Face) {
+        let face = Shape { orientation: Orientation::Forward, ..face };
+        let wires: Vec<Shape> = model.children(face).collect();
+        for wire in wires {
+            let Ok(id) = crate::topology::WireId::try_from(wire.node) else { continue };
+            let mut joined: Option<VertexId> = None;
+            for _ in 0..1000 {
+                let runs = wire_runs(model, id, wire.orientation);
+                if runs.len() < 2 {
+                    break;
+                }
+                let mut cut = false;
+                for i in 0..runs.len() {
+                    let (a, b) = (&runs[i], &runs[(i + 1) % runs.len()]);
+                    if a.edge == b.edge {
+                        continue;
+                    }
+                    let skip_angle = joined.is_some_and(|v| b.vertex(model, false) == v);
+                    let Some(cuts) = tail_at(a, b, runs.len(), sin_max, max_width, skip_angle) else { continue };
+                    joined = Some(cut_tail(model, id, a, b, cuts)?);
+                    cut = true;
+                    break;
+                }
+                if !cut {
+                    break;
+                }
+            }
+        }
+    }
+    Ok(shape)
+}
+
+/// The edges of `wire` (used `orientation`) as it runs them, those without a 3D curve left
+/// out.
+fn wire_runs(model: &Model, wire: crate::topology::WireId, orientation: Orientation) -> Vec<Run> {
+    let mut runs: Vec<Run> = Vec::new();
+    for &coedge in &model[wire].coedges {
+        let edge = model[coedge].edge;
+        let Some((curve, first, last)) = model.edge_curve(Shape::from(edge)) else { continue };
+        let reversed = (model[coedge].orientation == Orientation::Reversed) != (orientation == Orientation::Reversed);
+        runs.push(Run { coedge, edge, curve, first, last, reversed });
+    }
+    if orientation == Orientation::Reversed {
+        runs.reverse();
+    }
+    runs
+}
+
+/// The cuts of the tail where run `a` ends and `b` starts, if there is one (see
+/// [`fix_wire_tails`]); `count` is the number of edges in the wire.
+fn tail_at(a: &Run, b: &Run, count: usize, sin_max: f64, width: f64, skip_angle: bool) -> Option<(TailCut, TailCut)> {
+    let eps = crate::tolerance::LINEAR;
+    let (ta, tb) = (a.end(true), b.end(false));
+    let (pa, pb) = (a.curve.point(ta), b.curve.point(tb));
+    if pa.distance(pb) > width + 0.5 * eps {
+        return None;
+    }
+    if !skip_angle {
+        // The tangents leaving the tip: back along `a`, on along `b`.
+        let (Some(da), Some(db)) = (a.tangent(true), b.tangent(false)) else { return None };
+        let da = -da;
+        if da.dot(db) < 0.0 || da.cross(db).length() > sin_max {
+            return None;
+        }
+    }
+    // Each edge's stretch within the width of the other, from the tip.
+    let stretch = |x: &Run, y: &Run, from_end: bool| -> Option<(f64, bool)> {
+        let tip = x.end(from_end);
+        let far = x.end(!from_end);
+        let inside = |t: f64| y.distance_to(x.curve.point(t)) <= width + 0.5 * eps;
+        let (leave, whole) = if inside(far) {
+            (far, true)
+        } else {
+            // The first sample from the tip outside the width, then bisection back to it.
+            const N: usize = 64;
+            let at = |k: usize| tip + (far - tip) * k as f64 / N as f64;
+            let out = (1..=N).find(|&k| !inside(at(k)))?;
+            let (mut lo, mut hi) = (at(out - 1), at(out));
+            for _ in 0..200 {
+                let mid = 0.5 * (lo + hi);
+                if mid == lo || mid == hi {
+                    break;
+                }
+                if inside(mid) {
+                    lo = mid;
+                } else {
+                    hi = mid;
+                }
+                if y.distance_to(x.curve.point(hi)) <= width + eps {
+                    break;
+                }
+            }
+            (lo, false)
+        };
+        // All of the stretch close to the other edge, not bulging out in between.
+        let close = (1..20).all(|k| y.distance_to(x.curve.point(tip + (leave - tip) * k as f64 / 20.0)) <= width + 1.5 * eps);
+        close.then_some((leave, whole))
+    };
+    let (la, wa) = stretch(a, b, true)?;
+    let (lb, wb) = stretch(b, a, false)?;
+    let classify = |x: &Run, from_end: bool, t: f64| -> TailCut {
+        let (tip, far) = (x.end(from_end), x.end(!from_end));
+        let confusion = 1e-9 * (1.0 + (x.last - x.first).abs());
+        let length = |s: f64, e: f64| crate::geometry::measure::length_between(&x.curve, s.min(e), s.max(e));
+        if (t - far).abs() <= confusion || length(t, far) <= eps {
+            TailCut::Whole
+        } else if (t - tip).abs() <= confusion || length(t, tip) <= eps {
+            TailCut::Nothing
+        } else {
+            TailCut::Split(t)
+        }
+    };
+    let cuts = if wa && wb && a.curve.point(a.end(false)).distance(b.curve.point(b.end(true))) <= width + eps {
+        (TailCut::Whole, TailCut::Whole)
+    } else {
+        let a_leads = match (wa, wb) {
+            (false, false) | (true, false) => true,
+            (false, true) => false,
+            // Both within all along: the one whose far end is nearer the other edge (`a` on
+            // a tie).
+            (true, true) => b.distance_to(a.curve.point(a.end(false))) <= a.distance_to(b.curve.point(b.end(true))),
+        };
+        if a_leads {
+            let foot = crate::geometry::extrema::nearest_on_curve(a.curve.point(la), &b.curve, b.first, b.last).parameter;
+            (classify(a, true, la), classify(b, false, foot))
+        } else {
+            let foot = crate::geometry::extrema::nearest_on_curve(b.curve.point(lb), &a.curve, a.first, a.last).parameter;
+            (classify(a, true, foot), classify(b, false, lb))
+        }
+    };
+    let removed = [cuts.0, cuts.1].iter().filter(|&&c| c == TailCut::Whole).count();
+    if cuts == (TailCut::Nothing, TailCut::Nothing) || removed >= count {
+        return None;
+    }
+    Some(cuts)
+}
+
+/// Makes the cuts of a tail where run `a` ends and `b` starts in `wire`, and joins what
+/// is left of the two at one vertex, which it returns.
+fn cut_tail(model: &mut Model, wire: crate::topology::WireId, a: &Run, b: &Run, cuts: (TailCut, TailCut)) -> Result<VertexId> {
+    let mut kept = [VertexId::INVALID; 2];
+    for (k, (run, cut)) in [(a, cuts.0), (b, cuts.1)].into_iter().enumerate() {
+        // `a` meets the tip at its end, `b` at its start.
+        let tip_at_end = k == 0;
+        kept[k] = match cut {
+            TailCut::Nothing => run.vertex(model, tip_at_end),
+            TailCut::Whole => {
+                let far = run.vertex(model, !tip_at_end);
+                model.remove_coedge(wire, run.coedge)?;
+                far
+            }
+            TailCut::Split(t) => {
+                let tolerance = model.tolerance(Shape::from(run.edge));
+                let vertex = model.add_vertex(run.curve.point(t), tolerance);
+                let (first_half, second_half) = model.split_edge(run.edge, vertex, t)?;
+                // The half at the tip: the edge's end half where the tip is its end.
+                let tip_half = if tip_at_end != run.reversed { second_half } else { first_half };
+                let coedge = model[wire].coedges.iter().copied().find(|&c| model[c].edge == tip_half);
+                if let Some(coedge) = coedge {
+                    model.remove_coedge(wire, coedge)?;
+                }
+                vertex
+            }
+        };
+    }
+    let [va, vb] = kept;
+    if va != vb {
+        let gap = model.point(Shape::from(va)).distance(model.point(Shape::from(vb)));
+        let tolerance = model.tolerance(Shape::from(va)).max(model.tolerance(Shape::from(vb))).max(0.5 * gap + crate::tolerance::LINEAR);
+        model.replace_node(vb, va)?;
+        model.set_vertex_tolerance(va, tolerance)?;
+    }
+    Ok(va)
+}
 
 /// Splits the faces of `shape` closed by a seam in two, midway between the seam's two sides
 /// (in place; returns `shape`).
@@ -802,7 +1033,212 @@ pub struct SmallSolids {
     pub merge: bool,
 }
 
-// CLEAN-ROOM GAP: 183 lines removed; rewrite from the cleanroom spec `heal_adapted.md (body of drop_small_solids)`.
+/// `shape` (a compound, compsolid or solid) without its small solids (see [`SmallSolids`]),
+/// or, with `merge`, each merged into the solid next to it.
+///
+/// Merging goes by rounds. A face of a shell of a solid that is not small belongs to that
+/// shell (unless two such shells use it, or one uses it twice). Each small solid sums the
+/// areas of its faces belonging to each such outer shell and joins the one with the
+/// largest sum (the first to reach it on a tie), through its own shell that touches it: the
+/// outer shell is replaced by one of the faces of the shells joining it that it does not
+/// share (those two joining shells share are dropped too), then its own faces not shared
+/// with them; the small solid's other shells go into the receiving solid. For the next
+/// round only the faces new to the outer shells (those of the joining shells no outer shell
+/// had) belong to them; the rounds stop when no small solid is left or none joins any more.
+/// A small solid touching none is kept as it is.
+///
+/// The input's sub-shapes are not edited: the containers on the way to a change are made
+/// anew, sharing the rest. Returns `shape` itself where nothing changes, and a compound
+/// where its own solid is removed (empty) or replaced by several.
+#[doc(alias = "ShapeFix_FixSmallSolid")]
+#[doc(alias = "DropSmallSolids")]
+pub fn drop_small_solids(model: &mut Model, shape: Shape, small: &SmallSolids) -> Result<Shape> {
+    use crate::hashing::FastMap;
+    use crate::topology::NodeId;
+    if small.volume.is_none() && small.width_factor.is_none() {
+        return Ok(shape);
+    }
+    if !matches!(shape.kind(), NodeKind::Compound | NodeKind::CompSolid | NodeKind::Solid) {
+        return Ok(shape);
+    }
+    let unplaced = |s: Shape| Shape { orientation: Orientation::Forward, placement: crate::math::Transform::IDENTITY, ..s };
+    let mut seen = crate::hashing::FastSet::default();
+    let solids: Vec<Shape> = model.unique_subshapes(shape, NodeKind::Solid).into_iter().map(unplaced).filter(|s| seen.insert(s.node)).collect();
+    let is_small = |s: Shape| {
+        let volume = crate::properties::volume(model, s).mass;
+        small.volume.is_none_or(|v| volume <= v) && small.width_factor.is_none_or(|k| volume <= k * crate::properties::area(model, s).mass / 2.0)
+    };
+    let (smalls, larges): (Vec<Shape>, Vec<Shape>) = solids.iter().partition(|&&s| is_small(s));
+    if smalls.is_empty() {
+        return Ok(shape);
+    }
+    // What replaces a node (where it is used): nothing, or these uses.
+    let mut replaced: FastMap<NodeId, Vec<Shape>> = FastMap::default();
+    if !small.merge {
+        for s in &smalls {
+            replaced.insert(s.node, Vec::new());
+        }
+    } else {
+        let shells_of = |model: &Model, solid: Shape| -> Vec<Shape> { model.children_local(solid).collect() };
+        // Each outer shell's faces as they stand (the uses in it), its solid, and the shells
+        // to add to its solid after it.
+        let mut outer_faces: FastMap<NodeId, Vec<Shape>> = FastMap::default();
+        let mut extra: FastMap<NodeId, Vec<Shape>> = FastMap::default();
+        // The face → outer shell map (`None`: used by two, or twice).
+        let mut owner: FastMap<NodeId, Option<NodeId>> = FastMap::default();
+        for &solid in &larges {
+            for shell in shells_of(model, solid) {
+                let faces: Vec<Shape> = model.children_local(shell).collect();
+                for f in &faces {
+                    owner.entry(f.node).and_modify(|o| *o = None).or_insert(Some(shell.node));
+                }
+                outer_faces.entry(shell.node).or_insert(faces);
+            }
+        }
+        let area = |model: &Model, f: Shape| crate::properties::area(model, f).mass;
+        let mut remaining: Vec<Shape> = smalls.clone();
+        let mut touched: Vec<NodeId> = Vec::new();
+        while !remaining.is_empty() {
+            // Each small solid's choice: the outer shell, and its own shell joining it.
+            let mut joins: Vec<(Shape, Shape, NodeId)> = Vec::new();
+            for &s in &remaining {
+                let mut sums: Vec<((NodeId, usize), f64)> = Vec::new();
+                let mut best: Option<(usize, f64)> = None;
+                let own = shells_of(model, s);
+                for (k, shell) in own.iter().enumerate() {
+                    for f in model.children_local(*shell) {
+                        let Some(&Some(o)) = owner.get(&f.node) else { continue };
+                        let key = (o, k);
+                        let i = match sums.iter().position(|(q, _)| *q == key) {
+                            Some(i) => i,
+                            None => {
+                                sums.push((key, 0.0));
+                                sums.len() - 1
+                            }
+                        };
+                        sums[i].1 += area(model, Shape::from(f.node));
+                        if best.is_none_or(|(_, b)| sums[i].1 > b) {
+                            best = Some((i, sums[i].1));
+                        }
+                    }
+                }
+                if let Some((i, _)) = best {
+                    let ((o, k), _) = sums[i];
+                    joins.push((s, own[k], o));
+                }
+            }
+            if joins.is_empty() {
+                break;
+            }
+            let mut new_owner: FastMap<NodeId, Option<NodeId>> = FastMap::default();
+            let mut receivers: Vec<NodeId> = Vec::new();
+            for &(_, _, o) in &joins {
+                if !receivers.contains(&o) {
+                    receivers.push(o);
+                }
+            }
+            for &o in &receivers {
+                let merged: Vec<Shape> = joins.iter().filter(|j| j.2 == o).map(|j| j.1).collect();
+                // The merged shells' faces, as their solids use them, counted.
+                let mut uses: Vec<Shape> = Vec::new();
+                let mut count: FastMap<NodeId, usize> = FastMap::default();
+                for shell in &merged {
+                    for f in model.children_local(*shell) {
+                        let f = Shape { orientation: f.orientation.compose(shell.orientation), ..f };
+                        *count.entry(f.node).or_insert(0) += 1;
+                        uses.push(f);
+                    }
+                }
+                let mut shared_other = Vec::new();
+                let mut free = Vec::new();
+                for f in uses {
+                    if count[&f.node] > 1 {
+                        continue;
+                    }
+                    match owner.get(&f.node) {
+                        Some(&Some(q)) if q == o => {}
+                        Some(&Some(_)) => shared_other.push(f),
+                        _ => free.push(f),
+                    }
+                }
+                let own: Vec<Shape> = outer_faces[&o].iter().copied().filter(|f| !count.contains_key(&f.node)).collect();
+                for f in &free {
+                    new_owner.insert(f.node, Some(o));
+                }
+                let mut faces = shared_other;
+                faces.extend(free);
+                faces.extend(own);
+                outer_faces.insert(o, faces);
+                if !touched.contains(&o) {
+                    touched.push(o);
+                }
+            }
+            for &(s, adjacent, o) in &joins {
+                let others: Vec<Shape> = shells_of(model, s).into_iter().filter(|sh| sh.node != adjacent.node || sh.orientation != adjacent.orientation).collect();
+                extra.entry(o).or_default().extend(others);
+                replaced.insert(s.node, Vec::new());
+            }
+            remaining.retain(|s| !joins.iter().any(|j| j.0.node == s.node));
+            owner = new_owner;
+        }
+        for o in touched {
+            let mut uses = Vec::new();
+            let faces = &outer_faces[&o];
+            if !faces.is_empty() {
+                let shell = model.new_empty(NodeKind::Shell);
+                for &f in faces {
+                    model.add(shell, f)?;
+                }
+                uses.push(shell);
+            }
+            uses.extend(extra.remove(&o).unwrap_or_default());
+            replaced.insert(o, uses);
+        }
+    }
+    if replaced.is_empty() {
+        return Ok(shape);
+    }
+    let mut rebuilt = rebuild_containers(model, shape, &replaced)?;
+    if rebuilt.len() == 1 {
+        return Ok(rebuilt.remove(0));
+    }
+    let compound = model.new_empty(NodeKind::Compound);
+    for s in rebuilt {
+        model.add(compound, s)?;
+    }
+    Ok(compound)
+}
+
+/// `shape` with the nodes in `replaced` replaced where used (by none or several), the
+/// compounds, compsolids and solids on the way to a replacement made anew and the rest
+/// shared; the replacements' orientations and placements composed with their uses'.
+fn rebuild_containers(model: &mut Model, shape: Shape, replaced: &crate::hashing::FastMap<crate::topology::NodeId, Vec<Shape>>) -> Result<Vec<Shape>> {
+    let compose = |r: Shape| Shape { node: r.node, orientation: r.orientation.compose(shape.orientation), placement: shape.placement * r.placement };
+    if let Some(by) = replaced.get(&shape.node) {
+        return Ok(by.iter().map(|&r| compose(r)).collect());
+    }
+    if !matches!(shape.kind(), NodeKind::Compound | NodeKind::CompSolid | NodeKind::Solid) {
+        return Ok(vec![shape]);
+    }
+    let children: Vec<Shape> = model.children_local(Shape::from(shape.node)).collect();
+    let mut changed = false;
+    let mut parts: Vec<Shape> = Vec::new();
+    for child in children {
+        let found = rebuild_containers(model, child, replaced)?;
+        if found.len() != 1 || found[0] != child {
+            changed = true;
+        }
+        parts.extend(found);
+    }
+    if !changed {
+        return Ok(vec![shape]);
+    }
+    let container = model.new_empty(shape.kind());
+    for p in parts {
+        model.add(container, p)?;
+    }
+    Ok(vec![Shape { node: container.node, orientation: shape.orientation, placement: shape.placement }])
+}
 
 /// A use of an edge in a face's loop, in the loop's direction of travel.
 #[derive(Clone)]
@@ -1152,6 +1588,31 @@ mod tests {
         assert_eq!(model.unique_subshapes(fixed, NodeKind::Vertex).len(), 3);
         let length = crate::properties::length(&model, fixed).mass;
         assert!((length - 9.054743851305652).abs() < 1e-4, "{length}");
+    }
+
+    /// The tail of OCCT's heal/wire_tails_composed A1 cut where the two sides part by the
+    /// width exactly (the closed form); a spike wider than the angle is left; a straight
+    /// double-back loses the shorter edge and the longer is cut at its end.
+    #[test]
+    fn wire_tails_cut_in_closed_form() {
+        use crate::math::Point;
+        let triangle = |model: &mut Model, p: [Point; 3]| {
+            let edges: Vec<Shape> = (0..3).map(|i| crate::make::edge_between(model, p[i], p[(i + 1) % 3]).unwrap()).collect();
+            let wire = crate::make::wire(model, &edges).unwrap();
+            crate::make::planar_face(model, wire).unwrap()
+        };
+        let mut model = Model::new();
+        let face = triangle(&mut model, [Point::new(-1.0, 0.0, 0.0), Point::new(9.0, 0.0, 0.0), Point::new(1.0, 1.0, 0.0)]);
+        let fixed = fix_wire_tails(&mut model, face, 10f64.to_radians(), 0.7).unwrap();
+        let length = crate::properties::length(&model, fixed).mass;
+        assert!((length - 9.054745301989355).abs() < 1e-6, "{length}");
+        // The sides at (9, 0) part at about 7.1°: more than 5° is no tail.
+        let mut model = Model::new();
+        let face = triangle(&mut model, [Point::new(-1.0, 0.0, 0.0), Point::new(9.0, 0.0, 0.0), Point::new(1.0, 1.0, 0.0)]);
+        let before = crate::properties::length(&model, face).mass;
+        let fixed = fix_wire_tails(&mut model, face, 5f64.to_radians(), 0.7).unwrap();
+        assert_eq!(model.unique_subshapes(fixed, NodeKind::Edge).len(), 3);
+        assert!((crate::properties::length(&model, fixed).mass - before).abs() < 1e-12);
     }
 
     #[test]

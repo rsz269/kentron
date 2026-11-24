@@ -194,7 +194,116 @@ fn tangent_neighbours(model: &Model, shape: Shape) -> HashMap<NodeId, Vec<Shape>
     out
 }
 
-// CLEAN-ROOM GAP: 131 lines removed; rewrite from the cleanroom spec `draft_surface.md`.
+/// The surface of a face drafted by `angle` against the pull `direction`, staying in place
+/// where it meets `neutral` (`reversed`: the face uses its surface reversed): a plane turned
+/// about its line on the neutral plane so that its outward normal makes `sin angle` with the
+/// pull; a cylinder or cone about the pull direction the cone through its circle on the
+/// neutral plane, leaning by `angle` (a cone back to a cylinder at no angle). The frame of
+/// the result is the input's (a plane's turned with it). `None` where the face cannot be
+/// drafted: another kind of surface, a plane parallel to the neutral plane or hinged along
+/// the pull, an angle no plane through the hinge makes, a cylinder or cone not about the
+/// pull direction or the neutral plane's normal.
+fn drafted_surface(surface: &Surface, reversed: bool, direction: Direction, angle: f64, neutral: &Plane) -> Option<Surface> {
+    let mut surface = surface;
+    while let Surface::Trimmed(t) = surface {
+        surface = t.basis();
+    }
+    let d = Vector::from(direction);
+    let m = Vector::from(neutral.normal());
+    // The face's outward side: +1 along the frame's normal (plane) or away from the axis.
+    let outward = |right_handed: bool| if right_handed != reversed { 1.0 } else { -1.0 };
+    // The signed height along the axis `z` from `origin` to the neutral plane.
+    let height = |origin: Point, z: Vector| {
+        let zm = z.dot(m);
+        (zm.abs() > ANGULAR).then(|| (neutral.origin() - origin).dot(m) / zm)
+    };
+    // A cylinder's or cone's drafted generator: its semi-angle and radius at the frame's
+    // origin, given the radius on the neutral plane.
+    let leaning = |sigma: f64, z: Vector, h: f64, on_neutral: f64| {
+        let s = if d.dot(z) < 0.0 { -sigma * angle } else { sigma * angle };
+        let r = on_neutral + h * s.tan();
+        if r >= 0.0 { (-s, r) } else { (s, -r) }
+    };
+    let about_pull = |z: Vector| d.dot(m).abs() > 1.0 - ANGULAR && d.dot(z).abs() > 1.0 - ANGULAR;
+    match surface {
+        Surface::Plane(plane) => {
+            let frame = plane.frame();
+            let n = Vector::from(frame.z());
+            let o = frame.origin();
+            let hinge = n.cross(m);
+            if !(hinge.length() > 0.0) {
+                return None;
+            }
+            let l = hinge.normalized();
+            // A point of the hinge: from the origin, within the plane, square to the hinge.
+            let across = l.cross(n);
+            let at = o + across * ((neutral.origin() - o).dot(m) / across.dot(m));
+            let a = d.dot(l);
+            if a.abs() > 1.0 - ANGULAR {
+                return None;
+            }
+            let rho = (1.0 - a * a).sqrt();
+            if rho <= angle.sin().abs() {
+                return None;
+            }
+            // Turning σn by θ about l, its component along d is c cos θ − b sin θ =
+            // ρ cos(θ + φ); set to sin α.
+            let sigma = outward(frame.is_right_handed());
+            let b = sigma * d.dot(n.cross(l));
+            let c = sigma * d.dot(n);
+            let phi = (b / rho).atan2(c / rho);
+            let theta0 = (angle.sin() / rho).clamp(-1.0, 1.0).acos();
+            let mut theta = theta0 - phi;
+            if theta.cos() < 0.0 {
+                theta = -theta0 - phi;
+            }
+            // (Brought within a half turn by half turns: the same plane, its frame's normal
+            // possibly flipped.)
+            while theta.abs() > std::f64::consts::PI {
+                theta -= std::f64::consts::PI * theta.signum();
+            }
+            if theta.abs() <= ANGULAR {
+                return Some(surface.clone());
+            }
+            let turn = Transform::rotation(Axis { origin: at, direction: Direction::from_vector(l) }, theta);
+            Some(Surface::Plane(plane.transformed(&turn)))
+        }
+        Surface::Cylinder(cylinder) => {
+            let frame = *cylinder.frame();
+            let z = Vector::from(frame.z());
+            if !about_pull(z) {
+                return None;
+            }
+            if angle.abs() <= ANGULAR {
+                return Some(surface.clone());
+            }
+            let h = height(frame.origin(), z)?;
+            let (semi, r) = leaning(outward(frame.is_right_handed()), z, h, cylinder.radius());
+            Some(Surface::Cone(Cone::new(frame, semi, r)))
+        }
+        Surface::Cone(cone) => {
+            let frame = *cone.frame();
+            let z = Vector::from(frame.z());
+            if !about_pull(z) {
+                return None;
+            }
+            let h = height(frame.origin(), z)?;
+            let on_neutral = cone.radius() + h * cone.semi_angle().tan();
+            if on_neutral <= 0.0 {
+                return None;
+            }
+            if angle.abs() <= ANGULAR {
+                return Some(Surface::Cylinder(Cylinder::new(frame, on_neutral)));
+            }
+            let (semi, r) = leaning(outward(frame.is_right_handed()), z, h, on_neutral);
+            if (semi - cone.semi_angle()).abs() <= ANGULAR {
+                return Some(surface.clone());
+            }
+            Some(Surface::Cone(Cone::new(frame, semi, r)))
+        }
+        _ => None,
+    }
+}
 
 #[cfg(test)]
 mod tests {

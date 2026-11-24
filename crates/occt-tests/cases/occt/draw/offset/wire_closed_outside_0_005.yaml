@@ -351,12 +351,14 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/offset/wire_closed_outside_0_005/C5
+notes:
+  - "kentron deviation: Wire-offset cutting written anew (clean-room): the wire is one closed periodic quadratic B-spline; kentron cuts it before offsetting at its three curvature maxima (one per knot span; the minima fall on the knots, where a quadratic's curvature jumps), so its offset has 4 edges (OCCT 5). The length check (1%) and validity pass."
 build:
   - s: {load: {brep: "offset_wire_036.brep"}}
   - result: {offset_wire: {shape: s, length_fraction: 0.005}}
 checks:
   - {length: result, eq: 4.60678, rel: 0.01}
-  - {count: result, eq: {vertices: 5, edges: 5, wires: 1}}
+  - {count: result, eq: {vertices: 4, edges: 4, wires: 1}}
   - {valid: result}
 ---
 case: C6
@@ -634,12 +636,14 @@ ported_from:
   repo: https://github.com/Open-Cascade-SAS/OCCT
   git_hash: 3d097a0328e71b826377d4814ab05ec3c3d23871
   file: tests/offset/wire_closed_outside_0_005/E5
+notes:
+  - "kentron deviation: Wire-offset cutting written anew (clean-room): the spline edge (a cubic with 36 spans) has a genuine curvature extremum inside a span (the signed curvature runs -1.3707e-2, -1.3672e-2, -1.3918e-2 around it), where kentron cuts it before offsetting, so its offset has one edge more, 7 (OCCT 6). The length check (1%) and validity pass."
 build:
   - s: {load: {brep: "offset_wire_055.brep"}}
   - result: {offset_wire: {shape: s, length_fraction: 0.005}}
 checks:
   - {length: result, eq: 526.412, rel: 0.01}
-  - {count: result, eq: {vertices: 6, edges: 6, wires: 1}}
+  - {count: result, eq: {vertices: 7, edges: 7, wires: 1}}
   - {valid: result}
 ---
 case: E6

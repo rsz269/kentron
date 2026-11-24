@@ -31,7 +31,7 @@ use crate::geometry::fit;
 use crate::geometry::surface::{BSplineSurface, Cone, Cylinder, KnotVector, Plane, Surface};
 use crate::geometry::ParametricSurface;
 use crate::geometry::ParametricCurve;
-use crate::math::{Direction, Frame, Point, Point2, Transform2, Transformable, Transformable2, Vector, Vector2};
+use crate::math::{Direction, Frame, Point, Point2, Transform2, Transformable2, Vector, Vector2};
 use crate::properties;
 use crate::topology::{EdgeId, Model, NodeId, NodeKind, Orientation, Shape, VertexId};
 
@@ -526,7 +526,9 @@ fn make_compatible(sections: &mut Vec<Section>, closed: bool, looped: bool, matc
             }
             return;
         }
-        // CLEAN-ROOM GAP: 19 lines removed; rewrite from the cleanroom spec `loft_section_matching.md`.
+        Matching::ByRays => match match_or_split_by_rays(sections, &wires, &counts, closed, looped, marks) {
+            None => return,
+            Some(split) => split,
         }
     };
     // Orientation first (it changes where the vertices fall along the wire).
@@ -661,7 +663,324 @@ fn split_at_fractions(w: &mut WireSection, fractions: &[f64], marks: &mut Marks)
     w.pieces = out;
 }
 
-// CLEAN-ROOM GAP: 221 lines removed; rewrite from the cleanroom spec `loft_section_matching.md`.
+/// What [`Matching::ByRays`] does with the sections: `None` where it matched them by rays
+/// (closed sections whose edge counts differ, or all smooth, not looped), the sections then
+/// holding the matched wires; otherwise whether to split them by length (where the ray
+/// matching failed, the sections are restored, and split where their counts differ; open
+/// sections are split where their counts differ or all are smooth, and some has more than
+/// one edge).
+fn match_or_split_by_rays(sections: &mut Vec<Section>, wires: &[usize], counts: &[usize], closed: bool, looped: bool, marks: &mut Marks) -> Option<bool> {
+    let edge_counts: Vec<usize> = sections.iter().map(|s| match s {
+        Section::Wire(w) => w.pieces.len(),
+        Section::Point(..) => 1,
+    }).collect();
+    let report = edge_counts.iter().any(|&c| c != edge_counts[0]) || wires.iter().all(|&k| smooth(wire(&sections[k])));
+    if closed && report && !looped {
+        let saved = sections.clone();
+        if match_by_rays(sections, wires, marks) {
+            return None;
+        }
+        *sections = saved;
+        return Some(counts.iter().any(|&c| c != counts[0]));
+    }
+    Some(report && !closed && counts.iter().any(|&c| c > 1))
+}
+
+/// The centre a closed wire is matched about: a lone circle's or ellipse's own centre, else
+/// the wire's centroid as a uniform wire (by Gauss quadrature of each piece).
+fn centre(w: &WireSection) -> Point {
+    if let [piece] = w.pieces.as_slice() {
+        match &piece.curve {
+            Curve::Circle(c) => return c.center(),
+            Curve::Ellipse(e) => return e.center(),
+            _ => {}
+        }
+    }
+    // Five-point Gauss–Legendre nodes and weights on [-1, 1].
+    const NODES: [f64; 5] = [0.0, -0.538_469_310_105_683_1, 0.538_469_310_105_683_1, -0.906_179_845_938_664, 0.906_179_845_938_664];
+    const WEIGHTS: [f64; 5] = [0.568_888_888_888_888_9, 0.478_628_670_499_366_5, 0.478_628_670_499_366_5, 0.236_926_885_056_189_1, 0.236_926_885_056_189_1];
+    const SPANS: usize = 64;
+    let (mut moment, mut length) = (Vector::ZERO, 0.0);
+    for piece in &w.pieces {
+        let (a, b) = (piece.first.min(piece.last), piece.first.max(piece.last));
+        let h = (b - a) / SPANS as f64;
+        for i in 0..SPANS {
+            let mid = a + h * (i as f64 + 0.5);
+            for (x, wt) in NODES.iter().zip(WEIGHTS) {
+                let (p, d) = piece.curve.d1(mid + 0.5 * h * x);
+                let dl = wt * 0.5 * h * d.length();
+                moment = moment + (p - Point::ORIGIN) * dl;
+                length += dl;
+            }
+        }
+    }
+    if !(length > 0.0) {
+        return w.pieces[0].at(0.0);
+    }
+    Point::ORIGIN + moment * (1.0 / length)
+}
+
+/// A wire's plane for the ray matching: its centre and unit normal.
+#[derive(Clone, Copy)]
+struct RayPlane {
+    centre: Point,
+    normal: Vector,
+}
+
+/// `p`, of plane `from`, carried into plane `to`: moved by the centres' difference and, where
+/// the planes are not parallel (to 1e-4 rad), turned about the line through `to`'s centre
+/// along the normals' cross product by the smaller turn taking one plane onto the other.
+fn carry(p: Point, from: RayPlane, to: RayPlane) -> Point {
+    let q = p + (to.centre - from.centre);
+    let mut a = from.normal;
+    let b = to.normal;
+    let angle = a.angle(b);
+    if angle < 1e-4 || angle > std::f64::consts::PI - 1e-4 {
+        return q;
+    }
+    if a.dot(b) < 0.0 {
+        a = -a;
+    }
+    let axis = a.cross(b);
+    if !(axis.length() > 0.0) {
+        return q;
+    }
+    let k = axis.normalized();
+    let turn = a.angle(b);
+    let (sin, cos) = turn.sin_cos();
+    let v = q - to.centre;
+    // Rodrigues' rotation of v about k.
+    let r = v * cos + k.cross(v) * sin + k * (k.dot(v) * (1.0 - cos));
+    to.centre + r
+}
+
+/// The wire's distinct vertex marks, walking its pieces in order, each piece's two ends in
+/// the direction of its curve's parameter.
+fn vertex_order(w: &WireSection) -> Vec<usize> {
+    let mut out: Vec<usize> = Vec::new();
+    for piece in &w.pieces {
+        let ends = if piece.first <= piece.last { [piece.start, piece.end] } else { [piece.end, piece.start] };
+        for m in ends {
+            if !out.contains(&m) {
+                out.push(m);
+            }
+        }
+    }
+    out
+}
+
+/// The point of vertex `mark` of the wire.
+fn vertex_point(w: &WireSection, mark: usize) -> Option<Point> {
+    w.pieces.iter().find_map(|p| if p.start == mark { Some(p.at(0.0)) } else if p.end == mark { Some(p.at(1.0)) } else { None })
+}
+
+/// Where the ray from `c` towards `q` meets the wire: the vertex there (the piece's end
+/// within [`tolerance::LINEAR`](crate::tolerance::LINEAR), or in its first or last tenth one
+/// not `taken`), or else a vertex made there by splitting the piece. The ray is the segment
+/// from `c` through `q` as long as the wire's box's diagonal; of the wire's points locally
+/// nearest it, those within `LINEAR` of the nearest, the one nearest `q`. `None` where there
+/// is none.
+fn meet_ray(w: &mut WireSection, c: Point, q: Point, taken: &dyn Fn(usize) -> bool, marks: &mut Marks) -> Option<usize> {
+    const LINEAR: f64 = crate::tolerance::LINEAR;
+    const SAMPLES: usize = 64;
+    let mut lo = Point::new(f64::INFINITY, f64::INFINITY, f64::INFINITY);
+    let mut hi = Point::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+    for piece in &w.pieces {
+        for j in 0..=SAMPLES {
+            let p = piece.at(j as f64 / SAMPLES as f64);
+            lo = Point::new(lo.x.min(p.x), lo.y.min(p.y), lo.z.min(p.z));
+            hi = Point::new(hi.x.max(p.x), hi.y.max(p.y), hi.z.max(p.z));
+        }
+    }
+    let reach = (hi - lo).length();
+    let toward = q - c;
+    if !(toward.length() > 0.0) || !(reach > 0.0) {
+        return None;
+    }
+    let dir = toward.normalized();
+    let distance = |p: Point| {
+        let t = (p - c).dot(dir).clamp(0.0, reach);
+        p.distance(c + dir * t)
+    };
+    // The local minima of the distance along each piece: sampled, then refined by golden
+    // section search.
+    let mut found: Vec<(usize, f64, f64, Point)> = Vec::new();
+    for (i, piece) in w.pieces.iter().enumerate() {
+        let d: Vec<f64> = (0..=SAMPLES).map(|j| distance(piece.at(j as f64 / SAMPLES as f64))).collect();
+        for j in 0..=SAMPLES {
+            let left = j == 0 || d[j] <= d[j - 1];
+            let right = j == SAMPLES || d[j] <= d[j + 1];
+            if !(left && right) || (j > 0 && d[j] == d[j - 1]) {
+                continue;
+            }
+            let (mut a, mut b) = ((j.max(1) - 1) as f64 / SAMPLES as f64, (j + 1).min(SAMPLES) as f64 / SAMPLES as f64);
+            let f = |s: f64| distance(piece.at(s));
+            const G: f64 = 0.618_033_988_749_894_8;
+            let (mut x1, mut x2) = (b - G * (b - a), a + G * (b - a));
+            let (mut f1, mut f2) = (f(x1), f(x2));
+            for _ in 0..200 {
+                if b - a <= 1e-16 * (1.0 + a.abs()) {
+                    break;
+                }
+                if f1 <= f2 {
+                    (b, x2, f2) = (x2, x1, f1);
+                    x1 = b - G * (b - a);
+                    f1 = f(x1);
+                } else {
+                    (a, x1, f1) = (x1, x2, f2);
+                    x2 = a + G * (b - a);
+                    f2 = f(x2);
+                }
+            }
+            // The best of the bracket's ends and its middle.
+            let mut best = (0.5 * (a + b), f(0.5 * (a + b)));
+            for s in [a, b, j as f64 / SAMPLES as f64] {
+                let v = f(s);
+                if v < best.1 {
+                    best = (s, v);
+                }
+            }
+            found.push((i, best.0, best.1, piece.at(best.0)));
+        }
+    }
+    let least = found.iter().map(|f| f.2).fold(f64::INFINITY, f64::min);
+    let &(i, s, _, point) = found.iter().filter(|f| f.2 <= least + LINEAR).min_by(|a, b| a.3.distance(q).total_cmp(&b.3.distance(q)))?;
+    let piece = &w.pieces[i];
+    if point.distance(piece.at(0.0)) <= LINEAR {
+        return Some(piece.start);
+    }
+    if point.distance(piece.at(1.0)) <= LINEAR {
+        return Some(piece.end);
+    }
+    if s < 0.1 && !taken(piece.start) {
+        return Some(piece.start);
+    }
+    if s > 0.9 && !taken(piece.end) {
+        return Some(piece.end);
+    }
+    let mark = marks.add(None);
+    let (a, b) = piece.split(s, mark);
+    w.pieces.splice(i..=i, [a, b]);
+    Some(mark)
+}
+
+/// Matches closed wire sections by rays from their centres (see [`Matching::ByRays`]): each
+/// wire, from the last down, gets a vertex where the ray towards each vertex of the next
+/// (carried into its plane) meets it; the vertices are chained from the first wire up,
+/// wires the chains miss getting vertices where the ray towards the chain's last meets
+/// them; then each wire is turned and restarted so that its first edge runs between the
+/// chained vertices of the first wire's first edge (the one, of several, lying in the
+/// direction nearest that edge's). False where it fails or the counts still differ (the
+/// sections then part changed: the caller restores them).
+fn match_by_rays(sections: &mut [Section], wires: &[usize], marks: &mut Marks) -> bool {
+    const LINEAR: f64 = crate::tolerance::LINEAR;
+    if wires.is_empty() {
+        return false;
+    }
+    let mut planes: Vec<RayPlane> = Vec::with_capacity(wires.len());
+    for &k in wires {
+        let w = wire(&sections[k]);
+        let n = normal(w);
+        if !(n.length() > 0.0) {
+            return false;
+        }
+        planes.push(RayPlane { centre: centre(w), normal: n.normalized() });
+    }
+    let last = wires.len() - 1;
+    // Down: each vertex's match on the wire below.
+    let mut down: Vec<(usize, usize)> = Vec::new();
+    for kk in (1..=last).rev() {
+        let upper = wire(&sections[wires[kk]]).clone();
+        for v in vertex_order(&upper) {
+            let Some(p) = vertex_point(&upper, v) else { return false };
+            let q = carry(p, planes[kk], planes[kk - 1]);
+            if q.distance(planes[kk - 1].centre) <= LINEAR {
+                continue;
+            }
+            let matched: Vec<usize> = down.iter().map(|d| d.1).collect();
+            let taken = |m: usize| matched.contains(&m);
+            let Some(hit) = meet_ray(wire_mut(&mut sections[wires[kk - 1]]), planes[kk - 1].centre, q, &taken, marks) else { return false };
+            down.push((v, hit));
+        }
+    }
+    // Chains up from the first wire's vertices.
+    let mut chains: Vec<Vec<usize>> = Vec::new();
+    for v in vertex_order(wire(&sections[wires[0]])) {
+        let mut chain = vec![v];
+        while chain.len() < wires.len() {
+            let end = *chain.last().expect("a chain");
+            match down.iter().find(|d| d.1 == end) {
+                Some(&(u, _)) if u != v => chain.push(u),
+                _ => break,
+            }
+        }
+        chains.push(chain);
+    }
+    // Up: the wires the chains miss.
+    for kk in 0..last {
+        let lower = wire(&sections[wires[kk]]).clone();
+        for v in vertex_order(&lower) {
+            let Some(c) = chains.iter().position(|chain| chain.contains(&v)) else { return false };
+            let upper = vertex_order(wire(&sections[wires[kk + 1]]));
+            if chains[c].iter().any(|m| upper.contains(m)) {
+                continue;
+            }
+            let Some(p) = vertex_point(&lower, v) else { return false };
+            let q = carry(p, planes[kk], planes[kk + 1]);
+            if q.distance(planes[kk + 1].centre) <= LINEAR {
+                continue;
+            }
+            let chained: Vec<usize> = chains.iter().flatten().copied().collect();
+            let taken = |m: usize| chained.contains(&m);
+            let Some(hit) = meet_ray(wire_mut(&mut sections[wires[kk + 1]]), planes[kk + 1].centre, q, &taken, marks) else { return false };
+            chains[c].push(hit);
+        }
+    }
+    // Turning and restarting.
+    let first = wire(&sections[wires[0]]);
+    let head = &first.pieces[0];
+    let (a, b) = (head.start, head.end);
+    let toward = head.at(0.9) - planes[0].centre;
+    if !(toward.length() > 0.0) {
+        return false;
+    }
+    let toward = toward.normalized();
+    let count = first.pieces.len();
+    let chain_from = |m: usize| chains.iter().find(|c| c[0] == m);
+    for r in 1..wires.len() {
+        let (Some(ca), Some(cb)) = (chain_from(a), chain_from(b)) else { return false };
+        let (Some(&ar), Some(&br)) = (ca.get(r), cb.get(r)) else { return false };
+        let w = wire(&sections[wires[r]]);
+        let mut best: Option<(usize, bool, f64)> = None;
+        // (A closed wire of one piece runs between the two either way.)
+        let candidates = w.pieces.iter().enumerate().flat_map(|(i, piece)| {
+            let forward = (piece.start == ar && piece.end == br).then_some((i, false, 0.9));
+            let backward = (piece.start == br && piece.end == ar).then_some((i, true, 0.1));
+            forward.into_iter().chain(backward)
+        });
+        for (i, backwards, s) in candidates {
+            let piece = &w.pieces[i];
+            let mut p = piece.at(s);
+            for kk in (1..=r).rev() {
+                p = carry(p, planes[kk], planes[kk - 1]);
+            }
+            let d = p - planes[0].centre;
+            let cos = if d.length() > 0.0 { d.normalized().dot(toward) } else { f64::NEG_INFINITY };
+            if best.is_none_or(|(_, _, c)| cos > c) {
+                best = Some((i, backwards, cos));
+            }
+        }
+        let Some((mut i, backwards, _)) = best else { return false };
+        let w = wire_mut(&mut sections[wires[r]]);
+        if backwards {
+            w.pieces = w.pieces.iter().rev().map(Piece::reversed).collect();
+            i = w.pieces.len() - 1 - i;
+        }
+        w.pieces.rotate_left(i);
+    }
+    wires.iter().all(|&k| wire(&sections[k]).pieces.len() == count)
+}
+
 
 /// The Newell normal of a closed wire (its enclosed area's vector).
 fn normal(w: &WireSection) -> Vector {
@@ -1899,6 +2218,48 @@ mod tests {
             let length = properties::length(&model, across[0]).mass;
             assert!((length - (400.0 + (200f64.sqrt() - 10.0).powi(2)).sqrt()).abs() < 1e-6, "length {length}");
         }
+    }
+
+    /// A triangle ruled to a circle by rays: the ray through the circle's vertex (at angle 0)
+    /// splits the triangle's side there, at a third of it; those through the triangle's
+    /// corners split the circle: four faces, a closed valid solid. Three parallel circles
+    /// are not split.
+    #[test]
+    fn a_triangle_matched_to_a_circle_by_rays() {
+        let mut model = Model::new();
+        let corner = |a: f64| [10.0 * a.to_radians().cos(), 10.0 * a.to_radians().sin(), 0.0];
+        let triangle = polygon(&mut model, &[corner(90.0), corner(210.0), corner(330.0)]);
+        let round = circle(&mut model, 10.0, 5.0, Direction::Z);
+        let options = LoftOptions { ruled: true, solid: true, matching: Matching::ByRays, ..Default::default() };
+        let lofted = loft(&mut model, &[triangle, round], &options).unwrap();
+        let report = crate::validity::check(&model, lofted.shape);
+        assert!(report.is_valid(), "{report:?}");
+        let sides = model.unique_subshapes(lofted.shape, NodeKind::Face).into_iter().filter(|&f| !matches!(model.surface(f), Some(Surface::Plane(_)))).count();
+        assert_eq!(sides, 4);
+        let a = model.unique_subshapes(round, NodeKind::Edge)[0];
+        assert_eq!(lofted.generated(a).len(), 4);
+        // Three parallel circles: a face each way up, no split.
+        let mut model = Model::new();
+        let rings: Vec<Shape> = [(0.0, 3.0), (5.0, 4.0), (10.0, 3.0)].iter().map(|&(z, r)| circle(&mut model, z, r, Direction::Z)).collect();
+        let lofted = loft(&mut model, &rings, &LoftOptions { matching: Matching::ByRays, ..Default::default() }).unwrap();
+        assert_eq!(model.unique_subshapes(lofted.shape, NodeKind::Face).len(), 1);
+    }
+
+    /// The centre a wire is matched about: a lone circle's centre; a polygon's centroid as a
+    /// uniform wire (an L of unequal arms off its vertices' mean).
+    #[test]
+    fn a_wires_centre_is_its_centroid() {
+        let mut model = Model::new();
+        let mut marks = Marks::default();
+        let square = polygon(&mut model, &[[0.0, 0.0, 0.0], [4.0, 0.0, 0.0], [4.0, 2.0, 0.0], [0.0, 2.0, 0.0]]);
+        let Section::Wire(w) = Section::read(&model, square, &mut marks).unwrap() else { panic!("a wire") };
+        assert!(centre(&w).distance(Point::new(2.0, 1.0, 0.0)) < 1e-12);
+        // An L: sides 2, 1, 1, 1, 1, 2 round (0,0)-(2,0)-(2,1)-(1,1)-(1,2)-(0,2).
+        let l = polygon(&mut model, &[[0.0, 0.0, 0.0], [2.0, 0.0, 0.0], [2.0, 1.0, 0.0], [1.0, 1.0, 0.0], [1.0, 2.0, 0.0], [0.0, 2.0, 0.0]]);
+        let Section::Wire(w) = Section::read(&model, l, &mut marks).unwrap() else { panic!("a wire") };
+        // x: (2·1 + 1·2 + 1·1.5 + 1·1 + 1·0.5 + 2·0) / 8.
+        let x = (2.0 + 2.0 + 1.5 + 1.0 + 0.5) / 8.0;
+        assert!(centre(&w).distance(Point::new(x, x, 0.0)) < 1e-12, "{:?}", centre(&w));
     }
 
     /// A loft from a square to one with a corner lifted (a section in no one plane): the end

@@ -7,8 +7,8 @@
 //! * The data (`HLRBRep_ShapeToHLR`, `HLRBRep_Data::Update`): every face with its surface,
 //!   every edge with the faces it bounds, an edge between two faces that meet tangent-plane
 //!   continuously along it being a smooth one (`Rg1`, as `BRepLib::EncodeRegularity` finds
-//!   it) and an edge a face meets itself along a seam; the scene's size (`myBigSize`, the
-//!   widest of its sixteen min-max spans); each face's flags: whether it has outlines, is
+//!   it) and an edge a face meets itself along a seam; the scene's size (the widest
+//!   spread of its sampled lines over a fan of view-plane directions and in depth); each face's flags: whether it has outlines, is
 //!   simple (no outline, an elementary surface), seen edge-on (`IsSide`), seen from behind
 //!   (`Back`) and so hiding.
 //! * The outlines (`HLRTopoBRep_DSFiller` through `Contap_Contour`): on a cylinder, cone or
@@ -69,7 +69,22 @@ pub struct HiddenLines {
     pub hidden: Vec<DrawnLine>,
 }
 
-// CLEAN-ROOM GAP: 5 lines removed; rewrite from the cleanroom spec `hidden_lines_adapted.md`.
+/// Two unit normals within this angle (radians) count as one, and a normal this close to
+/// square to the line of sight lies on the contour: just above unit-vector rounding noise,
+/// with room for edges lying on their faces to a modelling tolerance.
+const SMOOTH_ANGLE: f64 = 1e-8;
+/// A plane or cylinder seen within this angle (radians, as a sine) of edge-on hides
+/// nothing, and a normal this close to square to the line of sight does not tell front
+/// from back: well below any modelled angle, well above rounding.
+const EDGE_ON: f64 = 1e-4;
+/// The depth tolerances of [`Data::hides`], relative to the scene's size: a sight-line hit
+/// on a face counts only when it is nearer the viewer by more than this. For a line not on
+/// the face, just above intersection noise.
+const DEPTH_OTHER: f64 = 1e-7;
+/// For a face's own edges, so that the edge's own surface does not hide it.
+const DEPTH_OWN_EDGE: f64 = 1e-3;
+/// For a face's own outlines, which graze the surface so that nearby hits spread further.
+const DEPTH_OWN_OUTLINE: f64 = 1e-2;
 
 /// Draws `shape` seen along `-view.z()`, the viewer on `view`'s positive z side: each sharp
 /// edge and each outline (where the line of sight grazes a curved face), cut into the
@@ -297,12 +312,45 @@ impl Data {
         let d = Direction::try_from_vector(view.z).expect("a view direction");
         for f in 0..self.faces.len() {
             let face = &self.faces[f];
-            // `Contap_ContAna`: lines through a point along a direction, or a circle.
+            // The contour generators: lines through a point along a direction, or a circle.
             let mut straight: Vec<(Point, Direction)> = Vec::new();
             let mut round: Option<Circle> = None;
             match &face.surface {
                 Surface::Plane(_) => continue,
-                // CLEAN-ROOM GAP: 38 lines removed; rewrite from the cleanroom spec `hidden_lines_adapted.md`.
+                Surface::Cylinder(c) => {
+                    // Two rulings, on the diameter square to both the axis and the line of sight.
+                    let frame = c.frame();
+                    let across = Vector::from(frame.z()).cross(Vector::from(d));
+                    if across.length() > 1e-12 {
+                        let n = across.normalized() * c.radius();
+                        straight.push((frame.origin() + n, frame.z()));
+                        straight.push((frame.origin() - n, frame.z()));
+                    }
+                }
+                Surface::Cone(c) => {
+                    // Rulings g(u) = cos u·x + sin u·y + cot α·z through the apex, where the normal
+                    // (cot α cos u, cot α sin u, -1) is square to d: a cos u + b sin u = tan α·(d·z).
+                    let frame = c.frame();
+                    let (x, y, z) = (Vector::from(frame.x()), Vector::from(frame.y()), Vector::from(frame.z()));
+                    let dv = Vector::from(d);
+                    let (a, b) = (dv.dot(x), dv.dot(y));
+                    let rho = a.hypot(b);
+                    let tan = c.semi_angle().tan();
+                    let k = tan * dv.dot(z);
+                    if k.abs() < rho {
+                        let phi = b.atan2(a);
+                        let beta = (k / rho).clamp(-1.0, 1.0).acos();
+                        let apex = c.apex();
+                        for u in [phi + beta, phi - beta] {
+                            let g = x * u.cos() + y * u.sin() + z * (1.0 / tan);
+                            straight.push((apex, Direction::from_vector(g)));
+                        }
+                    }
+                }
+                Surface::Sphere(s) => {
+                    // The great circle square to the line of sight.
+                    round = Some(Circle::new(Frame::from_z(s.frame().origin(), d), s.radius()));
+                }
                 other => {
                     return Err(Error::Failed(format!(
                         "hidden lines: the outlines of a {} face are not found yet",
@@ -411,7 +459,11 @@ impl Data {
             (face.lo, face.hi, face.depth, face.margin) = (lo, hi, depth, margin);
             let elementary = matches!(face.surface, Surface::Plane(_) | Surface::Cylinder(_) | Surface::Cone(_) | Surface::Sphere(_) | Surface::Torus(_));
             face.simple = !face.with_outlines && elementary;
-            // CLEAN-ROOM GAP: 6 lines removed; rewrite from the cleanroom spec `hidden_lines_adapted.md (uses)`.
+            // Seen edge-on: a plane holding the line of sight, a cylinder seen along its axis.
+            let dz = view.z;
+            let side = match &face.surface {
+                Surface::Plane(p) => Vector::from(p.frame().z()).dot(dz).abs() < EDGE_ON,
+                Surface::Cylinder(c) => Vector::from(c.frame().z()).cross(dz).length() < EDGE_ON,
                 _ => false,
             };
             face.hiding = if side {
@@ -431,7 +483,7 @@ impl Data {
                     let local = p.transformed(&face.shape.placement.inverse());
                     let Some(n) = normal_at(&face.local, local) else { continue };
                     let r = n.transformed(&face.shape.placement).dot(view.z);
-                    // CLEAN-ROOM GAP: 1 lines removed; rewrite from the cleanroom spec `hidden_lines_adapted.md (use)`.
+                    if r.abs() > EDGE_ON {
                         back = Some(r < 0.0);
                         break;
                     }
@@ -522,7 +574,16 @@ impl Data {
             return false;
         }
         let p = line.curve.point(t);
-        // CLEAN-ROOM GAP: 7 lines removed; rewrite from the cleanroom spec `hidden_lines_adapted.md`.
+        // How much nearer the viewer a hit must be: more for the face's own lines, which lie
+        // on its surface, and most for its outlines, which graze it.
+        let tol_z = self.big
+            * if !own {
+                DEPTH_OTHER
+            } else if line.role == Role::Outline {
+                DEPTH_OWN_OUTLINE
+            } else {
+                DEPTH_OWN_EDGE
+            };
         // The rejections by the face's min-max: off its projection, or in front of it all.
         let q = view.flat(p);
         let m = face.margin;
@@ -558,7 +619,31 @@ fn surface_name(s: &Surface) -> &'static str {
     }
 }
 
-// CLEAN-ROOM GAP: 22 lines removed; rewrite from the cleanroom spec `hidden_lines_adapted.md`.
+/// The scene's size: the widest spread of the lines' projected samples over a fan of eight
+/// directions in the view plane, or of their depths; at most the samples' diameter. Zero for
+/// an empty scene.
+fn big_size(lines: &[HlrLine], view: &View) -> f64 {
+    let _ = view;
+    let fan: Vec<Vector2> = (0..8)
+        .map(|k| {
+            let a = std::f64::consts::PI * k as f64 / 8.0;
+            Vector2::new(a.cos(), a.sin())
+        })
+        .collect();
+    let mut lo = [f64::INFINITY; 9];
+    let mut hi = [f64::NEG_INFINITY; 9];
+    for line in lines {
+        let t = &line.track;
+        for p in &t.points {
+            for (k, u) in fan.iter().enumerate() {
+                let s = p.x * u.x + p.y * u.y;
+                (lo[k], hi[k]) = (lo[k].min(s), hi[k].max(s));
+            }
+        }
+        (lo[8], hi[8]) = (lo[8].min(t.depth.0), hi[8].max(t.depth.1));
+    }
+    lo.iter().zip(&hi).map(|(a, b)| b - a).filter(|w| w.is_finite()).fold(0.0, f64::max)
+}
 
 fn line_distance(line: &Line, p: Point) -> f64 {
     let w = p - line.origin;
@@ -630,7 +715,13 @@ fn arc_zeros(surface: &Surface, curve: &Curve, first: f64, last: f64, d: Directi
     out
 }
 
-// CLEAN-ROOM GAP: 8 lines removed; rewrite from the cleanroom spec `hidden_lines_adapted.md (uses)`.
+/// Whether `surface`'s normal is square to `d`, within [`SMOOTH_ANGLE`], at samples all
+/// along the arc (samples without a normal, an apex, are passed over).
+fn on_contour(surface: &Surface, curve: &Curve, first: f64, last: f64, d: Direction) -> bool {
+    let d = Vector::from(d);
+    let n = 16;
+    let dots: Vec<f64> = (0..=n).filter_map(|i| normal_at(surface, curve.point(first + (last - first) * i as f64 / n as f64)).map(|m| m.dot(d))).collect();
+    !dots.is_empty() && dots.iter().all(|v| v.abs() <= SMOOTH_ANGLE)
 }
 
 fn boxes_meet(a: &Track, b: &Track, margin: f64) -> bool {
@@ -767,7 +858,27 @@ fn segment_closest(p0: Point2, p1: Point2, q0: Point2, q1: Point2) -> (f64, f64,
     let gap = (p0 + d1 * s).distance(q0 + d2 * t);
     (s, t, gap)
 }
-// CLEAN-ROOM GAP: 22 lines removed; rewrite from the cleanroom spec `hidden_lines_adapted.md`.
+
+/// Whether faces `a` and `b` meet tangent-plane continuously along the edge `curve` over
+/// `[first, last]`: at 21 points equally spaced over the range shrunk by 1% at each end
+/// (where the vertices, at which normals may jump, are avoided), both faces have an
+/// outward normal and the two agree within [`SMOOTH_ANGLE`].
+fn smooth(a: &HlrFace, b: &HlrFace, curve: &Curve, first: f64, last: f64) -> bool {
+    let outward = |face: &HlrFace, p: Point| {
+        let local = p.transformed(&face.shape.placement.inverse());
+        let n = normal_at(&face.local, local)?.transformed(&face.shape.placement);
+        Some(if face.shape.orientation == Orientation::Reversed { -n } else { n })
+    };
+    let n = 20;
+    let (lo, hi) = (first + 0.01 * (last - first), last - 0.01 * (last - first));
+    (0..=n).all(|i| {
+        let p = curve.point(lo + (hi - lo) * i as f64 / n as f64);
+        match (outward(a, p), outward(b, p)) {
+            (Some(na), Some(nb)) => na.dot(nb) > 0.0 && na.cross(nb).length() <= SMOOTH_ANGLE * na.length() * nb.length(),
+            _ => false,
+        }
+    })
+}
 
 #[cfg(test)]
 mod tests {
@@ -840,6 +951,31 @@ mod tests {
             let (lo, hi) = line.points.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), p| (lo.min(p.y), hi.max(p.y)));
             assert!(lo.abs() < 1e-12 && (hi - h * elevation.cos()).abs() < 1e-12, "{lo} {hi}");
         }
+    }
+
+    /// A cone seen from the side draws its two outlines from the apex to the base's ends,
+    /// seen; seen along its axis from above its apex (inside its opening), it has none. A
+    /// cylinder seen along its axis has none either.
+    #[test]
+    fn a_cones_outlines_run_from_its_apex() {
+        use crate::primitives::Cone;
+        let (r, h) = (2.0, 3.0);
+        let mut model = Model::new();
+        let solid = Cone::new(r, 0.0, h).build(&mut model).unwrap();
+        let drawn = hidden_lines(&model, solid, &tilted(0.0), TOLERANCE).unwrap();
+        let seen = length(&drawn.visible, LineKind::Outline);
+        assert!((seen - 2.0 * r.hypot(h)).abs() < 1e-9, "{seen}");
+        assert_eq!(length(&drawn.hidden, LineKind::Outline), 0.0);
+        for p in drawn.visible.iter().filter(|l| l.kind == LineKind::Outline).flat_map(|l| &l.points) {
+            // On the lines from (±r, 0) to (0, h).
+            assert!((p.x.abs() / r + p.y / h - 1.0).abs() < 1e-12, "{p:?}");
+        }
+        let above = Frame::new(Point::ORIGIN, Direction::Z, Direction::X);
+        let drawn = hidden_lines(&model, solid, &above, TOLERANCE).unwrap();
+        assert!(drawn.visible.iter().chain(&drawn.hidden).all(|l| l.kind == LineKind::Sharp));
+        let solid = Cylinder::new(r, h).build(&mut model).unwrap();
+        let drawn = hidden_lines(&model, solid, &above, TOLERANCE).unwrap();
+        assert!(drawn.visible.iter().chain(&drawn.hidden).all(|l| l.kind == LineKind::Sharp));
     }
 
     #[test]

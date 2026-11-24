@@ -118,7 +118,48 @@ pub fn mesh_with(model: &mut Model, shape: Shape, options: MeshOptions) -> Resul
     Ok(())
 }
 
-// CLEAN-ROOM GAP: 31 lines removed; rewrite from the cleanroom spec `small_adapted.md`.
+/// The absolute deflections a relative `relative` asks for: per edge node, `k·s·relative`
+/// with `s` the largest side of the edge's tight box and `k = W / (2 s)` clamped to
+/// `[0.5, 2]`, `W` the largest side of the whole shape's box (`relative` itself for a
+/// degenerate edge, of size 0); per face node, the mean of its edges' deflections (no entry
+/// for a face without edges).
+fn relative_deflections(model: &Model, shape: Shape, relative: f64) -> (HashMap<crate::topology::NodeId, f64>, HashMap<crate::topology::NodeId, f64>) {
+    let side = |s: Shape| {
+        let b = crate::properties::tight_bounding_box(model, s);
+        if b.is_empty() {
+            return 0.0;
+        }
+        (b.max.x - b.min.x).max(b.max.y - b.min.y).max(b.max.z - b.min.z).max(0.0)
+    };
+    let whole = side(shape);
+    let mut by_edge: HashMap<crate::topology::NodeId, f64> = HashMap::default();
+    for edge in model.unique_subshapes(shape, NodeKind::Edge) {
+        if by_edge.contains_key(&edge.node) {
+            continue;
+        }
+        let s = side(edge);
+        let deflection = if s > 0.0 { (whole / (2.0 * s)).clamp(0.5, 2.0) * s * relative } else { relative };
+        by_edge.insert(edge.node, deflection);
+    }
+    let mut by_face: HashMap<crate::topology::NodeId, f64> = HashMap::default();
+    for face in model.unique_subshapes(shape, NodeKind::Face) {
+        if by_face.contains_key(&face.node) {
+            continue;
+        }
+        let mut seen = FastSet::default();
+        let found: Vec<f64> = model
+            .unique_subshapes(face, NodeKind::Edge)
+            .into_iter()
+            .filter(|e| seen.insert(e.node))
+            .filter_map(|e| by_edge.get(&e.node).copied())
+            .collect();
+        if !found.is_empty() {
+            by_face.insert(face.node, found.iter().sum::<f64>() / found.len() as f64);
+        }
+    }
+    (by_edge, by_face)
+}
+
 /// The shapes in order, each node once (unplaced, a shape placed several times is one).
 fn once_each(shapes: Vec<Shape>) -> Vec<Shape> {
     let mut seen = crate::hashing::FastSet::default();

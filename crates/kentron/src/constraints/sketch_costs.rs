@@ -26,7 +26,20 @@ fn norm2(x: f64, y: f64) -> f64 {
     (x * x + y * y).sqrt()
 }
 
-// CLEAN-ROOM GAP: 16 lines removed; rewrite from the cleanroom spec `small_adapted.md`.
+/// The signed angle from `a` to `b`, anticlockwise positive, in `[−π, π)`: exactly
+/// antiparallel vectors give `−π` (CadQuery's sketch costs see that value); a zero vector
+/// gives NaN.
+fn angle(a: [f64; 2], b: [f64; 2]) -> f64 {
+    if (a[0] == 0.0 && a[1] == 0.0) || (b[0] == 0.0 && b[1] == 0.0) {
+        return f64::NAN;
+    }
+    let dot = a[0] * b[0] + a[1] * b[1];
+    let cross = a[0] * b[1] - a[1] * b[0];
+    if cross == 0.0 && dot < 0.0 {
+        return -std::f64::consts::PI;
+    }
+    cross.atan2(dot)
+}
 
 /// numpy's sign.
 fn sign(v: f64) -> f64 {
@@ -197,5 +210,20 @@ impl Objective<'_> {
 mod tests {
     use super::*;
 
-    // CLEAN-ROOM GAP: 6 lines removed; rewrite from the cleanroom spec `small_adapted.md (test)`.
+    #[test]
+    fn the_angle_between_two_vectors_is_signed_in_minus_pi_to_pi() {
+        use std::f64::consts::PI;
+        assert!((angle([1.0, 0.0], [-1.0, 1.0]) - 0.75 * PI).abs() <= 1e-15);
+        assert!((angle([1.0, 0.0], [0.0, -1.0]) + 0.5 * PI).abs() <= 1e-15);
+        // Antiparallel: −π, whichever the zero's sign.
+        assert_eq!(angle([1.0, 0.0], [-1.0, 0.0]), -PI);
+        assert_eq!(angle([1.0, 0.0], [-1.0, -0.0]), -PI);
+        assert_eq!(angle([-1.0, 0.0], [1.0, 0.0]), -PI);
+        // Just short of antiparallel, anticlockwise: just below π (rounding to `PI`, the
+        // double just below π).
+        let near = angle([1.0, 0.0], [-1.0, 1e-300]);
+        assert!(near > 0.0 && near <= PI, "{near}");
+        assert!(angle([0.0, 0.0], [1.0, 0.0]).is_nan());
+        assert!(angle([1.0, 0.0], [0.0, 0.0]).is_nan());
+    }
 }

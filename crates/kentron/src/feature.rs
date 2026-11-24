@@ -268,7 +268,13 @@ pub fn rib(model: &mut Model, base: Shape, wire: Shape, plane: &Plane, sweep: Ri
             }
         }
         RibSweep::Revolution { axis, side, other_side } => {
-            // CLEAN-ROOM GAP: 5 lines removed; rewrite from the cleanroom spec `small_adapted.md`.
+            // The turn each way: a point of the region at a distance ρ from the axis leaves
+            // the slab of half-thickness h after turning by asin(h/ρ); turning that far for
+            // the region's nearest point (and a little more, so that the slab's planes cut
+            // the tool cleanly), at most a quarter turn, the cut tool holds the whole slab.
+            let (near, _) = extents_from_axis(model, region, axis);
+            let turn = |h: f64| ((h.abs() / near).min(1.0).asin() + 0.05).min(std::f64::consts::FRAC_PI_2);
+            let (a1, a2) = (turn(side), turn(other_side));
             // Always reaching into the base (on its side of the axis) and cut back to it, as a
             // linear rib that does not slide: closed along the base, the tool's faces would
             // lie on the base's own as the section turned round, not matched by the boolean.
@@ -715,19 +721,20 @@ fn pieces_between_cyclic(pieces: &[CurvePiece], from: (usize, f64), to: (usize, 
     out
 }
 
-/// The greatest distance of `shape`'s edges (sampled) from `axis`.
-fn extent_from_axis(model: &Model, shape: Shape, axis: Axis) -> f64 {
+/// The least and greatest distances of `shape`'s edges (sampled) from `axis`.
+fn extents_from_axis(model: &Model, shape: Shape, axis: Axis) -> (f64, f64) {
     let a = Vector::from(axis.direction);
-    let mut far = 0.0f64;
+    let (mut near, mut far) = (f64::INFINITY, 0.0f64);
     for edge in model.unique_subshapes(shape, NodeKind::Edge) {
         if let Some((curve, first, last)) = model.edge_curve(edge) {
             for i in 0..=32 {
                 let p = curve.point(first + (last - first) * i as f64 / 32.0) - axis.origin;
-                far = far.max((p - a * p.dot(a)).length());
+                let rho = (p - a * p.dot(a)).length();
+                (near, far) = (near.min(rho), far.max(rho));
             }
         }
     }
-    far.max(1e-300)
+    (near.min(far).max(1e-300), far.max(1e-300))
 }
 
 /// The faces an extent is limited by.

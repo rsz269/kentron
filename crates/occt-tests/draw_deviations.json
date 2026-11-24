@@ -1486,8 +1486,8 @@
   "tests/offset/wire_unclosed_outside_0_025/B2": [
     {
       "from": "d.offset_counts(&[\"result\", \"61\", \"61\", \"1\"])?;",
-      "to": "d.offset_counts(&[\"result\", \"27\", \"27\", \"1\"])?;",
-      "reason": "OCCT cuts offset edges where its medial-axis construction (MAT2d) divides the wire: at curvature extrema and inflections and where bisectors end. kentron makes one edge per offset edge and per corner arc: its length as OCCT's, the result valid, with fewer vertices and edges: 27 and 27 (OCCT 61 and 61)."
+      "to": "d.offset_counts(&[\"result\", \"13\", \"13\", \"1\"])?;",
+      "reason": "Wire-offset cutting written anew (clean-room): kentron cuts the wire's B-splines before offsetting only at their curvature extrema, inflections and corner knots (C0 knots where the tangent turns), no longer at incidental places, so its offset has fewer edges: 13 (OCCT 61). The length check (1%) and validity pass."
     }
   ],
   "tests/offset/wire_unclosed_outside_0_025/B3": [
@@ -1519,8 +1519,8 @@
   "tests/offset/wire_unclosed_outside_0_075/B2": [
     {
       "from": "d.offset_counts(&[\"result\", \"60\", \"60\", \"1\"])?;",
-      "to": "d.offset_counts(&[\"result\", \"26\", \"26\", \"1\"])?;",
-      "reason": "OCCT cuts offset edges where its medial-axis construction (MAT2d) divides the wire: at curvature extrema and inflections and where bisectors end. kentron makes one edge per offset edge and per corner arc: its length as OCCT's, the result valid, with fewer vertices and edges: 26 and 26 (OCCT 60 and 60)."
+      "to": "d.offset_counts(&[\"result\", \"13\", \"13\", \"1\"])?;",
+      "reason": "Wire-offset cutting written anew (clean-room): kentron cuts the wire's B-splines before offsetting only at their curvature extrema, inflections and corner knots (C0 knots where the tangent turns), no longer at incidental places, so its offset has fewer edges: 13 (OCCT 60). The length check (1%) and validity pass."
     }
   ],
   "tests/offset/wire_unclosed_outside_0_005/A9": [
@@ -1533,8 +1533,8 @@
   "tests/offset/wire_unclosed_outside_0_075/B1": [
     {
       "from": "d.offset_counts(&[\"result\", \"41\", \"41\", \"1\"])?;",
-      "to": "d.offset_counts(&[\"result\", \"27\", \"27\", \"1\"])?;",
-      "reason": "OCCT cuts offset edges where its medial-axis construction (MAT2d) divides the wire: at curvature extrema and inflections and where bisectors end. kentron makes one edge per offset edge and per corner arc: its length as OCCT's, the result valid, with fewer vertices and edges: 27 and 27 (OCCT 41 and 41)."
+      "to": "d.offset_counts(&[\"result\", \"10\", \"10\", \"1\"])?;",
+      "reason": "Wire-offset cutting written anew (clean-room): kentron cuts the wire's B-splines before offsetting only at their curvature extrema, inflections and corner knots (C0 knots where the tangent turns), no longer at incidental places, so its offset has fewer edges: 10 (OCCT 41). The length check (1%) and validity pass."
     }
   ],
   "tests/offset/wire_unclosed_outside_0_025/B7": [
@@ -2826,6 +2826,83 @@
   "tests/geometry/2dbsplinecurve/B2": [
     {
       "note": "Pins OCCT's MovePointAndTangent correction shape. kentron moves the free poles by the minimum-norm change meeting the point and derivative conditions (a deliberate change, clean-room spec bspline_adapted.md); all 100 moves of the script succeed and reach the scripted point (within 9e-16) with the scripted tangent (within 6e-15 relative), but the curve elsewhere differs: length 6.422015 against OCCT's 6.649278 (-3.42%)."
+    }
+  ],
+  "tests/offset/wire_closed_inside_0_005/C5": [
+    {
+      "from": "d.offset_counts(&[\"result\", \"5\", \"5\", \"1\"])?;",
+      "to": "d.offset_counts(&[\"result\", \"4\", \"4\", \"1\"])?;",
+      "reason": "Wire-offset cutting written anew (clean-room): the wire is one closed periodic quadratic B-spline; kentron cuts it before offsetting at its three curvature maxima (one per knot span; the minima fall on the knots, where a quadratic's curvature jumps), so its offset has 4 edges (OCCT 5). The length check (1%) and validity pass."
+    }
+  ],
+  "tests/offset/wire_closed_inside_0_005/E5": [
+    {
+      "from": "d.offset_counts(&[\"result\", \"3\", \"3\", \"1\"])?;",
+      "to": "d.offset_counts(&[\"result\", \"4\", \"4\", \"1\"])?;",
+      "reason": "Wire-offset cutting written anew (clean-room): the spline edge (a cubic with 36 spans) has a genuine curvature extremum inside a span (the signed curvature runs -1.3707e-2, -1.3672e-2, -1.3918e-2 around it), where kentron cuts it before offsetting, so its offset has one edge more, 4 (OCCT 3). The length check (1%) and validity pass."
+    }
+  ],
+  "tests/offset/wire_closed_inside_0_025/C5": [
+    {
+      "from": "d.offset_counts(&[\"result\", \"5\", \"5\", \"1\"])?;",
+      "to": "d.offset_counts(&[\"result\", \"4\", \"4\", \"1\"])?;",
+      "reason": "Wire-offset cutting written anew (clean-room): the wire is one closed periodic quadratic B-spline; kentron cuts it before offsetting at its three curvature maxima (one per knot span; the minima fall on the knots, where a quadratic's curvature jumps), so its offset has 4 edges (OCCT 5). The length check (1%) and validity pass."
+    }
+  ],
+  "tests/offset/wire_closed_inside_0_025/E5": [
+    {
+      "from": "d.offset_counts(&[\"result\", \"3\", \"3\", \"1\"])?;",
+      "to": "d.offset_counts(&[\"result\", \"4\", \"4\", \"1\"])?;",
+      "reason": "Wire-offset cutting written anew (clean-room): the spline edge (a cubic with 36 spans) has a genuine curvature extremum inside a span (the signed curvature runs -1.3707e-2, -1.3672e-2, -1.3918e-2 around it), where kentron cuts it before offsetting, so its offset has one edge more, 4 (OCCT 3). The length check (1%) and validity pass."
+    }
+  ],
+  "tests/offset/wire_closed_inside_0_075/E5": [
+    {
+      "from": "d.offset_counts(&[\"result\", \"3\", \"3\", \"1\"])?;",
+      "to": "d.offset_counts(&[\"result\", \"4\", \"4\", \"1\"])?;",
+      "reason": "Wire-offset cutting written anew (clean-room): the spline edge (a cubic with 36 spans) has a genuine curvature extremum inside a span (the signed curvature runs -1.3707e-2, -1.3672e-2, -1.3918e-2 around it), where kentron cuts it before offsetting, so its offset has one edge more, 4 (OCCT 3). The length check (1%) and validity pass."
+    }
+  ],
+  "tests/offset/wire_closed_outside_0_005/C5": [
+    {
+      "from": "d.offset_counts(&[\"result\", \"5\", \"5\", \"1\"])?;",
+      "to": "d.offset_counts(&[\"result\", \"4\", \"4\", \"1\"])?;",
+      "reason": "Wire-offset cutting written anew (clean-room): the wire is one closed periodic quadratic B-spline; kentron cuts it before offsetting at its three curvature maxima (one per knot span; the minima fall on the knots, where a quadratic's curvature jumps), so its offset has 4 edges (OCCT 5). The length check (1%) and validity pass."
+    }
+  ],
+  "tests/offset/wire_closed_outside_0_005/E5": [
+    {
+      "from": "d.offset_counts(&[\"result\", \"6\", \"6\", \"1\"])?;",
+      "to": "d.offset_counts(&[\"result\", \"7\", \"7\", \"1\"])?;",
+      "reason": "Wire-offset cutting written anew (clean-room): the spline edge (a cubic with 36 spans) has a genuine curvature extremum inside a span (the signed curvature runs -1.3707e-2, -1.3672e-2, -1.3918e-2 around it), where kentron cuts it before offsetting, so its offset has one edge more, 7 (OCCT 6). The length check (1%) and validity pass."
+    }
+  ],
+  "tests/offset/wire_closed_outside_0_025/C5": [
+    {
+      "from": "d.offset_counts(&[\"result\", \"5\", \"5\", \"1\"])?;",
+      "to": "d.offset_counts(&[\"result\", \"4\", \"4\", \"1\"])?;",
+      "reason": "Wire-offset cutting written anew (clean-room): the wire is one closed periodic quadratic B-spline; kentron cuts it before offsetting at its three curvature maxima (one per knot span; the minima fall on the knots, where a quadratic's curvature jumps), so its offset has 4 edges (OCCT 5). The length check (1%) and validity pass."
+    }
+  ],
+  "tests/offset/wire_closed_outside_0_025/E5": [
+    {
+      "from": "d.offset_counts(&[\"result\", \"6\", \"6\", \"1\"])?;",
+      "to": "d.offset_counts(&[\"result\", \"7\", \"7\", \"1\"])?;",
+      "reason": "Wire-offset cutting written anew (clean-room): the spline edge (a cubic with 36 spans) has a genuine curvature extremum inside a span (the signed curvature runs -1.3707e-2, -1.3672e-2, -1.3918e-2 around it), where kentron cuts it before offsetting, so its offset has one edge more, 7 (OCCT 6). The length check (1%) and validity pass."
+    }
+  ],
+  "tests/offset/wire_closed_outside_0_075/C5": [
+    {
+      "from": "d.offset_counts(&[\"result\", \"5\", \"5\", \"1\"])?;",
+      "to": "d.offset_counts(&[\"result\", \"4\", \"4\", \"1\"])?;",
+      "reason": "Wire-offset cutting written anew (clean-room): the wire is one closed periodic quadratic B-spline; kentron cuts it before offsetting at its three curvature maxima (one per knot span; the minima fall on the knots, where a quadratic's curvature jumps), so its offset has 4 edges (OCCT 5). The length check (1%) and validity pass."
+    }
+  ],
+  "tests/offset/wire_closed_outside_0_075/E5": [
+    {
+      "from": "d.offset_counts(&[\"result\", \"6\", \"6\", \"1\"])?;",
+      "to": "d.offset_counts(&[\"result\", \"7\", \"7\", \"1\"])?;",
+      "reason": "Wire-offset cutting written anew (clean-room): the spline edge (a cubic with 36 spans) has a genuine curvature extremum inside a span (the signed curvature runs -1.3707e-2, -1.3672e-2, -1.3918e-2 around it), where kentron cuts it before offsetting, so its offset has one edge more, 7 (OCCT 6). The length check (1%) and validity pass."
     }
   ]
 }

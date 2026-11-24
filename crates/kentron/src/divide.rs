@@ -56,7 +56,69 @@ pub enum Parts {
 /// hold (at least one), and at least two across the shorter direction.
 #[doc(alias = "ShapeUpgrade_ShapeDivideArea")]
 #[doc(alias = "DT_SplitByNumber")]
-// CLEAN-ROOM GAP: 64 lines removed; rewrite from the cleanroom spec `small_adapted.md`.
+pub fn divide_by_number(model: &mut Model, face: Shape, parts: Parts) -> Result<Shape> {
+    let surface = model.surface(face).cloned().ok_or_else(|| Error::InvalidInput("dividing a face without a surface".into()))?;
+    // The parameter box, widened across a direction that is not periodic.
+    let (mut uf, mut ul, mut vf, mut vl) = model.face_uv_bounds(face);
+    let (su0, su1, sv0, sv1) = surface.bounds();
+    if surface.u_period().is_none() {
+        let w = 0.01 * (ul - uf);
+        (uf, ul) = ((uf - w).max(su0), (ul + w).min(su1));
+    }
+    if surface.v_period().is_none() {
+        let w = 0.01 * (vl - vf);
+        (vf, vl) = ((vf - w).max(sv0), (vl + w).min(sv1));
+    }
+    let (nu, nv) = match parts {
+        Parts::Grid(nu, nv) => (nu.max(1), nv.max(1)),
+        Parts::Total(n) => {
+            let area = crate::properties::area(model, face).mass;
+            if n <= 1 || area - area / n as f64 <= crate::tolerance::LINEAR {
+                return Ok(face);
+            }
+            let side = (area / n as f64).sqrt();
+            let lu = crate::geometry::measure::length_between(&surface.v_iso(0.5 * (vf + vl)), uf, ul);
+            let lv = crate::geometry::measure::length_between(&surface.u_iso(0.5 * (uf + ul)), vf, vl);
+            let count = |l: f64| ((l / side).floor() as usize).max(1);
+            let (mut nu, mut nv) = (count(lu), count(lv));
+            // The longest a direction's iso-lines stretch the box, sampled on a 5 × 5 grid:
+            // the shorter direction is cut at least once.
+            let (mut su, mut sv) = (0.0f64, 0.0f64);
+            const K: usize = 4;
+            for i in 0..=K {
+                for j in 0..=K {
+                    let u = uf + (ul - uf) * i as f64 / K as f64;
+                    let v = vf + (vl - vf) * j as f64 / K as f64;
+                    let (_, du, dv) = surface.d1(u, v);
+                    (su, sv) = (su.max(du.length()), sv.max(dv.length()));
+                }
+            }
+            if (ul - uf) * su > (vl - vf) * sv {
+                nv = nv.max(2);
+            } else {
+                nu = nu.max(2);
+            }
+            (nu, nv)
+        }
+    };
+    // The grid's inner lines, each overshooting the box by a hundredth at both ends.
+    let (ou, ov) = (0.01 * (ul - uf), 0.01 * (vl - vf));
+    let mut cuts = Vec::new();
+    for i in 1..nu {
+        cuts.push(Cut::iso(&surface, true, uf + (ul - uf) * i as f64 / nu as f64, vf - ov, vl + ov));
+    }
+    for j in 1..nv {
+        cuts.push(Cut::iso(&surface, false, vf + (vl - vf) * j as f64 / nv as f64, uf - ou, ul + ou));
+    }
+    if cuts.is_empty() {
+        return Ok(face);
+    }
+    let pieces = divide_face(model, face, &cuts)?;
+    let compound = model.new_empty(NodeKind::Compound);
+    for p in pieces {
+        model.add(compound, p)?;
+    }
+    Ok(compound)
 }
 
 /// `shape` with its faces divided along `edges` lying on them (as OCCT's

@@ -1054,7 +1054,8 @@ impl<'a> Reader<'a> {
     /// other instances), as OCCT's `StepToTopoDS_TranslateFace` makes it
     /// (`CreatePolyTriangulation`): a node per index of the file's `pnindex` into its list of
     /// coordinates, or per point of that list where `pnindex` is empty; the triangles given
-    // CLEAN-ROOM GAP: 2 lines removed; rewrite from the cleanroom spec `step_adapted.md (doc lines)`.
+    /// as triples, or as strips and fans decoded as ISO 10303-42 defines them (see
+    /// [`strip_and_fan_triangles`]).
     fn triangulation(&self, id: usize) -> Result<Option<Triangulation>> {
         let inst = self.get(id)?;
         // (The record; whether it has a geometric link, which surface sets have not; whether
@@ -1104,8 +1105,10 @@ impl<'a> Reader<'a> {
                     [a, b, c] => triangles.push([int(a)?, int(b)?, int(c)?]),
                     _ => return Err(invalid(format!("#{id}: a triangle without three nodes"))),
                 }
-            // CLEAN-ROOM GAP: 26 lines removed; rewrite from the cleanroom spec `step_adapted.md`.
             }
+        } else {
+            let lists = |v: &Value| -> Result<Vec<Vec<i64>>> { self.x.list(v).unwrap_or(&[]).iter().map(ints).collect() };
+            triangles = strip_and_fan_triangles(&lists(&p[k + 1])?, &lists(&p[k + 2])?);
         }
         let n = at.len() as i64;
         let triangles = triangles
@@ -1824,7 +1827,159 @@ fn style_colour(x: &Exchange, assignments: &[Value]) -> Option<[f64; 4]> {
     let [r, g, b] = rendering.or(surface).or(boundary).or(curve)?;
     Some([r, g, b, 1.0 - transparency.unwrap_or(0.0).clamp(0.0, 1.0)])
 }
-// CLEAN-ROOM GAP: 95 lines removed; rewrite from the cleanroom spec `step_adapted.md`.
+/// The triangles of `complex_triangulated_face` / `_surface_set` strips and fans (ISO
+/// 10303-42; 1-based node numbers), strips first, each in order. Strip triangle `i` of
+/// `(n1, …, nm)` has the nodes `n_i, n_{i+1}, n_{i+2}`, wound `(n_i, n_{i+2}, n_{i+1})` for odd
+/// `i` and `(n_i, n_{i+1}, n_{i+2})` for even, so that consecutive ones agree and the first is
+/// `(n1, n3, n2)`; fan triangle `j` (`2 ≤ j < m`) is `(n1, n_{j+1}, n_j)`. A triangle naming a
+/// node twice (a strip's restart) is left out.
+fn strip_and_fan_triangles(strips: &[Vec<i64>], fans: &[Vec<i64>]) -> Vec<[i64; 3]> {
+    let proper = |t: &[i64; 3]| t[0] != t[1] && t[1] != t[2] && t[0] != t[2];
+    let mut out = Vec::new();
+    for strip in strips {
+        for i in 0..strip.len().saturating_sub(2) {
+            let (a, b, c) = (strip[i], strip[i + 1], strip[i + 2]);
+            // (0-based i even: the standard's odd triangles.)
+            let t = if i % 2 == 0 { [a, c, b] } else { [a, b, c] };
+            if proper(&t) {
+                out.push(t);
+            }
+        }
+    }
+    for fan in fans {
+        for j in 1..fan.len().saturating_sub(1) {
+            let t = [fan[0], fan[j + 1], fan[j]];
+            if proper(&t) {
+                out.push(t);
+            }
+        }
+    }
+    out
+}
+
+/// The files holding the shapes of product definitions kept in other files: definition ->
+/// the file's name, by the document references of ISO 10303-214 and -203.
+///
+/// AP214: each `APPLIED_DOCUMENT_REFERENCE` names the definition (the last it refers to) and
+/// a document; the document file is the last `DOCUMENT_FILE` that the definition with
+/// associated documents equivalent to the document (through a
+/// `DOCUMENT_PRODUCT_EQUIVALENCE` and the formation it relates) refers to, or else the
+/// reference itself does. A file whose format (the description of a descriptive item of a
+/// shape representation of a property of the file) is given and is not STEP AP203 or AP214
+/// is left out. The name: that of the file's first external identification assignment (not
+/// a `#` reference), or that assignment's source's, or else the file's id or name.
+///
+/// AP203: each other `PRODUCT_DEFINITION_WITH_ASSOCIATED_DOCUMENTS` -> the name of the first
+/// of its documents that has one.
+fn external_references(x: &Exchange) -> HashMap<usize, String> {
+    let mut out: HashMap<usize, String> = HashMap::default();
+    let has_reference = x.of_type("APPLIED_DOCUMENT_REFERENCE").next().is_some();
+    let mut ap203: Vec<usize> = x.of_type("PRODUCT_DEFINITION_WITH_ASSOCIATED_DOCUMENTS").map(|(id, _)| id).collect();
+    if !has_reference && ap203.is_empty() {
+        return out;
+    }
+    // The instances each refers to (in parameter order), and those referring to each.
+    fn collect(x: &Exchange, v: &Value, into: &mut Vec<usize>) {
+        match v {
+            Value::Reference(r) => into.push(*r),
+            Value::List(_) => {
+                for e in x.list(v).unwrap_or(&[]) {
+                    collect(x, e, into);
+                }
+            }
+            Value::Typed(_) => {
+                if let Some((_, params)) = x.typed(v) {
+                    for e in params {
+                        collect(x, e, into);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut refers: HashMap<usize, Vec<usize>> = HashMap::default();
+    let mut referred: HashMap<usize, Vec<usize>> = HashMap::default();
+    for id in x.ids() {
+        let Ok(inst) = x.get(id) else { continue };
+        let mut found = Vec::new();
+        for (_, params) in inst.records() {
+            for v in params {
+                collect(x, v, &mut found);
+            }
+        }
+        for &r in &found {
+            let by = referred.entry(r).or_default();
+            if by.last() != Some(&id) {
+                by.push(id);
+            }
+        }
+        refers.insert(id, found);
+    }
+    let empty: Vec<usize> = Vec::new();
+    let refs = |id: usize| refers.get(&id).unwrap_or(&empty);
+    let back = |id: usize| referred.get(&id).unwrap_or(&empty);
+    let is = |id: usize, names: &[&str]| x.get(id).is_ok_and(|i| names.iter().any(|n| i.has(n)));
+    let text = |id: usize, k: usize| -> Option<String> {
+        let inst = x.get(id).ok()?;
+        inst.params().get(k)?.as_str().filter(|s| !s.is_empty()).map(str::to_string)
+    };
+    const DEFINITIONS: [&str; 2] = ["PRODUCT_DEFINITION", "PRODUCT_DEFINITION_WITH_ASSOCIATED_DOCUMENTS"];
+    const FORMATIONS: [&str; 2] = ["PRODUCT_DEFINITION_FORMATION", "PRODUCT_DEFINITION_FORMATION_WITH_SPECIFIED_SOURCE"];
+    for (adr, _) in x.of_type("APPLIED_DOCUMENT_REFERENCE") {
+        let Some(definition) = refs(adr).iter().copied().filter(|&r| is(r, &DEFINITIONS)).last() else { continue };
+        // The definition with associated documents equivalent to the referenced document.
+        let mut associated = None;
+        for &document in refs(adr).iter().filter(|&&r| is(r, &["DOCUMENT", "DOCUMENT_FILE"])) {
+            for &equivalence in back(document).iter().filter(|&&r| is(r, &["DOCUMENT_PRODUCT_EQUIVALENCE"])) {
+                for &formation in refs(equivalence).iter().filter(|&&r| is(r, &FORMATIONS)) {
+                    for &pdwad in back(formation).iter().filter(|&&r| is(r, &["PRODUCT_DEFINITION_WITH_ASSOCIATED_DOCUMENTS"])) {
+                        associated = Some(pdwad);
+                        ap203.retain(|&p| p != pdwad);
+                    }
+                }
+            }
+        }
+        let last_file = |of: usize| refs(of).iter().copied().filter(|&r| is(r, &["DOCUMENT_FILE"])).last();
+        let Some(file) = associated.and_then(last_file).or_else(|| last_file(adr)) else { continue };
+        // The file's format, where a shape representation of a property of it gives one.
+        let mut format: Option<String> = None;
+        for &property in back(file).iter().filter(|&&r| is(r, &["PROPERTY_DEFINITION"])) {
+            for &pdr in back(property).iter().filter(|&&r| is(r, &["PROPERTY_DEFINITION_REPRESENTATION"])) {
+                let Some(rep) = x.get(pdr).ok().and_then(|i| i.params().get(1).and_then(Value::as_reference)) else { continue };
+                let Ok(rep_inst) = x.get(rep) else { continue };
+                if !rep_inst.records().any(|(n, _)| n.ends_with("SHAPE_REPRESENTATION")) {
+                    continue;
+                }
+                let items = rep_inst.params().get(1).and_then(|v| x.list(v)).unwrap_or(&[]);
+                if let Some(item) = items.iter().filter_map(Value::as_reference).find(|&i| is(i, &["DESCRIPTIVE_REPRESENTATION_ITEM"])) {
+                    format = Some(text(item, 1).unwrap_or_default());
+                }
+            }
+        }
+        if let Some(f) = format.filter(|f| !f.is_empty()) {
+            let f = f.to_uppercase();
+            if f != "STEP AP203" && f != "STEP AP214" {
+                continue;
+            }
+        }
+        // The file's name.
+        let assignment = back(file).iter().copied().find(|&r| is(r, &["APPLIED_EXTERNAL_IDENTIFICATION_ASSIGNMENT"]));
+        let from_assignment = assignment.and_then(|a| {
+            text(a, 0).filter(|n| !n.starts_with('#')).or_else(|| {
+                let source = x.get(a).ok()?.params().get(2)?.as_reference()?;
+                let first = x.get(source).ok()?.params().first()?.clone();
+                match &first {
+                    Value::String(s) => Some(s.to_string()),
+                    Value::Typed(_) => x.typed(&first).and_then(|(_, p)| p.first().and_then(Value::as_str).map(str::to_string)),
+                    _ => None,
+                }
+                .filter(|s| !s.is_empty())
+            })
+        });
+        let Some(name) = from_assignment.or_else(|| text(file, 0)).or_else(|| text(file, 1)) else { continue };
+        out.insert(definition, name);
+    }
+    for pdwad in ap203 {
         let docs = x.get(pdwad).ok().and_then(|i| i.params().get(4).and_then(|v| x.list(v)).map(<[Value]>::to_vec)).unwrap_or_default();
         if let Some(name) = docs.iter().filter_map(Value::as_reference).find_map(|d| text(d, 1)) {
             out.insert(pdwad, name);
@@ -2246,6 +2401,34 @@ mod tests {
         let solid = model.new_empty(NodeKind::Solid);
         model.add(solid, shell).unwrap();
         assert_box(&model, solid, 12);
+    }
+
+    /// A complex triangulated face of strips: each side `[a, b, c, d]` (anticlockwise
+    /// seen from outside) as the strip (a, d, b, c), giving (a, b, d) and (d, b, c), both
+    /// outward; a strip repeating its last node (a restart) adds no degenerate triangle.
+    #[test]
+    fn a_complex_triangulated_face_of_strips() {
+        for restart in [false, true] {
+            let strips: Vec<String> = BOX_SIDES.iter().map(|&[a, b, c, d]| if restart { format!("({a},{d},{b},{c},{c})") } else { format!("({a},{d},{b},{c})") }).collect();
+            let file = tessellated_file(&[
+                box_corners(),
+                format!("COMPLEX_TRIANGULATED_FACE('',#20,8,(),$,(),({}),())", strips.join(",")),
+                "TESSELLATED_SHELL('',(#21),$)".into(),
+            ]);
+            let mut model = Model::new();
+            let shell = read(&mut model, &mut file.as_bytes()).unwrap();
+            let solid = model.new_empty(NodeKind::Solid);
+            model.add(solid, shell).unwrap();
+            assert_box(&model, solid, 12);
+        }
+    }
+
+    #[test]
+    fn strips_and_fans_decode_as_the_standard_winds_them() {
+        assert_eq!(strip_and_fan_triangles(&[vec![1, 2, 3, 4, 5]], &[]), vec![[1, 3, 2], [2, 3, 4], [3, 5, 4]]);
+        assert_eq!(strip_and_fan_triangles(&[], &[vec![1, 2, 3, 4]]), vec![[1, 3, 2], [1, 4, 3]]);
+        // Every triangle naming a node twice left out.
+        assert_eq!(strip_and_fan_triangles(&[vec![1, 2, 2, 3, 4]], &[vec![5, 6, 5, 7]]), vec![[2, 4, 3]]);
     }
 
     /// A triangle naming a node the face has not is refused.

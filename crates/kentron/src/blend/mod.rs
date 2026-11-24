@@ -2238,7 +2238,7 @@ fn mitres(corners: &[(Corner, f64)]) -> Vec<[Option<(Point, Vector)>; 2]> {
 /// `j`'s), and the angle it turns through.
 ///
 /// The test is OCCT's `ToricRotule` (ChFi3d_FilBuilder_C2.cxx: three planes, the third square
-/// to the other two, two constant fillets of one radius, to 1e-7) at a vertex OCCT finds
+/// to the other two, two constant fillets of one radius; here to kentron's linear tolerance) at a vertex OCCT finds
 /// `c1rotule` (both fillets ending on one face, their ends on one pivot). OCCT tries
 /// `PerformTwoCornerbyInter` there first, the two fillets cut where they meet (a mitre), and
 /// builds the torus only where that fails: on an L-prism it succeeds, and leaves material
@@ -2251,7 +2251,9 @@ fn mitres(corners: &[(Corner, f64)]) -> Vec<[Option<(Point, Vector)>; 2]> {
 /// here: it builds the torus (OCCT's `ChFiKPart_MakeRotule`) wherever `ToricRotule` holds,
 /// and leaves the mitre for the other vertices.
 fn toric_corners(model: &Model, shape: Shape, corners: &[(Corner, f64)], mitred: &[[Option<(Point, Vector)>; 2]]) -> Vec<(usize, usize, usize, usize, Axis, f64)> {
-    // CLEAN-ROOM GAP: 2 lines removed; rewrite from the cleanroom spec `small_adapted.md`.
+    // Radii equal, and walls square to the shared plane (unit normals' products), to
+    // kentron's linear tolerance.
+    let tol = tolerance::LINEAR;
     let mut found = Vec::new();
     let plane_normal = |f: &(NodeId, Surface, f64)| match untrimmed(&f.1) {
         // (Pointing out of the material.)
@@ -2269,14 +2271,14 @@ fn toric_corners(model: &Model, shape: Shape, corners: &[(Corner, f64)], mitred:
                 continue;
             };
             let (other, other_radius) = &corners[j];
-            // CLEAN-ROOM GAP: 1 lines removed; rewrite from the cleanroom spec `small_adapted.md (use)`.
+            if (radius - other_radius).abs() >= tol {
                 continue;
             }
             // The shared face (one plane), and each fillet's other face, its wall.
             let Some((fi, fj)) = (0..2).find_map(|a| (0..2).find(|&b| corner.faces[a].0 == other.faces[b].0 || on_one_plane(&corner.faces[a], &other.faces[b])).map(|b| (a, b))) else { continue };
             let (face, wall_i, wall_j) = (&corner.faces[fi], &corner.faces[1 - fi], &other.faces[1 - fj]);
             let (Some(n), Some(ni), Some(nj)) = (plane_normal(face), plane_normal(wall_i), plane_normal(wall_j)) else { continue };
-            // CLEAN-ROOM GAP: 1 lines removed; rewrite from the cleanroom spec `small_adapted.md (use)`.
+            if n.dot(ni).abs() >= tol || n.dot(nj).abs() >= tol {
                 continue;
             }
             // The pivot: the one other edge at the vertex where faces meet at an angle (seams
