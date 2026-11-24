@@ -118,37 +118,7 @@ pub fn mesh_with(model: &mut Model, shape: Shape, options: MeshOptions) -> Resul
     Ok(())
 }
 
-/// Each edge's and face's deflection relative to its size, as OCCT's
-/// (`BRepMesh_ShapeTool::RelativeEdgeDeflection`): an edge's the largest side of its box
-/// times `relative`, adjusted by half the shape's largest side over the edge's (within a
-/// half and two); a face's the average of its edges'.
-fn relative_deflections(model: &Model, shape: Shape, relative: f64) -> (HashMap<crate::topology::NodeId, f64>, HashMap<crate::topology::NodeId, f64>) {
-    let largest_side = |b: &crate::math::BoundingBox| {
-        let d = b.max - b.min;
-        d.x.max(d.y).max(d.z)
-    };
-    let whole = largest_side(&crate::properties::tight_bounding_box(model, shape));
-    let mut by_edge: HashMap<crate::topology::NodeId, f64> = HashMap::default();
-    for edge in model.unique_subshapes(shape, NodeKind::Edge) {
-        let size = largest_side(&crate::properties::tight_bounding_box(model, edge));
-        let d = if size > 0.0 {
-            let adjustment = (whole / (2.0 * size)).clamp(0.5, 2.0);
-            adjustment * size * relative
-        } else {
-            relative
-        };
-        by_edge.insert(edge.node, d);
-    }
-    let mut by_face: HashMap<crate::topology::NodeId, f64> = HashMap::default();
-    for face in model.unique_subshapes(shape, NodeKind::Face) {
-        let ds: Vec<f64> = model.unique_subshapes(face, NodeKind::Edge).iter().filter_map(|e| by_edge.get(&e.node).copied()).collect();
-        if !ds.is_empty() {
-            by_face.insert(face.node, ds.iter().sum::<f64>() / ds.len() as f64);
-        }
-    }
-    (by_edge, by_face)
-}
-
+// CLEAN-ROOM GAP: 31 lines removed; rewrite from the cleanroom spec `small_adapted.md`.
 /// The shapes in order, each node once (unplaced, a shape placed several times is one).
 fn once_each(shapes: Vec<Shape>) -> Vec<Shape> {
     let mut seen = crate::hashing::FastSet::default();

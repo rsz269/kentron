@@ -69,11 +69,7 @@ pub struct HiddenLines {
     pub hidden: Vec<DrawnLine>,
 }
 
-/// `BRepLib::EncodeRegularity`'s default angle (rad) within which two faces' normals along
-/// an edge make it a smooth one.
-const SMOOTH_ANGLE: f64 = 1e-10;
-/// `HLRBRep_Data::myToler`.
-const TOLER: f64 = 1e-5;
+// CLEAN-ROOM GAP: 5 lines removed; rewrite from the cleanroom spec `hidden_lines_adapted.md`.
 
 /// Draws `shape` seen along `-view.z()`, the viewer on `view`'s positive z side: each sharp
 /// edge and each outline (where the line of sight grazes a curved face), cut into the
@@ -306,44 +302,7 @@ impl Data {
             let mut round: Option<Circle> = None;
             match &face.surface {
                 Surface::Plane(_) => continue,
-                Surface::Cylinder(c) => {
-                    let axis = c.frame().z();
-                    let normale = axis.cross(d);
-                    if normale.length() > 1e-15 {
-                        let n = normale.normalized();
-                        let o = c.frame().origin();
-                        straight.push((o + n * c.radius(), axis));
-                        straight.push((o - n * c.radius(), axis));
-                    }
-                }
-                Surface::Cone(c) => {
-                    let frame = c.frame();
-                    let tgtalpha = c.semi_angle().tan();
-                    let coefcos = d.dot(frame.x());
-                    let coefsin = d.dot(frame.y());
-                    let coefcst = d.dot(frame.z()) * tgtalpha;
-                    let norm1 = coefcos * coefcos + coefsin * coefsin;
-                    if coefcst.abs() < norm1.sqrt() {
-                        let prm = (norm1 - coefcst * coefcst).sqrt();
-                        let cost0 = (coefcos * coefcst - coefsin * prm) / norm1;
-                        let cost1 = (coefcos * coefcst + coefsin * prm) / norm1;
-                        let sint0 = (coefcos * prm + coefsin * coefcst) / norm1;
-                        let sint1 = (-coefcos * prm + coefsin * coefcst) / norm1;
-                        let (x, y, z) = (Vector::from(frame.x()), Vector::from(frame.y()), Vector::from(frame.z()));
-                        let apex = c.apex();
-                        for (cos, sin) in [(cost0, sint0), (cost1, sint1)] {
-                            if let Some(dir) = Direction::try_from_vector(x * cos + y * sin + z * (1.0 / tgtalpha)) {
-                                straight.push((apex, dir));
-                            }
-                        }
-                    }
-                }
-                Surface::Sphere(s) => {
-                    let frame = s.frame();
-                    let dir2 = if d.dot(frame.x()).abs() < 0.9999999999999 { d.cross(frame.x()) } else { d.cross(frame.y()) };
-                    let x = Direction::try_from_vector(dir2).expect("square to the view");
-                    round = Some(Circle::new(Frame::new(frame.origin(), d, x), s.radius()));
-                }
+                // CLEAN-ROOM GAP: 38 lines removed; rewrite from the cleanroom spec `hidden_lines_adapted.md`.
                 other => {
                     return Err(Error::Failed(format!(
                         "hidden lines: the outlines of a {} face are not found yet",
@@ -452,12 +411,7 @@ impl Data {
             (face.lo, face.hi, face.depth, face.margin) = (lo, hi, depth, margin);
             let elementary = matches!(face.surface, Surface::Plane(_) | Surface::Cylinder(_) | Surface::Cone(_) | Surface::Sphere(_) | Surface::Torus(_));
             face.simple = !face.with_outlines && elementary;
-            let side = match &face.surface {
-                Surface::Plane(p) => Vector::from(p.normal()).dot(view.z).abs() < TOLER * 10.0,
-                Surface::Cylinder(c) => {
-                    let a = Vector::from(c.frame().z());
-                    a.dot(view.x).hypot(a.dot(view.y)) < TOLER * 10.0
-                }
+            // CLEAN-ROOM GAP: 6 lines removed; rewrite from the cleanroom spec `hidden_lines_adapted.md (uses)`.
                 _ => false,
             };
             face.hiding = if side {
@@ -477,7 +431,7 @@ impl Data {
                     let local = p.transformed(&face.shape.placement.inverse());
                     let Some(n) = normal_at(&face.local, local) else { continue };
                     let r = n.transformed(&face.shape.placement).dot(view.z);
-                    if r.abs() > TOLER * 10.0 {
+                    // CLEAN-ROOM GAP: 1 lines removed; rewrite from the cleanroom spec `hidden_lines_adapted.md (use)`.
                         back = Some(r < 0.0);
                         break;
                     }
@@ -568,13 +522,7 @@ impl Data {
             return false;
         }
         let p = line.curve.point(t);
-        let tol_z = if !own {
-            self.big * 1e-6
-        } else if line.role == Role::Outline {
-            self.big * 1e-2
-        } else {
-            self.big * 1e-3
-        };
+        // CLEAN-ROOM GAP: 7 lines removed; rewrite from the cleanroom spec `hidden_lines_adapted.md`.
         // The rejections by the face's min-max: off its projection, or in front of it all.
         let q = view.flat(p);
         let m = face.margin;
@@ -610,28 +558,7 @@ fn surface_name(s: &Surface) -> &'static str {
     }
 }
 
-/// The widest of the sixteen min-max spans of the lines' projections (`myBigSize`, as
-/// `HLRAlgo::UpdateMinMax` measures them).
-fn big_size(lines: &[HlrLine], view: &View) -> f64 {
-    let mut lo = [f64::INFINITY; 15];
-    let mut hi = [f64::NEG_INFINITY; 15];
-    for line in lines {
-        for (p, &t) in line.track.points.iter().zip(&line.track.params) {
-            let mut d = [0.0; 15];
-            for k in 0..7 {
-                let (s, c) = (k as f64 * std::f64::consts::PI / 14.0).sin_cos();
-                d[2 * k] = c * p.x + s * p.y;
-                d[2 * k + 1] = s * p.x - c * p.y;
-            }
-            d[14] = view.depth(line.curve.point(t));
-            for i in 0..15 {
-                lo[i] = lo[i].min(d[i]);
-                hi[i] = hi[i].max(d[i]);
-            }
-        }
-    }
-    (0..15).map(|i| hi[i] - lo[i]).filter(|d| d.is_finite()).fold(0.0, f64::max)
-}
+// CLEAN-ROOM GAP: 22 lines removed; rewrite from the cleanroom spec `hidden_lines_adapted.md`.
 
 fn line_distance(line: &Line, p: Point) -> f64 {
     let w = p - line.origin;
@@ -703,14 +630,7 @@ fn arc_zeros(surface: &Surface, curve: &Curve, first: f64, last: f64, d: Directi
     out
 }
 
-/// Whether the surface's normal is square to `d` all along a boundary arc (to within
-/// [`SMOOTH_ANGLE`]), the arc lying on the contour.
-fn on_contour(surface: &Surface, curve: &Curve, first: f64, last: f64, d: Direction) -> bool {
-    let d = Vector::from(d);
-    (0..=8).all(|i| {
-        let t = first + (last - first) * i as f64 / 8.0;
-        normal_at(surface, curve.point(t)).is_some_and(|n| n.dot(d).abs() <= SMOOTH_ANGLE)
-    })
+// CLEAN-ROOM GAP: 8 lines removed; rewrite from the cleanroom spec `hidden_lines_adapted.md (uses)`.
 }
 
 fn boxes_meet(a: &Track, b: &Track, margin: f64) -> bool {
@@ -847,28 +767,7 @@ fn segment_closest(p0: Point2, p1: Point2, q0: Point2, q1: Point2) -> (f64, f64,
     let gap = (p0 + d1 * s).distance(q0 + d2 * t);
     (s, t, gap)
 }
-
-/// Whether two faces meet tangent-plane continuously along an edge (`BRepLib::
-/// ContinuityOfFaces` to G1): their outward normals within [`SMOOTH_ANGLE`] at 21 points
-/// along it, short of its ends by a hundredth of its range.
-fn smooth(a: &HlrFace, b: &HlrFace, curve: &Curve, first: f64, last: f64) -> bool {
-    let outward = |face: &HlrFace, p: Point| {
-        let inverse = face.shape.placement.inverse();
-        let n = normal_at(&face.local, p.transformed(&inverse))?.transformed(&face.shape.placement);
-        Some(if face.shape.orientation == Orientation::Reversed { -n } else { n })
-    };
-    let eps = (last - first) / 100.0;
-    let (f, l) = (first + eps, last - eps);
-    for i in 0..=20 {
-        let p = curve.point(f + (l - f) * i as f64 / 20.0);
-        let (Some(n1), Some(n2)) = (outward(a, p), outward(b, p)) else { return false };
-        if n1.cross(n2).length() > SMOOTH_ANGLE || n1.dot(n2) < 0.0 {
-            return false;
-        }
-    }
-    true
-}
-
+// CLEAN-ROOM GAP: 22 lines removed; rewrite from the cleanroom spec `hidden_lines_adapted.md`.
 
 #[cfg(test)]
 mod tests {

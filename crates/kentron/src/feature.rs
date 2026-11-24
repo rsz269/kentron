@@ -268,11 +268,7 @@ pub fn rib(model: &mut Model, base: Shape, wire: Shape, plane: &Plane, sweep: Ri
             }
         }
         RibSweep::Revolution { axis, side, other_side } => {
-            // As OCCT: turned each way by asin(thickness / radius) + π/10 (at most π/2), then
-            // cut to the slab between the two sides.
-            let radius = extent_from_axis(model, region, axis);
-            let turn = |h: f64| ((h / radius).clamp(-1.0, 1.0).asin() + std::f64::consts::PI / 10.0).min(std::f64::consts::FRAC_PI_2);
-            let (a1, a2) = (turn(side), turn(other_side));
+            // CLEAN-ROOM GAP: 5 lines removed; rewrite from the cleanroom spec `small_adapted.md`.
             // Always reaching into the base (on its side of the axis) and cut back to it, as a
             // linear rib that does not slide: closed along the base, the tool's faces would
             // lie on the base's own as the section turned round, not matched by the boolean.

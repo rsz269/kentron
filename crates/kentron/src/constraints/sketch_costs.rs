@@ -26,22 +26,7 @@ fn norm2(x: f64, y: f64) -> f64 {
     (x * x + y * y).sqrt()
 }
 
-/// OCCT's gp_Vec2d::Angle: the angle from `a` to `b`, anticlockwise positive.
-fn angle(a: [f64; 2], b: [f64; 2]) -> f64 {
-    let (na, nb) = (norm2(a[0], a[1]), norm2(b[0], b[1]));
-    let d = na * nb;
-    let cosine = (a[0] * b[0] + a[1] * b[1]) / d;
-    let sine = (a[0] * b[1] - a[1] * b[0]) / d;
-    if cosine > -0.70710678118655 && cosine < 0.70710678118655 {
-        if sine > 0.0 { cosine.acos() } else { -cosine.acos() }
-    } else if cosine > 0.0 {
-        sine.asin()
-    } else if sine > 0.0 {
-        std::f64::consts::PI - sine.asin()
-    } else {
-        -std::f64::consts::PI - sine.asin()
-    }
-}
+// CLEAN-ROOM GAP: 16 lines removed; rewrite from the cleanroom spec `small_adapted.md`.
 
 /// numpy's sign.
 fn sign(v: f64) -> f64 {
@@ -212,10 +197,5 @@ impl Objective<'_> {
 mod tests {
     use super::*;
 
-    /// OCCT's angle from (1, 0) to (−1, 1): 135°, through its arcsine branch.
-    #[test]
-    fn angle_as_occt_computes_it() {
-        assert!((angle([1.0, 0.0], [-1.0, 1.0]) - 0.75 * std::f64::consts::PI).abs() < 1e-15);
-        assert!((angle([1.0, 0.0], [0.0, -1.0]) + std::f64::consts::FRAC_PI_2).abs() < 1e-15);
-    }
+    // CLEAN-ROOM GAP: 6 lines removed; rewrite from the cleanroom spec `small_adapted.md (test)`.
 }

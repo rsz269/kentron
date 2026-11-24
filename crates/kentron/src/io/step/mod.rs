@@ -1054,8 +1054,7 @@ impl<'a> Reader<'a> {
     /// other instances), as OCCT's `StepToTopoDS_TranslateFace` makes it
     /// (`CreatePolyTriangulation`): a node per index of the file's `pnindex` into its list of
     /// coordinates, or per point of that list where `pnindex` is empty; the triangles given
-    /// as such, or those of the strips and fans (strips' and fans' triangles taken in OCCT's
-    /// order and turn, those naming a point twice left out).
+    // CLEAN-ROOM GAP: 2 lines removed; rewrite from the cleanroom spec `step_adapted.md (doc lines)`.
     fn triangulation(&self, id: usize) -> Result<Option<Triangulation>> {
         let inst = self.get(id)?;
         // (The record; whether it has a geometric link, which surface sets have not; whether
@@ -1105,32 +1104,7 @@ impl<'a> Reader<'a> {
                     [a, b, c] => triangles.push([int(a)?, int(b)?, int(c)?]),
                     _ => return Err(invalid(format!("#{id}: a triangle without three nodes"))),
                 }
-            }
-        } else {
-            // (OCCT's SetTriangles, 1-based as there: a strip's triangles at its odd
-            // positions, then at its even ones; a fan's about its first node.)
-            for strip in self.x.list(&p[k + 1]).unwrap_or(&[]) {
-                let v = ints(strip)?;
-                let at = |j: usize| v[j - 1];
-                for j in (3..=v.len()).step_by(2) {
-                    if at(j) != at(j - 2) && at(j) != at(j - 1) {
-                        triangles.push([at(j - 2), at(j), at(j - 1)]);
-                    }
-                }
-                for j in (4..=v.len()).step_by(2) {
-                    if at(j) != at(j - 2) && at(j) != at(j - 1) {
-                        triangles.push([at(j - 2), at(j - 1), at(j)]);
-                    }
-                }
-            }
-            for fan in self.x.list(&p[k + 2]).unwrap_or(&[]) {
-                let v = ints(fan)?;
-                let at = |j: usize| v[j - 1];
-                for j in 3..=v.len() {
-                    if at(j) != at(j - 2) && at(j - 1) != at(j - 2) {
-                        triangles.push([at(1), at(j), at(j - 1)]);
-                    }
-                }
+            // CLEAN-ROOM GAP: 26 lines removed; rewrite from the cleanroom spec `step_adapted.md`.
             }
         }
         let n = at.len() as i64;
@@ -1850,101 +1824,7 @@ fn style_colour(x: &Exchange, assignments: &[Value]) -> Option<[f64; 4]> {
     let [r, g, b] = rendering.or(surface).or(boundary).or(curve)?;
     Some([r, g, b, 1.0 - transparency.unwrap_or(0.0).clamp(0.0, 1.0)])
 }
-
-/// The external references of product definitions: definition -> the referenced file's name,
-/// as OCCT's STEPConstruct_ExternRefs::LoadExternRefs and FileName find them (an applied
-/// document reference's, AP214; else an AP203 product definition with associated documents'),
-/// those of a format other than STEP AP203 or AP214 left out, as STEPCAFControl_Reader does.
-/// (The file is not looked for: kentron reads from bytes. OCCT, not finding it, keeps the
-/// name the external identification gives, else the document file's.)
-fn external_references(x: &Exchange) -> HashMap<usize, String> {
-    let mut out: HashMap<usize, String> = HashMap::default();
-    let adrs: Vec<usize> = x.of_type("APPLIED_DOCUMENT_REFERENCE").map(|(id, _)| id).collect();
-    let mut pdwads: Vec<usize> = x.of_type("PRODUCT_DEFINITION_WITH_ASSOCIATED_DOCUMENTS").map(|(id, _)| id).collect();
-    if adrs.is_empty() && pdwads.is_empty() {
-        return out;
-    }
-    // (Graph().Shareds: the instances an instance refers to; Sharings: those referring to it.)
-    let shareds = |id: usize| -> Vec<usize> {
-        let mut found = Vec::new();
-        let Ok(inst) = x.get(id) else { return found };
-        let mut values: Vec<&Value> = inst.records().flat_map(|(_, v)| v.iter()).collect();
-        while let Some(v) = values.pop() {
-            match v {
-                Value::Reference(r) => found.push(*r),
-                Value::List(_) => values.extend(x.list(v).unwrap_or(&[])),
-                Value::Typed(_) => values.extend(x.typed(v).map_or(&[][..], |(_, p)| p)),
-                _ => {}
-            }
-        }
-        found.reverse();
-        found
-    };
-    let mut sharings: HashMap<usize, Vec<usize>> = HashMap::default();
-    for id in x.ids() {
-        for r in shareds(id) {
-            sharings.entry(r).or_default().push(id);
-        }
-    }
-    let sharing = |id: usize| sharings.get(&id).cloned().unwrap_or_default();
-    let is = |id: usize, t: &str| x.get(id).is_ok_and(|i| i.has(t));
-    let is_definition = |id: usize| is(id, "PRODUCT_DEFINITION") || is(id, "PRODUCT_DEFINITION_WITH_ASSOCIATED_DOCUMENTS");
-    let is_formation = |id: usize| is(id, "PRODUCT_DEFINITION_FORMATION") || is(id, "PRODUCT_DEFINITION_FORMATION_WITH_SPECIFIED_SOURCE");
-    let text = |id: usize, k: usize| x.get(id).ok().and_then(|i| i.params().get(k).and_then(Value::as_str).map(str::to_string)).filter(|s| !s.is_empty());
-    for adr in adrs {
-        // findPDWADandExcludeExcess: the definition with documents of the product the
-        // referenced document is equivalent to, taken off the AP203 ones.
-        let mut pdwad = None;
-        for doc in shareds(adr).into_iter().filter(|&d| is(d, "DOCUMENT") || is(d, "DOCUMENT_FILE")) {
-            for dpe in sharing(doc).into_iter().filter(|&e| is(e, "DOCUMENT_PRODUCT_EQUIVALENCE")) {
-                for pdf in shareds(dpe).into_iter().filter(|&f| is_formation(f)) {
-                    for s in sharing(pdf).into_iter().filter(|&s| is(s, "PRODUCT_DEFINITION_WITH_ASSOCIATED_DOCUMENTS")) {
-                        pdwad = Some(s);
-                    }
-                    if let Some(p) = pdwad {
-                        pdwads.retain(|&q| q != p);
-                    }
-                }
-            }
-        }
-        let shape = shareds(adr).into_iter().filter(|&d| is_definition(d)).last();
-        // The document file: the definition's (with documents), else the reference's; with the
-        // format a shape representation of it describes.
-        let doc_file = shareds(pdwad.unwrap_or(adr)).into_iter().filter(|&d| is(d, "DOCUMENT_FILE")).last();
-        let Some(doc_file) = doc_file else { continue };
-        let mut format = None;
-        for pd in sharing(doc_file).into_iter().filter(|&p| is(p, "PROPERTY_DEFINITION")) {
-            for pdr in sharing(pd).into_iter().filter(|&r| is(r, "PROPERTY_DEFINITION_REPRESENTATION")) {
-                let Some(rep) = x.get(pdr).ok().and_then(|i| i.params().get(1).and_then(Value::as_reference)) else { continue };
-                if !(is(rep, "SHAPE_REPRESENTATION") || x.get(rep).is_ok_and(|i| i.name().ends_with("SHAPE_REPRESENTATION"))) {
-                    continue;
-                }
-                let items = x.get(rep).ok().and_then(|i| i.params().get(1).and_then(|v| x.list(v)).map(<[Value]>::to_vec)).unwrap_or_default();
-                format = items.iter().filter_map(Value::as_reference).find(|&i| is(i, "DESCRIPTIVE_REPRESENTATION_ITEM")).map(|i| text(i, 1).unwrap_or_default());
-            }
-        }
-        if let Some(f) = &format {
-            if !f.eq_ignore_ascii_case("STEP AP203") && !f.eq_ignore_ascii_case("STEP AP214") {
-                continue;
-            }
-        }
-        // FileName: the external identification's assigned id (not an entity number), or
-        // its source's; else the document file's id, else its name.
-        let aeia = sharing(doc_file).into_iter().find(|&a| is(a, "APPLIED_EXTERNAL_IDENTIFICATION_ASSIGNMENT"));
-        let from_aeia = aeia.and_then(|a| {
-            text(a, 0).filter(|n| !n.starts_with('#')).or_else(|| {
-                let source = x.get(a).ok()?.params().get(2)?.as_reference()?;
-                let id = x.get(source).ok()?.params().first()?.clone();
-                x.typed(&id).and_then(|(_, p)| p.first().and_then(Value::as_str)).or(id.as_str()).map(str::to_string).filter(|s| !s.is_empty())
-            })
-        });
-        let name = from_aeia.or_else(|| text(doc_file, 0)).or_else(|| text(doc_file, 1));
-        if let (Some(shape), Some(name)) = (shape, name) {
-            out.insert(shape, name);
-        }
-    }
-    // The AP203 ones left: the first of the definition's documents with a name.
-    for pdwad in pdwads {
+// CLEAN-ROOM GAP: 95 lines removed; rewrite from the cleanroom spec `step_adapted.md`.
         let docs = x.get(pdwad).ok().and_then(|i| i.params().get(4).and_then(|v| x.list(v)).map(<[Value]>::to_vec)).unwrap_or_default();
         if let Some(name) = docs.iter().filter_map(Value::as_reference).find_map(|d| text(d, 1)) {
             out.insert(pdwad, name);

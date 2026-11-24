@@ -2251,8 +2251,7 @@ fn mitres(corners: &[(Corner, f64)]) -> Vec<[Option<(Point, Vector)>; 2]> {
 /// here: it builds the torus (OCCT's `ChFiKPart_MakeRotule`) wherever `ToricRotule` holds,
 /// and leaves the mitre for the other vertices.
 fn toric_corners(model: &Model, shape: Shape, corners: &[(Corner, f64)], mitred: &[[Option<(Point, Vector)>; 2]]) -> Vec<(usize, usize, usize, usize, Axis, f64)> {
-    // (OCCT's tolerance in `ToricRotule`.)
-    const TOLESP: f64 = 1e-7;
+    // CLEAN-ROOM GAP: 2 lines removed; rewrite from the cleanroom spec `small_adapted.md`.
     let mut found = Vec::new();
     let plane_normal = |f: &(NodeId, Surface, f64)| match untrimmed(&f.1) {
         // (Pointing out of the material.)
@@ -2270,14 +2269,14 @@ fn toric_corners(model: &Model, shape: Shape, corners: &[(Corner, f64)], mitred:
                 continue;
             };
             let (other, other_radius) = &corners[j];
-            if (radius - other_radius).abs() >= TOLESP {
+            // CLEAN-ROOM GAP: 1 lines removed; rewrite from the cleanroom spec `small_adapted.md (use)`.
                 continue;
             }
             // The shared face (one plane), and each fillet's other face, its wall.
             let Some((fi, fj)) = (0..2).find_map(|a| (0..2).find(|&b| corner.faces[a].0 == other.faces[b].0 || on_one_plane(&corner.faces[a], &other.faces[b])).map(|b| (a, b))) else { continue };
             let (face, wall_i, wall_j) = (&corner.faces[fi], &corner.faces[1 - fi], &other.faces[1 - fj]);
             let (Some(n), Some(ni), Some(nj)) = (plane_normal(face), plane_normal(wall_i), plane_normal(wall_j)) else { continue };
-            if n.dot(ni).abs() >= TOLESP || n.dot(nj).abs() >= TOLESP {
+            // CLEAN-ROOM GAP: 1 lines removed; rewrite from the cleanroom spec `small_adapted.md (use)`.
                 continue;
             }
             // The pivot: the one other edge at the vertex where faces meet at an angle (seams
