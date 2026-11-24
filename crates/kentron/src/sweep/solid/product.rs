@@ -43,6 +43,132 @@ pub(super) fn sweep(model: &mut Model, solid: Shape, steady: &Steady) -> Result<
     sweep_in_stages(model, solid, &vec![stage; n], junctions)
 }
 
+/// Whether `W` passes back into the body: a point inside one of a stage's faces in `W`,
+/// carried along by the motion over the stage, found inside the body where it stood at the
+/// start of the motion or of a stage before. Then the product runs into itself: its winding is
+/// 2 where the body and `W` passing by, or `W` twice, cover a point (as a torus slid square to
+/// its axis passes its near side and then its far side over its hole, or a flat face turned
+/// about an axis passes its chords' points), and the product is resolved. (Under stages of
+/// one steady motion the body's place at the start alone: one stage after another is the
+/// same motion.) Found at points on a grid of each face's parameters (inside it, 16 a side),
+/// each at 32 places along the whole motion: an overlap thinner than those steps may go
+/// unnoticed.
+fn passes_back_into(model: &Model, solid: Shape, faces: &[Shape], sides: &[Vec<Side>], stages: &[Steady], junctions: &[Transform]) -> Result<bool> {
+    const N: usize = 16;
+    const STEPS: usize = 32;
+    let n = stages.len();
+    let one_motion = !matches!(stages[0], Steady::Carried(_)) && stages.iter().all(|s| same(s, &stages[0]));
+    let per_stage = STEPS.div_ceil(n).max(1);
+    let classifier = crate::boolean::PointClassifier::new(model, solid)?;
+    let starts: Vec<Transform> = junctions.iter().take(n).map(|j| j.inverse()).collect();
+    for (k, steady) in stages.iter().enumerate() {
+        if one_motion && k > 0 {
+            break;
+        }
+        // The places over the stage (over the whole motion, for one steady motion), from the
+        // body's place at the start of the motion or of each stage up to this one.
+        let places: Vec<Transform> = if one_motion {
+            (1..=per_stage * n).map(|j| {
+                let whole = (j - 1) / per_stage;
+                steady.at((j - whole * per_stage) as f64 / per_stage as f64) * junctions[whole]
+            }).collect()
+        } else {
+            (1..=per_stage).map(|j| steady.at(j as f64 / per_stage as f64) * junctions[k]).collect()
+        };
+        let references: &[Transform] = if one_motion { &starts[..1] } else { &starts[..=k] };
+        for (i, &face) in faces.iter().enumerate() {
+            if sides[k][i] != Side::Front {
+                continue;
+            }
+            let Some(surface) = model.surface(face) else { continue };
+            let Some(polygons) = contour::loop_polygons(model, face) else { continue };
+            let (u0, u1, v0, v1) = model.face_uv_bounds(face);
+            for a in 0..N {
+                for b in 0..N {
+                    let q = Point2::new(u0 + (u1 - u0) * (a as f64 + 0.5) / N as f64, v0 + (v1 - v0) * (b as f64 + 0.5) / N as f64);
+                    if !contour::within(&polygons, q) {
+                        continue;
+                    }
+                    let p = surface.point(q.x, q.y).transformed(&face.placement);
+                    for place in &places {
+                        let carried = p.transformed(place);
+                        if references.iter().any(|r| classifier.locate(carried.transformed(r)) == crate::boolean::PointLocation::Inside) {
+                            return Ok(true);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(false)
+}
+
+/// A point inside `cell`: just inside a face of it, off a point well inside the face (in its
+/// parameters), as near it as needed for a thin cell; `None` if none is found.
+fn point_within(model: &Model, cell: Shape) -> Result<Option<Point>> {
+    let classifier = crate::boolean::PointClassifier::new(model, cell)?;
+    let b = crate::properties::bounding_box(model, cell);
+    let size = (b.max - b.min).length();
+    for face in model.unique_subshapes(cell, NodeKind::Face) {
+        let Some(surface) = model.surface(face) else { continue };
+        let Some(polygons) = contour::loop_polygons(model, Shape { orientation: Orientation::Forward, ..face }) else { continue };
+        let closed: Vec<Vec<[f64; 2]>> = polygons.iter().filter(|p| !p.is_empty()).map(|p| p.iter().chain(&p[..1]).map(|q| [q.x, q.y]).collect()).collect();
+        if closed.is_empty() {
+            continue;
+        }
+        let [u, v] = crate::boolean::interior_uv(&closed);
+        let (p, du, dv) = surface.d1(u, v);
+        let n = du.cross(dv);
+        if !(n.length() > 0.0) {
+            continue;
+        }
+        let n = n.normalized() * if face.orientation == Orientation::Reversed { -1.0 } else { 1.0 };
+        let (p, n) = (p.transformed(&face.placement), n.transformed(&face.placement));
+        for step in [1e-3, 1e-4, 1e-5] {
+            let q = p - n * (step * size);
+            if classifier.locate(q) == crate::boolean::PointLocation::Inside {
+                return Ok(Some(q));
+            }
+        }
+    }
+    Ok(None)
+}
+
+/// The product where it runs into itself (see the module's notes): its faces split where they
+/// cross, the pieces of space it winds round at least once, joined. An error where the
+/// pieces' volumes, each counted as often as the product winds round it, do not add up to the
+/// product's (pieces missed or misjudged).
+fn resolved(model: &mut Model, product: Shape) -> Result<Shape> {
+    let faces = model.unique_subshapes(product, NodeKind::Face);
+    let cells = crate::boolean::enclosed_solids(model, &faces)?;
+    let cells = model.unique_subshapes(cells, NodeKind::Solid);
+    if cells.is_empty() {
+        return Err(Error::Failed("a sweep running into itself, not split into pieces".into()));
+    }
+    let classifier = crate::boolean::PointClassifier::new(model, product)?;
+    let mut kept = Vec::new();
+    let mut counted = 0.0;
+    for &cell in &cells {
+        // (A sliver with no point found inside it left out: the volumes adding up below tell
+        // whether it held anything.)
+        let found = match crate::boolean::point_inside(model, cell)? {
+            Some(p) => Some(p),
+            None => point_within(model, cell)?,
+        };
+        let Some(p) = found else { continue };
+        let winding = classifier.winding(p).ok_or_else(|| Error::Failed("how often a sweep winds round a point of it".into()))?;
+        counted += winding as f64 * crate::properties::volume(model, cell).mass;
+        if winding >= 1 {
+            kept.push(cell);
+        }
+    }
+    let whole = crate::properties::volume(model, product).mass;
+    if !((counted - whole).abs() <= 1e-6 * whole.abs()) {
+        return Err(Error::Failed(format!("a sweep running into itself: its pieces, as often as it winds round them, hold {counted}, not its {whole}")));
+    }
+    super::super::joined(model, &kept)
+}
+
 /// The swept solid of `solid` (unplaced; changed) under motions one after another, each steady
 /// as `W` goes (its field fixed on the body, or its curves where it grazes the body fixed),
 /// stage `k` carrying the body from where `junctions[k]` puts it to where `junctions[k + 1]`
@@ -102,8 +228,18 @@ pub(super) fn sweep_in_stages(model: &mut Model, solid: Shape, stages: &[Steady]
             }
         })
         .fold(0.0, f64::max);
+    let runs_into_itself = passes_back_into(model, solid, &faces, &sides, stages, &junctions)?;
     let mut builder = Builder::new(model, stages, junctions, size, reach)?;
-    builder.product(&faces, &sides)
+    let product = builder.product(&faces, &sides)?;
+    // (Where the split fails, the product as it is: a solid running into itself, its volume
+    // counting what is covered twice twice, which a boolean operation with it may yet take
+    // right.)
+    if runs_into_itself {
+        if let Ok(resolved) = resolved(model, product) {
+            return Ok(resolved);
+        }
+    }
+    Ok(product)
 }
 
 /// Whether two stages run along the body alike (the same steady motion).

@@ -6,7 +6,9 @@
 //! so that each curve crosses the face's boundary rather than ending on it). The grid is as
 //! fine as the normal turns: no cell spans more than a sixty-fourth of a half turn of it, so
 //! a curve's branches, which part where the normal turns, fall in different cells. The zero
-//! set is followed through the cells (marching squares, a saddle cell decided by its centre),
+//! set is followed through the cells (marching squares, a saddle cell decided by its centre;
+//! where the zero set crosses itself, `g` and its gradient vanishing, each branch carried on
+//! straight through the crossing),
 //! each place it crosses a grid line found exactly (by regula falsi on `g` along the line).
 //! Between those points the curve is fitted as cubics in the parameters and in space through
 //! the same parameters, and points are added (each projected onto `g = 0` by Newton steps
@@ -127,8 +129,66 @@ struct Chain {
     closed: bool,
 }
 
-/// The zero set of `g` over the box, as chains of the points where it crosses the grid lines.
-fn chains(gauge: &Gauge, b: (f64, f64, f64, f64), nu: usize, nv: usize) -> Vec<Chain> {
+/// Where the zero set crosses itself: a point `c` where `g` and its gradient vanish, `g` a
+/// saddle there (as where `g` is the product of two factors, each vanishing along a curve: a
+/// torus slid square to its axis grazes along its rims and along two of its tube's circles,
+/// which cross). Found by Newton steps on the gradient from `start`; taken where the zero set's
+/// two branches pass within `tolerance` of each other in space (crossing, within it), `None`
+/// elsewhere. `k` is the step the derivatives are taken over in the parameters.
+fn crossing(gauge: &Gauge, start: Point2, k: (f64, f64), tolerance: f64) -> Option<Point2> {
+    let g = |q: Point2| gauge.g(q.x, q.y);
+    // The gradient and the Hessian at `q`, by central differences.
+    let derivatives = |q: Point2| {
+        let (ku, kv) = k;
+        let at = |du: f64, dv: f64| g(Point2::new(q.x + du, q.y + dv));
+        let g0 = at(0.0, 0.0);
+        let (gp_u, gm_u, gp_v, gm_v) = (at(ku, 0.0), at(-ku, 0.0), at(0.0, kv), at(0.0, -kv));
+        let gradient = ((gp_u - gm_u) / (2.0 * ku), (gp_v - gm_v) / (2.0 * kv));
+        let guu = (gp_u - 2.0 * g0 + gm_u) / (ku * ku);
+        let gvv = (gp_v - 2.0 * g0 + gm_v) / (kv * kv);
+        let guv = (at(ku, kv) - at(ku, -kv) - at(-ku, kv) + at(-ku, -kv)) / (4.0 * ku * kv);
+        (g0, gradient, (guu, guv, gvv))
+    };
+    let mut q = start;
+    let mut settled = false;
+    for _ in 0..30 {
+        let (_, (gu, gv), (a, b, c)) = derivatives(q);
+        let det = a * c - b * b;
+        if !(det < 0.0) {
+            return None;
+        }
+        let step = Point2::new(-(c * gu - b * gv) / det, -(a * gv - b * gu) / det);
+        q = Point2::new(q.x + step.x, q.y + step.y);
+        if step.x.abs() <= 1e-9 * k.0 && step.y.abs() <= 1e-9 * k.1 {
+            settled = true;
+            break;
+        }
+    }
+    if !settled {
+        return None;
+    }
+    let (g0, _, (a, b, c)) = derivatives(q);
+    if !(a * c - b * b < 0.0) {
+        return None;
+    }
+    // Near a saddle `g ≈ g0 + ½ λ x²` along an eigenvector whose eigenvalue `λ` has the other
+    // sign from `g0`: the branches lie `2·√(2|g0|/|λ|)` apart along it.
+    let (mean, spread) = (0.5 * (a + c), (0.25 * (a - c) * (a - c) + b * b).sqrt());
+    let lambda = if g0 > 0.0 { mean - spread } else { mean + spread };
+    let direction = if b.abs() > 0.0 { Point2::new(lambda - c, b) } else if (lambda - a).abs() <= (lambda - c).abs() { Point2::new(1.0, 0.0) } else { Point2::new(0.0, 1.0) };
+    let length = direction.x.hypot(direction.y);
+    if !(length > 0.0) || lambda == 0.0 {
+        return None;
+    }
+    let (_, su, sv) = gauge.surface.d1(q.x, q.y);
+    let along = (su * (direction.x / length) + sv * (direction.y / length)).length();
+    let gap = 2.0 * (2.0 * g0.abs() / lambda.abs()).sqrt() * along;
+    (gap <= tolerance).then_some(q)
+}
+
+/// The zero set of `g` over the box, as chains of the points where it crosses the grid lines;
+/// where it crosses itself, each branch carried on straight through the crossing.
+fn chains(gauge: &Gauge, b: (f64, f64, f64, f64), nu: usize, nv: usize, tolerance: f64) -> Vec<Chain> {
     let (u0, u1, v0, v1) = b;
     let us: Vec<f64> = (0..=nu).map(|i| u0 + (u1 - u0) * i as f64 / nu as f64).collect();
     let vs: Vec<f64> = (0..=nv).map(|j| v0 + (v1 - v0) * j as f64 / nv as f64).collect();
@@ -157,14 +217,95 @@ fn chains(gauge: &Gauge, b: (f64, f64, f64, f64), nu: usize, nv: usize) -> Vec<C
             }
         }
     }
+    // Where the zero set crosses itself: a block of cells round each crossing (the cells
+    // within a quarter of a cell of it), the crossing at least that far inside it; the
+    // block's own crossings of grid lines dropped, and those round its sides paired through
+    // the crossing, each with the one across from it (two curves crossing there leave the
+    // block at points alternating between them round it).
+    let (du, dv) = ((u1 - u0) / nu as f64, (v1 - v0) / nv as f64);
+    let k = (1e-4 * du, 1e-4 * dv);
+    let mut found: Vec<Point2> = Vec::new();
+    for i in 0..nu {
+        for j in 0..nv {
+            let sides = [along_u(i, j), along_u(i, j + 1), along_v(i, j), along_v(i + 1, j)];
+            if !sides.iter().any(|&s| points[s].is_some()) {
+                continue;
+            }
+            let Some(c) = crossing(gauge, Point2::new(us[i] + 0.5 * du, vs[j] + 0.5 * dv), k, tolerance) else { continue };
+            let inside = c.x >= us[i] - 1e-9 * du && c.x <= us[i + 1] + 1e-9 * du && c.y >= vs[j] - 1e-9 * dv && c.y <= vs[j + 1] + 1e-9 * dv;
+            if inside && !found.iter().any(|q| (q.x - c.x).abs() <= 1e-6 * du && (q.y - c.y).abs() <= 1e-6 * dv) {
+                found.push(c);
+            }
+        }
+    }
+    let mut blocked = vec![vec![false; nv]; nu];
+    let mut through: Vec<(Point2, Vec<usize>)> = Vec::new();
+    for c in found {
+        let (x, y) = ((c.x - u0) / du, (c.y - v0) / dv);
+        let (i0, i1) = ((x - 0.25).floor(), (x + 0.25).floor());
+        let (j0, j1) = ((y - 0.25).floor(), (y + 0.25).floor());
+        if i0 < 0.0 || j0 < 0.0 || i1 >= nu as f64 || j1 >= nv as f64 {
+            continue;
+        }
+        let (i0, i1, j0, j1) = (i0 as usize, i1 as usize, j0 as usize, j1 as usize);
+        if (i0..=i1).any(|i| (j0..=j1).any(|j| blocked[i][j])) {
+            continue;
+        }
+        // The grid lines' pieces round the block, and within it.
+        let mut round = Vec::new();
+        let mut within = Vec::new();
+        for i in i0..=i1 {
+            for j in j0..=j1 + 1 {
+                (if j == j0 || j == j1 + 1 { &mut round } else { &mut within }).push(along_u(i, j));
+            }
+        }
+        for i in i0..=i1 + 1 {
+            for j in j0..=j1 {
+                (if i == i0 || i == i1 + 1 { &mut round } else { &mut within }).push(along_v(i, j));
+            }
+        }
+        let mut leaving: Vec<usize> = round.into_iter().filter(|&s| points[s].is_some()).collect();
+        if leaving.len() != 4 {
+            continue;
+        }
+        leaving.sort_by(|&a, &b| {
+            let (p, q) = (points[a].expect("a crossing"), points[b].expect("a crossing"));
+            ((p.y - c.y) / dv).atan2((p.x - c.x) / du).total_cmp(&((q.y - c.y) / dv).atan2((q.x - c.x) / du))
+        });
+        for s in within {
+            points[s] = None;
+        }
+        for i in i0..=i1 {
+            for j in j0..=j1 {
+                blocked[i][j] = true;
+            }
+        }
+        through.push((c, leaving));
+    }
+    // (Each crossing twice among the points, once on either branch through it.)
+    let count = count + 2 * through.len();
+    for (c, _) in &through {
+        points.extend([Some(*c), Some(*c)]);
+    }
     // The segments through each cell.
     let mut links: Vec<Vec<usize>> = vec![Vec::new(); count];
     let mut link = |a: usize, b: usize| {
         links[a].push(b);
         links[b].push(a);
     };
+    let first_through = count - 2 * through.len();
+    for (n, (_, leaving)) in through.iter().enumerate() {
+        for branch in 0..2 {
+            let node = first_through + 2 * n + branch;
+            link(leaving[branch], node);
+            link(node, leaving[branch + 2]);
+        }
+    }
     for i in 0..nu {
         for j in 0..nv {
+            if blocked[i][j] {
+                continue;
+            }
             let (bottom, top, left, right) = (along_u(i, j), along_u(i, j + 1), along_v(i, j), along_v(i + 1, j));
             let crossed: Vec<usize> = [bottom, right, top, left].into_iter().filter(|&k| points[k].is_some()).collect();
             match crossed.len() {
@@ -397,7 +538,7 @@ pub(super) fn cuts(model: &Model, face: Shape, steady: &Steady, tolerance: f64) 
     let h = (1e-7 * (b.1 - b.0), 1e-7 * (b.3 - b.2));
     let scale = (bounds.1 - bounds.0).hypot(bounds.3 - bounds.2);
     let mut out = Vec::new();
-    for chain in chains(&gauge, b, nu, nv) {
+    for chain in chains(&gauge, b, nu, nv, tolerance) {
         // A curve along the face's own boundary, or off it, divides nothing.
         if !chain.points.iter().any(|&q| within(&polygons, q) && distance_to(&polygons, q) > 1e-7 * scale) {
             continue;

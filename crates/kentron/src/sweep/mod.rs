@@ -13,6 +13,7 @@ mod draft;
 mod evolved;
 pub use evolved::{evolved, EvolvedOptions};
 pub(crate) use evolved::interior_point;
+use evolved::joined;
 pub use draft::extrude_drafted;
 mod middle;
 mod motion;

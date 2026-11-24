@@ -43,10 +43,17 @@
 //! folds (the motion turning past the direction along the curve): the sheets either side of
 //! the fold meet tangent along its path and cross beyond it, and splitting the product where
 //! it crosses itself ([`crate::boolean::enclosed_solids`]) does not part them; so a fold is
-//! refused as soon as it is found, before the product is made. It also does where a sheet a
-//! concave edge sweeps runs into the body, or a turn comes back over where it began: those are
-//! not detected. (A tool that is a union, as a ball on a stem, can instead be swept a piece
-//! at a time: the sweep of a union is the union of the sweeps.)
+//! refused as soon as it is found, before the product is made. It also does where `W`, carried
+//! along, passes back into the body (a torus slid square to its axis passes its near side and
+//! then its far side over its hole; a sheet a concave edge sweeps runs into the body; a turn
+//! comes back over where it began). That is looked for at points of `W` along the motion (an
+//! overlap thinner than the samples' spacing goes unnoticed), and where found the product's
+//! faces are split where they cross ([`crate::boolean::enclosed_solids`]) and the pieces of
+//! space it winds round at least once are the swept solid, joined, where their volumes, each
+//! counted as often as the product winds round it, add up to the product's; where they do not
+//! (the split missing or misjudging pieces) the product is taken as it is. (A tool that is a
+//! union, as a ball on a stem, can instead be swept a piece at a time: the sweep of a union is
+//! the union of the sweeps.)
 //!
 //! Nothing is tuned: the characteristic curves are followed within a tolerance taken from the
 //! body's size, and refusals are stated geometric conditions.

@@ -213,3 +213,21 @@ fn a_fold_is_refused_before_the_product_is_made() {
     let Err(Error::Failed(why)) = refused else { panic!("a fold refused, not {refused:?}") };
     assert!(why.contains("folding over itself"), "{why}");
 }
+
+/// A torus slid square to its axis, far enough that its hole is passed over: it grazes the
+/// motion along its two rims and two of its tube's circles, which cross one another, and its
+/// near side and then its far side pass over its hole (the product runs into itself there).
+/// The swept solid is, along each line in the motion's direction, the torus's span there and
+/// the slide: `π(2rR² + πRr² + 4r³/3)` (the torus with its hole filled across the motion)
+/// and the slide times the torus's shadow `4Rr + πr²`.
+#[test]
+fn a_torus_slid_square_to_its_axis_past_its_hole() {
+    let mut model = Model::new();
+    let (big, small, length) = (6.0, 2.0, 40.0);
+    let ring = Torus::new(big, small).with_frame(Frame::from_z(Point::new(11.5, 0.0, -9.0), Direction::Y)).build(&mut model).unwrap();
+    let swept = solid(&mut model, ring, &RigidMotion::Slide { by: Vector::new(0.0, 0.0, length) }).unwrap();
+    let (volume, _) = measure(&model, swept);
+    let filled = PI * (2.0 * small * big * big + PI * big * small * small + 4.0 * small.powi(3) / 3.0);
+    assert_close("volume", volume, filled + length * (4.0 * big * small + PI * small * small), 1e-8);
+    check(&model, swept);
+}
