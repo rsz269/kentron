@@ -1097,8 +1097,9 @@ class Mixin1D:
         return [Vector(d[0]) for d in self._derivatives(us)]
 
     def sample(self, n) -> Tuple[List[Vector], List[float]]:
-        # CLEAN-ROOM GAP: 2 lines removed; rewrite from the cleanroom spec `quasi_uniform_sampling.md (docstring lines)`.
-        GCPnts_QuasiUniformDeflection finds them (halving where the chord strays too far)."""
+        """Points along the curve and their parameters: `n` (an int) equally spaced by
+        length, or, for a float `n`, as many as keep the polyline through them within
+        distance `n` of the curve (kentron's quasi-uniform deflection sampler)."""
         first, last, closed, _, _ = self._info()
         if isinstance(n, int):
             count = n + 1 if closed else n
@@ -1504,7 +1505,10 @@ def _helix_spans(turns: float, radius: float, tolerance: float = 5e-7, max_degre
         spans *= 2
 
 
-# CLEAN-ROOM GAP: 53 lines removed; rewrite from the cleanroom spec `quasi_uniform_sampling.md`.
+def _quasi_uniform_deflection(edge: "Edge", deflection: float, u1: float, u2: float) -> List[float]:
+    """The parameters over `[u1, u2]` of samples of the edge's curve whose polyline stays
+    within `deflection` of it, increasing, both ends included (the native sampler)."""
+    return list(native.curve_deflection_parameters(edge.wrapped, float(deflection), float(u1), float(u2)))
 
 
 def _start_vertex(edge: Edge) -> Vertex:

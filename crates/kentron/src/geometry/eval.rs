@@ -2,7 +2,6 @@
 //! `Curve2` and `Surface` enums.
 
 use std::f64::consts::{FRAC_PI_2, PI, TAU};
-use std::ops::{Add, Div, Mul, Neg, Sub};
 
 use crate::math::{Axis, Direction, Frame, Point, Point2, Transform, Transformable, Vector, Vector2};
 use crate::tolerance::{INFINITE, LINEAR, RESOLUTION};
@@ -1646,7 +1645,226 @@ open_conic!(
     |c: &Hyperbola2| c.major_radius().max(c.minor_radius()).max(1e-300)
 );
 
-// CLEAN-ROOM GAP: 476 lines removed; rewrite from the cleanroom spec `offset_curve_eval.md`.
+// --- offset curves --------------------------------------------------------------------------
+
+/// The offset direction's unnormalised vector `N` from a basis derivative: `B′ × D` for a 3D
+/// offset along `direction`; in 2D the derivative turned clockwise, `(B′_y, −B′_x)`. Linear,
+/// so `N⁽ʲ⁾` is the map of `B⁽ʲ⁺¹⁾`.
+fn offset_normal_3d(direction: [f64; 3]) -> impl Fn([f64; 3]) -> [f64; 3] {
+    move |b| [b[1] * direction[2] - b[2] * direction[1], b[2] * direction[0] - b[0] * direction[2], b[0] * direction[1] - b[1] * direction[0]]
+}
+
+fn offset_normal_2d(b: [f64; 3]) -> [f64; 3] {
+    [b[1], -b[0], 0.0]
+}
+
+fn dot3(a: [f64; 3], b: [f64; 3]) -> f64 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+/// `C(t) = B(t) + o·n(t)` and its derivatives of orders `0..=order` (as coordinates), for
+/// the basis `basis`, offset `o` and normal map `normal` (see [`offset_normal_3d`]), with
+/// `n = N/|N|`. Where the basis tangent vanishes, the limit (see
+/// [`offset_basis_derivatives`]). Non-finite where the offset is undefined.
+fn offset_derivatives<C>(basis: &C, offset: f64, normal: impl Fn([f64; 3]) -> [f64; 3], t: f64, order: usize) -> Vec<[f64; 3]>
+where
+    C: ParametricCurve,
+    C::Point: super::control::ControlPoint<Vector = C::Vector>,
+{
+    let d = offset_basis_derivatives(basis, t, order);
+    // N⁽ʲ⁾, j = 0..=order.
+    let nd: Vec<[f64; 3]> = d[1..].iter().map(|&b| normal(b)).collect();
+    // g = N·N and its derivatives by Leibniz' rule.
+    let binomial = |m: usize, i: usize| -> f64 { (0..i).fold(1.0, |acc, j| acc * (m - j) as f64 / (j + 1) as f64) };
+    let g: Vec<f64> = (0..=order).map(|m| (0..=m).map(|i| binomial(m, i) * dot3(nd[i], nd[m - i])).sum()).collect();
+    // s = g^(−1/2): from g s′ = −½ g′ s, differentiated m times.
+    let mut s = vec![1.0 / g[0].sqrt()];
+    for m in 0..order {
+        let mut rhs: f64 = -0.5 * (0..=m).map(|i| binomial(m, i) * g[i + 1] * s[m - i]).sum::<f64>();
+        rhs -= (1..=m).map(|i| binomial(m, i) * g[i] * s[m + 1 - i]).sum::<f64>();
+        s.push(rhs / g[0]);
+    }
+    (0..=order)
+        .map(|k| {
+            let mut n = [0.0; 3];
+            for i in 0..=k {
+                let c = binomial(k, i) * s[k - i];
+                for x in 0..3 {
+                    n[x] += c * nd[i][x];
+                }
+            }
+            std::array::from_fn(|x| d[k][x] + offset * n[x])
+        })
+        .collect()
+}
+
+/// The basis point and the derivatives standing for `B′ … B⁽ᵒʳᵈᵉʳ⁺¹⁾` in the offset formulas
+/// at `t`, as coordinates. Where the basis tangent vanishes (`|B′|²` not above
+/// `RESOLUTION`) the first basis derivative of order `k = 2` or `3` that does not vanish
+/// and those after it, `±B⁽ᵏ⁾, ±B⁽ᵏ⁺¹⁾, …`, signed by the direction of travel on the side
+/// of larger parameters at the range's start and of smaller parameters elsewhere; NaN if
+/// all vanish.
+fn offset_basis_derivatives<C>(basis: &C, t: f64, order: usize) -> Vec<[f64; 3]>
+where
+    C: ParametricCurve,
+    C::Point: super::control::ControlPoint<Vector = C::Vector>,
+{
+    use super::control::ControlPoint;
+    let v = |x: C::Vector| C::Point::vector_coords(x);
+    let p = |x: C::Point| x.coords();
+    let mut d: Vec<[f64; 3]> = match order {
+        0 => {
+            let (b, d1) = basis.d1(t);
+            vec![p(b), v(d1)]
+        }
+        1 => {
+            let (b, d1, d2) = basis.d2(t);
+            vec![p(b), v(d1), v(d2)]
+        }
+        _ => {
+            let (b, d1, d2, d3) = basis.d3(t);
+            vec![p(b), v(d1), v(d2), v(d3)]
+        }
+    };
+    for n in d.len()..order + 2 {
+        d.push(v(basis.dn(t, n as u32)));
+    }
+    if dot3(d[1], d[1]) > RESOLUTION {
+        return d;
+    }
+    // A vanishing tangent: the same basis values whatever the order asked for.
+    let (b, d1, d2, d3) = basis.d3(t);
+    let mut all = vec![p(b), v(d1), v(d2), v(d3)];
+    let Some(k) = (2..=3).find(|&k| dot3(all[k], all[k]) > RESOLUTION) else {
+        return vec![[f64::NAN; 3]; order + 2];
+    };
+    for n in all.len()..=k + order {
+        all.push(v(basis.dn(t, n as u32)));
+    }
+    let (a, z) = (basis.first_parameter(), basis.last_parameter());
+    let at_start = (t - a) <= 1e-9 * (z - a).abs().max(f64::MIN_POSITIVE) && (z - a).is_finite();
+    // Near t₀, B′(t) ≈ B⁽ᵏ⁾(t₀)·(t − t₀)^(k−1)/(k−1)!: its sign on the chosen side.
+    let sign = if at_start || k % 2 == 1 { 1.0 } else { -1.0 };
+    let mut out = vec![all[0]];
+    out.extend((0..=order).map(|j| all[k + j].map(|x| sign * x)));
+    out
+}
+
+impl OffsetCurve {
+    fn derivatives(&self, t: f64, order: usize) -> Vec<[f64; 3]> {
+        let direction = Vector::from(self.direction());
+        offset_derivatives(self.basis(), self.offset(), offset_normal_3d([direction.x, direction.y, direction.z]), t, order)
+    }
+}
+
+impl OffsetCurve2 {
+    fn derivatives(&self, t: f64, order: usize) -> Vec<[f64; 3]> {
+        offset_derivatives(self.basis(), self.offset(), offset_normal_2d, t, order)
+    }
+}
+
+/// An offset curve's continuity, one order below its basis's (a C0 B-spline basis whose
+/// pieces meet tangentially over `first..last` gives G1).
+fn offset_continuity(basis: Continuity, spline_g1: impl FnOnce() -> bool) -> Continuity {
+    match basis {
+        Continuity::CN => Continuity::CN,
+        Continuity::C3 => Continuity::C2,
+        Continuity::C2 => Continuity::C1,
+        Continuity::G2 => Continuity::G2,
+        Continuity::G1 => Continuity::G1,
+        Continuity::C1 => Continuity::C0,
+        Continuity::C0 => if spline_g1() { Continuity::G1 } else { Continuity::C0 },
+    }
+}
+
+macro_rules! offset_curve {
+    ($ty:ident, $curve:ident, $point:ty, $vector:ty, $make:expr, $negated:expr) => {
+        impl ParametricCurve for $ty {
+            type Point = $point;
+            type Vector = $vector;
+            fn first_parameter(&self) -> f64 {
+                self.basis().first_parameter()
+            }
+            fn last_parameter(&self) -> f64 {
+                self.basis().last_parameter()
+            }
+            fn is_closed(&self) -> bool {
+                self.basis().is_closed()
+            }
+            fn is_periodic(&self) -> bool {
+                self.basis().is_periodic()
+            }
+            fn period(&self) -> Option<f64> {
+                self.basis().period()
+            }
+            fn continuity(&self) -> Continuity {
+                let basis = self.basis();
+                offset_continuity(basis.continuity(), || {
+                    let angular = crate::tolerance::ANGULAR;
+                    match basis {
+                        $curve::BSpline(s) => s.is_g1(s.first_parameter(), s.last_parameter(), angular),
+                        $curve::Trimmed(t) => match t.basis() {
+                            $curve::BSpline(s) => s.is_g1(t.first_parameter(), t.last_parameter(), angular),
+                            _ => false,
+                        },
+                        _ => false,
+                    }
+                })
+            }
+            fn is_cn(&self, n: u32) -> bool {
+                self.basis().is_cn(n + 1)
+            }
+            fn point(&self, t: f64) -> $point {
+                let d = self.derivatives(t, 0);
+                <$point as super::control::ControlPoint>::from_coords(d[0])
+            }
+            fn d1(&self, t: f64) -> ($point, $vector) {
+                let d = self.derivatives(t, 1);
+                let v = <$point as super::control::ControlPoint>::vector_from_coords;
+                (<$point as super::control::ControlPoint>::from_coords(d[0]), v(d[1]))
+            }
+            fn d2(&self, t: f64) -> ($point, $vector, $vector) {
+                let d = self.derivatives(t, 2);
+                let v = <$point as super::control::ControlPoint>::vector_from_coords;
+                (<$point as super::control::ControlPoint>::from_coords(d[0]), v(d[1]), v(d[2]))
+            }
+            fn d3(&self, t: f64) -> ($point, $vector, $vector, $vector) {
+                let d = self.derivatives(t, 3);
+                let v = <$point as super::control::ControlPoint>::vector_from_coords;
+                (<$point as super::control::ControlPoint>::from_coords(d[0]), v(d[1]), v(d[2]), v(d[3]))
+            }
+            fn dn(&self, t: f64, n: u32) -> $vector {
+                assert!(n > 0, "derivative of order 0");
+                // (Orders 1 to 3 evaluated as by d1 to d3.)
+                <$point as super::control::ControlPoint>::vector_from_coords(self.derivatives(t, n as usize)[n as usize])
+            }
+            fn reversed_parameter(&self, t: f64) -> f64 {
+                self.basis().reversed_parameter(t)
+            }
+            fn reverse(&mut self) {
+                let mut basis = self.basis().clone();
+                basis.reverse();
+                *self = $make(self, basis, $negated(self));
+            }
+            fn resolution(&self, tolerance: f64) -> f64 {
+                self.basis().resolution(tolerance)
+            }
+            fn breaks(&self) -> Vec<f64> {
+                self.basis().breaks()
+            }
+        }
+    };
+}
+
+offset_curve!(OffsetCurve, Curve, Point, Vector, |c: &OffsetCurve, basis, offset| OffsetCurve::new(basis, offset, c.direction()), |c: &OffsetCurve| -c.offset());
+offset_curve!(OffsetCurve2, Curve2, Point2, Vector2, |_: &OffsetCurve2, basis, offset| OffsetCurve2::new(basis, offset), |c: &OffsetCurve2| -c.offset());
+
+/// The third derivative of an offset curve for the curve adaptor: the exact one, `None`
+/// where the offset is undefined (the adaptor then asks the curve itself).
+pub(crate) fn offset_adaptor_third_derivative(c: &OffsetCurve, t: f64) -> Option<Vector> {
+    let d3 = c.d3(t).3;
+    (d3.x.is_finite() && d3.y.is_finite() && d3.z.is_finite()).then_some(d3)
+}
 
 #[cfg(test)]
 mod tests {
@@ -1665,5 +1883,162 @@ mod tests {
         }
     }
 
-    // CLEAN-ROOM GAP: 165 lines removed; rewrite from the cleanroom spec `offset_curve_eval.md`.
+    use super::super::bspline::BSplineCurve;
+    use super::super::curve2::BSplineCurve2;
+
+    /// A cubic whose first two and last two poles coincide: its tangent vanishes at both
+    /// ends.
+    fn stalled_cubic() -> BSplineCurve {
+        let poles = vec![Point::new(0.0, 0.0, 0.0), Point::new(0.0, 0.0, 0.0), Point::new(1.0, 2.0, 0.0), Point::new(3.0, 1.0, 0.0), Point::new(4.0, 0.0, 0.0), Point::new(4.0, 0.0, 0.0)];
+        BSplineCurve::new(poles, vec![0.0, 1.0, 2.0], vec![4, 2, 4], 3)
+    }
+
+    fn quintic() -> BSplineCurve {
+        let poles: Vec<Point> = (0..8).map(|i| Point::new(i as f64, (0.9 * i as f64).sin(), 0.2 * (0.5 * i as f64).cos())).collect();
+        BSplineCurve::new(poles, vec![0.0, 1.0, 1.8, 3.0], vec![6, 1, 1, 6], 5)
+    }
+
+    fn close(a: Vector, b: Vector, relative: f64) -> bool {
+        (a - b).length() <= relative * (1.0 + b.length())
+    }
+
+    /// Every derivative is the central difference of the one below it, and the orders agree
+    /// across d1, d2, d3 and dn.
+    fn check_derivatives(c: &Curve, ts: &[f64]) {
+        let h = 1e-5;
+        for &t in ts {
+            let (p0, a1) = c.d1(t);
+            let (p1, b1, b2) = c.d2(t);
+            let (p2, c1, c2, c3) = c.d3(t);
+            assert!(p0.distance(c.point(t)) < 1e-13 && p1.distance(p0) < 1e-13 && p2.distance(p0) < 1e-13);
+            assert!(close(a1, b1, 1e-13) && close(c1, b1, 1e-13) && close(c.dn(t, 1), a1, 1e-13));
+            assert_eq!(c2, b2, "the second derivative of d3 is d2's");
+            assert!(close(c.dn(t, 2), b2, 1e-13) && close(c.dn(t, 3), c3, 1e-13));
+            let difference = |k: u32| {
+                let f = |s: f64| if k == 1 { c.point(s) - Point::ORIGIN } else { c.dn(s, k - 1) };
+                (f(t + h) - f(t - h)) * (0.5 / h)
+            };
+            for k in 1..=5 {
+                assert!(close(c.dn(t, k), difference(k), 1e-6), "order {k} at {t}: {:?} {:?}", c.dn(t, k), difference(k));
+            }
+        }
+    }
+
+    #[test]
+    fn offset_curves_have_exact_derivatives() {
+        let offset = Curve::Offset(OffsetCurve::new(Curve::BSpline(quintic()), 0.3, Direction::Z));
+        check_derivatives(&offset, &[0.3, 1.4, 2.6]);
+        let stalled = Curve::Offset(OffsetCurve::new(Curve::BSpline(stalled_cubic()), 0.3, Direction::Z));
+        check_derivatives(&stalled, &[0.3, 0.6, 1.7]);
+        // The adaptor's third derivative is the curve's.
+        let Curve::Offset(o) = &offset else { unreachable!() };
+        assert_eq!(offset_adaptor_third_derivative(o, 0.7), Some(o.d3(0.7).3));
+    }
+
+    #[test]
+    fn offsets_of_a_circle_are_circles() {
+        let r = 2.0;
+        for (o, sign) in [(0.5, 1.0), (-0.5, -1.0)] {
+            // B′ × Z points away from the centre of a counterclockwise circle.
+            let c = OffsetCurve::new(Curve::Circle(Circle::new(Frame::WORLD, r)), o, Direction::Z);
+            let radius = r + sign * 0.5;
+            for t in [0.0, 0.7, 2.0, 4.5] {
+                assert!((c.point(t) - Point::new(radius * t.cos(), radius * t.sin(), 0.0)).length() < 1e-14);
+                for n in 1..=5u32 {
+                    let (dc, ds) = cos_sin_derivative(t, n);
+                    assert!(close(c.dn(t, n), Vector::new(radius * dc, radius * ds, 0.0), 1e-13), "order {n}");
+                }
+            }
+        }
+        // 2D: to the right of a counterclockwise circle is outwards.
+        let c2 = OffsetCurve2::new(Curve2::Circle(Circle2::new(crate::math::Frame2::WORLD, r)), 0.5);
+        for t in [0.0, 1.3, 3.0] {
+            assert!((c2.point(t) - Point2::new(2.5 * t.cos(), 2.5 * t.sin())).length() < 1e-14);
+            let (dc, ds) = cos_sin_derivative(t, 3);
+            assert!((c2.dn(t, 3) - Vector2::new(2.5 * dc, 2.5 * ds)).length() < 1e-13);
+        }
+    }
+
+    #[test]
+    fn offsets_of_lines_and_parabolas() {
+        let line = OffsetCurve::new(Curve::Line(Line::new(Point::ORIGIN, Direction::X)), 2.0, Direction::Z);
+        assert!((line.point(3.0) - Point::new(3.0, -2.0, 0.0)).length() < 1e-15);
+        for n in 2..=5 {
+            assert!(line.dn(1.0, n).length() < 1e-15);
+        }
+        // The parabola (t, t²) offset by o to its right: closed form by the unit normal
+        // (2t, −1)/√(1 + 4t²).
+        let poles = vec![Point2::new(-1.0, 1.0), Point2::new(0.0, -1.0), Point2::new(1.0, 1.0)];
+        let parabola = Curve2::BSpline(BSplineCurve2::new(poles, vec![-1.0, 1.0], vec![3, 3], 2));
+        let o = 0.25;
+        let c = OffsetCurve2::new(parabola, o);
+        let exact = |t: f64| {
+            let q = (1.0 + 4.0 * t * t).sqrt();
+            Point2::new(t + o * 2.0 * t / q, t * t - o / q)
+        };
+        for t in [-0.6, 0.1, 0.8] {
+            assert!((c.point(t) - exact(t)).length() < 1e-14);
+            let q = (1.0 + 4.0 * t * t).sqrt();
+            let d1 = Vector2::new(1.0 + o * 2.0 / q.powi(3), 2.0 * t + o * 4.0 * t / q.powi(3));
+            assert!((c.d1(t).1 - d1).length() < 1e-13, "{:?} {d1:?}", c.d1(t).1);
+            let h = 1e-4;
+            for k in 2..=5u32 {
+                let fd = (c.dn(t + h, k - 1) - c.dn(t - h, k - 1)) * (0.5 / h);
+                assert!((c.dn(t, k) - fd).length() <= 1e-5 * (1.0 + fd.length()), "order {k}");
+            }
+        }
+    }
+
+    #[test]
+    fn offsets_where_the_basis_tangent_vanishes_are_limits() {
+        let c = OffsetCurve::new(Curve::BSpline(stalled_cubic()), 0.3, Direction::Z);
+        for (t, inward) in [(0.0, 1.0), (2.0, -1.0)] {
+            let p = c.point(t);
+            assert!(p.x.is_finite() && p.y.is_finite());
+            assert_eq!(p, c.d2(t).0);
+            assert_eq!(c.d1(t).1, c.d2(t).1);
+            assert_eq!(c.d2(t).0, c.d3(t).0);
+            // Approached from inside the range, the point tends to the limit.
+            let near = c.point(t + inward * 1e-7);
+            assert!(near.distance(p) < 1e-5, "{near:?} {p:?}");
+            // The first derivative lies along the curve's limit tangent.
+            let chord = c.point(t + inward * 1e-6) - p;
+            let d1 = c.d1(t).1;
+            assert!(chord.cross(d1).length() < 1e-3 * chord.length() * d1.length(), "{chord:?} {d1:?}");
+        }
+        // A 3D offset along the line's own direction is undefined: no panic.
+        let along = OffsetCurve::new(Curve::Line(Line::new(Point::ORIGIN, Direction::Z)), 1.0, Direction::Z);
+        assert!(!along.point(1.0).x.is_finite());
+        let Curve::Line(_) = along.basis() else { unreachable!() };
+        assert!(offset_adaptor_third_derivative(&along, 1.0).is_none());
+    }
+
+    #[test]
+    fn reversed_offsets_are_the_same_points_backwards() {
+        let c = OffsetCurve::new(Curve::BSpline(quintic()), 0.3, Direction::Z);
+        let mut r = c.clone();
+        r.reverse();
+        for t in [0.0, 0.4, 1.5, 3.0] {
+            assert!(r.point(r.reversed_parameter(t)).distance(c.point(t)) < 1e-13);
+        }
+        let poles = vec![Point2::new(0.0, 0.0), Point2::new(1.0, 2.0), Point2::new(3.0, 1.0)];
+        let c2 = OffsetCurve2::new(Curve2::BSpline(BSplineCurve2::new(poles, vec![0.0, 1.0], vec![3, 3], 2)), -0.4);
+        let mut r2 = c2.clone();
+        r2.reverse();
+        for t in [0.0, 0.3, 1.0] {
+            assert!((r2.point(r2.reversed_parameter(t)) - c2.point(t)).length() < 1e-13);
+        }
+    }
+
+    #[test]
+    fn offset_continuity_is_one_order_below() {
+        let c = OffsetCurve::new(Curve::BSpline(quintic()), 0.3, Direction::Z);
+        // (A B-spline counts as C3 at most.)
+        assert_eq!(c.continuity(), Continuity::C2);
+        assert_eq!(OffsetCurve::new(Curve::Circle(Circle::new(Frame::WORLD, 1.0)), 0.1, Direction::Z).continuity(), Continuity::CN);
+        // A polyline with its legs in line: C0 but G1.
+        let straight = BSplineCurve::new(vec![Point::new(0.0, 0.0, 0.0), Point::new(1.0, 0.0, 0.0), Point::new(3.0, 0.0, 0.0)], vec![0.0, 1.0, 2.0], vec![2, 1, 2], 1);
+        assert_eq!(OffsetCurve::new(Curve::BSpline(straight), 0.1, Direction::Z).continuity(), Continuity::G1);
+        assert!(c.is_cn(3) && !c.is_cn(4));
+    }
 }

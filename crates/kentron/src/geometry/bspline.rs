@@ -599,9 +599,62 @@ impl<P: ControlPoint> BSplineCurve<P> {
         self.segments = Default::default();
     }
 
-    /// Moves knot `i` to `value`; panics if that breaks the knots' increasing order.
-    // CLEAN-ROOM GAP: 32 lines removed; rewrite from the cleanroom spec `bspline_adapted.md`.
+    /// Moves poles so that the curve passes through `target` at `u`. Only the poles of the
+    /// knot span containing `u` with index in `first_pole..=last_pole` move, each along the
+    /// same vector `target − point(u)`, by its (rational) basis value over the sum of the
+    /// squared basis values of the poles allowed to move: the least displacement of those
+    /// poles that does it. Knots and weights stay. The coefficients depend only on the knots,
+    /// the weights and `u`, so opposite moves cancel.
+    ///
+    /// Returns the first and last index of the poles allowed to move, or `None` (the curve
+    /// left unchanged) for a periodic curve, a reversed or out-of-bounds range, a `u` not in
+    /// the parameter range, or no allowed pole influencing the point at `u`.
+    #[doc(alias = "MovePoint")]
+    pub fn move_point(&mut self, u: f64, target: P, first_pole: usize, last_pole: usize) -> Option<(usize, usize)> {
+        let n = self.poles.len();
+        if self.periodic || first_pole > last_pole || last_pole >= n || !u.is_finite() {
+            return None;
+        }
+        if u < self.first_parameter() || u > self.last_parameter() {
+            return None;
+        }
+        let p = self.degree;
+        let (span, basis) = self.rational_basis_at(u, 0);
+        let (lo, hi) = (first_pole.max(span - p), last_pole.min(span));
+        if lo > hi {
+            return None;
+        }
+        let r = &basis[0];
+        let sum: f64 = (lo..=hi).map(|i| r[i + p - span].powi(2)).sum();
+        if !(sum > 0.0) {
+            return None;
+        }
+        let (c, t) = (self.point(u).coords(), target.coords());
+        let d = [t[0] - c[0], t[1] - c[1], t[2] - c[2]];
+        for i in lo..=hi {
+            let f = r[i + p - span] / sum;
+            if f != 0.0 {
+                let q = self.poles[i].coords();
+                self.poles[i] = P::from_coords([q[0] + f * d[0], q[1] + f * d[1], q[2] + f * d[2]]);
+            }
+        }
+        self.segments = Default::default();
+        Some((lo, hi))
+    }
 
+    /// The flat-knot span evaluation uses at `u` (`flat[span] <= u < flat[span + 1]`,
+    /// clamped into the curve's spans) and the rational basis functions of its poles
+    /// `span - degree ..= span` with their derivatives of orders `0..=order` there. For a
+    /// non-periodic curve.
+    fn rational_basis_at(&self, u: f64, order: usize) -> (usize, Vec<Vec<f64>>) {
+        let (p, n) = (self.degree, self.poles.len());
+        let span = self.flat[..n].partition_point(|&k| k <= u).saturating_sub(1).clamp(p, n - 1);
+        let basis = basis_derivatives(&self.flat, span, u, p, order.min(p));
+        let weights: Vec<f64> = (0..=p).map(|j| self.weight(span - p + j)).collect();
+        (span, rational_basis(&basis, &weights, order))
+    }
+
+    /// Moves knot `i` to `value`; panics if that breaks the knots' increasing order.
     pub fn set_knot(&mut self, i: usize, value: f64) {
         let last = self.knots.len() - 1;
         assert!(
@@ -764,9 +817,83 @@ impl<P: ControlPoint> BSplineCurve<P> {
         self.set_periodic_form(super::knots::Periodic { degree: self.degree, knots, multiplicities, poles });
     }
 
-    // CLEAN-ROOM GAP: 32 lines removed; rewrite from the cleanroom spec `bspline_adapted.md`.
+    /// [`ParametricCurve::reverse`] with the first and last knot values kept exactly: the
+    /// mirrored ends `a + b − b` and `a + b − a` may round away from `a` and `b`, and callers
+    /// pairing curves by their parameter ranges (the Coons patch) want those unchanged.
+    pub(crate) fn reverse_as_occt(&mut self) {
+        let last = self.knots.len() - 1;
+        let (a, b) = (self.knots[0], self.knots[last]);
+        self.reverse();
+        if self.knots[0] != a || self.knots[last] != b {
+            self.knots[0] = a;
+            self.knots[last] = b;
+            self.flat = match self.periodic {
+                true => periodic_flatten(&self.knots, &self.multiplicities, self.degree),
+                false => flatten(&self.knots, &self.multiplicities),
+            };
+            self.segments = Default::default();
+        }
+    }
 
-    // CLEAN-ROOM GAP: 85 lines removed; rewrite from the cleanroom spec `bspline_adapted.md`.
+    /// Moves poles so that the curve passes through `target` at `u` with first derivative
+    /// `tangent` there (a derivative with respect to the parameter, not a unit direction).
+    /// The first `starting + 1` and the last `ending + 1` poles stay (`-1` keeps none at that
+    /// end); the others move by the least displacement (in the least-squares sense) meeting
+    /// both conditions, each a combination of the point and derivative corrections with
+    /// coefficients set by the knots, the weights and `u` only. Knots, weights and degree
+    /// stay.
+    ///
+    /// `None` (the curve left unchanged) for a periodic curve, `starting` or `ending` outside
+    /// `-1..=degree`, fewer than two poles free to move, `u` outside the range or within
+    /// `tolerance` of an end whose poles are kept, or when the free poles cannot meet both
+    /// conditions (their basis values and derivatives at `u` dependent): raising the degree
+    /// gives more freedom.
+    #[doc(alias = "MovePointAndTangent")]
+    pub fn move_point_and_tangent(&mut self, u: f64, target: P, tangent: P::Vector, tolerance: f64, starting: i32, ending: i32) -> Option<()> {
+        let (p, n) = (self.degree, self.poles.len());
+        if self.periodic || !u.is_finite() {
+            return None;
+        }
+        if !(-1..=p as i32).contains(&starting) || !(-1..=p as i32).contains(&ending) || starting + ending + 4 > n as i32 {
+            return None;
+        }
+        let (a, b) = (self.first_parameter(), self.last_parameter());
+        let after_start = if starting == -1 { u >= a } else { u > a + tolerance };
+        let before_end = if ending == -1 { u <= b } else { u < b - tolerance };
+        if !(after_start && before_end) {
+            return None;
+        }
+        // The poles free to move, intersected with those of the span at `u`.
+        let (free_lo, free_hi) = ((starting + 1) as usize, n - 1 - (ending + 1) as usize);
+        let (span, basis) = self.rational_basis_at(u, 1);
+        let (lo, hi) = (free_lo.max(span - p), free_hi.min(span));
+        if lo > hi {
+            return None;
+        }
+        let (r, dr): (Vec<f64>, Vec<f64>) = (lo..=hi).map(|i| (basis[0][i + p - span], basis[1][i + p - span])).unzip();
+        // The Gram matrix of the two constraint rows over the free poles.
+        let aa: f64 = r.iter().map(|x| x * x).sum();
+        let bb: f64 = r.iter().zip(&dr).map(|(x, y)| x * y).sum();
+        let cc: f64 = dr.iter().map(|y| y * y).sum();
+        let det = aa * cc - bb * bb;
+        // Scale-free: the squared sine of the angle between the two rows.
+        if !(aa > 0.0 && cc > 0.0) || !(det > 1e-12 * aa * cc) {
+            return None;
+        }
+        let (c, dc) = self.d1(u);
+        let (c, dc, t, v) = (c.coords(), P::vector_coords(dc), target.coords(), P::vector_coords(tangent));
+        let dp = [t[0] - c[0], t[1] - c[1], t[2] - c[2]];
+        let dv = [v[0] - dc[0], v[1] - dc[1], v[2] - dc[2]];
+        // Multipliers (B Bᵀ)⁻¹ Δ per coordinate, then ΔP_i = r_i λ + dr_i μ.
+        let lambda: [f64; 3] = std::array::from_fn(|k| (cc * dp[k] - bb * dv[k]) / det);
+        let mu: [f64; 3] = std::array::from_fn(|k| (aa * dv[k] - bb * dp[k]) / det);
+        for (j, i) in (lo..=hi).enumerate() {
+            let q = self.poles[i].coords();
+            self.poles[i] = P::from_coords(std::array::from_fn(|k| q[k] + r[j] * lambda[k] + dr[j] * mu[k]));
+        }
+        self.segments = Default::default();
+        Some(())
+    }
 
     /// The knots bounding `u`: `(i, i)` if `u` is knot `i` within `tolerance`, otherwise
     /// `(i, i + 1)` with `knot(i) < u < knot(i + 1)`.
@@ -2021,7 +2148,68 @@ impl BSplineSurface {
         }
     }
 
-    // CLEAN-ROOM GAP: 45 lines removed; rewrite from the cleanroom spec `bspline_adapted.md`.
+    /// Moves poles so that the surface passes through `target` at `(u, v)`: the poles of
+    /// the patch containing `(u, v)` with row index in `u_poles` and column index in
+    /// `v_poles` (inclusive) move along `target − point(u, v)`, each by its tensor-product
+    /// (rational) basis value over the sum of the squared values of the poles allowed to
+    /// move. See [`BSplineCurve::move_point`]. Returns the rectangle of poles allowed to
+    /// move as `(u_first, u_last, v_first, v_last)`, or `None` (the surface unchanged) for a
+    /// periodic surface, reversed or out-of-bounds ranges, parameters outside the bounds, or
+    /// no allowed pole influencing the point.
+    #[doc(alias = "MovePoint")]
+    pub fn move_point(&mut self, u: f64, v: f64, target: Point, u_poles: (usize, usize), v_poles: (usize, usize)) -> Option<(usize, usize, usize, usize)> {
+        use crate::geometry::ParametricSurface;
+        let (rows, columns) = (self.u_pole_count(), self.v_pole_count());
+        if self.u.periodic || self.v.periodic || !u.is_finite() || !v.is_finite() {
+            return None;
+        }
+        if u_poles.0 > u_poles.1 || v_poles.0 > v_poles.1 || u_poles.1 >= rows || v_poles.1 >= columns {
+            return None;
+        }
+        let (u0, u1, v0, v1) = self.bounds();
+        if u < u0 || u > u1 || v < v0 || v > v1 {
+            return None;
+        }
+        let span_basis = |kv: &KnotVector, count: usize, t: f64| {
+            let flat = flatten(&kv.knots, &kv.multiplicities);
+            let span = flat[..count].partition_point(|&k| k <= t).saturating_sub(1).clamp(kv.degree, count - 1);
+            (span, basis_derivatives(&flat, span, t, kv.degree, 0).swap_remove(0))
+        };
+        let (pu, pv) = (self.u.degree, self.v.degree);
+        let (su, nu) = span_basis(&self.u, rows, u);
+        let (sv, nv) = span_basis(&self.v, columns, v);
+        let (ilo, ihi) = (u_poles.0.max(su - pu), u_poles.1.min(su));
+        let (jlo, jhi) = (v_poles.0.max(sv - pv), v_poles.1.min(sv));
+        if ilo > ihi || jlo > jhi {
+            return None;
+        }
+        // Tensor-product rational basis over the patch.
+        let mut total = 0.0;
+        for a in 0..=pu {
+            for b in 0..=pv {
+                total += nu[a] * nv[b] * self.weight(su - pu + a, sv - pv + b);
+            }
+        }
+        if !(total != 0.0) {
+            return None;
+        }
+        let r = |i: usize, j: usize| nu[i + pu - su] * nv[j + pv - sv] * self.weight(i, j) / total;
+        let sum: f64 = (ilo..=ihi).flat_map(|i| (jlo..=jhi).map(move |j| (i, j))).map(|(i, j)| r(i, j).powi(2)).sum();
+        if !(sum > 0.0) {
+            return None;
+        }
+        let d = target - self.point(u, v);
+        let moves: Vec<(usize, usize, f64)> = (ilo..=ihi).flat_map(|i| (jlo..=jhi).map(move |j| (i, j))).map(|(i, j)| (i, j, r(i, j) / sum)).collect();
+        for (i, j, f) in moves {
+            if f != 0.0 {
+                self.poles[i][j] = self.poles[i][j] + d * f;
+            }
+        }
+        self.patches = Default::default();
+        self.flat_knots = Default::default();
+        self.unrolled = Default::default();
+        Some((ilo, ihi, jlo, jhi))
+    }
 
     /// See [`BSplineCurve::locate`].
     pub fn locate_u(&self, u: f64, tolerance: f64) -> (usize, usize) {
@@ -2121,11 +2309,33 @@ impl BSplineSurface {
     }
 }
 
-// CLEAN-ROOM GAP: 26 lines removed; rewrite from the cleanroom spec `bspline_adapted.md`.
+/// The rational basis functions `R_j = w_j N_j / Σ w_k N_k` and their derivatives of orders
+/// `0..=order` from the B-spline basis `basis[k][j]` (derivative order `k`, rows missing
+/// above the degree being zero) and the weights of the same poles: Leibniz' rule on
+/// `R_j · W = w_j N_j`.
+fn rational_basis(basis: &[Vec<f64>], weights: &[f64], order: usize) -> Vec<Vec<f64>> {
+    let m = weights.len();
+    let row = |k: usize| basis.get(k);
+    let w: Vec<f64> = (0..=order).map(|k| row(k).map_or(0.0, |b| b.iter().zip(weights).map(|(n, w)| n * w).sum())).collect();
+    let mut out: Vec<Vec<f64>> = Vec::with_capacity(order + 1);
+    for k in 0..=order {
+        let mut r: Vec<f64> = (0..m).map(|j| row(k).map_or(0.0, |b| b[j] * weights[j])).collect();
+        let mut binom = 1.0;
+        for i in 1..=k {
+            binom = binom * (k - i + 1) as f64 / i as f64;
+            for j in 0..m {
+                r[j] -= binom * w[i] * out[k - i][j];
+            }
+        }
+        for x in &mut r {
+            *x /= w[0];
+        }
+        out.push(r);
+    }
+    out
+}
 
-// CLEAN-ROOM GAP: 40 lines removed; rewrite from the cleanroom spec `bspline_adapted.md`.
 
-/// The knots bounding `x` (see [`BSplineCurve::locate`]).
 fn locate_knot(knots: &[f64], x: f64, tolerance: f64) -> (usize, usize) {
     if let Some(i) = knots.iter().position(|k| (k - x).abs() <= tolerance) {
         return (i, i);
@@ -2679,4 +2889,139 @@ mod fast_evaluation_tests {
     }
 }
 
-// CLEAN-ROOM GAP: 16 lines removed; rewrite from the cleanroom spec `bspline_adapted.md`.
+#[cfg(test)]
+mod move_tests {
+    use super::*;
+    use crate::geometry::{ParametricCurve, ParametricSurface};
+    use crate::math::Vector;
+
+    fn wavy(rational: bool) -> BSplineCurve {
+        let poles: Vec<Point> = (0..7).map(|i| Point::new(i as f64, (i as f64 * 0.7).sin(), 0.1 * i as f64)).collect();
+        let curve = BSplineCurve::new(poles, vec![0.0, 0.3, 0.5, 1.0], vec![4, 2, 1, 4], 3);
+        if rational { curve.with_weights((0..7).map(|i| 1.0 + 0.2 * (i % 3) as f64).collect()) } else { curve }
+    }
+
+    #[test]
+    fn moving_a_point_reaches_it_and_moving_back_restores_the_poles() {
+        for rational in [false, true] {
+            let original = wavy(rational);
+            let mut curve = original.clone();
+            let d = Vector::new(0.3, -0.2, 0.5);
+            let target = curve.point(0.4) + d;
+            // (u = 0.4 is in the span of poles 2 to 5.)
+            assert_eq!(curve.move_point(0.4, target, 1, 4), Some((2, 4)));
+            assert!(curve.point(0.4).distance(target) < 1e-13);
+            // The poles outside the range or the span stay.
+            for i in [0, 1, 5, 6] {
+                assert_eq!(curve.poles()[i], original.poles()[i]);
+            }
+            let back = curve.point(0.4) - d;
+            curve.move_point(0.4, back, 1, 4).unwrap();
+            for (a, b) in curve.poles().iter().zip(original.poles()) {
+                assert!(a.distance(*b) < 1e-14, "{a:?} {b:?}");
+            }
+        }
+        // Rejected moves leave the curve as it was.
+        let mut curve = wavy(false);
+        assert_eq!(curve.move_point(0.4, Point::ORIGIN, 6, 6), None);
+        assert_eq!(curve.move_point(0.4, Point::ORIGIN, 3, 2), None);
+        assert_eq!(curve.move_point(f64::NAN, Point::ORIGIN, 0, 6), None);
+        assert_eq!(curve, wavy(false));
+    }
+
+    #[test]
+    fn moving_a_bezier_point_is_the_least_displacement() {
+        let poles: Vec<Point> = (0..4).map(|i| Point::new(i as f64, (i * i) as f64, 0.0)).collect();
+        let mut curve = BSplineCurve::new(poles.clone(), vec![0.0, 1.0], vec![4, 4], 3);
+        let u = 0.3;
+        let basis = [0.7f64.powi(3), 3.0 * 0.3 * 0.49, 3.0 * 0.09 * 0.7, 0.3f64.powi(3)];
+        let sum: f64 = basis.iter().map(|b| b * b).sum();
+        let d = Vector::new(1.0, 2.0, -1.0);
+        let target = curve.point(u) + d;
+        curve.move_point(u, target, 0, 3).unwrap();
+        for i in 0..4 {
+            assert!(curve.poles()[i].distance(poles[i] + d * (basis[i] / sum)) < 1e-14);
+        }
+    }
+
+    #[test]
+    fn moving_a_point_and_tangent_keeps_the_kept_poles() {
+        for rational in [false, true] {
+            // Both ends kept by two poles, mid-span.
+            let mut curve = wavy(rational);
+            let original = curve.clone();
+            let (target, tangent) = (Point::new(2.0, 1.0, 0.0), Vector::new(4.0, 1.0, -2.0));
+            curve.move_point_and_tangent(0.6, target, tangent, 1e-5, 1, 1).unwrap();
+            let (p, d) = curve.d1(0.6);
+            assert!(p.distance(target) < 1e-10 && (d - tangent).length() < 1e-10, "{p:?} {d:?}");
+            assert_eq!(&curve.poles()[..2], &original.poles()[..2]);
+            assert_eq!(&curve.poles()[5..], &original.poles()[5..]);
+            // Asking again for what is already there changes nothing beyond rounding.
+            let before = curve.clone();
+            curve.move_point_and_tangent(0.6, target, tangent, 1e-5, 1, 1).unwrap();
+            for (a, b) in curve.poles().iter().zip(before.poles()) {
+                assert!(a.distance(*b) < 1e-12);
+            }
+            // The start point and tangent themselves replaced.
+            let mut curve = wavy(rational);
+            curve.move_point_and_tangent(0.0, Point::new(-1.0, 0.0, 0.0), Vector::new(0.0, 3.0, 0.0), 1e-5, -1, 1).unwrap();
+            let (p, d) = curve.d1(0.0);
+            assert!(p.distance(Point::new(-1.0, 0.0, 0.0)) < 1e-12 && (d - Vector::new(0.0, 3.0, 0.0)).length() < 1e-10);
+        }
+    }
+
+    #[test]
+    fn moving_a_point_and_tangent_without_freedom_fails_unchanged() {
+        // A quadratic Bézier with both end poles kept has one free pole: refused.
+        let poles = vec![Point::new(0.0, 0.0, 0.0), Point::new(1.0, 1.0, 0.0), Point::new(2.0, 0.0, 0.0)];
+        let mut curve = BSplineCurve::new(poles, vec![0.0, 1.0], vec![3, 3], 2);
+        let original = curve.clone();
+        assert!(curve.move_point_and_tangent(0.5, Point::new(1.0, 2.0, 0.0), Vector::new(1.0, 0.0, 0.0), 1e-5, 0, 0).is_none());
+        assert_eq!(curve, original);
+        // Enough free poles, but only one of them acts at `u`: its value and derivative rows
+        // are proportional, so the two conditions cannot both be met.
+        let poles = vec![Point::new(0.0, 0.0, 0.0), Point::new(1.0, 0.0, 0.0), Point::new(2.0, 0.0, 0.0), Point::new(3.0, 0.0, 0.0)];
+        let mut line = BSplineCurve::new(poles, vec![0.0, 1.0, 2.0, 3.0], vec![2, 1, 1, 2], 1);
+        let original = line.clone();
+        // At u = 0.5 only poles 0 and 1 act, and pole 0 is kept: one free row entry.
+        assert!(line.move_point_and_tangent(0.5, Point::new(0.5, 1.0, 0.0), Vector::new(1.0, 1.0, 0.0), 1e-5, 0, -1).is_none());
+        assert_eq!(line, original);
+    }
+
+    #[test]
+    fn reversing_as_before_keeps_the_end_knots() {
+        let poles: Vec<Point> = (0..6).map(|i| Point::new(i as f64, (i as f64).sqrt(), 0.0)).collect();
+        let curve = BSplineCurve::new(poles, vec![0.1, 0.37, 0.71, 1.3], vec![4, 1, 1, 4], 3).with_weights(vec![1.0, 1.2, 0.8, 1.0, 1.1, 1.0]);
+        let (mut a, mut b) = (curve.clone(), curve.clone());
+        a.reverse_as_occt();
+        b.reverse();
+        assert_eq!((a.poles(), a.weights(), a.multiplicities()), (b.poles(), b.weights(), b.multiplicities()));
+        assert_eq!((a.knots()[0], a.knots()[3]), (0.1, 1.3));
+        for (x, y) in a.knots().iter().zip(b.knots()) {
+            assert!((x - y).abs() <= 4.0 * f64::EPSILON);
+        }
+        for i in 0..=20 {
+            let t = 0.1 + 1.2 * i as f64 / 20.0;
+            assert!(a.point(0.1 + 1.3 - t).distance(curve.point(t)) < 1e-14);
+        }
+    }
+
+    #[test]
+    fn moving_a_surface_point() {
+        let poles: Vec<Vec<Point>> = (0..3).map(|i| (0..3).map(|j| Point::new(i as f64, j as f64, 0.0)).collect()).collect();
+        let kv = KnotVector::new(vec![0.0, 1.0], vec![3, 3], 2);
+        let original = BSplineSurface::new(poles, kv.clone(), kv);
+        let mut surface = original.clone();
+        let target = Point::new(1.0, 1.0, 1.0);
+        assert_eq!(surface.move_point(0.5, 0.5, target, (0, 2), (0, 2)), Some((0, 2, 0, 2)));
+        assert!(surface.point(0.5, 0.5).distance(target) < 1e-14);
+        let back = Point::new(1.0, 1.0, 0.0);
+        surface.move_point(0.5, 0.5, back, (0, 2), (0, 2)).unwrap();
+        for (r, s) in surface.poles().iter().zip(original.poles()) {
+            for (a, b) in r.iter().zip(s) {
+                assert!(a.distance(*b) < 1e-14);
+            }
+        }
+        assert_eq!(surface.move_point(0.5, 0.5, target, (0, 3), (0, 2)), None);
+    }
+}

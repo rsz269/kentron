@@ -2787,5 +2787,45 @@
       "to": "set GoodNbCurv 3",
       "reason": "The intersection crosses itself at four points; OCCT's splits its curves there into 14 pieces, four meeting at each crossing, where kentron's 3 closed loops run through unbroken. Checked against OCCT 8.1's own result (DRAW): the loops pass through OCCT's pieces' ends and the total length agrees (86.1021 kentron, 86.1158 OCCT, its approximations differing near the crossings)."
     }
+  ],
+  "tests/geometry/bsplinecurve/A3": [
+    {
+      "note": "Pins OCCT's MovePointAndTangent correction shape. kentron moves the free poles by the minimum-norm change meeting the point and derivative conditions (a deliberate change, clean-room spec bspline_adapted.md); all 100 moves of the script succeed and reach the scripted point (within 9e-16) with the scripted tangent (within 6e-15 relative), but the curve elsewhere differs: length 8.141332 against OCCT's 8.334695 (-2.32%)."
+    }
+  ],
+  "tests/geometry/bsplinecurve/A5": [
+    {
+      "note": "Pins OCCT's MovePointAndTangent correction shape. kentron moves the free poles by the minimum-norm change meeting the point and derivative conditions (a deliberate change, clean-room spec bspline_adapted.md); all 100 moves of the script succeed and reach the scripted point (within 9e-16) with the scripted tangent (within 6e-15 relative), but the curve elsewhere differs: length 7.361544 against OCCT's 7.350841 (+0.15%)."
+    }
+  ],
+  "tests/geometry/bsplinecurve/A7": [
+    {
+      "note": "Pins OCCT's MovePointAndTangent correction shape. kentron moves the free poles by the minimum-norm change meeting the point and derivative conditions (a deliberate change, clean-room spec bspline_adapted.md); all 100 moves of the script succeed and reach the scripted point (within 9e-16) with the scripted tangent (within 6e-15 relative), but the curve elsewhere differs: length 6.913735 against OCCT's 7.238501 (-4.49%)."
+    }
+  ],
+  "tests/geometry/bsplinecurve/A9": [
+    {
+      "note": "Pins OCCT's MovePointAndTangent correction shape. kentron moves the free poles by the minimum-norm change meeting the point and derivative conditions (a deliberate change, clean-room spec bspline_adapted.md); all 100 moves of the script succeed and reach the scripted point (within 9e-16) with the scripted tangent (within 6e-15 relative), but the curve elsewhere differs: length 6.999571 against OCCT's 7.086766 (-1.23%)."
+    }
+  ],
+  "tests/geometry/2dbsplinecurve/A8": [
+    {
+      "note": "Pins OCCT's MovePointAndTangent correction shape. kentron moves the free poles by the minimum-norm change meeting the point and derivative conditions (a deliberate change, clean-room spec bspline_adapted.md); all 100 moves of the script succeed and reach the scripted point (within 9e-16) with the scripted tangent (within 6e-15 relative), but the curve elsewhere differs: length 7.656155 against OCCT's 7.788545 (-1.70%)."
+    }
+  ],
+  "tests/geometry/2dbsplinecurve/A9": [
+    {
+      "note": "Pins OCCT's MovePointAndTangent correction shape. kentron moves the free poles by the minimum-norm change meeting the point and derivative conditions (a deliberate change, clean-room spec bspline_adapted.md); all 100 moves of the script succeed and reach the scripted point (within 9e-16) with the scripted tangent (within 6e-15 relative), but the curve elsewhere differs: length 6.990981 against OCCT's 6.983287 (+0.11%)."
+    }
+  ],
+  "tests/geometry/2dbsplinecurve/B1": [
+    {
+      "note": "Pins OCCT's MovePointAndTangent correction shape. kentron moves the free poles by the minimum-norm change meeting the point and derivative conditions (a deliberate change, clean-room spec bspline_adapted.md); all 100 moves of the script succeed and reach the scripted point (within 9e-16) with the scripted tangent (within 6e-15 relative), but the curve elsewhere differs: length 5.984734 against OCCT's 5.959047 (+0.43%)."
+    }
+  ],
+  "tests/geometry/2dbsplinecurve/B2": [
+    {
+      "note": "Pins OCCT's MovePointAndTangent correction shape. kentron moves the free poles by the minimum-norm change meeting the point and derivative conditions (a deliberate change, clean-room spec bspline_adapted.md); all 100 moves of the script succeed and reach the scripted point (within 9e-16) with the scripted tangent (within 6e-15 relative), but the curve elsewhere differs: length 6.422015 against OCCT's 6.649278 (-3.42%)."
+    }
   ]
 }

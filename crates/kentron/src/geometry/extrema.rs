@@ -127,10 +127,39 @@ fn norm(a: [f64; 3]) -> f64 {
     dot(a, a).sqrt()
 }
 
-// CLEAN-ROOM GAP: 29 lines removed; rewrite from the cleanroom spec `extrema_parallel.md`.
+/// A closed interval of parameters, empty while `lo > hi`.
+#[derive(Debug, Clone, Copy)]
+struct Range {
+    lo: f64,
+    hi: f64,
+}
 
-/// The extrema of two curves (2D or 3D): parallel and concentric lines and circles by
-/// OCCT's rules (`Extrema_ExtCC`), other pairs by Newton steps from a grid of parameters.
+impl Range {
+    const EMPTY: Range = Range { lo: f64::INFINITY, hi: f64::NEG_INFINITY };
+
+    /// The interval between `a` and `b`, in either order.
+    fn between(a: f64, b: f64) -> Self {
+        Range { lo: a.min(b), hi: a.max(b) }
+    }
+
+    /// Widens the interval to take `x` in.
+    fn add(&mut self, x: f64) {
+        self.lo = self.lo.min(x);
+        self.hi = self.hi.max(x);
+    }
+
+    /// The interval's length (negative when it is empty).
+    fn delta(&self) -> f64 {
+        self.hi - self.lo
+    }
+
+    fn common(&self, other: &Range) -> Range {
+        Range { lo: self.lo.max(other.lo), hi: self.hi.min(other.hi) }
+    }
+}
+
+/// The extrema of two curves (2D or 3D): parallel lines, a line along a circle's axis and
+/// coaxial circles in closed form, other pairs by Newton steps from a grid of parameters.
 fn curves_extrema<C>(a: &C, b: &C, ka: &Kind, kb: &Kind) -> CurveCurveExtrema<C::Point>
 where
     C: ParametricCurve,
@@ -164,7 +193,54 @@ where
         CurveCurveExtrema::Isolated(v)
     };
     match (ka, kb) {
-        // CLEAN-ROOM GAP: 45 lines removed; rewrite from the cleanroom spec `extrema_parallel.md (three arms of curves_extrema)`.
+        // Parallel lines: parallel over a common stretch, else touching there, else apart.
+        (Kind::Line { origin: oa, direction: da }, Kind::Line { origin: ob, direction: db }) if norm(cross(*da, *db)) <= crate::tolerance::ANGULAR => {
+            let distance = norm(cross(minus(*oa, *ob), *db));
+            if (infinite(u11) && infinite(u12)) || (infinite(u21) && infinite(u22)) {
+                return CurveCurveExtrema::Parallel { distance };
+            }
+            // `a`'s range seen along `b`.
+            let backwards = dot(*da, *db) < 0.0;
+            let along = |t: f64, lower: bool| match infinite(t) {
+                true if lower != backwards => f64::NEG_INFINITY,
+                true => f64::INFINITY,
+                false => dot(minus(a.point(t).coords(), *ob), *db),
+            };
+            let common = Range::between(along(u11, true), along(u12, false)).common(&Range::between(u21, u22));
+            match common.delta() {
+                d if d > confusion => CurveCurveExtrema::Parallel { distance },
+                d if d >= 0.0 => {
+                    let t2 = 0.5 * (common.lo + common.hi);
+                    let t1 = dot(minus(b.point(t2).coords(), *oa), *da);
+                    isolated(vec![make(t1, t2)])
+                }
+                _ => isolated(ends().into_iter().collect()),
+            }
+        }
+        // A line along a circle's axis: every point of the circle is at its radius from the
+        // line's foot on the axis, if the line reaches the circle's plane.
+        (Kind::Line { origin, direction }, Kind::Circle { center, normal, radius, .. }) if along_axis(*origin, *direction, *center, *normal) => {
+            match axis_reaches(*origin, *direction, *center, Range::between(u11, u12)) {
+                true => CurveCurveExtrema::Parallel { distance: *radius },
+                false => CurveCurveExtrema::Isolated(Vec::new()),
+            }
+        }
+        (Kind::Circle { center, normal, radius, .. }, Kind::Line { origin, direction }) if along_axis(*origin, *direction, *center, *normal) => {
+            match axis_reaches(*origin, *direction, *center, Range::between(u21, u22)) {
+                true => CurveCurveExtrema::Parallel { distance: *radius },
+                false => CurveCurveExtrema::Isolated(Vec::new()),
+            }
+        }
+        // Coaxial circles.
+        (Kind::Circle { center: ca, normal: na, .. }, Kind::Circle { center: cb, normal: nb, .. })
+            if norm(cross(*na, *nb)) <= crate::tolerance::ANGULAR && norm(cross(minus(*cb, *ca), *na)) <= confusion =>
+        {
+            match coaxial(a, b, ka, kb) {
+                Coaxial::Parallel(distance) => CurveCurveExtrema::Parallel { distance },
+                Coaxial::Touching(pairs) => isolated(pairs.into_iter().map(|(t1, t2)| make(t1, t2)).collect()),
+                Coaxial::Apart => isolated(ends().into_iter().collect()),
+            }
+        }
         _ => {
             let mut found: Vec<CurveExtremum<C::Point>> = stationary_pairs(a, b, ka, kb).into_iter().map(|(t1, t2)| make(t1, t2)).collect();
             // Beyond lines and conics, the global minimum too where it is at an end (as
@@ -207,7 +283,90 @@ where
     best
 }
 
-// CLEAN-ROOM GAP: 98 lines removed; rewrite from the cleanroom spec `extrema_parallel.md`.
+/// True if the line through `origin` along `direction` is the axis of the circle about
+/// `center` with `normal` (parallel to it and through the centre, within `LINEAR`).
+fn along_axis(origin: [f64; 3], direction: [f64; 3], center: [f64; 3], normal: [f64; 3]) -> bool {
+    norm(cross(direction, normal)) <= crate::tolerance::ANGULAR && norm(cross(minus(center, origin), direction)) <= crate::tolerance::LINEAR
+}
+
+/// True if the line's range (within `LINEAR`) contains the circle centre's parameter.
+fn axis_reaches(origin: [f64; 3], direction: [f64; 3], center: [f64; 3], range: Range) -> bool {
+    let s = dot(minus(center, origin), direction);
+    range.lo - crate::tolerance::LINEAR <= s && s <= range.hi + crate::tolerance::LINEAR
+}
+
+/// How two coaxial arcs lie, compared by their angles about the axis.
+enum Coaxial {
+    /// Their angular spans overlap: the distance between them, the same everywhere there.
+    Parallel(f64),
+    /// The spans only touch: the pairs `(t1, t2)` from `b`'s point at the touching angle to
+    /// the points of `a` at the same and the opposite angle (those `a` covers).
+    Touching(Vec<(f64, f64)>),
+    /// The spans are apart.
+    Apart,
+}
+
+/// Compares the angular spans of the coaxial arcs `a` and `b` (kinds `ka`, `kb`, both
+/// circles), angles measured about `b`'s centre in `b`'s frame, which are `b`'s own
+/// parameters. Spans overlapping by more than `LINEAR` are parallel; spans meeting in a
+/// point (the first such point along `b` where they meet twice) touch; others are apart.
+fn coaxial<C>(a: &C, b: &C, ka: &Kind, kb: &Kind) -> Coaxial
+where
+    C: ParametricCurve,
+    C::Point: ControlPoint<Vector = C::Vector>,
+{
+    use std::f64::consts::{PI, TAU};
+    let (Kind::Circle { center: ca, x: xa, y: ya, radius: ra, normal: na }, Kind::Circle { center: cb, x: xb, y: yb, radius: rb, .. }) = (ka, kb) else {
+        unreachable!("two circles")
+    };
+    let h = dot(minus(*cb, *ca), *na);
+    let near = ((ra - rb).powi(2) + h * h).sqrt();
+    let angle = |p: [f64; 3]| {
+        let r = minus(p, *cb);
+        dot(r, *yb).atan2(dot(r, *xb))
+    };
+    // Rounding of the angles of points: ends this close count as meeting.
+    let slack = 1e-12;
+    let (u11, u12, u21, u22) = (a.first_parameter(), a.last_parameter(), b.first_parameter(), b.last_parameter());
+    let (la, lb) = (u12 - u11, u22 - u21);
+    // `a`'s angles run the same way as `b`'s, or the other.
+    let sense = if dot(cross(*xa, *ya), cross(*xb, *yb)) >= 0.0 { 1.0 } else { -1.0 };
+    let start = angle(a.point(u11).coords());
+    // `a`'s span (by its start reduced into `b`'s window), and `b`'s.
+    let span_b = Range { lo: u21, hi: u22 };
+    let span_a = if la >= TAU - slack {
+        Range { lo: u21, hi: u21 + TAU }
+    } else {
+        let lo = if sense > 0.0 { start } else { start - la };
+        let lo = u21 + (lo - u21).rem_euclid(TAU);
+        Range { lo, hi: lo + la }
+    };
+    let commons: Vec<Range> = [-TAU, 0.0, TAU]
+        .iter()
+        .map(|&shift| Range { lo: span_a.lo + shift, hi: span_a.hi + shift }.common(&span_b))
+        .filter(|c| c.delta() >= -slack)
+        .collect();
+    if commons.iter().any(|c| c.delta() > crate::tolerance::LINEAR) || (lb >= TAU - slack && la > crate::tolerance::LINEAR) {
+        return Coaxial::Parallel(near);
+    }
+    let Some(theta) = commons.iter().map(|c| (0.5 * (c.lo + c.hi)).clamp(u21, u22)).min_by(f64::total_cmp) else {
+        return Coaxial::Apart;
+    };
+    // `a`'s parameter at an angle, if `a` covers it (ends included, within the slack).
+    let on_a = |phi: f64| -> Option<f64> {
+        if la >= TAU - slack {
+            return Some(u11 + (sense * (phi - start)).rem_euclid(TAU).min(la));
+        }
+        let along = (sense * (phi - start)).rem_euclid(TAU);
+        match () {
+            _ if along <= la + slack => Some(u11 + along.min(la)),
+            _ if along >= TAU - slack => Some(u11),
+            _ => None,
+        }
+    };
+    let pairs: Vec<(f64, f64)> = [theta, theta + PI].iter().filter_map(|&phi| on_a(phi).map(|t1| (t1, theta))).collect();
+    Coaxial::Touching(pairs)
+}
 
 /// The parameters of the stationary pairs of the distance between two curves (minima,
 /// maxima and saddles), within their ranges: Newton steps on `(A - B)·A' = 0` and

@@ -440,7 +440,197 @@ pub fn interpolate_with_end_tangents<P: ControlPoint>(
     BSplineCurve::try_new(poles.into_iter().map(P::from_coords).collect(), knots, multiplicities, p)
 }
 
-// CLEAN-ROOM GAP: 191 lines removed; rewrite from the cleanroom spec `fit_tangents.md`.
+/// The derivative at `x` of the polynomial interpolating `values` at `nodes` (Lagrange
+/// form), per coordinate.
+fn lagrange_derivative(nodes: &[f64], values: &[[f64; 3]], x: f64) -> [f64; 3] {
+    let mut out = [0.0; 3];
+    for (j, (&tj, qj)) in nodes.iter().zip(values).enumerate() {
+        // ℓ_j′(x) = Σ_{m ≠ j} 1/(t_j − t_m) Π_{l ≠ j, m} (x − t_l)/(t_j − t_l).
+        let mut derivative = 0.0;
+        for (m, &tm) in nodes.iter().enumerate() {
+            if m == j {
+                continue;
+            }
+            let mut term = 1.0 / (tj - tm);
+            for (l, &tl) in nodes.iter().enumerate() {
+                if l != j && l != m {
+                    term *= (x - tl) / (tj - tl);
+                }
+            }
+            derivative += term;
+        }
+        for k in 0..3 {
+            out[k] += derivative * qj[k];
+        }
+    }
+    out
+}
+
+/// A cubic B-spline interpolating `points` at `params` (or at chord lengths), with first
+/// derivatives `tangents[i]` at the points where given (an empty slice: none), open or
+/// periodic.
+///
+/// - If `scale`, each given tangent keeps its direction and takes the L1 length of the
+///   derivative of the parabola (the line for two points) through three consecutive points:
+///   the window starting at the number of tangents given before it (not counting the first
+///   point's), within the points.
+/// - End tangents not given (open), or the first point's (periodic, where it serves at the
+///   seam too), are those of the cubic (the parabola for three points) through the first or
+///   last points. Inner tangents not given stay free.
+/// - Knots at the parameters: the ends of multiplicity 4 (open) or 2 (periodic, the curve C1
+///   at the seam), inner ones 2 where a tangent is given and 1 otherwise. Without tangents,
+///   two points give a line (or a periodic polyline) and three (open) a single quadratic.
+///
+/// Fails for fewer than two points, consecutive points closer than `tolerance`, parameters
+/// not increasing or not one per point (one more, closing the loop, if periodic), tangents
+/// not one per point or shorter than `tolerance`, missing end tangents with two points, or a
+/// singular system.
+#[doc(alias = "GeomAPI_Interpolate::Load")]
+pub fn interpolate_with_tangents<P: ControlPoint>(
+    points: &[P],
+    params: Option<&[f64]>,
+    tangents: &[Option<P::Vector>],
+    periodic: bool,
+    scale: bool,
+    tolerance: f64,
+) -> Result<BSplineCurve<P>> {
+    let invalid = |m: &str| Err(Error::InvalidInput(m.into()));
+    let n = points.len();
+    if n < 2 {
+        return invalid("interpolation needs two or more points");
+    }
+    let q: Vec<[f64; 3]> = points.iter().map(|p| p.coords()).collect();
+    let gap = |a: [f64; 3], b: [f64; 3]| ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt();
+    if (1..n).any(|i| gap(q[i - 1], q[i]) < tolerance) {
+        return invalid("consecutive interpolation points coincide");
+    }
+    let t: Vec<f64> = match params {
+        Some(given) => given.to_vec(),
+        None => {
+            let mut t = vec![0.0];
+            for i in 1..n {
+                t.push(t[i - 1] + gap(q[i - 1], q[i]));
+            }
+            if periodic {
+                t.push(t[n - 1] + gap(q[0], q[n - 1]));
+            }
+            t
+        }
+    };
+    if t.len() != n + periodic as usize {
+        return invalid("one interpolation parameter per point (and one closing a periodic curve) needed");
+    }
+    if t.windows(2).any(|w| !(w[1] - w[0] >= f64::MIN_POSITIVE)) {
+        return invalid("interpolation parameters must increase");
+    }
+    let requested = !tangents.is_empty();
+    if requested && tangents.len() != n {
+        return invalid("one tangent (or none) per interpolation point needed");
+    }
+    let mut k: Vec<Option<[f64; 3]>> = tangents.iter().map(|v| v.map(P::vector_coords)).collect();
+    if k.iter().flatten().any(|v| gap(*v, [0.0; 3]) < tolerance) {
+        return invalid("an interpolation tangent is shorter than the tolerance");
+    }
+    if requested && scale {
+        let deg = if n == 2 { 1 } else { 2 };
+        let mut given_before = 0;
+        for i in 0..n {
+            let Some(v) = k[i] else { continue };
+            let s = given_before.min(n - 1 - deg);
+            let d = lagrange_derivative(&t[s..=s + deg], &q[s..=s + deg], t[i]);
+            let l1 = |a: [f64; 3]| a[0].abs() + a[1].abs() + a[2].abs();
+            let (want, have) = (l1(d), l1(v));
+            if have > 0.0 {
+                k[i] = Some(v.map(|x| x * (want / have)));
+            }
+            if i >= 1 {
+                given_before += 1;
+            }
+        }
+    }
+    if !requested {
+        match (n, periodic) {
+            (2, true) => return BSplineCurve::try_new_periodic(points.to_vec(), t, vec![1, 1, 1], 1),
+            (2, false) => return BSplineCurve::try_new(points.to_vec(), vec![t[0], t[1]], vec![2, 2], 1),
+            (3, false) => {
+                let flat = [t[0], t[0], t[0], t[2], t[2], t[2]];
+                let rows: Vec<Vec<f64>> = (0..3)
+                    .map(|i| crate::geometry::bspline::basis_derivatives(&flat, 2, t[i], 2, 0).swap_remove(0))
+                    .collect();
+                let poles = solve_dense(rows, q.clone()).ok_or_else(|| Error::InvalidInput("singular interpolation problem".into()))?;
+                return BSplineCurve::try_new(poles.into_iter().map(P::from_coords).collect(), vec![t[0], t[2]], vec![3, 3], 2);
+            }
+            _ => k = vec![None; n],
+        }
+    }
+    // Free end tangents from the cubic (the parabola) through the end points.
+    let free_start = k[0].is_none();
+    let free_end = !periodic && k[n - 1].is_none();
+    if free_start || free_end {
+        if n < 3 {
+            return invalid("two interpolation points need both end tangents");
+        }
+        let e = if n == 3 { 2 } else { 3 };
+        if free_start {
+            k[0] = Some(lagrange_derivative(&t[..=e], &q[..=e], t[0]));
+        }
+        if free_end {
+            k[n - 1] = Some(lagrange_derivative(&t[n - 1 - e..n], &q[n - 1 - e..n], t[n - 1]));
+        }
+    }
+    let p = 3;
+    // Knots and the conditions (parameter, derivative order, value).
+    let inner_multiplicity = |i: usize| if k[i].is_some() { 2 } else { 1 };
+    let mut knots = t.clone();
+    let mut multiplicities: Vec<usize> = Vec::with_capacity(t.len());
+    let mut conditions: Vec<(f64, usize, [f64; 3])> = Vec::new();
+    for i in 0..n {
+        conditions.push((t[i], 0, q[i]));
+        if let Some(v) = k[i] {
+            conditions.push((t[i], 1, v));
+        }
+    }
+    if periodic {
+        multiplicities.push(2);
+        multiplicities.extend((1..n).map(inner_multiplicity));
+        multiplicities.push(2);
+    } else {
+        knots.truncate(n);
+        multiplicities.push(4);
+        multiplicities.extend((1..n - 1).map(inner_multiplicity));
+        multiplicities.push(4);
+    }
+    let count: usize = if periodic { multiplicities[..n].iter().sum() } else { multiplicities.iter().sum::<usize>() - p - 1 };
+    if conditions.len() != count {
+        return invalid("inconsistent interpolation conditions");
+    }
+    let flat = match periodic {
+        true => crate::geometry::bspline::periodic_flatten(&knots, &multiplicities, p),
+        false => knots.iter().zip(&multiplicities).flat_map(|(&x, &m)| std::iter::repeat(x).take(m)).collect(),
+    };
+    // The spans evaluation uses (`flat[span] <= x < flat[span + 1]`), poles taken cyclically
+    // on a periodic curve.
+    let spans = if periodic { count + p } else { count };
+    let rows: Vec<Vec<f64>> = conditions
+        .iter()
+        .map(|&(x, order, _)| {
+            let span = flat[..spans].partition_point(|&f| f <= x).saturating_sub(1).clamp(p, spans - 1);
+            let b = crate::geometry::bspline::basis_derivatives(&flat, span, x, p, order);
+            let mut row = vec![0.0; count];
+            for (j, &v) in b[order].iter().enumerate() {
+                row[(span - p + j) % count] += v;
+            }
+            row
+        })
+        .collect();
+    let rhs: Vec<[f64; 3]> = conditions.iter().map(|c| c.2).collect();
+    let poles = solve_dense(rows, rhs).ok_or_else(|| Error::InvalidInput("singular interpolation problem".into()))?;
+    let poles: Vec<P> = poles.into_iter().map(P::from_coords).collect();
+    match periodic {
+        true => BSplineCurve::try_new_periodic(poles, knots, multiplicities, p),
+        false => BSplineCurve::try_new(poles, knots, multiplicities, p),
+    }
+}
 
 /// Options for [`approximate_with`].
 #[derive(Debug, Clone, Copy, PartialEq)]

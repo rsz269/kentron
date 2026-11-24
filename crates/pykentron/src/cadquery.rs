@@ -183,6 +183,41 @@ pub fn curve_derivatives(shape: Handle, us: Vec<f64>) -> PyResult<Vec<(Xyz, Xyz,
     })
 }
 
+/// Curve parameters sampling the curve over `[u1, u2]` so that the polyline through them
+/// stays within `deflection` of it (kentron's quasi-uniform deflection sampler on each
+/// edge's stretch), increasing, both ends included.
+#[pyfunction]
+pub fn curve_deflection_parameters(shape: Handle, deflection: f64, u1: f64, u2: f64) -> PyResult<Vec<f64>> {
+    use kentron::geometry::curve::TrimmedCurve;
+    with_model(|m| {
+        let path = path(m, shape.shape)?;
+        let failed = || kentron::Error::InvalidInput(format!("a curve cannot be sampled within {deflection}"));
+        let mut out: Vec<f64> = Vec::new();
+        for piece in &path.pieces {
+            let (lo, hi) = (piece.start.max(u1), (piece.start + piece.span()).min(u2));
+            if !(hi > lo) {
+                continue;
+            }
+            let (a, b) = (piece.local(lo), piece.local(hi));
+            let stretch = Curve::Trimmed(TrimmedCurve::new(piece.curve.clone(), a.min(b), a.max(b)));
+            let sampled = kentron::geometry::sample::quasi_uniform_deflection(&stretch, deflection).ok_or_else(failed)?;
+            let mut ts: Vec<f64> = sampled.parameters.iter().map(|&t| piece.global(t)).collect();
+            if piece.reversed {
+                ts.reverse();
+            }
+            let skip = usize::from(!out.is_empty());
+            out.extend(ts.into_iter().skip(skip));
+        }
+        if out.len() < 2 {
+            return Err(failed().into());
+        }
+        // (The ends exactly as asked.)
+        let last = out.len() - 1;
+        (out[0], out[last]) = (u1, u2);
+        Ok(out)
+    })
+}
+
 /// The curve's length (over its parameter range).
 #[pyfunction]
 pub fn curve_length(shape: Handle) -> PyResult<f64> {
@@ -888,6 +923,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(make_bspline_face, m)?)?;
     let _ = direction;
     m.add_function(wrap_pyfunction!(curve_info, m)?)?;
+    m.add_function(wrap_pyfunction!(curve_deflection_parameters, m)?)?;
     m.add_function(wrap_pyfunction!(curve_derivatives, m)?)?;
     m.add_function(wrap_pyfunction!(curve_length, m)?)?;
     m.add_function(wrap_pyfunction!(curve_parameters_at_lengths, m)?)?;

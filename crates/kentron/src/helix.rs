@@ -166,7 +166,113 @@ pub struct Helix {
 /// a tangent. Fails for a part with a non-positive height or pitch, a taper of a right
 /// angle or more, or a start on the axis.
 #[doc(alias = "HelixBRep_BuilderHelix")]
-// CLEAN-ROOM GAP: 116 lines removed; rewrite from the cleanroom spec `helix_builder.md`.
+pub fn helix(model: &mut Model, frame: &Frame, start_diameter: f64, parts: &[HelixPart], options: &HelixOptions) -> Result<Helix> {
+    if parts.is_empty() {
+        return Err(Error::InvalidInput("a helix needs at least one part".into()));
+    }
+    let tolerance = options.tolerance;
+    let approximation = CurveApproximationOptions { tolerance, continuity: Continuity::C1, max_segments: options.max_segments, max_degree: options.max_degree };
+    let (origin, z) = (frame.origin(), Vector::from(frame.z()));
+    let mut start = origin + Vector::from(frame.x()) * (start_diameter / 2.0);
+    let mut diameter = start_diameter;
+    let mut reached: f64 = 0.0;
+    let mut edges: Vec<Vec<BSplineCurve>> = Vec::with_capacity(parts.len());
+    for part in parts {
+        let taper = (0.5 * (part.end_diameter - diameter) / part.height).atan();
+        if !(taper.abs() < FRAC_PI_2 - 1e-12) {
+            return Err(Error::InvalidInput(format!("a helix part tapers at {taper} rad, a right angle or more")));
+        }
+        if !(part.height >= tolerance) || !(part.pitch >= tolerance) {
+            return Err(Error::InvalidInput(format!("a helix part of height {} and pitch {}", part.height, part.pitch)));
+        }
+        // The part's own frame: on the axis level with its start, x towards the start.
+        let foot = origin + z * (start - origin).dot(z);
+        let radial = start - foot;
+        let radius = radial.length();
+        if !(radius >= tolerance) {
+            return Err(Error::InvalidInput("a helix part starts on its axis".into()));
+        }
+        let local = Frame::new(foot, frame.z(), Direction::from_vector(radial));
+        let to_world = Transform::frame_to_frame(&Frame::WORLD, &local);
+        let turns = part.height / part.pitch;
+        let whole = turns.floor();
+        let exact = |first: f64, last: f64| HelixCurve { first, last, pitch: part.pitch, start_radius: radius, taper, left_handed: options.left_handed };
+        let approximate = |first: f64, last: f64| -> Result<(BSplineCurve, f64)> {
+            let made = crate::geometry::convert::approximate_parametric(&exact(first, last), &approximation)
+                .ok_or_else(|| Error::Failed("a helix turn could not be approximated".into()))?;
+            Ok((made.curve.transformed(&to_world), made.max_error))
+        };
+        let mut part_edges = Vec::with_capacity(whole as usize + 1);
+        let cylinder = taper == 0.0;
+        for i in 0..whole as usize {
+            let (a, b) = (TAU * i as f64, TAU * (i + 1) as f64);
+            if cylinder && i > 0 {
+                // On a cylinder every turn is the first one moved up by whole pitches.
+                let first: &BSplineCurve = &part_edges[0];
+                part_edges.push(first.transformed(&Transform::translation(z * (part.pitch * i as f64))));
+                continue;
+            }
+            let (curve, error) = approximate(a, b)?;
+            reached = reached.max(error);
+            part_edges.push(curve);
+        }
+        if turns - whole > 1e-7 * turns.max(1.0) || whole == 0.0 {
+            let (curve, error) = approximate(TAU * whole, TAU * turns)?;
+            reached = reached.max(error);
+            part_edges.push(curve);
+        }
+        let last = part_edges.last().expect("an edge");
+        start = last.point(last.last_parameter());
+        diameter = part.end_diameter;
+        edges.push(part_edges);
+    }
+    for k in 1..edges.len() {
+        let (before, after) = edges.split_at_mut(k);
+        smooth(before[k - 1].last_mut().expect("an edge"), after[0].first_mut().expect("an edge"));
+    }
+    let curves: Vec<BSplineCurve> = edges.into_iter().flatten().collect();
+    let mut vertex = model.add_vertex(curves[0].point(curves[0].first_parameter()), reached);
+    let mut shapes = Vec::with_capacity(curves.len());
+    for curve in curves {
+        let (a, b) = (curve.first_parameter(), curve.last_parameter());
+        let end = model.add_vertex(curve.point(b), reached);
+        let edge = model.add_edge(vertex, end, reached)?;
+        model.set_edge_curve(edge.into(), Curve::BSpline(curve), reached)?;
+        model.set_edge_range(edge.into(), a, b)?;
+        shapes.push(Shape::from(edge));
+        vertex = end;
+    }
+    let wire = crate::make::wire(model, &shapes)?;
+    Ok(Helix { wire, tolerance_reached: reached })
+}
+
+/// Gives the end of `before` and the start of `after` the mean of their two derivatives
+/// there (each keeping its own junction point, `before` its first two poles and `after` its
+/// last two), raising a curve's degree one step at a time while it has too little freedom;
+/// a curve that cannot be moved is left as it was. Nothing is done where the tangents
+/// already agree within `1e-7` rad.
+fn smooth(before: &mut BSplineCurve, after: &mut BSplineCurve) {
+    let (b, a) = (before.last_parameter(), after.first_parameter());
+    let ((p, d1), (q, d2)) = (before.d1(b), after.d1(a));
+    if d1.angle(d2) < 1e-7 {
+        return;
+    }
+    let mean = (d1 + d2) * 0.5;
+    let moved = |curve: &BSplineCurve, u: f64, point: Point, starting: i32, ending: i32| {
+        (curve.degree()..=BSplineCurve::<Point>::MAX_DEGREE).find_map(|degree| {
+            let mut trial = curve.clone();
+            trial.increase_degree(degree);
+            trial.move_point_and_tangent(u, point, mean, crate::tolerance::PARAMETRIC, starting, ending).map(|()| trial)
+        })
+    };
+    if let Some(c) = moved(before, b, p, 1, -1) {
+        *before = c;
+    }
+    if let Some(c) = moved(after, a, q, -1, 1) {
+        *after = c;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -221,5 +327,56 @@ mod tests {
         // A part with no height is refused.
         let flat = [HelixPart { height: 0.0, pitch: 4.0, end_diameter: 20.0 }];
         assert!(helix(&mut model, &Frame::WORLD, 20.0, &flat, &HelixOptions::default()).is_err());
+    }
+
+    #[test]
+    fn edges_by_whole_turns_and_handedness() {
+        let mut model = Model::new();
+        let options = HelixOptions::default();
+        // Three whole turns: three edges, no remainder; less than a turn: one.
+        let made = helix(&mut model, &Frame::WORLD, 10.0, &[HelixPart { height: 6.0, pitch: 2.0, end_diameter: 10.0 }], &options).unwrap();
+        assert_eq!(curves(&model, made.wire).len(), 3);
+        let made = helix(&mut model, &Frame::WORLD, 10.0, &[HelixPart { height: 1.0, pitch: 2.0, end_diameter: 10.0 }], &options).unwrap();
+        let edges = curves(&model, made.wire);
+        assert_eq!(edges.len(), 1);
+        let (c, _, b) = &edges[0];
+        assert!(c.point(*b).distance(Point::new(-5.0, 0.0, 1.0)) < 1e-6);
+        // Left-handed: clockwise seen from above.
+        let left = HelixOptions { left_handed: true, ..options };
+        let made = helix(&mut model, &Frame::WORLD, 10.0, &[HelixPart { height: 1.0, pitch: 4.0, end_diameter: 10.0 }], &left).unwrap();
+        let edges = curves(&model, made.wire);
+        let (c, a, b) = &edges[0];
+        assert!(c.point(*b).distance(Point::new(0.0, -5.0, 1.0)) < 1e-6, "{:?}", c.point(*b));
+        assert!(c.d1(*a).1.y < 0.0);
+        // A cone narrowing, three parts with two junctions, both smooth.
+        let parts = [
+            HelixPart { height: 4.0, pitch: 2.0, end_diameter: 6.0 },
+            HelixPart { height: 3.0, pitch: 1.5, end_diameter: 6.0 },
+            HelixPart { height: 2.5, pitch: 1.0, end_diameter: 8.0 },
+        ];
+        let made = helix(&mut model, &Frame::WORLD, 10.0, &parts, &options).unwrap();
+        let edges = curves(&model, made.wire);
+        assert_eq!(edges.len(), 2 + 2 + 3);
+        for w in edges.windows(2) {
+            let ((c1, _, l1), (c2, f2, _)) = (&w[0], &w[1]);
+            let ((p1, v1), (p2, v2)) = (c1.d1(*l1), c2.d1(*f2));
+            // (Exactly where the parts meet; within the approximation between turns.)
+            let kink = if (p1.z - 4.0).abs() < 1e-6 || (p1.z - 7.0).abs() < 1e-6 { 1e-9 } else { 1e-3 };
+            assert!(p1.distance(p2) < 1e-9 && v1.angle(v2) < kink, "{p1:?} {}", v1.angle(v2));
+        }
+        let (c, _, b) = edges.last().unwrap();
+        let end = c.point(*b);
+        assert!((end.z - 9.5).abs() < 1e-6 && ((end.x * end.x + end.y * end.y).sqrt() - 4.0).abs() < 1e-3, "{end:?}");
+    }
+
+    #[test]
+    fn invalid_helices_are_refused() {
+        let mut model = Model::new();
+        let options = HelixOptions::default();
+        let part = |height: f64, pitch: f64, end_diameter: f64| [HelixPart { height, pitch, end_diameter }];
+        assert!(helix(&mut model, &Frame::WORLD, 10.0, &[], &options).is_err());
+        assert!(helix(&mut model, &Frame::WORLD, 10.0, &part(5.0, -1.0, 10.0), &options).is_err());
+        assert!(helix(&mut model, &Frame::WORLD, 0.0, &part(5.0, 1.0, 0.0), &options).is_err());
+        assert!(helix(&mut model, &Frame::WORLD, 10.0, &part(1e-30, 1.0, 20.0), &options).is_err());
     }
 }

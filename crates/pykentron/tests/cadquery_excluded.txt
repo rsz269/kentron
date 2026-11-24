@@ -63,3 +63,9 @@ tests.test_assembly::test_shallow_assy
 # and OCCT's prism of a shell, a compsolid of the solids each face sweeps.
 tests.test_free_functions::test_adaptor_curve_to_edge
 tests.test_cadquery.TestCadQuery::testCompSolid
+
+# Pins OCCT's quasi-uniform-deflection point count: `ellipse(10, 1).sample(0.1)` must give
+# exactly 16 points. kentron's sampler (halving spans until each chord is within the
+# deflection) gives 12, the polyline within 0.088 of the ellipse (measured at 200 steps a
+# span), so within the 0.1 asked for.
+tests.test_shapes::test_sample

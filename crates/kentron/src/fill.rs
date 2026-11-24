@@ -291,7 +291,159 @@ pub fn coons(model: &mut Model, edges: &[Shape]) -> Result<Shape> {
     crate::make::face_bounded_on(model, Surface::BSpline(surface), &[wire])
 }
 
-// CLEAN-ROOM GAP: 162 lines removed; rewrite from the cleanroom spec `fill_coons.md`.
+/// The B-spline surface of the bilinearly blended Coons patch of four B-spline `curves`
+/// closing a loop (in any order and direction).
+///
+/// The first curve is kept; each further place takes, from the curves left, one starting
+/// where the last placed ends (a closed one first), else, in their order, the first one
+/// starting or ending there (reversed if ending). With the loop `A₁ A₂ A₃ A₄`, u runs along
+/// `A₁` (at v = v_min) and the reversed `A₃` (at v = v_max), v along the reversed `A₄` (at
+/// u = u_min) and `A₂` (at u = u_max). Opposite curves are made compatible: the same
+/// degree, the same parameter range (the shorter mapped affinely onto the longer, or the
+/// second shifted onto the first's) and the union of their knots. The control net is the
+/// discrete Coons patch of the four control polygons: the boundary rows and columns are the
+/// curves' poles, an inner pole `(i, j)` (with `s = i/(n−1)`, `t = j/(m−1)`) the sum of the
+/// two linear blends of opposite poles less the bilinear blend of the corner poles. Weights,
+/// if any curve is rational, are blended by the same rule.
+///
+/// `Error::InvalidInput` unless there are four curves joining end to end (within
+/// `tolerance::LINEAR`); `Error::Failed` if opposite curves cannot be given equal pole
+/// counts.
+#[doc(alias = "GeomFill_BSplineCurves")]
+#[doc(alias = "GeomFill_Stretch")]
+pub fn coons_surface(curves: &[crate::geometry::curve::BSplineCurve]) -> Result<BSplineSurface> {
+    use crate::tolerance::{LINEAR, PARAMETRIC};
+    if curves.len() != 4 {
+        return Err(Error::InvalidInput(format!("a Coons patch has four curves, not {}", curves.len())));
+    }
+    let mut arranged: Vec<_> = curves.iter().map(|c| c.clamped()).collect();
+    let start = |c: &crate::geometry::curve::BSplineCurve| c.point(c.first_parameter());
+    let end = |c: &crate::geometry::curve::BSplineCurve| c.point(c.last_parameter());
+    for place in 1..4 {
+        let tip = end(&arranged[place - 1]);
+        let closed = (place..4).find(|&i| start(&arranged[i]).distance(end(&arranged[i])) <= LINEAR && start(&arranged[i]).distance(tip) <= LINEAR);
+        let chosen = closed.map(|i| (i, false)).or_else(|| {
+            (place..4).find_map(|i| match () {
+                _ if start(&arranged[i]).distance(tip) <= LINEAR => Some((i, false)),
+                _ if end(&arranged[i]).distance(tip) <= LINEAR => Some((i, true)),
+                _ => None,
+            })
+        });
+        let Some((i, reversed)) = chosen else {
+            return Err(Error::InvalidInput("the curves of a Coons patch do not join end to end".into()));
+        };
+        arranged.swap(place, i);
+        if reversed {
+            arranged[place].reverse_as_occt();
+        }
+    }
+    let [c1, c2, mut c3, mut c4]: [crate::geometry::curve::BSplineCurve; 4] = arranged.try_into().expect("four curves");
+    c3.reverse_as_occt();
+    c4.reverse_as_occt();
+    let (c1, c3) = compatible(c1, c3, PARAMETRIC)?;
+    let (c2, c4) = compatible(c2, c4, PARAMETRIC)?;
+    let (n, m) = (c1.poles().len(), c2.poles().len());
+    // The discrete Coons blend of four boundary sequences (poles or weights).
+    fn blend<T: Copy>(n: usize, m: usize, b1: &[T], b2: &[T], b3: &[T], b4: &[T], combine: impl Fn(&[(f64, T)]) -> T) -> Vec<Vec<T>> {
+        (0..n)
+            .map(|i| {
+                (0..m)
+                    .map(|j| {
+                        let (s, t) = (i as f64 / (n - 1) as f64, j as f64 / (m - 1) as f64);
+                        match () {
+                            _ if j == 0 => b1[i],
+                            _ if j == m - 1 => b3[i],
+                            _ if i == 0 => b4[j],
+                            _ if i == n - 1 => b2[j],
+                            _ => combine(&[
+                                (1.0 - t, b1[i]),
+                                (t, b3[i]),
+                                (1.0 - s, b4[j]),
+                                (s, b2[j]),
+                                (-(1.0 - s) * (1.0 - t), b1[0]),
+                                (-s * (1.0 - t), b2[0]),
+                                (-s * t, b3[n - 1]),
+                                (-(1.0 - s) * t, b4[m - 1]),
+                            ]),
+                        }
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+    let poles = blend(n, m, c1.poles(), c2.poles(), c3.poles(), c4.poles(), |terms| {
+        let v = terms.iter().fold(Vector::new(0.0, 0.0, 0.0), |acc, &(f, p)| acc + (p - Point::ORIGIN) * f);
+        Point::ORIGIN + v
+    });
+    let u = KnotVector::new(c1.knots().to_vec(), c1.multiplicities().to_vec(), c1.degree());
+    let v = KnotVector::new(c2.knots().to_vec(), c2.multiplicities().to_vec(), c2.degree());
+    let surface = BSplineSurface::try_new(poles, u, v)?;
+    if [&c1, &c2, &c3, &c4].iter().all(|c| !c.is_rational()) {
+        return Ok(surface);
+    }
+    let weights = |c: &crate::geometry::curve::BSplineCurve| (0..c.poles().len()).map(|i| c.weight(i)).collect::<Vec<f64>>();
+    let w = blend(n, m, &weights(&c1), &weights(&c2), &weights(&c3), &weights(&c4), |terms| terms.iter().map(|&(f, w)| f * w).sum());
+    if w.iter().flatten().any(|&x| !(x > 0.0)) {
+        return Err(Error::Failed("the blended weights of a Coons patch are not positive".into()));
+    }
+    Ok(surface.with_weights(w))
+}
+
+/// Two opposite boundary curves of a Coons patch made compatible: the same degree (the
+/// larger), the same parameter range (the curve with the shorter range mapped affinely onto
+/// the other's; for equal lengths `b` shifted onto `a`'s) and the same knots (each given the
+/// other's knots, up to the larger multiplicity). `Error::Failed` if the pole counts still
+/// differ.
+fn compatible(
+    mut a: crate::geometry::curve::BSplineCurve,
+    mut b: crate::geometry::curve::BSplineCurve,
+    parametric: f64,
+) -> Result<(crate::geometry::curve::BSplineCurve, crate::geometry::curve::BSplineCurve)> {
+    let degree = a.degree().max(b.degree());
+    a.increase_degree(degree);
+    b.increase_degree(degree);
+    let range = |c: &crate::geometry::curve::BSplineCurve| (c.knots()[0], c.knots()[c.knots().len() - 1]);
+    let ((a0, a1), (b0, b1)) = (range(&a), range(&b));
+    let (la, lb) = (a1 - a0, b1 - b0);
+    if la > lb {
+        b = mapped(&b, a0, a1)?;
+    } else if lb > la {
+        a = mapped(&a, b0, b1)?;
+    } else if la > parametric && (a0, a1) != (b0, b1) {
+        b = mapped(&b, a0, a1)?;
+    }
+    let knots = |c: &crate::geometry::curve::BSplineCurve| c.knots().iter().copied().zip(c.multiplicities().iter().copied()).collect::<Vec<(f64, usize)>>();
+    let (ka, kb) = (knots(&a), knots(&b));
+    let inner = |k: &[(f64, usize)]| k[1..k.len() - 1].to_vec();
+    a.insert_knots(&inner(&kb));
+    b.insert_knots(&inner(&ka));
+    if a.poles().len() != b.poles().len() {
+        return Err(Error::Failed("opposite curves of a Coons patch cannot be made compatible".into()));
+    }
+    Ok((a, b))
+}
+
+/// `curve` reparametrised affinely onto `[lo, hi]`: knots mapped linearly (the end knots set
+/// to `lo` and `hi` exactly), poles, weights and multiplicities unchanged.
+fn mapped(curve: &crate::geometry::curve::BSplineCurve, lo: f64, hi: f64) -> Result<crate::geometry::curve::BSplineCurve> {
+    let k = curve.knots();
+    let last = k.len() - 1;
+    let (a, b) = (k[0], k[last]);
+    let knots: Vec<f64> = k
+        .iter()
+        .enumerate()
+        .map(|(i, &x)| match i {
+            0 => lo,
+            _ if i == last => hi,
+            _ => lo + (x - a) * (hi - lo) / (b - a),
+        })
+        .collect();
+    let out = crate::geometry::curve::BSplineCurve::try_new(curve.poles().to_vec(), knots, curve.multiplicities().to_vec(), curve.degree())?;
+    Ok(match curve.weights() {
+        Some(w) => out.with_weights(w.to_vec()),
+        None => out,
+    })
+}
 
 /// Copies of `edges` (each placed where it is: the face's own, joined at their ends without
 /// changing the edges given, which other faces may share) in order end to end, by their end
@@ -610,5 +762,33 @@ mod tests {
         model.add(solid, shells[0]).unwrap();
         let volume = crate::properties::volume(&model, solid).mass.abs();
         assert!((volume - 1000.0).abs() < 1e-9 * 1000.0, "{volume}");
+    }
+
+    #[test]
+    fn coons_surfaces_of_mixed_curves_keep_their_boundaries() {
+        use crate::geometry::curve::BSplineCurve;
+        let p = Point::new;
+        // A cubic with an inner knot on [0, 2] against a line on [0, 1]; a quadratic Bézier
+        // against a line, given reversed and out of order.
+        let bottom = BSplineCurve::new(vec![p(0.0, 0.0, 0.0), p(1.0, -0.5, 0.2), p(2.0, 0.3, 0.0), p(3.0, -0.2, 0.1), p(4.0, 0.0, 0.0)], vec![0.0, 0.7, 2.0], vec![4, 1, 4], 3);
+        let right = BSplineCurve::new(vec![p(4.0, 0.0, 0.0), p(4.5, 1.5, 0.5), p(4.0, 3.0, 0.0)], vec![0.0, 1.0], vec![3, 3], 2);
+        let top = BSplineCurve::new(vec![p(0.0, 3.0, 0.0), p(4.0, 3.0, 0.0)], vec![5.0, 6.0], vec![2, 2], 1);
+        let left = BSplineCurve::new(vec![p(0.0, 3.0, 0.0), p(0.0, 0.0, 0.0)], vec![0.0, 3.0], vec![2, 2], 1);
+        let surface = coons_surface(&[bottom.clone(), top.clone(), left.clone(), right.clone()]).unwrap();
+        let (u0, u1, v0, v1) = surface.bounds();
+        assert_eq!((u0, u1), (0.0, 2.0));
+        for i in 0..=10 {
+            let f = i as f64 / 10.0;
+            let u = u0 + (u1 - u0) * f;
+            assert!(surface.point(u, v0).distance(bottom.point(u)) < 1e-12);
+            assert!(surface.point(u, v1).distance(p(4.0 * f, 3.0, 0.0)) < 1e-12);
+            let v = v0 + (v1 - v0) * f;
+            assert!(surface.point(u1, v).distance(right.point(right.first_parameter() + f)) < 1e-12);
+            assert!(surface.point(u0, v).distance(p(0.0, 3.0 * f, 0.0)) < 1e-12);
+        }
+        // Not four curves, or not joining.
+        assert!(matches!(coons_surface(&[bottom.clone(), top.clone(), left.clone()]), Err(Error::InvalidInput(_))));
+        let apart = BSplineCurve::new(vec![p(0.0, 3.0, 1.0), p(4.0, 3.0, 1.0)], vec![0.0, 1.0], vec![2, 2], 1);
+        assert!(matches!(coons_surface(&[bottom, right, apart, left]), Err(Error::InvalidInput(_))));
     }
 }

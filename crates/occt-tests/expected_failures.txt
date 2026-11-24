@@ -759,8 +759,16 @@ tests/feat/featprism/R4
 tests/feat/featrevol/I6
 tests/feat/featrevol/J7
 tests/geometry/2dbeziecurve/B1
+tests/geometry/2dbsplinecurve/A8
+tests/geometry/2dbsplinecurve/A9
+tests/geometry/2dbsplinecurve/B1
+tests/geometry/2dbsplinecurve/B2
 tests/geometry/2dbsplinecurve/B7
 tests/geometry/2dpolygon/A1
+tests/geometry/bsplinecurve/A3
+tests/geometry/bsplinecurve/A5
+tests/geometry/bsplinecurve/A7
+tests/geometry/bsplinecurve/A9
 tests/geometry/circ2d3Tan/CircleCircleLin_11
 tests/geometry/circ2d3Tan/CircleCirclePoint_13
 tests/geometry/circ2d3Tan/CircleLinPoint_11

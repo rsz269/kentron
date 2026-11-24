@@ -655,7 +655,39 @@ fn torus_elementary(torus: &crate::geometry::surface::Torus, other: &Surface, to
     if circles.is_empty() { Q::Empty } else { Q::Circles(circles) }
 }
 
-// CLEAN-ROOM GAP: 35 lines removed; rewrite from the cleanroom spec `sphere_cone.md`.
+/// A sphere whose centre lies on a cone's axis meets the (double) cone in circles about the
+/// axis: in a meridian plane, with `x` the offset along the axis from the sphere's centre,
+/// the circle `x² + ρ² = R²` meets the lines `ρ = ±tan α (x + d)` (`d` the centre's
+/// distance from the apex) where `(1 + tan²α) x² + 2 tan²α d x + tan²α d² − R² = 0`. A root
+/// of radius about zero is the apex lying on the sphere: an isolated point. A double root
+/// (tangency) gives its circle twice.
+fn sphere_cone(sphere: &crate::geometry::surface::Sphere, cone: &crate::geometry::surface::Cone) -> QuadricIntersection {
+    use crate::geometry::polynomial_roots::PolynomialRoots;
+    let (centre, radius, apex) = (sphere.frame().origin(), sphere.radius(), cone.apex());
+    let (sin, cos) = cone.semi_angle_sin_cos();
+    let tan = sin / cos;
+    let towards = centre - apex;
+    let d = towards.length();
+    let axis = if d <= f64::EPSILON { cone.frame().z() } else { Direction::from_vector(towards) };
+    let t2 = tan * tan;
+    let roots = PolynomialRoots::quadratic(1.0 + t2, 2.0 * t2 * d, t2 * d * d - radius * radius);
+    let (mut circles, mut points) = (Vec::new(), Vec::new());
+    for x in roots.roots {
+        let at = apex + Vector::from(axis) * (d + x);
+        let rho = (tan * (d + x)).abs();
+        if rho <= 0.01 * crate::tolerance::LINEAR {
+            points.push(at);
+        } else {
+            circles.push(Circle::new(Frame::from_z(at, axis), rho));
+        }
+    }
+    match (circles.is_empty(), points.is_empty()) {
+        (true, true) => QuadricIntersection::Empty,
+        (false, true) => QuadricIntersection::Circles(circles),
+        (true, false) => QuadricIntersection::Points(points),
+        (false, false) => QuadricIntersection::CirclesAndPoints(circles, points),
+    }
+}
 
 /// Two cones on one axis meet in circles: where their meridians (lines in the plane of
 /// height along the axis and signed radius) give the same distance from the axis. `None`
@@ -2083,5 +2115,48 @@ mod tests {
         assert!(a < b && b - a < TAU);
         let (lo, hi) = (curves.curves[0].point(a).unwrap(), curves.curves[1].point(a).unwrap());
         assert!(lo.distance(hi) < 1e-4, "branches meet at the domain's ends");
+    }
+
+    #[test]
+    fn a_sphere_on_a_cones_axis_meets_it_in_circles() {
+        use crate::geometry::surface::Cone;
+        let alpha = 30f64.to_radians();
+        let sphere = Sphere::new(Frame::WORLD, 1.0);
+        // The apex two below the centre: two circles, each on both surfaces.
+        let cone = Cone::new(Frame::from_z(Point::new(0.0, 0.0, -2.0), Direction::Z), alpha, 0.0);
+        let on_both = |circles: &[Circle], cone: &Cone| {
+            for c in circles {
+                for i in 0..8 {
+                    let p = c.point(i as f64);
+                    assert!((p.distance(Point::ORIGIN) - 1.0).abs() < 1e-12);
+                    let (h, rho) = (p.z - cone.apex().z, p.x.hypot(p.y));
+                    assert!((rho - (h * alpha.tan()).abs()).abs() < 1e-12, "{p:?}");
+                }
+            }
+        };
+        let QuadricIntersection::Circles(circles) = sphere_cone(&sphere, &cone) else { panic!("circles") };
+        assert_eq!(circles.len(), 2);
+        on_both(&circles, &cone);
+        // The apex on the sphere: a circle and the apex as a point.
+        let cone = Cone::new(Frame::from_z(Point::new(0.0, 0.0, -1.0), Direction::Z), alpha, 0.0);
+        let QuadricIntersection::CirclesAndPoints(circles, points) = sphere_cone(&sphere, &cone) else { panic!("circles and points") };
+        assert_eq!((circles.len(), points.len()), (1, 1));
+        assert!(points[0].distance(Point::new(0.0, 0.0, -1.0)) < 1e-12);
+        on_both(&circles, &cone);
+        // The apex at the centre: two circles of radius R sin α about the cone's axis.
+        let cone = Cone::new(Frame::WORLD, alpha, 0.0);
+        let QuadricIntersection::Circles(circles) = sphere_cone(&sphere, &cone) else { panic!("circles") };
+        assert_eq!(circles.len(), 2);
+        for c in &circles {
+            assert!((c.radius() - alpha.sin()).abs() < 1e-12 && (Vector::from(c.frame().z()).cross(Vector::new(0.0, 0.0, 1.0))).length() < 1e-15);
+        }
+        assert!((circles[0].frame().origin().z + circles[1].frame().origin().z).abs() < 1e-12);
+        // Too small to reach the cone; just touching it (a double root: twice).
+        let cone = Cone::new(Frame::from_z(Point::new(0.0, 0.0, -4.0), Direction::Z), alpha, 0.0);
+        assert!(matches!(sphere_cone(&sphere, &cone), QuadricIntersection::Empty));
+        let cone = Cone::new(Frame::from_z(Point::new(0.0, 0.0, -2.0), Direction::Z), alpha, 0.0);
+        let QuadricIntersection::Circles(circles) = sphere_cone(&Sphere::new(Frame::WORLD, 2.0 * alpha.sin()), &cone) else { panic!("circles") };
+        assert_eq!(circles.len(), 2);
+        assert!((circles[0].radius() - circles[1].radius()).abs() < 1e-7);
     }
 }
