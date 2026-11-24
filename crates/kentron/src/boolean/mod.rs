@@ -3543,4 +3543,135 @@ mod tests {
         use Mill::*;
         mill_raster([36.0, 14.0, 54.0, 28.0], &[Along(45.0, 24.0, 50.0, 24.0), Along(40.0, 24.0, 45.0, 24.0), Along(45.0, 20.0, 50.0, 20.0), Along(40.0, 20.0, 45.0, 20.0)]);
     }
+
+    /// The volume inside both a ring about z (centre circle of radius `big` at height `z0`;
+    /// the torus of tube radius `tori.0` less that of `tori.1`, above `z_min`) and a tube along
+    /// y through (`big`, ·, `z0`) (radius `tube.0` less `tube.1`, from `ys.0` to `ys.1`): along
+    /// each line in x the exact length inside both, by the midpoint rule across y and z (in
+    /// stretches between the heights where the lengths jump).
+    fn ring_tube_overlap(big: f64, z0: f64, tori: (f64, f64), z_min: f64, tube: (f64, f64), ys: (f64, f64)) -> f64 {
+        // (The x > 0 half of a torus's section along the line: the tube lies there.)
+        let torus = |r: f64, y: f64, dz: f64| -> Option<(f64, f64)> {
+            let w = (r * r - dz * dz).sqrt();
+            let hi = (big + w) * (big + w) - y * y;
+            (w.is_finite() && hi > 0.0).then(|| (((big - w) * (big - w) - y * y).max(0.0).sqrt(), hi.sqrt()))
+        };
+        let disc = |r: f64, dz: f64| -> Option<(f64, f64)> {
+            let w = (r * r - dz * dz).sqrt();
+            w.is_finite().then(|| (big - w, big + w))
+        };
+        let overlap = |a: Option<(f64, f64)>, b: Option<(f64, f64)>| match (a, b) {
+            (Some(a), Some(b)) => (a.1.min(b.1) - a.0.max(b.0)).max(0.0),
+            _ => 0.0,
+        };
+        let length = |y: f64, z: f64| {
+            let dz = z - z0;
+            if z < z_min {
+                return 0.0;
+            }
+            let (t1, t0) = (torus(tori.0, y, dz), torus(tori.1, y, dz));
+            let (c1, c0) = (disc(tube.0, dz), disc(tube.1, dz));
+            overlap(t1, c1) - overlap(t1, c0) - overlap(t0, c1) + overlap(t0, c0)
+        };
+        let nodes = |breaks: &[f64], lo: f64, hi: f64, n: usize| -> Vec<(f64, f64)> {
+            let mut b: Vec<f64> = breaks.iter().copied().filter(|&x| x > lo && x < hi).chain([lo, hi]).collect();
+            b.sort_by(f64::total_cmp);
+            b.windows(2)
+                .flat_map(|w| {
+                    let k = ((n as f64 * (w[1] - w[0]) / (hi - lo)).round() as usize).max(4);
+                    let h = (w[1] - w[0]) / k as f64;
+                    (0..k).map(move |i| (w[0] + h * (i as f64 + 0.5), h))
+                })
+                .collect()
+        };
+        let reach = tori.0.min(tube.0);
+        let zs = nodes(&[z0 - tori.1, z0 + tori.1, z0 - tube.1, z0 + tube.1, z_min], z0 - reach, z0 + reach, 1200);
+        let ys = nodes(&[], ys.0.min(ys.1), ys.0.max(ys.1), 2400);
+        ys.iter().map(|&(y, hy)| zs.iter().map(|&(z, hz)| length(y, z) * hz).sum::<f64>() * hy).sum()
+    }
+
+    /// `a` op `b` for each operation, valid, against the volumes from those of `a`, `b` and
+    /// their overlap `common` (within the quadrature's error, a two-thousandth of it).
+    fn check_against_overlap(model: &mut Model, a: Shape, b: Shape, (va, vb, common): (f64, f64, f64), what: &str) {
+        let tolerance = 5e-4 * common + 1e-6 * (va + vb);
+        for (name, expected) in [("union", va + vb - common), ("intersection", common), ("difference", va - common), ("reverse difference", vb - common)] {
+            let r = match name {
+                "union" => union(model, a, b),
+                "intersection" => intersection(model, a, b),
+                "difference" => difference(model, a, b),
+                _ => difference(model, b, a),
+            }
+            .unwrap();
+            let report = validity::check(model, r);
+            assert!(report.is_valid(), "{what}, {name}: {report:?}");
+            let v = properties::volume(model, r).mass;
+            assert!((v - expected).abs() <= tolerance, "{what}, {name}: volume {v} against {expected}");
+        }
+    }
+
+    /// A torus and a cylinder of its tube's radius whose axis is tangent to its centre
+    /// circle, the cylinder ending in the meridian plane through the point of tangency (as
+    /// in a compressor's housing): the two touch along that meridian circle, the cylinder's
+    /// end edge, and the branch of their section where the cylinder runs into the torus
+    /// crosses that circle at its top and bottom. The surfaces part there only to fourth
+    /// order, and the traced branch passed the crossings 1e-4 off: they were not found, the
+    /// branch was dropped and neither face was split (the results invalid, the difference
+    /// the whole torus). Now the crossings are where the surfaces' curvatures across the
+    /// circle change order. With the torus's seam on that meridian and off it, the cylinder
+    /// either way along its axis.
+    #[test]
+    fn a_torus_and_a_cylinder_touching_along_a_meridian() {
+        let (big, r, z0, length) = (12.8, 3.315, 3.7227, 16.885);
+        for (turn, way) in [(0.0f64, -1.0), (37f64.to_radians(), -1.0), (0.0, 1.0), (-71f64.to_radians(), 1.0)] {
+            let mut model = Model::new();
+            let frame = Frame::new(Point::new(0.0, 0.0, z0), Direction::Z, Direction::new(turn.cos(), turn.sin(), 0.0));
+            let torus = crate::primitives::Torus::new(big, r).with_frame(frame).build(&mut model).unwrap();
+            let (start, axis) = if way < 0.0 { (-length, Direction::Y) } else { (length, -Direction::Y) };
+            let pipe = cylinder(&mut model, (big, start, z0), axis, r, length);
+            let common = ring_tube_overlap(big, z0, (r, 0.0), f64::NEG_INFINITY, (r, 0.0), (0.0, start));
+            let volumes = (2.0 * PI * PI * big * r * r, PI * r * r * length, common);
+            check_against_overlap(&mut model, torus, pipe, volumes, &format!("seam turned {turn}, cylinder {way}"));
+        }
+    }
+
+    /// The same contact where a tube (a cylinder bored through) meets tori: one of its bore's
+    /// radius (touching the bore along the meridian circle, the bore's end edge), one of its
+    /// outside's, and the shell between them cut down to its top (the half of a compressor's
+    /// volute). Also a smaller ring, and the tube's end a hair (within the tolerance) either
+    /// side of the meridian plane, its end edge lying on the torus nearly tangent.
+    #[test]
+    fn a_tube_against_tori_touching_it_along_a_meridian() {
+        let cases = [(12.8, 3.315, 0.3377, 3.7227, 16.885, 0.0, 0.0), (12.8, 3.315, 0.3377, 3.7227, 16.885, 0.4, 1e-3), (12.8, 3.315, 0.3377, 3.7227, 16.885, -0.4, -1e-3), (8.0, 2.5, 0.4, 2.6, 10.0, 0.0, 0.0)];
+        for (big, r, wall, z0, length, turn, shift) in cases {
+            let mut model = Model::new();
+            let bore = r - wall;
+            let frame = Frame::new(Point::new(0.0, 0.0, z0), Direction::Z, Direction::new(f64::cos(turn), f64::sin(turn), 0.0));
+            let torus = |model: &mut Model, tube: f64| crate::primitives::Torus::new(big, tube).with_frame(frame).build(model).unwrap();
+            let outside = cylinder(&mut model, (big, shift - length, z0), Direction::Y, r, length);
+            let inside = cylinder(&mut model, (big, shift - length, z0), Direction::Y, bore, length);
+            let pipe = difference(&mut model, outside, inside).unwrap();
+            let ys = (shift - length, shift);
+            let v_pipe = PI * (r * r - bore * bore) * length;
+            let what = |name: &str| format!("ring {big}, turned {turn}, shifted {shift}: {name}");
+            for tube in [bore, r] {
+                let t = torus(&mut model, tube);
+                let common = ring_tube_overlap(big, z0, (tube, 0.0), f64::NEG_INFINITY, (r, bore), ys);
+                check_against_overlap(&mut model, pipe, t, (v_pipe, 2.0 * PI * PI * big * tube * tube, common), &what(&format!("torus {tube}")));
+            }
+            // The shell between the tori above z = r / 2, against the cylinder whole.
+            let (outer, inner) = (torus(&mut model, r), torus(&mut model, bore));
+            let shell = difference(&mut model, outer, inner).unwrap();
+            let z_min = 0.5 * r;
+            let slab = cuboid(&mut model, (-2.0 * big, -2.0 * big, z_min), (4.0 * big, 4.0 * big, 2.0 * z0));
+            let top = intersection(&mut model, shell, slab).unwrap();
+            // (Pappus: the area of each disc above the cut turned about the axis at `big`.)
+            let above = |radius: f64| {
+                let d = z0 - z_min;
+                PI * radius * radius - (radius * radius * (d / radius).acos() - d * (radius * radius - d * d).sqrt())
+            };
+            let v_top = 2.0 * PI * big * (above(r) - above(bore));
+            let common = ring_tube_overlap(big, z0, (r, bore), z_min, (r, 0.0), ys);
+            check_against_overlap(&mut model, top, outside, (v_top, PI * r * r * length, common), &what("shell's top"));
+        }
+    }
 }

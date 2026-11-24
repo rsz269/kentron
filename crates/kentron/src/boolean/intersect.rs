@@ -2863,28 +2863,32 @@ pub(super) fn closest_points(a: &Curve, (a0, a1): (f64, f64), b: &Curve, (b0, b1
     (u, s)
 }
 
-fn touching_across(a: &Surface, b: &Surface, p: Point) -> bool {
+/// The normal curvature of surface `s` at its point `p` along the tangent direction `w`, as
+/// seen along `n` (positive where the surface turns towards `n`); `None` where its
+/// parametrization is singular there.
+fn normal_curvature(s: &Surface, p: Point, n: Vector, w: Vector) -> Option<f64> {
     use crate::geometry::ParametricSurface;
+    let [u, v] = geom::uv_of(s, p);
+    let d = s.d2(u, v);
+    let (e, f, g) = (d.du.dot(d.du), d.du.dot(d.dv), d.dv.dot(d.dv));
+    let det = e * g - f * f;
+    if !(det.abs() > 1e-300) {
+        return None;
+    }
+    // w = α du + β dv (w is tangent).
+    let (wu, wv) = (w.dot(d.du), w.dot(d.dv));
+    let (alpha, beta) = ((g * wu - f * wv) / det, (e * wv - f * wu) / det);
+    let second = (d.duu * (alpha * alpha) + d.duv * (2.0 * alpha * beta) + d.dvv * (beta * beta)).dot(n);
+    let first = (d.du * alpha + d.dv * beta).length_squared();
+    (first > 1e-300).then(|| second / first)
+}
+
+fn touching_across(a: &Surface, b: &Surface, p: Point) -> bool {
     let n = geom::normal_at_point(a, p);
     if n.cross(geom::normal_at_point(b, p)).length() > 1e-3 {
         return false;
     }
-    // The normal curvature of a surface along a tangent direction (as seen along `n`).
-    let curvature = |s: &Surface, w: Vector| -> Option<f64> {
-        let [u, v] = geom::uv_of(s, p);
-        let d = s.d2(u, v);
-        let (e, f, g) = (d.du.dot(d.du), d.du.dot(d.dv), d.dv.dot(d.dv));
-        let det = e * g - f * f;
-        if !(det.abs() > 1e-300) {
-            return None;
-        }
-        // w = α du + β dv (w is tangent).
-        let (wu, wv) = (w.dot(d.du), w.dot(d.dv));
-        let (alpha, beta) = ((g * wu - f * wv) / det, (e * wv - f * wu) / det);
-        let second = (d.duu * (alpha * alpha) + d.duv * (2.0 * alpha * beta) + d.dvv * (beta * beta)).dot(n);
-        let first = (d.du * alpha + d.dv * beta).length_squared();
-        (first > 1e-300).then(|| second / first)
-    };
+    let curvature = |s: &Surface, w: Vector| normal_curvature(s, p, n, w);
     let e1 = {
         let x = if n.x.abs() < 0.9 { Vector::new(1.0, 0.0, 0.0) } else { Vector::new(0.0, 1.0, 0.0) };
         let x = x - n * x.dot(n);
@@ -3547,6 +3551,73 @@ impl Graph {
                 self.faces[fa].vertices_on.push(v);
                 self.faces[fb].vertices_on.push(v);
             }
+            // (Where the surfaces touch tangent along an edge lying on both, the points of it
+            // other branches of the section cross it at: vertices on the edge, and on the
+            // sections passing them, as nearly as their samples allow. Only near traced
+            // sections: those found in closed form pass such points exactly, and where
+            // quadrics touch along a curve, their curvatures across it keep their order.)
+            let mut contacts: Vec<Vec<(f64, usize, bool)>> = vec![Vec::new(); curves.len()];
+            let traced: Vec<(Point, Point)> = curves
+                .iter()
+                .filter_map(|c| match c {
+                    Section::Sampled(points, ..) => {
+                        let mut b = crate::math::BoundingBox::EMPTY;
+                        for &p in points {
+                            b.add_point(p);
+                        }
+                        let spacing = points.windows(2).map(|w| w[0].distance(w[1])).fold(0.0, f64::max);
+                        let b = b.enlarged(spacing + on_tol());
+                        Some((b.min, b.max))
+                    }
+                    _ => None,
+                })
+                .collect();
+            if !traced.is_empty() {
+                let mut lying = self.edges_lying_on_both(fa, fb).0;
+                lying.retain(|&e| traced.iter().any(|b| geom::boxes_overlap(b, &self.edges[e].bbox)));
+                lying.sort_unstable();
+                lying.dedup();
+                for p in self.tangent_contact_crossings(fa, fb, &lying) {
+                    // (On both faces: an edge may lie on the other face's surface past it.)
+                    if [fa, fb].iter().any(|&f| self.faces[f].locate(p, &self.edges, &self.vertices) == Location::Outside) {
+                        continue;
+                    }
+                    let passing: Vec<(usize, f64)> = curves
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(k, section)| {
+                            let (t, d) = section.project(p);
+                            let reach = match section {
+                                Section::Sampled(points, ..) => {
+                                    let n = points.len();
+                                    let i = (t.floor().max(0.0) as usize).min(n.saturating_sub(2));
+                                    2.0 * points[i].distance(points[(i + 1) % n]) + on_tol()
+                                }
+                                _ => on_tol(),
+                            };
+                            (d <= reach).then_some((k, t))
+                        })
+                        .collect();
+                    if passing.is_empty() {
+                        continue;
+                    }
+                    let v = self.vertices.add(p);
+                    self.faces[fa].vertices_on.push(v);
+                    self.faces[fb].vertices_on.push(v);
+                    for &e in &lying {
+                        let edge = &self.edges[e];
+                        let Some(c) = &edge.curve else { continue };
+                        let (s, d) = geom::project(c, edge.first, edge.last, p);
+                        if d <= on_tol() {
+                            self.add_pave(e, s, v);
+                            ended.push((e, v));
+                        }
+                    }
+                    for (k, t) in passing {
+                        contacts[k].push((t, v, false));
+                    }
+                }
+            }
             // A vertex the section passes only near (where the surfaces touch crossing, its
             // branches crossing in it) is on it if passed so twice: by both arcs the tracing
             // makes of the crossing (one alone may be another branch's, passing by).
@@ -3554,8 +3625,8 @@ impl Graph {
             // too, as the edge two faces lying nearly on one another share, meets that edge
             // where the edge passes it: no edge crosses the other face there to tell.)
             let mut ends: Vec<Vec<(f64, usize, bool)>> = Vec::with_capacity(curves.len());
-            for section in &curves {
-                let mut met: Vec<(f64, usize, bool)> = Vec::new();
+            for (section, contacts) in curves.iter().zip(contacts) {
+                let mut met: Vec<(f64, usize, bool)> = contacts;
                 let (meetings, at_vertices) = self.section_end_meetings(fa, fb, section);
                 for (t, v) in at_vertices {
                     met.push((t, v, false));
@@ -3634,6 +3705,96 @@ impl Graph {
         for (edge, v) in ended {
             self.pave_coincident(edge, v);
         }
+    }
+
+    /// Where the faces' surfaces touch tangent along an edge of either lying on the other
+    /// (a cylinder against a torus along a meridian circle of its radius), the points of that
+    /// edge where they cross from one side of each other to the other: where the difference
+    /// of their normal curvatures square to the edge changes sign. Other branches of their
+    /// section pass through those points, which a traced branch finds only roughly there
+    /// (the surfaces part from each other there to fourth order, not second).
+    fn tangent_contact_crossings(&self, fa: usize, fb: usize, lying: &[usize]) -> Vec<Point> {
+        let (a, b) = (&self.faces[fa].surface, &self.faces[fb].surface);
+        let mut out: Vec<Point> = Vec::new();
+        for &e in lying {
+            let edge = &self.edges[e];
+            let Some(c) = &edge.curve else { continue };
+            // The difference at `t`, with the larger of the two curvatures' sizes; `None` where
+            // the surfaces are not tangent (or a curvature is not found). (Nearly tangent as
+            // [`touching_across`] takes it: an edge lying on both within the tolerance a hair
+            // off the line along which they touch, as a cylinder's end a little short of the
+            // torus's meridian plane, is crossed by the other branches about where that line
+            // is, nearer than the hair.)
+            let difference = |t: f64| -> Option<(f64, f64)> {
+                let (p, tangent) = c.d1(t);
+                let n = geom::normal_at_point(a, p);
+                if n.cross(geom::normal_at_point(b, p)).length() > 1e-3 {
+                    return None;
+                }
+                let w = n.cross(tangent);
+                let length = w.length();
+                if !(length > 1e-300) {
+                    return None;
+                }
+                let w = w * (1.0 / length);
+                let (ka, kb) = (normal_curvature(a, p, n, w)?, normal_curvature(b, p, n, w)?);
+                Some((ka - kb, ka.abs().max(kb.abs())))
+            };
+            const N: usize = 64;
+            let ts: Vec<f64> = (0..=N).map(|i| edge.first + (edge.last - edge.first) * i as f64 / N as f64).collect();
+            // (Tangent all along the edge, or not a contact along it.)
+            let Some(values) = ts.iter().map(|&t| difference(t)).collect::<Option<Vec<(f64, f64)>>>() else { continue };
+            let size = values.iter().map(|v| v.1).fold(0.0, f64::max);
+            // (Differences as small as rounding are none: the same surface twice.)
+            let tiny = 1e-9 * size;
+            if values.iter().all(|v| v.0.abs() <= tiny) {
+                continue;
+            }
+            let sign = |x: f64| if x > tiny { 1 } else if x < -tiny { -1 } else { 0 };
+            let mut found: Vec<f64> = Vec::new();
+            // (An end where they are level, as a closed edge's vertex there.)
+            for (k, t) in [(0, edge.first), (N, edge.last)] {
+                if sign(values[k].0) == 0 {
+                    found.push(t);
+                }
+            }
+            // Bisection between samples of either sign; round the end of a closed edge too.
+            let span = edge.last - edge.first;
+            let wrapped = |t: f64| if t > edge.last { t - span } else { t };
+            let bisect = |t0: f64, s0: i32, t1: f64| {
+                let (mut lo, mut hi) = (t0, t1);
+                for _ in 0..80 {
+                    let m = 0.5 * (lo + hi);
+                    if m == lo || m == hi {
+                        break;
+                    }
+                    match difference(wrapped(m)) {
+                        Some((x, _)) if (x > 0.0) == (s0 > 0) => lo = m,
+                        Some(_) => hi = m,
+                        None => break,
+                    }
+                }
+                wrapped(0.5 * (lo + hi))
+            };
+            let signed: Vec<(f64, i32)> = ts.iter().zip(&values).map(|(&t, v)| (t, sign(v.0))).filter(|v| v.1 != 0).collect();
+            for w in signed.windows(2) {
+                if w[0].1 != w[1].1 {
+                    found.push(bisect(w[0].0, w[0].1, w[1].0));
+                }
+            }
+            if let (true, Some(&(t_first, s_first)), Some(&(t_last, s_last))) = (edge.start == edge.end, signed.first(), signed.last()) {
+                if s_first != s_last {
+                    found.push(bisect(t_last, s_last, t_first + span));
+                }
+            }
+            for t in found {
+                let p = c.point(t);
+                if !out.iter().any(|q| q.distance(p) <= on_tol()) {
+                    out.push(p);
+                }
+            }
+        }
+        out
     }
 
     /// Where an open traced section, near either end, passes a boundary edge of either face
