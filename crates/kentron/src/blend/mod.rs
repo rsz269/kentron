@@ -10,7 +10,7 @@ mod setback;
 mod setback_tests;
 
 pub use corner2d::{chamfer_2d, fillet_2d, fillet_wire_2d, Corner2d};
-pub use sections::{fillet_conic, fillet_g2};
+pub use sections::{fillet_conic, fillet_conic_edges, fillet_g2, ConicFilletEdge, ConicSection};
 pub use setback::fillet_setback;
 
 use crate::error::{Error, Result};
@@ -2850,7 +2850,8 @@ fn chamfer_solid_edges(model: &mut Model, shape: Shape, edges: &[ChamferedEdge])
             break;
         }
     }
-    let firsts = chain_faces(model, shape, &chains, edges);
+    let chosen: Vec<Option<Shape>> = edges.iter().map(|e| e.face).collect();
+    let firsts = chain_faces(model, shape, &chains, &chosen);
     if !elementary {
         return chamfer_in_turn(model, shape, &chains, edges, &firsts);
     }
@@ -2977,11 +2978,11 @@ fn with_tools(model: &mut Model, shape: Shape, tools: &[(Shape, bool)]) -> Resul
     Ok(result)
 }
 
-/// Each of `chains`' edges' face for its chamfer's first distance: the chosen face of the
-/// edge it carries on (`edges`, by index), carried along the chain from vertex to vertex:
-/// the same face where the next edge has it, else the face across from the other one, else
-/// the face tangent to it there.
-fn chain_faces(model: &Model, shape: Shape, chains: &[(Shape, f64)], edges: &[ChamferedEdge]) -> Vec<Option<NodeId>> {
+/// Each of `chains`' edges' face for its chamfer's (or conic fillet's) first distance: the
+/// chosen face of the edge it carries on (`chosen`, by index), carried along the chain from
+/// vertex to vertex: the same face where the next edge has it, else the face across from the
+/// other one, else the face tangent to it there.
+fn chain_faces(model: &Model, shape: Shape, chains: &[(Shape, f64)], chosen: &[Option<Shape>]) -> Vec<Option<NodeId>> {
     let faces_of = |edge: Shape| -> Vec<NodeId> {
         model.explore(shape, NodeKind::Face).filter(|&f| model.explore(f, NodeKind::Edge).any(|e| e.node == edge.node)).map(|f| f.node).collect()
     };
@@ -2989,12 +2990,12 @@ fn chain_faces(model: &Model, shape: Shape, chains: &[(Shape, f64)], edges: &[Ch
     let mut firsts: Vec<Option<NodeId>> = chains
         .iter()
         .map(|&(e, index)| {
-            let chosen = edges[index as usize].face.map(|f| f.node)?;
+            let chosen = chosen[index as usize].map(|f| f.node)?;
             faces_of(e).contains(&chosen).then_some(chosen)
         })
         .collect();
     // (Never set where none was chosen.)
-    let chosen_any = |k: usize| edges[chains[k].1 as usize].face.is_some();
+    let chosen_any = |k: usize| chosen[chains[k].1 as usize].is_some();
     loop {
         let mut changed = false;
         for k in 0..chains.len() {

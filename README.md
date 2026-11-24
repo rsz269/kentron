@@ -19,7 +19,8 @@ kentron models solids as faces bounded by edges and vertices, over exact curves 
 independently: OCCT is not a dependency.
 
 - Primitives, extrusions, revolutions, lofts and pipes.
-- Booleans, fillets, chamfers, drafts, offsets and thick solids.
+- Booleans, fillets (round, conic of a given rho, elliptic of two distances), chamfers, drafts,
+  offsets and thick solids.
 - Filling surfaces, removing features, sewing and healing.
 - Meshing, and text from TrueType and OpenType fonts.
 - BRep, STEP and STL files.
