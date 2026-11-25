@@ -30,7 +30,7 @@
 //! The section is then the blank's section less what those candidate curves bound, each
 //! piece kept where the swept set does not cover it (how deep a point lies in the tool at
 //! its deepest over the motion: sampled, then searched), and is swept back into a solid:
-//! extruded, screwed or revolved. The curves are cubics through their points, as close as
+//! extruded, screwed or revolved. The curves are quintics through their points, as close as
 //! about 1e-10 of the blank's size.
 
 use std::f64::consts::{PI, TAU};
@@ -1444,7 +1444,7 @@ fn section_faces(model: &mut Model, candidates: &[Candidate], loops: &[Loop], ma
     }
 }
 
-/// The wire of a loop: its junctions vertices, its pieces edges (the candidates' cubics
+/// The wire of a loop: its junctions vertices, its pieces edges (the candidates' quintics
 /// through their points, the blank's own circle and lines exactly).
 fn loop_wire(model: &mut Model, candidates: &[Candidate], l: &Loop, map: &PlaneMap, size: f64) -> Result<Shape> {
     let n = l.pieces.len();
@@ -1489,9 +1489,10 @@ fn loop_wire(model: &mut Model, candidates: &[Candidate], l: &Loop, map: &PlaneM
     Ok(Shape::from(model.add_wire(&coedges)?))
 }
 
-/// The cubic through a candidate piece's points, even in its parameter, from junction
+/// The quintic through a candidate piece's points, even in its parameter, from junction
 /// `start` to junction `end`: points doubled until it lies within 1e-10 of the blank's size
-/// of the candidate between them.
+/// of the candidate between them. (A quintic's error falls as the spacing to the sixth power,
+/// a cubic's only to the fourth: to that accuracy a cubic takes many times the poles.)
 fn fit_piece(candidates: &[Candidate], piece: &Piece, start: P2, end: P2, size: f64) -> Result<crate::geometry::curve2::BSplineCurve2> {
     let mut n = 16;
     loop {
@@ -1504,7 +1505,7 @@ fn fit_piece(candidates: &[Candidate], piece: &Piece, start: P2, end: P2, size: 
                 Point2::new(p[0], p[1])
             })
             .collect();
-        let fit = crate::geometry::fit::interpolate_with_parameters(&points, &params)?;
+        let fit = crate::geometry::fit::interpolate_with_parameters_of_degree(&points, &params, 5)?;
         let error = (0..n)
             .flat_map(|i| [0.25, 0.5, 0.75].map(|h| (i as f64 + h) / n as f64))
             .map(|f| {

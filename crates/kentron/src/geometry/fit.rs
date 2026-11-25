@@ -262,11 +262,21 @@ fn solve_cyclic_tridiagonal(below: &[f64], diagonal: &[f64], above: &[f64], rhs:
 /// averaging the parameters, so the curve is C2.
 #[doc(alias = "GeomAPI_Interpolate")]
 pub fn interpolate_with_parameters<P: ControlPoint>(points: &[P], params: &[f64]) -> Result<BSplineCurve<P>> {
+    interpolate_with_parameters_of_degree(points, params, 3)
+}
+
+/// [`interpolate_with_parameters`] of `degree` (1 to 7; lower for fewer than `degree + 1`
+/// points): the curve C^(degree − 1). Through points sampled off a smooth curve, its error
+/// falls as the spacing to the power `degree + 1`.
+pub fn interpolate_with_parameters_of_degree<P: ControlPoint>(points: &[P], params: &[f64], degree: usize) -> Result<BSplineCurve<P>> {
     let n = points.len();
     if n < 2 || params.len() != n || params.windows(2).any(|w| !(w[0] < w[1])) {
         return Err(Error::InvalidInput("interpolation needs two or more points with increasing parameters".into()));
     }
-    let p = (n - 1).min(3);
+    if !(1..=7).contains(&degree) {
+        return Err(Error::InvalidInput(format!("interpolation of degree {degree}: 1 to 7 are made")));
+    }
+    let p = (n - 1).min(degree);
     // Flat knots by averaging (The NURBS Book, eq. 9.8).
     let mut flat = vec![params[0]; p + 1];
     for j in 1..n - p {
@@ -282,8 +292,8 @@ pub fn interpolate_with_parameters<P: ControlPoint>(points: &[P], params: &[f64]
         while span + 1 < n && flat[span + 1] <= t {
             span += 1;
         }
-        // (Degree three at most: the basis functions on the stack.)
-        let (basis, _) = crate::geometry::bspline::basis_and_first::<4>(&flat, 0, span, t, p, false);
+        // (Degree seven at most: the basis functions on the stack.)
+        let (basis, _) = crate::geometry::bspline::basis_and_first::<8>(&flat, 0, span, t, p, false);
         for (j, &b) in basis[..=p].iter().enumerate() {
             if b != 0.0 {
                 *matrix.at(i, span - p + j).ok_or_else(|| Error::InvalidInput("interpolation parameters out of order with the knots".into()))? = b;
@@ -1120,6 +1130,33 @@ mod tests {
             let t = k as f64 / 640.0;
             assert!(fitted[0].point(t).distance(through.point(t)) < 1e-7);
         }
+    }
+
+    /// A quintic through points on an arc lies far closer to it between them than the cubic
+    /// through the same points, and its error falls as the spacing to the sixth power (halved
+    /// spacing, a sixty-fourth of the error, roughly), not the fourth; degree 3 is the cubic
+    /// interpolation itself.
+    #[test]
+    fn quintics_through_samples_follow_a_curve_closer() {
+        let at = |t: f64| Point::new(4.5 * (5.0 * t).cos(), 4.5 * (5.0 * t).sin(), 0.0);
+        let fits = |n: usize| {
+            let params: Vec<f64> = (0..=n).map(|i| i as f64 / n as f64).collect();
+            let points: Vec<Point> = params.iter().map(|&t| at(t)).collect();
+            let cubic = interpolate_with_parameters(&points, &params).unwrap();
+            let same = interpolate_with_parameters_of_degree(&points, &params, 3).unwrap();
+            assert_eq!(cubic.poles(), same.poles());
+            let quintic = interpolate_with_parameters_of_degree(&points, &params, 5).unwrap();
+            assert_eq!((quintic.degree(), quintic.poles().len()), (5, n + 1));
+            for (&t, &p) in params.iter().zip(&points) {
+                assert!(quintic.point(t).distance(p) < 1e-12);
+            }
+            assert!(interpolate_with_parameters_of_degree(&points, &params, 8).is_err());
+            let error = |c: &BSplineCurve| (0..4 * n).map(|k| (k as f64 + 0.5) / (4 * n) as f64).map(|t| c.point(t).distance(at(t))).fold(0.0, f64::max);
+            (error(&cubic), error(&quintic))
+        };
+        let ((c32, q32), (c64, q64)) = (fits(32), fits(64));
+        assert!(q32 < 0.02 * c32 && q64 < 0.02 * c64, "quintic {q32:e} {q64:e}, cubic {c32:e} {c64:e}");
+        assert!(q64 < q32 / 40.0 && c64 > c32 / 20.0, "quintic {q32:e} {q64:e}, cubic {c32:e} {c64:e}");
     }
 
     #[test]
