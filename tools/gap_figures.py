@@ -184,6 +184,19 @@ def scene_meridian(cq, kernel):
     return {"torus": [(torus.val(), FIRST)], "cylinder": [(cylinder.val(), SECOND)], "union": [(torus.union(cylinder).val(), BODY)]}
 
 
+def scene_outlet(cq, kernel):
+    """After a compressor housing's outlet and volute (danieljuschus' pemfc-aircraft-sizing,
+    compressor_mass.py), the outlet moved 1e-3 away from the volute along its axis."""
+    R, ro, t, z, length, gap = 12.8, 3.315, 0.3377, 3.7227, 16.885, 1e-3
+    ri = ro - t
+    def torus(r):
+        return cq.Workplane("XZ").center(R, z).circle(r).revolve(360, [-R, 0], [-R, 1])
+    cylinder = cq.Workplane("XZ").center(R, z).circle(ro).extrude(length)
+    volute = torus(ro).cut(torus(ri)).copyWorkplane(cq.Workplane("XY", origin=(0, 0, ro / 2))).split(keepTop=True).cut(cylinder)
+    outlet = cylinder.faces(">Y or <Y").shell(-t).cut(torus(ri)).translate((0, -gap, 0))
+    return {"volute": [(volute.val(), FIRST)], "outlet": [(outlet.val(), SECOND)], "union": [(outlet.union(volute).val(), BODY)]}
+
+
 def draw_commands(commands):
     """kentron's DRAW interpreter run on commands (crates/occt-tests' draw_commands): what
     they print, or a RuntimeError saying which command failed and why."""
@@ -1326,6 +1339,21 @@ def figure_meridian(rebuild):
             (COLUMNS[2], cadquery["union"], "CadQuery: their union", ("good", "torus and cylinder, one valid solid"))):
         info = mesh["info"][0]
         figure.panel(x, TOP, MAIN, height, render([mesh], close), title, "%d faces, volume %.1f" % (info["faces"], info["volume"]), verdict)
+    return figure
+
+
+def figure_outlet(rebuild):
+    kentron, cadquery = (scene("outlet", k, rebuild) for k in ("kentron", "cadquery"))
+    height = 300
+    figure = Figure(WIDTH, TOP + height + 56, "A half-torus volute and a tube outlet 1e-3 apart, where the volute's flat bottom runs within tolerance of the tube: kentron's union loses part of the volute and is not valid, CadQuery's is one sound solid.")
+    view = View((0.55, -0.6, 0.6), (8, -6, 3.7), 46, SIDE, height)
+    close = View((0.55, -0.6, 0.6), (10, -6, 3), 38, MAIN, height)
+    figure.panel(COLUMNS[0], TOP, SIDE, height, render([cadquery["volute"], cadquery["outlet"]], view), "Volute and outlet", "1e-3 apart along the tube")
+    for x, mesh, title, verdict in (
+            (COLUMNS[1], kentron["union"], "kentron: their union", ("bad", "not valid, and part of the volute is lost")),
+            (COLUMNS[2], cadquery["union"], "CadQuery: their union", ("good", "one valid solid"))):
+        info = mesh["info"][0]
+        figure.panel(x, TOP, MAIN, height, render([mesh], close) + (marked(close, mesh) if verdict[0] == "bad" else ""), title, "%d faces, volume %.1f" % (info["faces"], info["volume"]), verdict)
     return figure
 
 

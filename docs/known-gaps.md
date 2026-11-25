@@ -347,6 +347,36 @@ section (at most 5e-4 wide) is lost when the face is split.
   to a nearby vertex, and face splitting that keeps slivers thinner than the snapping
   distance. Not a contained change.
 
+### Parts within tolerance of touching along a torus and a cylinder
+
+*Found 2026-11-25.*
+
+![A half-torus volute and a tube outlet 1e-3 apart: kentron's union loses part of the volute and is not valid, CadQuery's is one sound solid](known-gaps/outlet.svg)
+
+A compressor housing's outlet (a tube shelled from a cylinder of the volute's tube radius,
+cut by the inner torus) and its volute (the top of a torus shell, cut by the cylinder)
+touch along pieces of the inner torus and of the cylinder; touching exactly, they are right
+(f56f435). Moved a little apart or into each other, booleans go wrong where the surfaces
+are within tolerance of each other without coinciding: where the volute's flat bottom
+(z = ro/2) meets the cylinder, the torus's section circle is tangent to the cylinder's
+straight line and stays within 1e-6 of it for |y| < 4.5e-3, so an outlet end vertex at
+y = -1e-3 lands on both and the split circle edge is taken the long way round (a disc face
+of area 327); with the outlet's end 1e-3 into the volute, the tube's end lies where the
+cylinder and the torus are within tolerance (y^2/2R < 1e-6).
+
+- **Repro:** `~/prj/kentron-local/compressor/shifted.py` (`scene_outlet` in
+  `tools/gap_figures.py`): R 12.8, tube radius 3.315, wall 0.3377, outlet moved by ±1e-3
+  along its axis.
+- **Evidence:** outlet 1e-3 away: union 265.30 and invalid where the parts' volumes give
+  446.07 (CadQuery 446.0717), volute − outlet 174.85 and invalid (355.6). Outlet 1e-3 in:
+  outlet − volute invalid (90.48; CadQuery 90.454). Moved 0.1 into the volute along the
+  tube, or 1e-3 across it, 1e-3 up, 0.1 down: also invalid or wrong, on main before
+  f56f435 too. The Rust-built operands pass the 1e-3-away case; CadQuery's revolved tori
+  (not free-form, but met along traced sections) fail it.
+- **Needed:** handling of surfaces that are within tolerance of each other near a boundary
+  without coinciding (vertices and edge splits decided consistently on both), not a
+  contained change.
+
 ### The part of a whole plane outside what it meets
 
 *Found 2026-11-22.*
