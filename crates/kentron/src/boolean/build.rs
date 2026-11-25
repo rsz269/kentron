@@ -205,6 +205,28 @@ impl Output {
         // Far faces keep their edges: one built anew in place of such an edge would leave
         // them bounded by edges the result does not have.
         let far_edges: crate::hashing::FastSet<EdgeId> = kept.iter().filter(|k| k.far).flat_map(|k| graph.far[k.face].data.edges.iter().map(|e| e.edge)).collect();
+        // The pcurves fitted to the result's edges on the faces they do not come from (the
+        // section edges, an edge of one operand on the other's face), for all faces at once;
+        // taken below in order.
+        let mut jobs: Vec<(usize, usize)> = kept
+            .iter()
+            .enumerate()
+            .filter(|(_, k)| !k.far)
+            .flat_map(|(ki, k)| k.region.loops.iter().flatten().map(move |&(ai, _)| (ki, ai)))
+            .filter(|&(ki, ai)| {
+                let arc = &arcs_of[kept[ki].face][ai];
+                let piece = &pieces[arc.piece];
+                graph.edges[pieces[piece.rep].edge].curve.is_some() && !(arc.pcurve.is_some() && piece.rep == arc.piece)
+            })
+            .collect();
+        jobs.sort_unstable();
+        jobs.dedup();
+        let fitted = crate::parallel::map(&jobs, |&(ki, ai)| {
+            let face_data = &graph.faces[kept[ki].face];
+            let arc = &arcs_of[kept[ki].face][ai];
+            fitted_pcurve(graph, pieces, face_data, arc)
+        });
+        let fits: HashMap<(usize, usize), Result<Curve2>> = jobs.into_iter().zip(fitted).collect();
         let mut faces: Vec<Shape> = Vec::new();
         for (ki, k) in kept.iter().enumerate() {
             if k.far {
@@ -294,55 +316,7 @@ impl Output {
                     let pcurve = match (&arc.pcurve, &out.curve) {
                         (Some(p), _) if piece.rep == arc.piece => p.clone(),
                         (Some(p), None) => p.clone(),
-                        (_, Some(curve)) => {
-                            // The arc's middle in (u, v): on its own pcurve if it has one (its
-                            // polyline may be just its two ends).
-                            let middle = match &arc.pcurve {
-                                Some(p) => {
-                                    let q = p.point(0.5 * (piece.first + piece.last));
-                                    [q.x, q.y]
-                                }
-                                None => arc.uv[arc.uv.len() / 2],
-                            };
-                            // (On the surface computed with where it is the output one cut
-                            // down near the face (the same parameters): carried on past the face,
-                            // the output one may fold back over it, a foot found on the fold.)
-                            let near = match (&face_data.surface, &surface) {
-                                (crate::geometry::surface::Surface::BSpline(_), crate::geometry::surface::Surface::BSpline(_)) => &face_data.surface,
-                                _ => &surface,
-                            };
-                            // (Across a seam where the surface closes without a period, its two
-                            // uses taken to their sides by the bounds' width, as by a period.)
-                            let closed = |k: usize| face_data.closed_bounds[k].map(|(lo, hi)| hi - lo);
-                            let periods = [face_data.u_period.or_else(|| closed(0)), face_data.v_period.or_else(|| closed(1))];
-                            // (From the arc's end at the curve's start, where the start is on a
-                            // seam: its foot alone may be found on either side.)
-                            let start = [arc.uv[0], arc.uv[arc.uv.len() - 1]]
-                                .into_iter()
-                                .find(|uv| geom::surface_point(near, *uv).distance(curve.point(out.first)) <= 1e3 * TOL);
-                            let fitted = aligned_pcurve(curve, near, out.first, out.last, middle, periods, face_data.drift, start)?;
-                            // (Where the fit is not on the arc's own pcurve (up to whole
-                            // periods) at its ends and middle, the curve's parameters were found
-                            // on another branch of the surface passing through the same points
-                            // (a half ellipse turned about the axis it ends on, past the axis,
-                            // near a pole, where either branch carries on smoothly): from the
-                            // arc's own pcurve, along its edge, instead.)
-                            let off_middle = arc.pcurve.as_ref().zip(graph.edges[piece.edge].curve.as_ref()).is_some_and(|(own, own_curve)| {
-                                let (lo, hi) = (piece.first.min(piece.last), piece.first.max(piece.last));
-                                [out.first, 0.5 * (out.first + out.last), out.last].iter().any(|&t| {
-                                    let (m, o) = (fitted.point(t), own.point(geom::project(own_curve, lo, hi, curve.point(t)).0));
-                                    [(m.x, o.x, periods[0]), (m.y, o.y, periods[1])].iter().any(|&(x, y, period)| {
-                                        let d = x - y;
-                                        let d = period.map_or(d, |p| d - (d / p).round() * p);
-                                        d.abs() > 1e-6 * (1.0 + y.abs())
-                                    })
-                                })
-                            });
-                            match (&arc.pcurve, off_middle) {
-                                (Some(own), true) => along_own_pcurve(graph, piece, own, curve, out.first, out.last, near).unwrap_or(fitted),
-                                _ => fitted,
-                            }
-                        }
+                        (_, Some(_)) => fits.get(&(ki, ai)).expect("fitted").clone()?,
                         (None, None) => return Err(Error::InvalidInput("a degenerate edge without a pcurve".into())),
                     };
                     if let Some(curve) = &out.curve {
@@ -403,6 +377,64 @@ impl Output {
         }
         Ok(())
     }
+}
+
+/// The pcurve of the result's edge for `arc` (of `face`, not its own: a section edge, or an
+/// edge of the other operand lying on it), from the edge's curve, the representative's of
+/// the arc's piece.
+fn fitted_pcurve(graph: &Graph, pieces: &[Piece], face_data: &super::graph::Face, arc: &ArcOnFace) -> Result<Curve2> {
+    let piece = &pieces[arc.piece];
+    let rep = &pieces[piece.rep];
+    let curve = graph.edges[rep.edge].curve.as_ref().expect("an edge with a curve");
+    let (first, last) = (rep.first, rep.last);
+    let surface = &face_data.output;
+    // The arc's middle in (u, v): on its own pcurve if it has one (its
+    // polyline may be just its two ends).
+    let middle = match &arc.pcurve {
+        Some(p) => {
+            let q = p.point(0.5 * (piece.first + piece.last));
+            [q.x, q.y]
+        }
+        None => arc.uv[arc.uv.len() / 2],
+    };
+    // (On the surface computed with where it is the output one cut
+    // down near the face (the same parameters): carried on past the face,
+    // the output one may fold back over it, a foot found on the fold.)
+    let near = match (&face_data.surface, surface) {
+        (crate::geometry::surface::Surface::BSpline(_), crate::geometry::surface::Surface::BSpline(_)) => &face_data.surface,
+        _ => surface,
+    };
+    // (Across a seam where the surface closes without a period, its two
+    // uses taken to their sides by the bounds' width, as by a period.)
+    let closed = |k: usize| face_data.closed_bounds[k].map(|(lo, hi)| hi - lo);
+    let periods = [face_data.u_period.or_else(|| closed(0)), face_data.v_period.or_else(|| closed(1))];
+    // (From the arc's end at the curve's start, where the start is on a
+    // seam: its foot alone may be found on either side.)
+    let start = [arc.uv[0], arc.uv[arc.uv.len() - 1]]
+        .into_iter()
+        .find(|uv| geom::surface_point(near, *uv).distance(curve.point(first)) <= 1e3 * TOL);
+    let fitted = aligned_pcurve(curve, near, first, last, middle, periods, face_data.drift, start)?;
+    // (Where the fit is not on the arc's own pcurve (up to whole
+    // periods) at its ends and middle, the curve's parameters were found
+    // on another branch of the surface passing through the same points
+    // (a half ellipse turned about the axis it ends on, past the axis,
+    // near a pole, where either branch carries on smoothly): from the
+    // arc's own pcurve, along its edge, instead.)
+    let off_middle = arc.pcurve.as_ref().zip(graph.edges[piece.edge].curve.as_ref()).is_some_and(|(own, own_curve)| {
+        let (lo, hi) = (piece.first.min(piece.last), piece.first.max(piece.last));
+        [first, 0.5 * (first + last), last].iter().any(|&t| {
+            let (m, o) = (fitted.point(t), own.point(geom::project(own_curve, lo, hi, curve.point(t)).0));
+            [(m.x, o.x, periods[0]), (m.y, o.y, periods[1])].iter().any(|&(x, y, period)| {
+                let d = x - y;
+                let d = period.map_or(d, |p| d - (d / p).round() * p);
+                d.abs() > 1e-6 * (1.0 + y.abs())
+            })
+        })
+    });
+    Ok(match (&arc.pcurve, off_middle) {
+        (Some(own), true) => along_own_pcurve(graph, piece, own, curve, first, last, near).unwrap_or(fitted),
+        _ => fitted,
+    })
 }
 
 /// True if two coincident pieces run the same way.
