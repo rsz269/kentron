@@ -55,6 +55,7 @@ pub use cells::{cells, Cell};
 pub use fuzzy::snapped;
 pub use interference::{interference, Interference};
 pub use volume::{enclosed_solids, enclosed_solids_unsplit};
+pub(crate) use volume::enclosed_solids_at_once;
 pub(crate) use cells::point_inside;
 pub(crate) use geom::on_tol;
 

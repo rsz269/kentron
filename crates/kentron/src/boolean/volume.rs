@@ -23,13 +23,33 @@ use super::PointLocation;
 #[doc(alias = "BOPAlgo_MakerVolume")]
 #[doc(alias = "mkvolume")]
 pub fn enclosed_solids(model: &mut Model, shapes: &[Shape]) -> Result<Shape> {
-    Ok(enclose(model, shapes, true, &Default::default(), None)?.0)
+    Ok(enclose(model, shapes, Split::OneAfterAnother, &Default::default(), None)?.0)
+}
+
+/// [`enclosed_solids`] of faces split by one another all at once, in one graph (every pair of
+/// faces met on the pool), where that can be done (else one after another). Much quicker for
+/// many faces, but not split alike everywhere (a face turned inside out past its own edges,
+/// as an offset past a bend's radius, may leave a region more): for callers that check the
+/// pieces, as by their volumes.
+pub(crate) fn enclosed_solids_at_once(model: &mut Model, shapes: &[Shape]) -> Result<Shape> {
+    Ok(enclose(model, shapes, Split::AtOnce, &Default::default(), None)?.0)
+}
+
+/// How [`enclose`] splits the faces by one another.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Split {
+    /// Not at all: they meet along shared edges already.
+    No,
+    /// Each sheet in turn by the union of those before it.
+    OneAfterAnother,
+    /// All in one graph where that can be done, else one after another.
+    AtOnce,
 }
 
 /// [`enclosed_solids`] of faces taken as they are, not split by one another: they must meet
 /// along shared edges already.
 pub fn enclosed_solids_unsplit(model: &mut Model, shapes: &[Shape]) -> Result<Shape> {
-    Ok(enclose(model, shapes, false, &Default::default(), None)?.0)
+    Ok(enclose(model, shapes, Split::No, &Default::default(), None)?.0)
 }
 
 /// Where the space behind a face (as a shell holds it) lies: in which of the shapes of a
@@ -40,11 +60,11 @@ pub(super) type MarksAt<'a> = &'a dyn Fn(&Model, Shape) -> Option<Vec<bool>>;
 /// solid with where it lies by `marks_at` (behind one of its faces): a shell turned inwards
 /// is a cavity of the solid around it lying where the space just outside the shell does.
 pub(super) fn enclosed_solids_marked(model: &mut Model, faces: &[Shape], boxes: &crate::hashing::FastMap<crate::topology::NodeId, crate::math::BoundingBox>, marks_at: MarksAt) -> Result<Vec<(Shape, Vec<bool>)>> {
-    Ok(enclose(model, faces, false, boxes, Some(marks_at))?.1)
+    Ok(enclose(model, faces, Split::No, boxes, Some(marks_at))?.1)
 }
 
 #[allow(clippy::type_complexity)]
-fn enclose(model: &mut Model, shapes: &[Shape], split: bool, known: &crate::hashing::FastMap<crate::topology::NodeId, crate::math::BoundingBox>, marks_at: Option<MarksAt>) -> Result<(Shape, Vec<(Shape, Vec<bool>)>)> {
+fn enclose(model: &mut Model, shapes: &[Shape], split: Split, known: &crate::hashing::FastMap<crate::topology::NodeId, crate::math::BoundingBox>, marks_at: Option<MarksAt>) -> Result<(Shape, Vec<(Shape, Vec<bool>)>)> {
     // The arguments as faces (a solid's shells), split by one another.
     let mut sheets = Vec::new();
     for &shape in shapes {
@@ -61,7 +81,13 @@ fn enclose(model: &mut Model, shapes: &[Shape], split: bool, known: &crate::hash
         return Err(Error::InvalidInput("no faces to enclose solids with".into()));
     };
     let mut fused = first;
-    if split {
+    // (All split in one graph where that can be done: every pair of faces met at once, on
+    // the pool.)
+    let at_once = if split == Split::AtOnce && sheets.len() > 1 { super::fuse::cells(model, &sheets)? } else { None };
+    if let Some(cells) = at_once {
+        let faces: Vec<Shape> = cells.iter().map(|c| c.shape).filter(|s| s.kind() == NodeKind::Face).collect();
+        fused = compound(model, &faces)?;
+    } else if split != Split::No {
         // (Keeping the arcs that bound nothing yet: later sheets may close regions with
         // them, as if all were fused at once.)
         for &sheet in &sheets[1..] {
@@ -458,5 +484,23 @@ mod tests {
         }
         // The halves share the face between them.
         assert_eq!(model.unique_subshapes(result, NodeKind::Face).len(), 11);
+    }
+
+    /// The faces of two overlapping cubes, each given alone (all split by one another at
+    /// once): the cube they share and the two L-shaped rests, each piece once.
+    #[test]
+    fn faces_of_overlapping_cubes_given_alone_enclose_three_pieces() {
+        let mut model = Model::new();
+        let a = crate::primitives::Cuboid::new(2.0, 2.0, 2.0).build(&mut model).unwrap();
+        let b = crate::primitives::Cuboid::new(2.0, 2.0, 2.0).with_frame(Frame::from_z(Point::new(1.0, 1.0, 1.0), Direction::Z)).build(&mut model).unwrap();
+        let mut faces = model.unique_subshapes(a, NodeKind::Face);
+        faces.extend(model.unique_subshapes(b, NodeKind::Face));
+        let result = enclosed_solids_at_once(&mut model, &faces).unwrap();
+        let mut volumes: Vec<f64> = model.unique_subshapes(result, NodeKind::Solid).iter().map(|&s| properties::volume(&model, s).mass).collect();
+        volumes.sort_by(f64::total_cmp);
+        assert_eq!(volumes.len(), 3, "{volumes:?}");
+        for (v, expected) in volumes.iter().zip([1.0, 7.0, 7.0]) {
+            assert!((v - expected).abs() < 1e-9, "{volumes:?}");
+        }
     }
 }

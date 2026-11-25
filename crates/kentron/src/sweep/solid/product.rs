@@ -274,7 +274,8 @@ fn volume_of(model: &Model, solid: Shape) -> f64 {
 /// product's (pieces missed or misjudged).
 fn resolved(model: &mut Model, product: Shape) -> Result<Shape> {
     let faces = model.unique_subshapes(product, NodeKind::Face);
-    let cells = crate::boolean::enclosed_solids(model, &faces)?;
+    // (Split all at once: the volumes adding up below check the pieces.)
+    let cells = crate::boolean::enclosed_solids_at_once(model, &faces)?;
     let cells = model.unique_subshapes(cells, NodeKind::Solid);
     if cells.is_empty() {
         return Err(Error::Failed("a sweep running into itself, not split into pieces".into()));
