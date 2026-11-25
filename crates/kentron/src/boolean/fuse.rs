@@ -60,7 +60,8 @@ pub(super) fn cells(model: &mut Model, shapes: &[Shape]) -> Result<Option<Vec<Ce
     for (fi, arcs) in arcs_of.iter().enumerate() {
         let face = &graph.faces[fi];
         let scale = face.bbox.0.distance(face.bbox.1);
-        for region in split::split_face(arcs, &pieces, &face.polylines, scale, false) {
+        let exact = |i: usize, t: f64| graph.arc_point(fi, &arcs[i], &pieces, t);
+        for region in split::split_face_exact(arcs, &pieces, &face.polylines, scale, false, Some(&exact)) {
             let p = geom::surface_point(&face.surface, region.interior);
             let mut on: Vec<usize> = graph
                 .index()
@@ -203,7 +204,8 @@ fn solid_cells(model: &mut Model, shapes: &[Shape]) -> Result<Option<Vec<Cell>>>
     for (fi, arcs) in arcs_of.iter().enumerate() {
         let face = &graph.faces[fi];
         let scale = face.bbox.0.distance(face.bbox.1);
-        for region in split::split_face(arcs, &pieces, &face.polylines, scale, false) {
+        let exact = |i: usize, t: f64| graph.arc_point(fi, &arcs[i], &pieces, t);
+        for region in split::split_face_exact(arcs, &pieces, &face.polylines, scale, false, Some(&exact)) {
             kept.push(Kept { face: fi, region, flip: false, far: false });
         }
     }

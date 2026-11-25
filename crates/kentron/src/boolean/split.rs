@@ -424,6 +424,27 @@ impl Graph {
         ArcOnFace { piece, uv, pcurve: Some(b.pcurve.clone()), leave_start, leave_end, along: b.bounds.then_some(b.along) }
     }
 
+    /// The point of `arc` (on face `fi`) at `t`, a parameter of its piece's edge, in the face's
+    /// (u, v): on its pcurve, or the foot of its edge's point, taken to the copy (across a
+    /// period or seam) nearest its polyline's end nearer `t`. `None` for a degenerate edge.
+    pub fn arc_point(&self, fi: usize, arc: &ArcOnFace, pieces: &[Piece], t: f64) -> Option<Uv> {
+        if let Some(p) = &arc.pcurve {
+            let q = p.point(t);
+            return Some([q.x, q.y]);
+        }
+        let piece = &pieces[arc.piece];
+        let e = &self.edges[piece.edge];
+        e.curve.as_ref()?;
+        let face = &self.faces[fi];
+        let near = if (t - piece.first).abs() <= (t - piece.last).abs() { arc.uv[0] } else { *arc.uv.last()? };
+        let p = e.point(t, &self.vertices);
+        // (At a pole u is undefined.)
+        if geom::is_pole(&face.surface, p) {
+            return None;
+        }
+        Some(face.unwrap(geom::uv_of(&face.surface, p), near))
+    }
+
     /// Each boundary use of face `fi` as an arc over its whole edge (which the face keeps
     /// while the other operand does not cut it), with the edge's range.
     pub fn whole_boundary_arcs(&self, fi: usize) -> Vec<WholeArc> {
@@ -567,6 +588,16 @@ impl Graph {
 /// sides) are kept as slits: loops along the arc and back, within the region holding them,
 /// so that a later operation meeting them splits there (as OCCT's internal edges).
 pub(super) fn split_face<P: AsRef<[Uv]>>(arcs: &[ArcOnFace], pieces: &[Piece], face_polylines: &[P], uv_scale: f64, keep_slits: bool) -> Vec<Region> {
+    split_face_exact(arcs, pieces, face_polylines, uv_scale, keep_slits, None)
+}
+
+/// A point of an arc (by its index) in the face's (u, v) at a parameter of its piece's edge,
+/// exactly (from its pcurve or its 3D curve, not its polyline); `None` where not known.
+pub(super) type ArcPoint<'a> = &'a (dyn Fn(usize, f64) -> Option<Uv> + Sync);
+
+/// [`split_face`], the arcs' points found exactly by `exact` where their polylines cannot
+/// tell their order (arcs leaving a node tangent to one another).
+pub(super) fn split_face_exact<P: AsRef<[Uv]>>(arcs: &[ArcOnFace], pieces: &[Piece], face_polylines: &[P], uv_scale: f64, keep_slits: bool, exact: Option<ArcPoint>) -> Vec<Region> {
     // Nodes: arc ends, merged when they are the same vertex at the same (u, v).
     let eps = 1e-7 * uv_scale.max(1.0);
     let mut nodes: Vec<(usize, Uv)> = Vec::new();
@@ -660,7 +691,7 @@ pub(super) fn split_face<P: AsRef<[Uv]>>(arcs: &[ArcOnFace], pieces: &[Piece], f
         }
     }
     let cycles = loop {
-        let cycles = trace(arcs, &ends, &alive, &nodes);
+        let cycles = trace(arcs, pieces, &ends, &alive, &nodes, exact);
         // An arc with the same cycle on both sides separates nothing.
         let mut bridges = Vec::new();
         for cycle in &cycles {
@@ -815,7 +846,7 @@ fn on_polyline(poly: &[Uv], p: Uv, eps: f64) -> bool {
 
 /// The cycles of the arrangement's faces: each half-arc is followed by the next one
 /// clockwise around its end, so that bounded faces run counter-clockwise.
-fn trace(arcs: &[ArcOnFace], ends: &[(usize, usize)], alive: &[bool], nodes: &[(usize, Uv)]) -> Vec<Vec<(usize, bool)>> {
+fn trace(arcs: &[ArcOnFace], pieces: &[Piece], ends: &[(usize, usize)], alive: &[bool], nodes: &[(usize, Uv)], exact: Option<ArcPoint>) -> Vec<Vec<(usize, bool)>> {
     // Outgoing half-arcs at each node, by angle.
     let mut around: Vec<Vec<(f64, usize, bool)>> = vec![Vec::new(); nodes.len()];
     for (i, a) in arcs.iter().enumerate() {
@@ -829,7 +860,7 @@ fn trace(arcs: &[ArcOnFace], ends: &[(usize, usize)], alive: &[bool], nodes: &[(
     }
     for list in &mut around {
         list.sort_by(|a, b| a.0.total_cmp(&b.0));
-        untangle_tangent(list, arcs);
+        untangle_tangent(list, arcs, pieces, exact);
         lens_order(list, arcs, ends);
     }
     let end_of = |(a, forward): (usize, bool)| if forward { ends[a].1 } else { ends[a].0 };
@@ -909,7 +940,7 @@ fn lens_order(list: &mut [(f64, usize, bool)], arcs: &[ArcOnFace], ends: &[(usiz
 /// departures are nearly the same, by their directions farther along: arcs leaving nearly
 /// tangent to one another (as a section meeting a boundary where its surfaces are tangent
 /// along it) curve apart by less, a step from the node, than the noise in their points.
-fn untangle_tangent(list: &mut [(f64, usize, bool)], arcs: &[ArcOnFace]) {
+fn untangle_tangent(list: &mut [(f64, usize, bool)], arcs: &[ArcOnFace], pieces: &[Piece], exact: Option<ArcPoint>) {
     use std::f64::consts::{PI, TAU};
     const TANGENT: f64 = 1e-3;
     let n = list.len();
@@ -956,8 +987,45 @@ fn untangle_tangent(list: &mut [(f64, usize, bool)], arcs: &[ArcOnFace]) {
                 let a = (p[1] - o[1]).atan2(p[0] - o[0]) - base;
                 a - TAU * ((a + PI) / TAU).floor()
             };
+            // (Or, where every arc's points are known exactly, each one's turn at its point
+            // that far from the node, the same distance for all: arcs nearly coincident, as
+            // the sections of two surfaces touching along a curve across a third, part by
+            // less than their polylines' points, sampled at other distances along curving
+            // arcs, stray from them.)
+            let turn_exactly = |&(_, i, forward): &(f64, usize, bool)| -> Option<f64> {
+                let exact = exact?;
+                let piece = &pieces[arcs[i].piece];
+                let (from, to) = if forward { (piece.first, piece.last) } else { (piece.last, piece.first) };
+                let at = |s: f64| exact(i, from + (to - from) * s);
+                let o = at(0.0)?;
+                let far = |q: Uv| (q[0] - o[0]).hypot(q[1] - o[1]) >= reach;
+                const STEPS: usize = 64;
+                let mut lo = 0.0;
+                let mut hi = None;
+                for k in 1..=STEPS {
+                    let s = k as f64 / STEPS as f64;
+                    if far(at(s)?) {
+                        hi = Some(s);
+                        break;
+                    }
+                    lo = s;
+                }
+                let mut hi = hi?;
+                for _ in 0..60 {
+                    let mid = 0.5 * (lo + hi);
+                    if far(at(mid)?) {
+                        hi = mid;
+                    } else {
+                        lo = mid;
+                    }
+                }
+                let p = at(hi)?;
+                let a = (p[1] - o[1]).atan2(p[0] - o[0]) - base;
+                Some(a - TAU * ((a + PI) / TAU).floor())
+            };
             if reach > 0.0 {
-                let turns: Vec<f64> = lines.iter().map(|uv| turn(uv)).collect();
+                let exactly: Option<Vec<f64>> = list[k..end].iter().map(turn_exactly).collect();
+                let turns: Vec<f64> = exactly.unwrap_or_else(|| lines.iter().map(|uv| turn(uv)).collect());
                 let mut order: Vec<usize> = (0..end - k).collect();
                 order.sort_by(|&a, &b| turns[a].total_cmp(&turns[b]));
                 let group: Vec<(f64, usize, bool)> = order.iter().map(|&j| list[k + j]).collect();
@@ -1039,6 +1107,40 @@ mod tests {
         let regions = split_face(&arcs, &pieces, &[outer], 1.0, false);
         let areas: Vec<f64> = regions.iter().map(|r| r.polygons.iter().map(|p| geom::signed_area(p)).sum()).collect();
         assert!(areas.iter().any(|&a| (a - 1.0).abs() < 1e-3), "{areas:?}");
+    }
+
+    /// Two arcs leaving a node tangent to one another, along circles of radii 1 and 1.00001
+    /// touching there (as the sections of a cylinder and a ball touching along a curve
+    /// across a plane), sampled at other spacings: the points of their polylines at a
+    /// distance from the node are at other distances along them, and curving, they turn by
+    /// more than the circles part. Found exactly, the tighter circle is the farther round.
+    #[test]
+    fn arcs_leaving_tangent_ordered_by_their_exact_points() {
+        let radii = [1.0, 1.00001];
+        let point = |k: usize, t: f64| -> Uv {
+            let r = radii[k];
+            let a = -std::f64::consts::FRAC_PI_2 + t / r;
+            [r * a.cos(), r + r * a.sin()]
+        };
+        let sampled = |k: usize, n: usize| -> Vec<Uv> { (0..=n).map(|i| point(k, i as f64 / n as f64)).collect() };
+        let paths = vec![(0, 1, sampled(0, 11)), (0, 2, sampled(1, 6)), (0, 3, vec![[0.0, 0.0], [-1.0, 0.0]])];
+        let (mut arcs, pieces) = arcs(&paths);
+        for a in &mut arcs[..2] {
+            a.leave_start = [1.0, 0.0];
+        }
+        let exact = |i: usize, t: f64| (i < 2).then(|| point(i, t));
+        let order = |exact: Option<ArcPoint>| {
+            let mut list = vec![(0.0, 0, true), (1e-9, 1, true), (std::f64::consts::PI, 2, true)];
+            untangle_tangent(&mut list, &arcs, &pieces, exact);
+            // (From the straight arc round, which the order starts from does not matter.)
+            let k = list.iter().position(|h| h.1 == 2).unwrap();
+            list.rotate_left(k + 1);
+            list.iter().map(|h| h.1).collect::<Vec<_>>()
+        };
+        // (Counter-clockwise round the node: the wider circle first, below the tighter.)
+        assert_eq!(order(Some(&exact)), vec![1, 0, 2]);
+        // (By the polylines alone, the other way round.)
+        assert_eq!(order(None), vec![0, 1, 2]);
     }
 
     /// The boundary of the unit square, its left and right sides split at mid-height

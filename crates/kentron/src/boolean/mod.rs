@@ -682,13 +682,14 @@ fn classified(model: &Model, graph: &mut Graph) -> (Vec<split::Piece>, Vec<Vec<s
                     p.edge == b.edge && p.first == e.first && p.last == e.last
                 })
         });
+        let exact = |i: usize, t: f64| graph.arc_point(fi, &arcs[i], &pieces, t);
         let regions_of_face = match untouched {
             Some(id) => {
                 let fingerprint = model.face_fingerprint(id);
-                (*model.derived(id.into(), fingerprint, || FaceRegions(split::split_face(arcs, &pieces, &face.polylines, scale, false)))).0.clone()
+                (*model.derived(id.into(), fingerprint, || FaceRegions(split::split_face_exact(arcs, &pieces, &face.polylines, scale, false, Some(&exact))))).0.clone()
             }
             None => {
-                let mut regions = split::split_face(arcs, &pieces, &face.polylines, scale, false);
+                let mut regions = split::split_face_exact(arcs, &pieces, &face.polylines, scale, false, Some(&exact));
                 // (Regions thinner than their polylines' sampling: their interior points from
                 // denser ones, the coarse ones' possibly off the region.)
                 for r in &mut regions {
@@ -4014,5 +4015,40 @@ mod tests {
         assert!((pooled.0 - each.0).abs() <= 1e-9 * each.0, "volumes {} and {}", pooled.0, each.0);
         assert!((pooled.1 - each.1).abs() <= 1e-9 * each.1, "areas {} and {}", pooled.1, each.1);
         assert!(each.0 < 67.5 * 0.99, "something cut away: {}", each.0);
+    }
+
+    /// A tube whose end is a great circle of a ball (the cylinder touching the sphere all
+    /// round it) united with two tubes meeting at a kink beside it, their ends' discs
+    /// crossing in slivers that the first tube's cylinder and the ball cross nearly together,
+    /// touching one another on them (as where a ball-end mill's moves along neighbouring
+    /// passes overlap). On a sliver the section of the cylinder and the ball's circle arrive at
+    /// their meeting point tangent to second order: their polylines, sampled at other spacings,
+    /// once ordered them the wrong way round there, the sliver left out and the shell open.
+    /// Closed, with the volume of the primitives' union (tools/brute.py line_volume, Tube and
+    /// Ball: 369.1756 at 3000 lines a side, which give the first tube 4e-6 of its volume too
+    /// much), either way round.
+    #[test]
+    fn a_tube_touching_a_ball_round_its_end_with_tubes_at_a_kink() {
+        let r = 3.0;
+        let tube = |model: &mut Model, a: Point, b: Point| {
+            let t = b - a;
+            Cylinder::new(r, t.length()).with_frame(Frame::from_z(a, Direction::new(t.x, t.y, t.z))).build(model).unwrap()
+        };
+        let mut model = Model::new();
+        let first = tube(&mut model, Point::new(55.0, 12.0, -3.0), Point::new(60.0, 12.0, -3.9021130325903055));
+        let ball = Sphere::new(r).with_frame(Frame::from_z(Point::new(55.0, 12.0, -3.0), Direction::Z)).build(&mut model).unwrap();
+        let kink = Point::new(55.0, 14.0, -3.1013446322926326);
+        let before = tube(&mut model, Point::new(50.0, 14.0, -2.0), kink);
+        let after = tube(&mut model, kink, Point::new(60.0, 14.0, -4.094881978457195));
+        let bent = union(&mut model, before, after).unwrap();
+        let others = union(&mut model, ball, bent).unwrap();
+        assert!(validity::check(&model, others).is_valid());
+        for (a, b) in [(first, others), (others, first)] {
+            let united = union(&mut model, a, b).unwrap();
+            assert!(validity::check(&model, united).is_valid());
+            let volume = properties::volume(&model, united).mass;
+            assert!((volume - REFERENCE).abs() < 1e-5 * REFERENCE, "volume {volume}");
+        }
+        const REFERENCE: f64 = 369.1756;
     }
 }

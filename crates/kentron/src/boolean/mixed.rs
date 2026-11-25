@@ -198,7 +198,8 @@ pub(super) fn run(model: &mut Model, mut graph: Graph, operation: Operation) -> 
                     p.edge == b.edge && p.first == e.first && p.last == e.last
                 })
         });
-        let split = || split::split_face(arcs, &pieces, &face.polylines, scale, keep_slits);
+        let exact = |i: usize, t: f64| graph.arc_point(fi, &arcs[i], &pieces, t);
+        let split = || split::split_face_exact(arcs, &pieces, &face.polylines, scale, keep_slits, Some(&exact));
         let found = match untouched {
             Some(id) if keep_slits => (*model.derived(id.into(), model.face_fingerprint(id), || SlitRegions(split()))).0.clone(),
             Some(id) => (*model.derived(id.into(), model.face_fingerprint(id), || super::FaceRegions(split()))).0.clone(),

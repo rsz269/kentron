@@ -31,7 +31,8 @@ Library (import tools/brute.py, or run it):
   shapes said to touch overlap?).
 - `polytope_volume(halfspaces)`: the exact volume of {x : A x + b <= 0}.
 - `line_volume(inside, solids, box, n, breaks)`: the volume of a solid made of analytic
-  primitives (`Cylinder`, `Torus`, `HalfSpace`, each placed anywhere; no kernel involved):
+  primitives (`Cylinder`, `Torus`, `HalfSpace`, `Ball`, `Tube`, each placed anywhere; no
+  kernel involved):
   along each line in x the exact length inside (between the points where the lines cross
   the primitives), by the midpoint rule across y and z. `inside` combines the primitives'
   inside masks (a function of their list), so booleans of them, overlap and all, are exact
@@ -414,6 +415,58 @@ class HalfSpace:
         if self.n[0] == 0:
             return []
         return [self.p[0] - ((y - self.p[1]) * self.n[1] + (z - self.p[2]) * self.n[2]) / self.n[0]]
+
+
+class Ball:
+    """A solid ball of `radius` about `centre`."""
+
+    def __init__(self, centre, radius):
+        self.c, self.r = np.asarray(centre, float), radius
+
+    def inside(self, x, y, z):
+        return (x - self.c[0]) ** 2 + (y - self.c[1]) ** 2 + (z - self.c[2]) ** 2 < self.r * self.r
+
+    def x_crossings(self, y, z):
+        w = np.sqrt(np.maximum(self.r * self.r - (y - self.c[1]) ** 2 - (z - self.c[2]) ** 2, 0.0))
+        return [self.c[0] - w, self.c[0] + w]
+
+
+class Tube:
+    """A solid cylinder of `radius` about the segment from `a` to `b` (any direction), its ends
+    flat, square to it."""
+
+    def __init__(self, a, b, radius):
+        self.a, self.b, self.r = np.asarray(a, float), np.asarray(b, float), radius
+        self.d = self.b - self.a
+        self.dd = self.d @ self.d
+
+    def inside(self, x, y, z):
+        p = np.stack([x - self.a[0], y - self.a[1], z - self.a[2]])
+        s = np.tensordot(self.d, p, axes=1) / self.dd
+        q = p - np.multiply.outer(self.d, s)
+        return ((q * q).sum(axis=0) < self.r * self.r) & (s > 0) & (s < 1)
+
+    def x_crossings(self, y, z):
+        # Along the line (x, y, z) in x: |w - (w.d/dd) d|^2 = r^2 with w = p - a, a quadratic in
+        # x; and the ends' planes (p - a).d = 0, (p - b).d = 0. (A cut where there is none is
+        # harmless: lengths are counted by the midpoints' masks.)
+        d, dd = self.d, self.dd
+        wy, wz = y - self.a[1], z - self.a[2]
+        # w - (w.d/dd) d = e wx + g: e from w's x part, g from its y and z.
+        e = np.array([1.0, 0.0, 0.0]) - d * (d[0] / dd)
+        g = np.stack([np.zeros_like(wy), wy, wz]) - np.multiply.outer(d, (d[1] * wy + d[2] * wz) / dd)
+        A = e @ e
+        B = 2 * np.tensordot(e, g, axes=1)
+        C = (g * g).sum(axis=0) - self.r * self.r
+        disc = np.maximum(B * B - 4 * A * C, 0.0)
+        cuts = []
+        if A > 1e-300:
+            for sgn in (-1, 1):
+                cuts.append(self.a[0] + (-B + sgn * np.sqrt(disc)) / (2 * A))
+        if abs(d[0]) > 1e-300:
+            for end in (self.a, self.b):
+                cuts.append(end[0] - (d[1] * (y - end[1]) + d[2] * (z - end[2])) / d[0])
+        return cuts
 
 
 def line_volume(inside, solids, box, n=(2400, 1200), breaks=((), ())):
