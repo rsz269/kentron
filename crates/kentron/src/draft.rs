@@ -34,7 +34,70 @@ pub struct DraftedFace {
 #[doc(alias = "BRepOffsetAPI_DraftAngle")]
 #[doc(alias = "depouille")]
 pub fn draft(model: &mut Model, shape: Shape, direction: Direction, faces: &[DraftedFace]) -> Result<Shape> {
-    drafted(model, shape, direction, faces, true)
+    match drafted(model, shape, direction, faces, true) {
+        Ok(drafted) => Ok(drafted),
+        Err(e) => cut_by_drafted_planes(model, shape, direction, faces)?.ok_or(e),
+    }
+}
+
+/// Planar faces drafted so far that they close over the part, their tilted planes meeting
+/// one another or another face before the part ends (a ridge, an apex), which the draft
+/// keeping the part's topology cannot follow: where each face's plane bounds the whole part
+/// (the part lies on its inner side) and the draft moves the face inwards all over it, the
+/// draft takes away just what lies beyond the tilted planes, the faces round them trimmed
+/// where they meet them: the part cut by the tilted planes. `None` where that does not hold
+/// (a face not a plane, or drafted with faces tangent to it; a part with curved faces, which
+/// may bulge past a plane between its vertices; a plane not bounding the part; a face moved
+/// outwards somewhere, as below its neutral plane).
+fn cut_by_drafted_planes(model: &mut Model, shape: Shape, direction: Direction, faces: &[DraftedFace]) -> Result<Option<Shape>> {
+    let faces: Vec<&DraftedFace> = faces.iter().filter(|f| f.angle.abs() > 1e-4).collect();
+    let neighbours = tangent_neighbours(model, shape);
+    if faces.is_empty() || faces.iter().any(|f| neighbours.get(&f.face.node).is_some_and(|n| !n.is_empty())) {
+        return Ok(None);
+    }
+    let placed = |model: &Model, f: Shape| model.surface(f).map(|s| s.transformed(&f.placement));
+    let planar = |s: &Surface| {
+        let mut s = s;
+        while let Surface::Trimmed(t) = s {
+            s = t.basis();
+        }
+        matches!(s, Surface::Plane(_))
+    };
+    if !model.unique_subshapes(shape, NodeKind::Face).into_iter().all(|f| placed(model, f).is_some_and(|s| planar(&s))) {
+        return Ok(None);
+    }
+    let corners: Vec<Point> = model.unique_subshapes(shape, NodeKind::Vertex).into_iter().map(|v| model.point(v)).collect();
+    // A face's outward normal on `surface` (a plane, the face's or its drafted one) and a point
+    // of it.
+    let outward = |surface: &Surface, face: Shape| {
+        let (o, du, dv) = surface.d1(0.0, 0.0);
+        let n = du.cross(dv).normalized();
+        (o, if face.orientation == Orientation::Reversed { -n } else { n })
+    };
+    let mut tools = Vec::new();
+    for f in faces {
+        let Some(surface) = placed(model, f.face) else { return Ok(None) };
+        let (o, n) = outward(&surface, f.face);
+        if corners.iter().any(|&p| (p - o).dot(n) > LINEAR) {
+            return Ok(None);
+        }
+        let Some(tilted) = drafted_surface(&surface, f.face.orientation == Orientation::Reversed, direction, f.angle, &f.neutral) else { return Ok(None) };
+        let (o, n) = outward(&tilted, f.face);
+        let own: Vec<Point> = model.unique_subshapes(f.face, NodeKind::Vertex).into_iter().map(|v| model.point(v)).collect();
+        // (Moved inwards: the face as it was lies on or beyond its tilted plane.)
+        if own.iter().any(|&p| (p - o).dot(n) < -LINEAR) {
+            return Ok(None);
+        }
+        tools.push((tilted, o - n));
+    }
+    let mut cut = shape;
+    for (plane, inside) in tools {
+        let face = model.new_empty(NodeKind::Face);
+        model.set_face_surface(face, plane, LINEAR)?;
+        let half = crate::primitives::half_space(model, face, inside)?;
+        cut = crate::boolean::intersection(model, cut, half)?;
+    }
+    Ok(Some(cut))
 }
 
 /// `draft`; `ordered`: a straight edge the draft turns round (its faces' new planes meeting
@@ -325,6 +388,51 @@ mod tests {
             .expect("a face at x")
     }
 
+    /// The face of `shape` on a plane through `y`-coordinate `y` (parallel to XZ).
+    fn face_at_y(model: &Model, shape: Shape, y: f64) -> Shape {
+        model
+            .unique_subshapes(shape, NodeKind::Face)
+            .into_iter()
+            .find(|&f| matches!(model.surface(f), Some(Surface::Plane(p)) if (p.origin().y - y).abs() < 1e-9 && p.normal().y().abs() > 0.5))
+            .expect("a face at y")
+    }
+
+    /// Sides drafted so far that they meet before the top: the part closes along a ridge
+    /// (two opposite sides) or at a point (all four), the top gone. Its volume, the
+    /// integral of the section `(w − nx·τz)(d − ny·τz)` up to where it closes.
+    #[test]
+    fn sides_drafted_past_meeting_close_the_part() {
+        let (w, d, h) = (4.0, 6.0, 5.0);
+        let angle = 0.6f64;
+        let tau = angle.tan();
+        let integral = |nx: f64, ny: f64| {
+            let top = [(nx, w), (ny, d)].iter().filter(|(n, _)| *n > 0.0).map(|(n, l)| l / (n * tau)).fold(h, f64::min);
+            w * d * top - (w * ny + d * nx) * tau * top * top / 2.0 + nx * ny * tau * tau * top.powi(3) / 3.0
+        };
+        let bottom = Plane::new(Point::ORIGIN, Direction::Z);
+        for (sides, nx, ny) in [(vec![0, 1], 2.0, 0.0), (vec![0, 1, 2, 3], 2.0, 2.0), (vec![0, 2], 1.0, 1.0)] {
+            let mut model = Model::new();
+            let b = Cuboid::new(w, d, h).build(&mut model).unwrap();
+            let faces: Vec<DraftedFace> = sides
+                .iter()
+                .map(|&i| {
+                    let face = match i {
+                        0 => face_at_x(&model, b, 0.0),
+                        1 => face_at_x(&model, b, w),
+                        2 => face_at_y(&model, b, 0.0),
+                        _ => face_at_y(&model, b, d),
+                    };
+                    DraftedFace { face, angle, neutral: bottom }
+                })
+                .collect();
+            let drafted = draft(&mut model, b, Direction::Z, &faces).unwrap();
+            let expected = integral(nx, ny);
+            let got = volume(&model, drafted).mass;
+            assert!((got - expected).abs() < 1e-9 * expected, "{sides:?}: {got} against {expected}");
+            valid(&model, drafted);
+        }
+    }
+
     #[test]
     fn a_box_side_leans_in() {
         let mut model = Model::new();
@@ -438,12 +546,19 @@ mod tests {
     }
 
     /// The same box 10 high: its long sides meet at 5√3, below the top, whose short edges the
-    /// draft would turn round. OCCT fails it (Draft_EdgeRecomputation), and so does kentron,
-    /// where keeping the topology would make a solid inside out at the top.
+    /// draft would turn round. Keeping the topology would make a solid inside out at the top:
+    /// the box is cut by the tilted planes instead, closing along a ridge where the long sides
+    /// meet (the volume, the integral of the section `(a − 2τz)(b − 2τz)` up to there).
     #[test]
-    fn a_box_drafted_until_its_top_is_gone_is_refused() {
+    fn a_box_drafted_until_its_top_is_gone_closes_along_a_ridge() {
         let mut model = Model::new();
-        assert!(sides_drafted(&mut model, &[(0.0, 0.0), (30.0, 0.0), (30.0, 10.0), (0.0, 10.0)], 10.0, 30.0).is_err());
+        let (a, b) = (30.0, 10.0);
+        let drafted = sides_drafted(&mut model, &[(0.0, 0.0), (a, 0.0), (a, b), (0.0, b)], 10.0, 30.0).unwrap();
+        valid(&model, drafted);
+        let t = 30f64.to_radians().tan();
+        let top = b / (2.0 * t);
+        let expected = a * b * top - (a + b) * t * top * top + 4.0 * t * t * top.powi(3) / 3.0;
+        assert!((volume(&model, drafted).mass - expected).abs() < 1e-9 * expected, "{}", volume(&model, drafted).mass);
     }
 
     /// An L-block 8 high, its arms 5 wide, its sides drafted 30°: they close over each arm at
