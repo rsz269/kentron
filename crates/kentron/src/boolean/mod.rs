@@ -153,6 +153,56 @@ pub fn union(model: &mut Model, a: Shape, b: Shape) -> Result<Shape> {
     run(model, a, b, Operation::Union)
 }
 
+/// The union of all of `shapes` (an empty compound for none): united two by two, in a
+/// balanced tree of unions (the first half's union with the second half's, each half the
+/// same way). Unions of separate parts of the tree run at once on threads of their own (with
+/// the `parallel` feature), each in a model of its own, its result copied into `model`: the
+/// result is the same however many threads there are, and the same as [`union`] taken in
+/// that tree. Many tools to cut away at once (the moves of a mill) are cut faster as their
+/// union, made so, than one after another.
+pub fn union_all(model: &mut Model, shapes: &[Shape]) -> Result<Shape> {
+    match shapes {
+        [] => return Ok(model.new_empty(crate::topology::NodeKind::Compound)),
+        [one] => return Ok(*one),
+        _ => {}
+    }
+    // (Where what an operation makes is recorded, or it runs as part of another that sets
+    // how (on this thread), all in `model`, in the same tree.)
+    let in_place = model.history().is_some() || RECORDING_ON.load(std::sync::atomic::Ordering::Relaxed) > 0 || SPLITTING_CELLS.with(|f| f.get()) || mixed::slits_kept();
+    if in_place {
+        return united_in_place(model, shapes);
+    }
+    let (apart, united) = united_apart(model, shapes)?;
+    model.import(&apart, united)
+}
+
+/// [`union_all`] in `model`.
+fn united_in_place(model: &mut Model, shapes: &[Shape]) -> Result<Shape> {
+    if let [one] = shapes {
+        return Ok(*one);
+    }
+    let (first, second) = shapes.split_at(shapes.len() / 2);
+    let a = united_in_place(model, first)?;
+    let b = united_in_place(model, second)?;
+    union(model, a, b)
+}
+
+/// [`union_all`] of `shapes` of `source` in a new model: the halves at once.
+fn united_apart(source: &Model, shapes: &[Shape]) -> Result<(Model, Shape)> {
+    if let [one] = shapes {
+        let mut model = Model::new();
+        let shape = model.import(source, *one)?;
+        return Ok((model, shape));
+    }
+    let (first, second) = shapes.split_at(shapes.len() / 2);
+    let (a, b) = crate::parallel::join(|| united_apart(source, first), || united_apart(source, second));
+    let ((mut model, a), (other, b)) = (a?, b?);
+    let b = model.import(&other, b)?;
+    drop(other);
+    let united = union(&mut model, a, b)?;
+    Ok((model, united))
+}
+
 /// The solids of `shape` when every face of it belongs to one of them.
 fn only_solids(model: &Model, shape: Shape) -> Option<Vec<Shape>> {
     use crate::topology::NodeKind;
@@ -3910,5 +3960,59 @@ mod tests {
             }
             check_against_overlap(&mut model, outlet, volute, (volumes[0], volumes[1], 0.0), &what);
         }
+    }
+
+    /// A ball-end mill's moves along two neighbouring passes over a wavy floor: each pass
+    /// the tubes and balls along its tip's centre path, built apart ([`crate::parallel::each`]),
+    /// and all united by [`union_all`] then cut from a block at once. On the pool and on one
+    /// thread alone the passes and the cut are the same, to the last bit; and the same solid
+    /// as the moves cut one after another.
+    #[test]
+    #[cfg(feature = "parallel")]
+    fn many_tools_united_on_threads_as_on_one() {
+        let radius = 1.0;
+        let pass = |model: &mut Model, j: usize| -> Result<Shape> {
+            let y = 1.2 * j as f64;
+            let centres: Vec<Point> = (0..6).map(|i| {
+                let x = -1.0 + 2.0 * i as f64;
+                Point::new(x, y, radius - 1.5 + 0.4 * (0.7 * x + 0.3 * y).sin())
+            }).collect();
+            let mut pieces = Vec::new();
+            for (k, c) in centres.iter().enumerate() {
+                pieces.push(Sphere::new(radius).with_frame(Frame::from_z(*c, Direction::Z)).build(model)?);
+                if let Some(next) = centres.get(k + 1) {
+                    let t = *next - *c;
+                    pieces.push(Cylinder::new(radius, t.length()).with_frame(Frame::from_z(*c, Direction::new(t.x, t.y, t.z))).build(model)?);
+                }
+            }
+            let mut swept = pieces[0];
+            for &piece in &pieces[1..] {
+                swept = union(model, swept, piece)?;
+            }
+            Ok(swept)
+        };
+        let cut = |one_by_one: bool| -> (f64, f64, usize, Vec<f64>) {
+            let mut model = Model::new();
+            let block = Cuboid::from_corners(Point::new(0.0, -0.5, -3.0), Point::new(9.0, 2.0, 0.0)).build(&mut model).unwrap();
+            let passes = crate::parallel::each(&mut model, 3, pass).unwrap();
+            let result = if one_by_one {
+                passes.iter().try_fold(block, |body, &tool| difference(&mut model, body, tool)).unwrap()
+            } else {
+                let tools = union_all(&mut model, &passes).unwrap();
+                difference(&mut model, block, tools).unwrap()
+            };
+            assert!(validity::check(&model, result).is_valid());
+            let passes_volume = passes.iter().map(|&p| properties::volume(&model, p).mass).collect();
+            (properties::volume(&model, result).mass, properties::area(&model, result).mass, model.explore(result, NodeKind::Face).count(), passes_volume)
+        };
+        let pooled = cut(false);
+        let alone = rayon::ThreadPoolBuilder::new().num_threads(1).build().unwrap().install(|| cut(false));
+        assert_eq!(pooled.0.to_bits(), alone.0.to_bits(), "volumes {} and {}", pooled.0, alone.0);
+        assert_eq!(pooled.1.to_bits(), alone.1.to_bits(), "areas {} and {}", pooled.1, alone.1);
+        assert_eq!((pooled.2, &pooled.3), (alone.2, &alone.3));
+        let each = cut(true);
+        assert!((pooled.0 - each.0).abs() <= 1e-9 * each.0, "volumes {} and {}", pooled.0, each.0);
+        assert!((pooled.1 - each.1).abs() <= 1e-9 * each.1, "areas {} and {}", pooled.1, each.1);
+        assert!(each.0 < 67.5 * 0.99, "something cut away: {}", each.0);
     }
 }

@@ -110,6 +110,11 @@ thread_local! {
     static KEEP_SLITS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
+/// Whether faces keep such arcs ([`with_slits`]) on this thread.
+pub(super) fn slits_kept() -> bool {
+    KEEP_SLITS.with(|k| k.get())
+}
+
 /// `f` with the faces of operations on shapes other than solids keeping the arcs on them
 /// that bound nothing as slits (loops along the arc and back), for later operations to
 /// split there: shapes fused one after another as if all at once.

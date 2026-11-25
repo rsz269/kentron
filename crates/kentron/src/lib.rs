@@ -56,7 +56,7 @@ pub mod loft;
 pub mod make;
 pub mod offset;
 pub mod math;
-mod parallel;
+pub mod parallel;
 pub mod mesh;
 pub mod meshing;
 pub mod modify;

@@ -1,5 +1,30 @@
 //! Independent steps of an operation run on a thread pool (with the `parallel` feature),
 //! their results in the order of their inputs, so that what follows is the same either way.
+//!
+//! [`each`] does so for parts of a model built independently of one another (the tools a
+//! part is cut by, made one by one).
+
+use crate::error::Result;
+use crate::topology::{Model, Shape};
+
+/// The shapes `build` makes for each of `0..count`, in `model`: each built in a model of its
+/// own, at once on the thread pool (with the `parallel` feature), and copied into `model` in
+/// order. The shapes are the same however many threads there are; the first error (by
+/// index) is returned. `build` sees only its own new model: what it builds from must be
+/// made in it (and the copies carry no recorded history).
+pub fn each(model: &mut Model, count: usize, build: impl Fn(&mut Model, usize) -> Result<Shape> + Sync) -> Result<Vec<Shape>> {
+    let indices: Vec<usize> = (0..count).collect();
+    let built = map(&indices, |&i| {
+        let mut own = Model::new();
+        let shape = build(&mut own, i);
+        (own, shape)
+    });
+    let mut shapes = Vec::with_capacity(count);
+    for (own, shape) in built {
+        shapes.push(model.import(&own, shape?)?);
+    }
+    Ok(shapes)
+}
 
 /// How long items are worked through here before the rest go to the pool: most steps (of
 /// operations on a few faces) take less than the pool costs, in waking its threads and in
@@ -54,4 +79,19 @@ pub(crate) fn map<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync + Se
 #[cfg(not(feature = "parallel"))]
 pub(crate) fn map<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync + Send) -> Vec<R> {
     items.iter().map(f).collect()
+}
+
+/// `a()` and `b()`, at once on the pool where it has threads to spare (each with the
+/// caller's tolerances).
+#[cfg(feature = "parallel")]
+pub(crate) fn join<A: Send, B: Send>(a: impl FnOnce() -> A + Send, b: impl FnOnce() -> B + Send) -> (A, B) {
+    let loose = crate::tolerance::loosened();
+    let both = || rayon::join(|| crate::tolerance::with_loosened(loose, a), || crate::tolerance::with_loosened(loose, b));
+    if rayon::current_thread_index().is_some() { both() } else { pool().install(both) }
+}
+
+/// `a()` and `b()`.
+#[cfg(not(feature = "parallel"))]
+pub(crate) fn join<A: Send, B: Send>(a: impl FnOnce() -> A + Send, b: impl FnOnce() -> B + Send) -> (A, B) {
+    (a(), b())
 }
