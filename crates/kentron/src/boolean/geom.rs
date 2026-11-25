@@ -275,12 +275,12 @@ pub(super) fn foot_on(surface: &Surface, p: Point) -> crate::geometry::extrema::
         }
     }
     // (No nearer than the nearest sample itself, the steps having run off or stalled, as
-    // from beside a pole: narrowed down from that sample.)
+    // from beside a pole, or along a bound to a farther point: from that sample by steps
+    // each bringing the point nearer.)
     if freeform(surface) && foot.point.distance(p) > on_tol() && foot.point.distance(p) > best.0.sqrt() * (1.0 + 1e-9) + 1e-12 {
         let (u0, u1, v0, v1) = surface.bounds();
-        let (nu, nv) = grid_steps(surface);
         if [u0, u1, v0, v1].iter().all(|x| x.is_finite()) {
-            let second = narrowed(surface, p, start, ((u1 - u0) / nu.max(1) as f64, (v1 - v0) / nv.max(1) as f64));
+            let second = descended(surface, p, start);
             if second.point.distance(p) < foot.point.distance(p) {
                 foot = second;
             }
@@ -385,6 +385,61 @@ fn narrowed(surface: &Surface, p: Point, start: (f64, f64), steps: (f64, f64)) -
     let found = crate::geometry::extrema::SurfaceFoot { u, v, point, du: su, dv: sv };
     let polished = crate::geometry::extrema::newton_foot_from_sample(p, surface, nearest.1);
     if polished.point.distance(p) < found.point.distance(p) { polished } else { found }
+}
+
+/// The point of `surface` nearest `p` about `start` (on a surface with finite bounds), by
+/// steps that each bring the point nearer: Newton's where the distance is convex, else down
+/// the gradient, either halved until it comes nearer. A parameter on its bound that the
+/// distance would take past it is held there, the other alone moving (the foot sought
+/// along that edge); where both are held, or no step comes nearer, the foot is there. (As
+/// sure as [`narrowed`] from a sample where Newton's own steps run off, a few evaluations
+/// a step instead of a thousand.)
+fn descended(surface: &Surface, p: Point, start: (f64, f64)) -> crate::geometry::extrema::SurfaceFoot {
+    let (u0, u1, v0, v1) = surface.bounds();
+    let (u_periodic, v_periodic) = (surface.is_u_periodic(), surface.is_v_periodic());
+    let clamp = |u: f64, v: f64| (if u_periodic { u } else { u.clamp(u0, u1) }, if v_periodic { v } else { v.clamp(v0, v1) });
+    let (mut u, mut v) = clamp(start.0, start.1);
+    let (u_small, v_small) = (1e-12 * (u1 - u0).abs().max(1e-300), 1e-12 * (v1 - v0).abs().max(1e-300));
+    let mut f = surface.point(u, v).distance_squared(p);
+    for _ in 0..100 {
+        let d = surface.d2(u, v);
+        let r = d.point - p;
+        let (gu, gv) = (r.dot(d.du), r.dot(d.dv));
+        let (huu, huv, hvv) = (d.du.dot(d.du) + r.dot(d.duu), d.du.dot(d.dv) + r.dot(d.duv), d.dv.dot(d.dv) + r.dot(d.dvv));
+        let held = |x: f64, g: f64, lo: f64, hi: f64, periodic: bool| !periodic && ((x <= lo && g > 0.0) || (x >= hi && g < 0.0));
+        let (hu, hv) = (held(u, gu, u0, u1, u_periodic), held(v, gv, v0, v1, v_periodic));
+        let (lu, lv) = (d.du.dot(d.du).max(1e-300), d.dv.dot(d.dv).max(1e-300));
+        let det = huu * hvv - huv * huv;
+        let newton = match (hu, hv) {
+            (true, true) => break,
+            (true, false) => (0.0, if hvv > 0.0 { -gv / hvv } else { -gv / lv }),
+            (false, true) => (if huu > 0.0 { -gu / huu } else { -gu / lu }, 0.0),
+            (false, false) if huu > 0.0 && det > 0.0 => ((-gu * hvv + gv * huv) / det, (-gv * huu + gu * huv) / det),
+            (false, false) => (-gu / lu.max(lv), -gv / lu.max(lv)),
+        };
+        let gradient = (if hu { 0.0 } else { -gu / lu.max(lv) }, if hv { 0.0 } else { -gv / lu.max(lv) });
+        let mut moved = None;
+        'directions: for (su, sv) in [newton, gradient] {
+            let mut t = 1.0;
+            for _ in 0..40 {
+                let (nu, nv) = clamp(u + t * su, v + t * sv);
+                if (nu - u).abs() <= u_small && (nv - v).abs() <= v_small {
+                    break;
+                }
+                let fc = surface.point(nu, nv).distance_squared(p);
+                if fc < f {
+                    moved = Some((nu, nv, fc));
+                    break 'directions;
+                }
+                t *= 0.5;
+            }
+        }
+        // (Steps of a trillionth of the range are not taken: the foot is there.)
+        let Some((nu, nv, fc)) = moved else { break };
+        (u, v, f) = (nu, nv, fc);
+    }
+    let (point, du, dv) = surface.d1(u, v);
+    crate::geometry::extrema::SurfaceFoot { u, v, point, du, dv }
 }
 
 /// Where the last point's foot was found on a free-form surface: its parameters, the point
