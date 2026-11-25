@@ -34,7 +34,8 @@
 //! nowhere larger than those of the three sections' sum, equal only in the limit at a face's
 //! normal, where both are the section's. So the patch is convex for every `s > r`, and
 //! degenerates at `s = r`, where the flats' boundaries shrink to the points where the contact
-//! lines cross. (Checked on a dense grid of normals in the tests below.)
+//! lines cross. (Proved in docs/g2-setback-corner-proof.md, by a reduction to a 2 × 2 matrix
+//! that tools/g2_concavity.rs certifies positive definite in interval arithmetic.)
 //!
 //! Convex, the patch lies within the solid's faces (above every tangent plane, of the faces
 //! too), and within the corner's cube of side `s`: each summand keeps `u_i` at most its share
@@ -1035,10 +1036,48 @@ mod tests {
         }
     }
 
+    /// The proof's Lemma 2 (docs/g2-setback-corner-proof.md), on this module's own support
+    /// functions: on the slice c = 1, minus the Hessian of `Σp − Φ` is the matrix `M` built
+    /// from `f(s) = p(s, 1)`, `f'` and `F = −f''` alone, and it is positive definite (the
+    /// lemma's inequality, which the proof's interval computation establishes everywhere).
+    #[test]
+    fn the_slice_hessian_is_the_proof_s_matrix() {
+        let c = corner(3.0);
+        let f = |s: f64| {
+            let p = c.section.support(s, 1.0);
+            (p.value, p.point[0], -p.hessian[0][0])
+        };
+        let kappa = |x: f64, y: f64| f(x / y).2 / y.powi(3);
+        for (a, b) in [(0.3, 0.6), (0.05, 0.7), (0.5, 0.5), (0.01, 0.02), (0.9, 1.0), (1e-4, 0.3)] {
+            let n = [a, b, 1.0];
+            let (h, hd) = (c.sections(n).hessian, c.set_back(n).hessian);
+            let got = [hd[0][0] - h[0][0], hd[0][1] - h[0][1], hd[1][1] - h[1][1]];
+            let ((fa, fpa, big_fa), (fb, fpb, big_fb), (fr, fpr, _)) = (f(a), f(b), f(a / b));
+            let x = b * fr;
+            let (_, fpx, big_fx) = f(x);
+            let (y, z) = (fb, fa);
+            let (_, fpya, _) = f(y / a);
+            let (_, fpzb, _) = f(z / b);
+            let (xa, xb) = (fpr, fr - a / b * fpr);
+            let (q, v, vp) = ([b, -a], [y, -a * fpb], [b * fpa, -z]);
+            let (kab, kya, kzb) = (kappa(a, b), kappa(y, a), kappa(z, b));
+            let entry = |i: usize, j: usize| {
+                let e = |k: usize| if k == 0 { [1.0, 0.0] } else { [0.0, 1.0] };
+                kab * (1.0 - fpx / 3.0) * q[i] * q[j] + big_fa * (1.0 - fpzb / 3.0) * e(0)[i] * e(0)[j] + big_fb * (1.0 - fpya / 3.0) * e(1)[i] * e(1)[j]
+                    - (big_fx * [xa, xb][i] * [xa, xb][j] + kya * v[i] * v[j] + kzb * vp[i] * vp[j]) / 3.0
+            };
+            let want = [entry(0, 0), entry(0, 1), entry(1, 1)];
+            for k in 0..3 {
+                assert!((got[k] - want[k]).abs() < 1e-7 * (1.0 + want[k].abs()), "({a}, {b}) {k}: {got:?} {want:?}");
+            }
+            assert!(want[0] > 0.0 && want[0] * want[2] - want[1] * want[1] > 0.0, "({a}, {b}): {want:?}");
+        }
+    }
+
     /// The bound behind every set-back above the radius: the radii of `Φ` are nowhere larger
     /// than the sections' sum (the least generalized eigenvalue at least 1), on a grid of
     /// normals spreading by powers of ten towards the octant's edges and corners; and both are
-    /// positive definite there.
+    /// positive definite there. (Proved for all normals in docs/g2-setback-corner-proof.md.)
     #[test]
     fn the_set_back_term_never_outbends_the_sections() {
         let c = corner(3.0);
