@@ -784,6 +784,18 @@ impl CornerSupport {
             lo[k] -= margin;
             hi[k] += margin;
         }
+        // (Newton's method is not run where the point lies off the patch's outline, a polygon
+        // through its boundary's points: there it would only run off the octant.)
+        // (Round the outline: face i's flat from a_i to b_i, then fillet l's seam, which runs
+        // from a_j to b_i, backwards.)
+        let outline: Vec<[f64; 2]> = (0..3)
+            .flat_map(|i| {
+                let flat = edges[2 * i + 1].iter().step_by(8).map(|u| onto_plane(*u));
+                let seam = edges[2 * ((i + 2) % 3)].iter().rev().step_by(8).map(|u| onto_plane(*u));
+                flat.chain(seam).collect::<Vec<_>>()
+            })
+            .collect();
+        let off = |x: [f64; 2]| !inside_polygon(&outline, x);
         let grid = 2 * spans;
         let at = |k: usize, i: usize| lo[k] + (hi[k] - lo[k]) * (i as f64 + 0.5) / grid as f64;
         let lines: Vec<usize> = (0..grid).collect();
@@ -791,6 +803,9 @@ impl CornerSupport {
             let mut last = None;
             (0..grid).filter_map(|j| {
                 let x = [at(0, i), at(1, j)];
+                if off(x) {
+                    return None;
+                }
                 let found = self.height_from(x, last);
                 last = found.map(|(_, n)| n);
                 found.map(|(h, _)| (x, h))
@@ -867,12 +882,15 @@ impl CornerSupport {
                 deviation = deviation.max((graph.height(onto_plane(*u)) - diagonal(*u)).abs());
             }
         }
-        let check = 3 * spans / 2 + 1;
+        let check = spans + 1;
         let lines: Vec<usize> = (0..check).collect();
         let inside: Vec<f64> = crate::parallel::map(&lines, |&i| {
             let mut last = None;
             (0..check).filter_map(|j| {
                 let x = [lo[0] + (hi[0] - lo[0]) * (i as f64 + 0.31) / check as f64, lo[1] + (hi[1] - lo[1]) * (j as f64 + 0.73) / check as f64];
+                if off(x) {
+                    return None;
+                }
                 let found = self.height_from(x, last);
                 last = found.map(|(_, n)| n);
                 found.map(|(h, _)| (graph.height(x) - h).abs())
@@ -882,6 +900,19 @@ impl CornerSupport {
         graph.deviation = deviation;
         Ok(graph)
     }
+}
+
+/// Whether `x` lies inside the closed polygon `outline` (an odd number of its sides cross the
+/// ray from `x` along the first axis).
+fn inside_polygon(outline: &[[f64; 2]], x: [f64; 2]) -> bool {
+    let mut inside = false;
+    for k in 0..outline.len() {
+        let (a, b) = (outline[k], outline[(k + 1) % outline.len()]);
+        if (a[1] > x[1]) != (b[1] > x[1]) && x[0] < a[0] + (x[1] - a[1]) * (b[0] - a[0]) / (b[1] - a[1]) {
+            inside = !inside;
+        }
+    }
+    inside
 }
 
 /// Solves the symmetric positive definite system whose upper band (`a[k][d]` the entry at

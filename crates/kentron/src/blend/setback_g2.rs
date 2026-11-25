@@ -613,6 +613,26 @@ mod tests {
         assert!((got - want).abs() < 1e-3, "{got} against {want}");
     }
 
+    /// A box turned out of the axes, set back at the corner its frame starts from (its edges'
+    /// directions there turning the other way round from the far corner's): its volume as
+    /// the support function's.
+    #[test]
+    fn a_turned_box_sets_back_its_first_corner() {
+        use crate::math::{Direction, Frame as Placement};
+        let (w, r, s) = ([10.0, 12.0, 14.0], 1.1, 3.0);
+        let mut model = Model::new();
+        let origin = Point::new(3.0, -2.0, 5.0);
+        let frame = Placement::new(origin, Direction::new(1.0, 2.0, 2.0), Direction::new(2.0, -1.0, 0.0));
+        let b = crate::primitives::Cuboid::new(w[0], w[1], w[2]).with_frame(frame).build(&mut model).unwrap();
+        let edges = corner_edges(&model, b, origin);
+        assert_eq!(edges.len(), 3);
+        let out = fillet_setback_g2(&mut model, b, &edges, r, s).unwrap();
+        assert!(crate::validity::check(&model, out).is_valid());
+        let c = CornerSupport::new(UnitSection::equal_area_square(), r, s).unwrap();
+        let (got, want) = (volume_of(&model, out), reference(w, &c));
+        assert!((got - want).abs() < 2e-4, "{got} against {want}");
+    }
+
     /// Refused: a set-back not past the radius, a radius not positive, edges too short for
     /// their stops at both ends, and a corner whose faces are not square to one another.
     #[test]
