@@ -2386,6 +2386,108 @@ mod tests {
         }
     }
 
+    /// Prisms on a circle and on the same moved across by 3e-6 of its radius 3: their sides
+    /// cross at an angle of 1e-6, the outlines within the tolerance of each other for a
+    /// stretch either side of each crossing (crossed there, not run along), and 3e-6 apart at
+    /// most between (the sides' seams where they are farthest apart). The intersection is the
+    /// lens the circles share (in closed form) times the height they share, and the results
+    /// add up (to the part in 1e-9 the faces' integrals on these rational outlines reach).
+    #[test]
+    fn prisms_on_a_circle_and_the_same_moved_a_hair() {
+        let (r, d, h, raised) = (3.0, 3e-6, 4.0, 1.5);
+        let mut model = Model::new();
+        let circle = |x: f64, z: f64| crate::geometry::curve::Curve::Circle(crate::geometry::curve::Circle::new(Frame::new(Point::new(x, 0.0, z), Direction::Z, Direction::X), r));
+        let first = conic_prism(&mut model, circle(0.0, 0.0), h, 0);
+        let second = conic_prism(&mut model, circle(d, raised), h, 0);
+        let whole = properties::volume(&model, first).mass;
+        assert!((whole - PI * r * r * h).abs() < 1e-11 * whole, "{whole}");
+        let lens = 2.0 * r * r * (0.5 * d / r).acos() - 0.5 * d * (4.0 * r * r - d * d).sqrt();
+        let common = lens * (h - raised);
+        for (op, x, y, want) in [(intersection as fn(&mut Model, Shape, Shape) -> Result<Shape>, first, second, common), (intersection, second, first, common), (union, first, second, 2.0 * whole - common), (difference, first, second, whole - common)] {
+            let r = op(&mut model, x, y).unwrap();
+            let report = validity::check(&model, r);
+            assert!(report.problems.is_empty(), "{report:?}");
+            let v = properties::volume(&model, r).mass;
+            assert!((v - want).abs() < 1e-9 * whole, "{v} against {want}");
+        }
+    }
+
+    /// Prisms on a closed periodic B-spline outline (eight poles about a circle, its knots from
+    /// 3) and on the same moved across by 2.9e-6, the second lowered by a fifteenth of their
+    /// height: the outlines cross twice at angles of about 1e-6, within the classifying
+    /// distance of each other for a long stretch about each crossing. The bottom
+    /// outline of each meets the other's side where the outlines cross, found as the
+    /// sides' lines of meeting are (in closed form, the classifying distance not taken for
+    /// meeting along a stretch). Every result is valid and they add up; the intersection
+    /// lies between the prism's cross-section and that less a strip as wide as the move
+    /// along the outline, over the height they share.
+    #[test]
+    fn prisms_on_an_outline_and_the_same_moved_a_hair() {
+        use crate::geometry::curve::{BSplineCurve, Curve};
+        let poles = [
+            (2.4775224573227153, 0.0),
+            (1.9866654191666364, 1.9866654191666362),
+            (1.776982384600636e-16, 2.9020324649324856),
+            (-2.4924892437560295, 2.49248924375603),
+            (-3.201553642958206, 3.920772421147315e-16),
+            (-1.7113199793120286, -1.7113199793120282),
+            (-6.092011759060008e-16, -3.3163367393229923),
+            (1.625845109015556, -1.6258451090155568),
+        ];
+        let (h, lowered, (dx, dy)) = (8.366476807755433, 0.5641892695822941, (2.8569289529656317e-06, -6.410179343273588e-07));
+        let prism = |model: &mut Model, (dx, dy, z): (f64, f64, f64)| {
+            let curve = BSplineCurve::try_new_periodic(poles.iter().map(|&(x, y)| Point::new(x + dx, y + dy, z)).collect(), (3..=11).map(f64::from).collect(), vec![1; 9], 3).unwrap();
+            let edge = crate::make::edge_from_curve(model, Curve::BSpline(curve)).unwrap();
+            let wire = crate::make::wire(model, &[edge]).unwrap();
+            let face = crate::make::planar_face(model, wire).unwrap();
+            crate::sweep::extrude(model, face, Vector::new(0.0, 0.0, h)).unwrap().shape
+        };
+        let mut model = Model::new();
+        let a = prism(&mut model, (0.0, 0.0, 0.0));
+        let b = prism(&mut model, (dx, dy, -lowered));
+        let whole = properties::volume(&model, a).mass;
+        let section = whole / h;
+        let outline = model.explore(a, NodeKind::Edge).filter(|&e| matches!(model.edge_curve(e), Some((Curve::BSpline(_), _, _)))).map(|e| properties::length(&model, e).mass).next().unwrap();
+        let mut volumes = Vec::new();
+        for (op, x, y) in [(intersection as fn(&mut Model, Shape, Shape) -> Result<Shape>, a, b), (intersection, b, a), (union, a, b), (difference, a, b), (difference, b, a)] {
+            let r = op(&mut model, x, y).unwrap();
+            let report = validity::check(&model, r);
+            assert!(report.problems.is_empty(), "{report:?}");
+            volumes.push(properties::volume(&model, r).mass);
+        }
+        let [common, other_way, joined, a_less, b_less] = volumes[..] else { unreachable!() };
+        let shared = h - lowered;
+        let strip = (dx * dx + dy * dy).sqrt() * outline * shared;
+        assert!(common <= section * shared + 1e-9 * whole && common >= section * shared - strip, "{common} against {}", section * shared);
+        for (sum, want) in [(other_way, common), (joined + common, 2.0 * whole), (a_less + common, whole), (b_less + common, whole)] {
+            assert!((sum - want).abs() < 1e-9 * whole, "{sum} against {want}");
+        }
+    }
+
+    /// Prisms on an ellipse and on the same turned by 3e-7 about its centre: the outlines
+    /// cross four times, at most 6e-7 apart in between, within the classifying distance all
+    /// round: one outline as far as the operations can tell, the sides lying on one another.
+    /// Every result is valid, the union the prism made taller, and the volumes are those of
+    /// the exact solids within the slivers' (the outlines' areas apart, times the height).
+    #[test]
+    fn prisms_on_an_ellipse_and_the_same_turned_a_hair() {
+        let (a, b, h, raised, turn) = (5.0, 3.0, 4.0, 1.5, 3e-7);
+        let mut model = Model::new();
+        let first = conic_prism(&mut model, turned_ellipse(a, b, 0.0, 0.0), h, 1);
+        let second = conic_prism(&mut model, turned_ellipse(a, b, turn, raised), h, 1);
+        let whole = PI * a * b * h;
+        let common = turned_ellipses_overlap(a, b, turn) * (h - raised);
+        let slivers = (PI * a * b - turned_ellipses_overlap(a, b, turn)) * h;
+        assert!(slivers > 0.0 && slivers < 1e-4, "{slivers}");
+        for (op, x, y, want) in [(intersection as fn(&mut Model, Shape, Shape) -> Result<Shape>, first, second, common), (intersection, second, first, common), (union, first, second, 2.0 * whole - common), (difference, first, second, whole - common)] {
+            let r = op(&mut model, x, y).unwrap();
+            let report = validity::check(&model, r);
+            assert!(report.problems.is_empty(), "{report:?}");
+            let v = properties::volume(&model, r).mass;
+            assert!((v - want).abs() < slivers + 1e-10 * whole, "{v} against {want}");
+        }
+    }
+
     /// Two arched prisms, one on the other's side surface along all of it (moved along the
     /// direction of extrusion): their curved sides are one surface, met along no line, and
     /// the union is the prism made taller.

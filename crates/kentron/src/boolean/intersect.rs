@@ -175,7 +175,7 @@ struct ContactKey {
 fn surface_contact(curve: &Curve, first: f64, last: f64, surface: &Surface, tolerance: f64) -> Contact {
     if let Some(contact) = plane_contact(curve, first, last, surface)
         .or_else(|| coaxial_contact(curve, first, last, surface))
-        .or_else(|| extrusion_contact(curve, first, surface))
+        .or_else(|| extrusion_contact(curve, first, last, surface))
         .or_else(|| line_quadric_contact(curve, first, last, surface))
     {
         return contact;
@@ -509,8 +509,12 @@ fn coaxial_contact(curve: &Curve, first: f64, last: f64, surface: &Surface) -> O
 
 /// [`surface_contact`] in closed form against a surface of extrusion, for a line along its
 /// direction (as far from it all along: on it or clear of it) and for the surface's basis
-/// curve moved along the direction (on it).
-fn extrusion_contact(curve: &Curve, first: f64, surface: &Surface) -> Option<Contact> {
+/// curve moved along the direction (on it); and for a B-spline curve lying across the
+/// direction (in a plane square to it, as the outline of a prism along it), by its heights
+/// over the surface as where the extrusion of that curve meets it (see
+/// [`extrusions_along`]): the same crossings, found the same way, where the curve and the
+/// basis cross at a shallow angle, within the tolerance of each other for a stretch.
+fn extrusion_contact(curve: &Curve, first: f64, last: f64, surface: &Surface) -> Option<Contact> {
     let Surface::Extrusion(e) = surface else { return None };
     let d = Vector::from(e.direction());
     match curve {
@@ -518,8 +522,23 @@ fn extrusion_contact(curve: &Curve, first: f64, surface: &Surface) -> Option<Con
             Some(if geom::signed_distance(surface, curve.point(first)).abs() <= on_tol() { Contact::On } else { Contact::At(Vec::new()) })
         }
         Curve::BSpline(_) if same_shadow(curve, e.basis(), d) => Some(Contact::On),
+        Curve::BSpline(b) if across(b, d) => match heights_along(curve, first, last, surface) {
+            Heights::On => Some(Contact::On),
+            Heights::Roots(roots) => Some(Contact::At(roots)),
+            Heights::Unsure => None,
+        },
         _ => None,
     }
+}
+
+/// Whether a B-spline curve lies in a plane square to `d` (a unit vector): its poles all as
+/// far along it, to rounding.
+fn across(b: &crate::geometry::curve::BSplineCurve, d: Vector) -> bool {
+    let poles = b.poles();
+    let heights = poles.iter().map(|p| (*p - Point::ORIGIN).dot(d));
+    let (lo, hi) = heights.fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), h| (lo.min(h), hi.max(h)));
+    let size = poles.iter().map(|p| (*p - Point::ORIGIN).length()).fold(1.0, f64::max);
+    hi - lo <= 1e-12 * size
 }
 
 /// [`surface_contact`] in closed form for a line against a cylinder or a sphere, where the
@@ -948,6 +967,39 @@ fn extrusions_along(fa: &Face, fb: &Face) -> Option<Vec<Section>> {
     if !(t1 > t0) {
         return Some(Vec::new());
     }
+    let roots = match heights_along(curve, t0, t1, other) {
+        Heights::On => return Some(Vec::new()),
+        Heights::Unsure => return None,
+        Heights::Roots(roots) => roots,
+    };
+    let boxes = [&fa.bbox, &fb.bbox];
+    let on_other = |p: Point| {
+        let uv = geom::uv_of(other, p);
+        geom::surface_point(other, uv).distance(p) <= 10.0 * TOL
+    };
+    Some(roots.into_iter().map(|t| curve.point(t)).filter(|&p| on_other(p)).map(|p| line_across(p, extrusion.direction(), boxes)).collect())
+}
+
+/// Where a curve crosses a surface along whose direction it does not run (the basis of an
+/// extrusion, or a curve across the direction both run along), from its heights over it.
+enum Heights {
+    /// Within the tolerance of it all along (or crossing it back and forth, within twice the
+    /// classifying distance of it all along).
+    On,
+    /// Running along it within the tolerance over a stretch, or touching it there: left to
+    /// the general search.
+    Unsure,
+    /// Crossing or touching it at these parameters.
+    Roots(Vec<f64>),
+}
+
+/// [`Heights`] of `curve` over `[t0, t1]` against `other`, from its signed distances at even
+/// steps: the roots between samples and either side of the turns of the height (see
+/// [`height_roots`]), where every stretch within the tolerance is a crossing at a shallow
+/// angle (see [`shallow_crossings_only`]): found exactly however shallow (bisected on the
+/// distance's sign), where the stretch within the tolerance about the crossing, as long as
+/// the tolerance over the angle, may be much longer than the samples' spacing.
+fn heights_along(curve: &Curve, t0: f64, t1: f64, other: &Surface) -> Heights {
     // (The distance from the other surface, along its normal at the foot point; where the
     // foot is held at the end of the other's extruded curve, not the distance to it.)
     let height = |t: f64| geom::signed_distance(other, curve.point(t));
@@ -961,25 +1013,96 @@ fn extrusions_along(fa: &Face, fb: &Face) -> Option<Vec<Section>> {
     // (The same surface over the whole face, as a copy of it: met along no line, as
     // coincident quadrics; met over a stretch only, left to the tracing.)
     if hs.iter().all(|h| h.abs() <= TOL) {
-        return Some(Vec::new());
+        return Heights::On;
     }
-    if hs.windows(2).any(|w| w[0].abs() <= TOL && w[1].abs() <= TOL) {
-        return None;
+    if !shallow_crossings_only(&hs, curve.period().is_some_and(|period| t1 - t0 >= period)) {
+        return Heights::Unsure;
     }
     let ds: Vec<f64> = ts.iter().map(|&t| slope(t)).collect();
-    let boxes = [&fa.bbox, &fb.bbox];
-    let on_other = |p: Point| {
-        let uv = geom::uv_of(other, p);
-        geom::surface_point(other, uv).distance(p) <= 10.0 * TOL
+    let mut roots = height_roots(&height, &slope, &ts, &hs, &ds);
+    // The crossings a hair apart, the curve no farther from the surface between them than
+    // points are taken to be on it (the classifying distance), as where a closed curve and
+    // the same turned by a millionth cross at angles of that order.
+    // (Crossing back and forth all along within twice that distance, the curve and the
+    // surface's are one as far as the operations can tell: the faces on either lie within
+    // that distance of a surface between them, everywhere. They are taken to lie on one
+    // another, as copies do, the slivers between them lost: the operations would take most of
+    // each for lying on the other, the pieces cut between the crossings left unmatched.)
+    // (Only some stretches so: there the curve lies on the surface, crossing it and back; the
+    // two crossings about such a stretch are none, the narrowest first, until none is left.
+    // Its points then lie within that distance of the surface wherever they are across it
+    // from the rest of the stretch they are now part of, taken as lying on it, not across.)
+    let cyclic = curve.period().is_some_and(|period| t1 - t0 >= period);
+    let narrow = on_tol();
+    let farthest = |roots: &[f64], k: usize| {
+        let m = roots.len();
+        let (a, b) = (roots[k], if k + 1 < m { roots[k + 1] } else { roots[0] + (t1 - t0) });
+        (1..16).map(|i| height(a + (b - a) * i as f64 / 16.0).abs()).fold(0.0, f64::max)
     };
-    Some(
-        height_roots(&height, &slope, &ts, &hs, &ds)
-            .into_iter()
-            .map(|t| curve.point(t))
-            .filter(|&p| on_other(p))
-            .map(|p| line_across(p, extrusion.direction(), boxes))
-            .collect(),
-    )
+    let stretches = |m: usize| if cyclic && m >= 2 { m } else { m.saturating_sub(1) };
+    if roots.len() >= 2 && hs.iter().all(|h| h.abs() <= 2.0 * narrow) && (0..stretches(roots.len())).all(|k| farthest(&roots, k) <= 2.0 * narrow) {
+        return Heights::On;
+    }
+    loop {
+        let m = roots.len();
+        let Some((k, gap)) = (0..stretches(m)).map(|k| (k, farthest(&roots, k))).min_by(|x, y| x.1.total_cmp(&y.1)) else { break };
+        if gap > narrow {
+            break;
+        }
+        if k + 1 < m {
+            roots.drain(k..=k + 1);
+        } else {
+            roots.pop();
+            roots.remove(0);
+        }
+    }
+    Heights::Roots(roots)
+}
+
+/// Whether each stretch of the heights `hs` (at even steps along a curve) lying within the
+/// tolerance of the other surface, over two samples or more, is the curve crossing it at a
+/// shallow angle: the heights just before and after the stretch clear of the tolerance on
+/// either side, changing sign once within it. (Not a stretch along which the surfaces run
+/// together, nor where the curve touches the surface and turns back.) `cyclic` where the
+/// samples go once round a closed curve, the last the first again: a stretch may run across
+/// its start; else one at an end of the samples is not taken for a crossing.
+fn shallow_crossings_only(hs: &[f64], cyclic: bool) -> bool {
+    let m = if cyclic { hs.len() - 1 } else { hs.len() };
+    let at = |i: usize| hs[i % m];
+    let within = |i: usize| at(i).abs() <= TOL;
+    // (Round a closed curve, from a sample clear of the tolerance; all within it is no
+    // crossing.)
+    let begin = if cyclic {
+        match (0..m).find(|&i| !within(i)) {
+            Some(i) => i,
+            None => return false,
+        }
+    } else {
+        0
+    };
+    let end = begin + m;
+    let mut i = begin;
+    while i < end {
+        if !within(i) {
+            i += 1;
+            continue;
+        }
+        let mut j = i;
+        while j + 1 < end && within(j + 1) {
+            j += 1;
+        }
+        if j > i {
+            if (!cyclic && (i == 0 || j + 1 >= m)) || at(i - 1) * at(j + 1) >= 0.0 {
+                return false;
+            }
+            let changes = (i - 1..=j).filter(|&k| (at(k) < 0.0) != (at(k + 1) < 0.0)).count();
+            if changes != 1 {
+                return false;
+            }
+        }
+        i = j + 1;
+    }
+    true
 }
 
 /// Whether two B-spline curves are the same seen along `d` (as the bases of one surface of
