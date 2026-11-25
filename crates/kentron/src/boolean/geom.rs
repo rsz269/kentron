@@ -190,7 +190,10 @@ pub(super) fn uv_within(surface: &Surface, p: Point, reach: f64) -> Option<Uv> {
     // (Farther than the reach, on a surface coming back near itself, from samples nearer the
     // point too: the foot found may be on the next turn of one winding round, nearer than its
     // samples on the point's own turn, with no sample of that turn near enough to lead there.)
-    if foot.point.distance(p) > reach && crate::geometry::extrema::close_samples(surface) != (0, 0) {
+    // (Or on any surface whose sheets pass close to each other, as a ring squashed across
+    // its hole, where the nearest sample may lie on the other sheet: the point, taken to
+    // lie on the surface, is looked for from the nearest samples before it is put off it.)
+    if foot.point.distance(p) > reach {
         foot = foot_from_nearest_samples(surface, p, foot, 32);
     }
     (foot.point.distance(p) <= reach).then_some([foot.u, foot.v])
@@ -272,9 +275,8 @@ pub(super) fn foot_on(surface: &Surface, p: Point) -> crate::geometry::extrema::
         }
     }
     // (No nearer than the nearest sample itself, the steps having run off or stalled, as
-    // from beside a pole or where the distance is not convex: narrowed down from that
-    // sample.)
-    if freeform(surface) && foot.point.distance(p) > on_tol() && foot.point.distance(p) > best.0.sqrt() * (1.0 - 1e-9) {
+    // from beside a pole: narrowed down from that sample.)
+    if freeform(surface) && foot.point.distance(p) > on_tol() && foot.point.distance(p) > best.0.sqrt() * (1.0 + 1e-9) + 1e-12 {
         let (u0, u1, v0, v1) = surface.bounds();
         let (nu, nv) = grid_steps(surface);
         if [u0, u1, v0, v1].iter().all(|x| x.is_finite()) {
@@ -308,7 +310,8 @@ pub(super) fn foot_on(surface: &Surface, p: Point) -> crate::geometry::extrema::
     if (u_bound && surface.is_u_closed()) || (v_bound && surface.is_v_closed()) {
         let across = |x: f64, a: f64, b: f64| if (x - a).abs() < (x - b).abs() { b } else { a };
         let start = (if u_bound && surface.is_u_closed() { across(foot.u, u0, u1) } else { foot.u }, if v_bound && surface.is_v_closed() { across(foot.v, v0, v1) } else { foot.v });
-        let second = crate::geometry::extrema::newton_foot_from_sample(p, surface, start);
+        let (nu, nv) = grid_steps(surface);
+        let second = narrowed(surface, p, start, ((u1 - u0) / nu.max(1) as f64, (v1 - v0) / nv.max(1) as f64));
         if second.point.distance(p) < distance {
             return second;
         }

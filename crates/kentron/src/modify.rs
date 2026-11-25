@@ -851,8 +851,8 @@ mod tests {
         }
     }
 
-    /// Stretches, shears and mirrors (a negative determinant), and one shear that also
-    /// turns the parts.
+    /// Stretches, shears and mirrors (a negative determinant), one shear that also turns
+    /// the parts, and one squashing much along x.
     fn stretches() -> Vec<AffineTransform> {
         use crate::math::Matrix3;
         let rows = [
@@ -860,12 +860,14 @@ mod tests {
             [[1.3, 0.4, 0.0], [0.0, 0.8, 0.3], [0.2, 0.0, 1.1]],
             [[-1.2, 0.3, 0.1], [0.2, 0.7, -0.4], [0.0, 0.5, 1.6]],
             [[0.34, 0.05, -1.56], [-0.9, 0.6, 0.2], [0.4, 1.2, 0.3]],
+            // Squashing a ring across its hole: its inner sheets close together.
+            [[0.3, 0.15, 0.0], [0.0, 1.2, 0.3], [0.1, 0.0, 1.4]],
         ];
         rows.iter().map(|r| AffineTransform::new(Matrix3::from_rows(*r), Vector::new(3.0, -1.0, 2.0))).collect()
     }
 
     /// Primitives with the closed form of how far inside each point is (negative
-    /// outside): a box, a cylinder, a frustum, a cone to its apex, a ball, a ring.
+    /// outside): a box, a cylinder, a frustum, a cone to its apex, a ball, two rings.
     fn primitives_with_depth(model: &mut Model) -> Vec<(Shape, Box<dyn Fn(Point) -> f64>)> {
         let radial = |p: Point| (p.x * p.x + p.y * p.y).sqrt();
         vec![
@@ -876,6 +878,7 @@ mod tests {
             (Cone::new(1.5, 0.0, 2.5).build(model).unwrap(), Box::new(move |p: Point| (1.5 * (1.0 - p.z / 2.5) - radial(p)).min(p.z).min(2.5 - p.z))),
             (Sphere::new(1.5).build(model).unwrap(), Box::new(|p: Point| 1.5 - (p - Point::ORIGIN).length())),
             (Torus::new(3.0, 1.0).build(model).unwrap(), Box::new(move |p: Point| 1.0 - ((radial(p) - 3.0).powi(2) + p.z * p.z).sqrt())),
+            (Torus::new(2.5, 0.9).build(model).unwrap(), Box::new(move |p: Point| 0.9 - ((radial(p) - 2.5).powi(2) + p.z * p.z).sqrt())),
         ]
     }
 
