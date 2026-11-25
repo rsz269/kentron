@@ -141,12 +141,15 @@ pub(super) fn cells(model: &mut Model, shapes: &[Shape]) -> Result<Option<Vec<Ce
     // Where regions lie on one another, each shape's faces made up of the cells inside it,
     // else (faces split differently where they meet) none of them.
     if shared_regions {
-        let areas: Vec<f64> = faces.iter().map(|&f| crate::properties::area(model, f).mass).collect();
-        for (k, &shape) in shapes.iter().enumerate() {
+        // (Each face's area on the pool.)
+        let model: &Model = model;
+        let areas: Vec<f64> = crate::parallel::map(&faces, |&f| crate::properties::area(model, f).mass);
+        let indices: Vec<usize> = (0..n).collect();
+        let wholes: Vec<f64> = crate::parallel::map(&indices, |&k| if dimension[k] == 2 { crate::properties::area(model, shapes[k]).mass } else { 0.0 });
+        for (k, &whole) in wholes.iter().enumerate() {
             if dimension[k] != 2 {
                 continue;
             }
-            let whole = crate::properties::area(model, shape).mass;
             let parts: f64 = region_marks.iter().zip(&areas).filter(|(m, _)| m.contains(&k)).map(|(_, a)| a).sum();
             if (parts - whole).abs() > 1e-6 * whole.abs() + 1e-12 {
                 return Ok(None);

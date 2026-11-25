@@ -3537,7 +3537,8 @@ impl Graph {
     /// Edges lying on a face of the other operand cross its boundary edges: splits both
     /// there.
     pub fn intersect_edges_on_faces(&mut self) {
-        let mut crossings: Vec<(usize, usize, f64, f64)> = Vec::new();
+        // The pairs of edges whose boxes meet, in order; their crossings found on the pool.
+        let mut pairs: Vec<(usize, usize)> = Vec::new();
         for face in &self.faces {
             // (With many edges both ways, the boundary's edges in a tree over their boxes;
             // those met taken in the boundary's order all the same.)
@@ -3559,14 +3560,16 @@ impl Graph {
                     if !geom::boxes_overlap(&e1.bbox, &e2.bbox) {
                         continue;
                     }
-                    for (t, s) in edge_crossings(e1, e2, on_tol()) {
-                        crossings.push((ei, b.edge, t, s));
-                    }
+                    pairs.push((ei, b.edge));
                 }
             }
         }
-        for (e1, e2, t, s) in crossings {
-            self.add_crossing(e1, t, e2, s);
+        let edges = &self.edges;
+        let found = crate::parallel::map(&pairs, |&(e1, e2)| edge_crossings(&edges[e1], &edges[e2], on_tol()));
+        for (&(e1, e2), crossings) in pairs.iter().zip(found) {
+            for (t, s) in crossings {
+                self.add_crossing(e1, t, e2, s);
+            }
         }
     }
 

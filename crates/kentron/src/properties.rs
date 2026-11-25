@@ -317,7 +317,9 @@ fn face_area_moments(model: &Model, face: Shape) -> Moments {
 
 /// The volume a closed shell bounds, from its faces' terms (kept in the model).
 pub(crate) fn closed_shell_volume(model: &Model, shell: Shape) -> f64 {
-    model.explore(shell, NodeKind::Face).map(|f| face_volume_term(model, f)).sum()
+    // (The faces' terms found on the pool, added in order.)
+    let faces: Vec<Shape> = model.explore(shell, NodeKind::Face).collect();
+    crate::parallel::map(&faces, |&f| face_volume_term(model, f)).into_iter().sum()
 }
 
 /// A face's term of the volume a closed shell bounds (see [`face_volume_terms`]).
