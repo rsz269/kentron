@@ -97,8 +97,7 @@ fn conic<P: ControlPoint, C: ParametricCurve<Point = P, Vector = P::Vector>>(cur
         }
         Form::Ellipse(center) => {
             let full = (b - a - std::f64::consts::TAU).abs() <= crate::tolerance::PARAMETRIC;
-            let spans = (((b - a) / (std::f64::consts::TAU / 3.0)) - 1e-9).ceil().max(1.0) as usize;
-            let step = (b - a) / spans as f64;
+            let ArcParameters { spans, step, .. } = ArcParameters::elliptic(a, b);
             let w = (0.5 * step).cos();
             let knots: Vec<f64> = (0..=spans).map(|i| a + i as f64 * step).collect();
             let mut poles = Vec::new();
@@ -120,6 +119,67 @@ fn conic<P: ControlPoint, C: ParametricCurve<Point = P, Vector = P::Vector>>(cur
             };
             Some(curve.with_weights(weights))
         }
+    }
+}
+
+/// How the exact B-spline of an arc of a circle or ellipse (or of a piece of hyperbola) over
+/// `[a, b]` is parametrized, as [`curve_to_bspline`] and [`surface_to_bspline`] make it: the
+/// arc is cut into equal spans (one for a hyperbola), each a rational quadratic piece whose
+/// parameter runs linearly between the span's ends, where it agrees with the curve's own
+/// (an angle). Within a span, at the share `s` of it, the angle `θ` from the span's middle
+/// has `tan(θ/2) = (2s − 1)·tan(δ/4)` for a span of `δ` (`tanh` for a hyperbola): the
+/// symmetric rational quadratic arc's parametrization.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct ArcParameters {
+    pub(crate) first: f64,
+    pub(crate) spans: usize,
+    pub(crate) step: f64,
+    hyperbolic: bool,
+}
+
+impl ArcParameters {
+    /// An arc of a circle or ellipse: spans of at most 120°.
+    pub(crate) fn elliptic(a: f64, b: f64) -> Self {
+        let spans = (((b - a) / (std::f64::consts::TAU / 3.0)) - 1e-9).ceil().max(1.0) as usize;
+        Self { first: a, spans, step: (b - a) / spans as f64, hyperbolic: false }
+    }
+
+    /// A piece of hyperbola: one span.
+    pub(crate) fn hyperbolic(a: f64, b: f64) -> Self {
+        Self { first: a, spans: 1, step: b - a, hyperbolic: true }
+    }
+
+    /// The span ends, where the two parameters agree.
+    pub(crate) fn knots(&self) -> Vec<f64> {
+        (0..=self.spans).map(|i| self.first + i as f64 * self.step).collect()
+    }
+
+    /// The span holding `x` in either parameter (the end spans beyond the ends).
+    fn span(&self, x: f64) -> usize {
+        (((x - self.first) / self.step).floor().max(0.0) as usize).min(self.spans - 1)
+    }
+
+    fn half_tan(&self, x: f64) -> f64 {
+        if self.hyperbolic { x.tanh() } else { x.tan() }
+    }
+
+    fn half_atan(&self, x: f64) -> f64 {
+        if self.hyperbolic { x.atanh() } else { x.atan() }
+    }
+
+    /// The curve's own parameter at the B-spline's parameter `t`.
+    pub(crate) fn angle(&self, t: f64) -> f64 {
+        let start = self.first + self.span(t) as f64 * self.step;
+        let s = (t - start) / self.step;
+        start + 0.5 * self.step + 2.0 * self.half_atan((2.0 * s - 1.0) * self.half_tan(0.25 * self.step))
+    }
+
+    /// The B-spline's parameter at the curve's own parameter `angle`.
+    pub(crate) fn parameter(&self, angle: f64) -> f64 {
+        let start = self.first + self.span(angle) as f64 * self.step;
+        let middle = start + 0.5 * self.step;
+        let s = 0.5 * (self.half_tan(0.5 * (angle - middle)) / self.half_tan(0.25 * self.step) + 1.0);
+        start + s * self.step
     }
 }
 
@@ -177,7 +237,7 @@ pub fn surface_to_bspline(surface: &Surface) -> Option<BSplineSurface> {
 /// is unbounded or of a kind without one), keeping its parameters at the rectangle's
 /// corners: a tensor product of a circle arc (rational quadratic) in the angular direction
 /// with the profile in the other (a line, a circle arc, the basis curve).
-fn surface_patch_to_bspline(surface: &Surface, (u1, u2): (f64, f64), (v1, v2): (f64, f64)) -> Option<BSplineSurface> {
+pub(crate) fn surface_patch_to_bspline(surface: &Surface, (u1, u2): (f64, f64), (v1, v2): (f64, f64)) -> Option<BSplineSurface> {
     use crate::geometry::curve::{Circle, Line, TrimmedCurve};
     use crate::math::{Frame, Vector};
     use super::surface::KnotVector;
@@ -322,6 +382,13 @@ where
     let mut breaks: Vec<f64> = curve.breaks().into_iter().filter(|&k| a < k && k < b && !curve.is_cn(order as u32)).collect();
     breaks.sort_by(f64::total_cmp);
     breaks.dedup();
+    approximate_pieces(&|t| curve.point(t), a, b, &breaks, degree, options)
+}
+
+/// Least-squares B-splines of `degree` through `point` over `[a, b]`, on more and more
+/// uniform spans within each piece that `breaks` (sorted, inside `(a, b)`) cut off, until one
+/// is within the tolerance. The breaks are knots of full multiplicity.
+pub(crate) fn approximate_pieces<P: ControlPoint>(point: &dyn Fn(f64) -> P, a: f64, b: f64, breaks: &[f64], degree: usize, options: &CurveApproximationOptions) -> Option<ApproximatedCurve<P>> {
     let pieces = breaks.len() + 1;
     let mut best: Option<ApproximatedCurve<P>> = None;
     let mut per_piece = 1;
@@ -346,14 +413,14 @@ where
             }
         }
         params.push(b);
-        let q: Vec<[f64; 3]> = params.iter().map(|&t| curve.point(t).coords()).collect();
+        let q: Vec<[f64; 3]> = params.iter().map(|&t| point(t).coords()).collect();
         if let Some(fitted) = super::fit::least_squares_with_knots::<P>(&q, &params, degree, flat) {
             // The error, checked between the samples.
             let mut max_error = 0.0f64;
             for w in spans.windows(2) {
                 for i in 0..=8 * (degree + 1) {
                     let t = w[0] + (w[1] - w[0]) * i as f64 / (8 * (degree + 1)) as f64;
-                    max_error = max_error.max(distance(fitted.point(t).coords(), curve.point(t).coords()));
+                    max_error = max_error.max(distance(fitted.point(t).coords(), point(t).coords()));
                 }
             }
             let better = best.as_ref().map_or(true, |x| max_error < x.max_error);
@@ -473,5 +540,37 @@ impl ToBSpline for Curve2 {
     type Point = Point2;
     fn to_bspline(&self) -> Option<BSplineCurve2> {
         curve2_to_bspline(self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::geometry::curve::{Circle, Ellipse, Hyperbola, TrimmedCurve};
+    use crate::math::{Direction, Frame};
+
+    /// The B-spline of an arc at `t` is the arc at `angle(t)`, and `parameter` inverts
+    /// `angle`, for arcs of one, two and three spans, a whole ellipse and a hyperbola.
+    #[test]
+    fn arc_parameters_follow_the_conversion() {
+        let frame = Frame::new(Point::new(1.0, -2.0, 0.5), Direction::new(0.2, 0.3, 1.0), Direction::X);
+        let cases: Vec<(Curve, f64, f64, bool)> = vec![
+            (Curve::Circle(Circle::new(frame, 2.0)), 0.3, 1.9, false),
+            (Curve::Circle(Circle::new(frame, 2.0)), -1.0, 3.5, false),
+            (Curve::Ellipse(Ellipse::new(frame, 3.0, 1.0)), 0.5, 6.0, false),
+            (Curve::Ellipse(Ellipse::new(frame, 3.0, 1.0)), 0.0, std::f64::consts::TAU, false),
+            (Curve::Hyperbola(Hyperbola::new(frame, 3.0, 1.0)), -1.2, 0.7, true),
+        ];
+        for (curve, a, b, hyperbolic) in cases {
+            let bspline = curve_to_bspline(&Curve::Trimmed(TrimmedCurve::new(curve.clone(), a, b))).unwrap();
+            let map = if hyperbolic { ArcParameters::hyperbolic(a, b) } else { ArcParameters::elliptic(a, b) };
+            assert_eq!(bspline.first_parameter(), a);
+            for i in 0..=100 {
+                let t = a + (b - a) * i as f64 / 100.0;
+                let angle = map.angle(t);
+                assert!(bspline.point(t).distance(curve.point(angle)) < 1e-12, "{curve:?} at {t}");
+                assert!((map.parameter(angle) - t).abs() < 1e-12);
+            }
+        }
     }
 }

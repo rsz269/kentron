@@ -4,7 +4,8 @@ use std::collections::HashMap;
 
 use crate::error::{Error, Result};
 use crate::geometry::curve::Curve;
-use crate::geometry::curve2::{Curve2, Line2};
+use crate::geometry::convert::ArcParameters;
+use crate::geometry::curve2::{BSplineCurve2, Curve2, Line2};
 use crate::geometry::surface::Surface;
 use crate::geometry::{project, ParametricCurve, ParametricSurface};
 use crate::math::{AffineTransform, AffineTransformable, Direction2, Point2, Transform, Transform2, Transformable, Transformable2, Vector2};
@@ -176,7 +177,7 @@ pub fn transform_model(model: &mut Model, t: &Transform, options: TransformOptio
 /// largest stretch factor of the map. The result has an identity placement.
 #[doc(alias = "BRepBuilderAPI_GTransform")]
 pub fn transform_affine(model: &mut Model, shape: Shape, t: &AffineTransform) -> Result<Shape> {
-    let mut copier = AffineCopier { t: *t, stretch: t.max_stretch(), copied: HashMap::new() };
+    let mut copier = AffineCopier { t: *t, stretch: t.max_stretch(), copied: HashMap::new(), edge_parameters: HashMap::new() };
     let copy = copier.copy(model, shape)?;
     let reversed = t.matrix().determinant() < 0.0 && shape.kind() == NodeKind::Face;
     let orientation = if reversed { shape.orientation.reversed() } else { shape.orientation };
@@ -189,6 +190,8 @@ struct AffineCopier {
     stretch: f64,
     /// Copies of nodes reached at a placement.
     copied: HashMap<(NodeId, [[u64; 4]; 3]), NodeId>,
+    /// How each copied edge's curve is parametrized against its original's.
+    edge_parameters: HashMap<NodeId, CurveParameters>,
 }
 
 impl AffineCopier {
@@ -227,9 +230,10 @@ impl AffineCopier {
                     edge
                 };
                 if let Some((curve, first, last)) = model.edge_curve(local) {
-                    let (curve, first, last) = affine_curve(&curve, first, last, &map)?;
+                    let (curve, first, last, parameters) = affine_curve(&curve, first, last, &map)?;
                     model.set_edge_curve(edge.into(), curve, record.tolerance * self.stretch)?;
                     model.set_edge_range(edge.into(), first, last)?;
+                    self.edge_parameters.insert(edge.into(), parameters);
                 }
                 if let Some(p) = model.edge_polyline(local).cloned() {
                     model.set_edge_polyline(edge.into(), Some(p.affine_transformed(&map)))?;
@@ -242,9 +246,12 @@ impl AffineCopier {
                 let face = model.new_empty(NodeKind::Face);
                 let tolerance = record.tolerance * self.stretch;
                 model.set_face_tolerance(crate::topology::FaceId::try_from(face.node).expect("a face"), tolerance)?;
+                let mut parameters = SurfaceParameters::Axes(None, None);
                 if let Some(surface) = model.face_surface(f).cloned() {
                     let bounds = model.face_bounds(f);
-                    model.set_face_surface(face, affine_surface(&surface, bounds, &map)?, tolerance)?;
+                    let (mapped, p) = affine_surface(&surface, bounds, &map)?;
+                    model.set_face_surface(face, mapped, tolerance)?;
+                    parameters = p;
                 }
                 if let Some(mesh) = model.face_mesh(f).cloned() {
                     model.set_face_mesh(face, Some(mesh.affine_transformed(&map)))?;
@@ -258,8 +265,9 @@ impl AffineCopier {
                         let placed = Shape { placement: shape.placement * wire.placement, ..Shape::from(edge) };
                         let new_edge = EdgeId::try_from(self.copy(model, placed)?.node).expect("an edge");
                         let coedge = model.add_coedge(new_edge, orientation)?;
-                        // The surface keeps its parametrization: pcurves stay.
                         if let Some((pcurve, first, last)) = model.effective_pcurve(id) {
+                            let edge_parameters = self.edge_parameters.get(&new_edge.into()).copied().unwrap_or(CurveParameters::Same);
+                            let (pcurve, first, last) = affine_pcurve(&pcurve, first, last, edge_parameters, &parameters)?;
                             model.set_pcurve_with_range(coedge, pcurve, first, last)?;
                         }
                         coedges.push(coedge);
@@ -287,9 +295,72 @@ impl AffineCopier {
     }
 }
 
-/// A curve deformed by an affine map, with its new range: lines stay lines, Bézier and
-/// B-spline curves keep their parameters, other curves become B-splines first.
-fn affine_curve(curve: &Curve, first: f64, last: f64, t: &AffineTransform) -> Result<(Curve, f64, f64)> {
+/// How the curve of an edge copied by [`transform_affine`] is parametrized against the
+/// original's.
+#[derive(Debug, Clone, Copy)]
+enum CurveParameters {
+    Same,
+    /// The copy's parameter is the original's times this (a line's, which is a distance).
+    Scaled(f64),
+    /// The B-spline form of an arc of a conic, whose own parameter is the original's.
+    Arc(ArcParameters),
+}
+
+impl CurveParameters {
+    /// The original's parameter at the copy's `t`.
+    fn original(&self, t: f64) -> f64 {
+        match self {
+            CurveParameters::Same => t,
+            CurveParameters::Scaled(k) => t / k,
+            CurveParameters::Arc(arc) => arc.angle(t),
+        }
+    }
+
+    /// The copy's parameter at the original's `t`.
+    fn copied(&self, t: f64) -> f64 {
+        match self {
+            CurveParameters::Same => t,
+            CurveParameters::Scaled(k) => t * k,
+            CurveParameters::Arc(arc) => arc.parameter(t),
+        }
+    }
+}
+
+/// How the surface of a face copied by [`transform_affine`] is parametrized against the
+/// original's.
+#[derive(Debug, Clone, Copy)]
+enum SurfaceParameters {
+    /// `(u, v) ↦ A·(u, v)`: a plane mapped to a plane, its frame no longer orthonormal.
+    Linear([[f64; 2]; 2]),
+    /// u and v each on their own: kept (`None`) or the B-spline form of an arc in it.
+    Axes(Option<ArcParameters>, Option<ArcParameters>),
+}
+
+impl SurfaceParameters {
+    /// The copy's (u, v) at the original's `p`.
+    fn copied(&self, p: Point2) -> Point2 {
+        match self {
+            SurfaceParameters::Linear(a) => Point2::new(a[0][0] * p.x + a[0][1] * p.y, a[1][0] * p.x + a[1][1] * p.y),
+            SurfaceParameters::Axes(u, v) => Point2::new(u.map_or(p.x, |a| a.parameter(p.x)), v.map_or(p.y, |a| a.parameter(p.y))),
+        }
+    }
+}
+
+/// How the B-spline form of `curve` over `[a, b]` is parametrized, where it is not by the
+/// curve's own parameter: an arc of a circle or ellipse, a piece of hyperbola.
+fn arc_parameters(curve: &Curve, a: f64, b: f64) -> Option<ArcParameters> {
+    match curve {
+        Curve::Circle(_) | Curve::Ellipse(_) => Some(ArcParameters::elliptic(a, b)),
+        Curve::Hyperbola(_) => Some(ArcParameters::hyperbolic(a, b)),
+        Curve::Trimmed(t) => arc_parameters(t.basis(), a, b),
+        _ => None,
+    }
+}
+
+/// A curve deformed by an affine map, with its new range and how its parameter changed:
+/// lines stay lines (their parameter, a distance, scaled), Bézier and B-spline curves keep
+/// their parameters, other curves become B-splines first.
+fn affine_curve(curve: &Curve, first: f64, last: f64, t: &AffineTransform) -> Result<(Curve, f64, f64, CurveParameters)> {
     use crate::geometry::curve::{Line, TrimmedCurve};
     use crate::math::Direction;
     Ok(match curve {
@@ -297,45 +368,169 @@ fn affine_curve(curve: &Curve, first: f64, last: f64, t: &AffineTransform) -> Re
             let d = t.transform_vector(crate::math::Vector::from(l.direction));
             let k = d.length();
             let direction = Direction::try_from_vector(d).ok_or_else(|| Error::InvalidInput("the map collapses a line".into()))?;
-            (Curve::Line(Line::new(t.transform_point(l.origin), direction)), first * k, last * k)
+            (Curve::Line(Line::new(t.transform_point(l.origin), direction)), first * k, last * k, CurveParameters::Scaled(k))
         }
-        Curve::Bezier(b) => (Curve::Bezier(b.affine_transformed(t)), first, last),
-        Curve::BSpline(b) => (Curve::BSpline(b.affine_transformed(t)), first, last),
+        Curve::Bezier(b) => (Curve::Bezier(b.affine_transformed(t)), first, last, CurveParameters::Same),
+        Curve::BSpline(b) => (Curve::BSpline(b.affine_transformed(t)), first, last, CurveParameters::Same),
         Curve::Trimmed(c) if matches!(c.basis(), Curve::Bezier(_) | Curve::BSpline(_)) => {
-            let (basis, _, _) = affine_curve(c.basis(), first, last, t)?;
-            (Curve::Trimmed(TrimmedCurve::new(basis, c.first_parameter(), c.last_parameter())), first, last)
+            let (basis, _, _, _) = affine_curve(c.basis(), first, last, t)?;
+            (Curve::Trimmed(TrimmedCurve::new(basis, c.first_parameter(), c.last_parameter())), first, last, CurveParameters::Same)
         }
+        Curve::Trimmed(c) => affine_curve(c.basis(), first, last, t)?,
         other => {
             let piece = Curve::Trimmed(TrimmedCurve::new(other.clone(), first, last));
             let b = crate::geometry::convert::curve_to_bspline(&piece)
                 .ok_or_else(|| Error::InvalidInput(format!("no B-spline form of {other:?}")))?;
             let (f, l) = (b.first_parameter(), b.last_parameter());
-            (Curve::BSpline(b.affine_transformed(t)), f, l)
+            let parameters = arc_parameters(other, first, last).map_or(CurveParameters::Same, CurveParameters::Arc);
+            (Curve::BSpline(b.affine_transformed(t)), f, l, parameters)
         }
     })
 }
 
-/// A surface deformed by an affine map, keeping its parameters: Bézier and B-spline
-/// surfaces map their poles; a plane becomes a bilinear patch over the face's bounds; other
-/// surfaces become B-splines first.
-fn affine_surface(surface: &Surface, (u1, u2, v1, v2): (f64, f64, f64, f64), t: &AffineTransform) -> Result<Surface> {
-    use crate::geometry::surface::{BSplineSurface, KnotVector};
+/// A surface deformed by an affine map, and how its parameters changed: a plane stays a
+/// plane, Bézier and B-spline surfaces map their poles, other surfaces become B-splines
+/// over the face's bounds first.
+fn affine_surface(surface: &Surface, (u1, u2, v1, v2): (f64, f64, f64, f64), t: &AffineTransform) -> Result<(Surface, SurfaceParameters)> {
+    use crate::geometry::surface::Plane;
+    use crate::math::{Direction, Frame, Vector};
+    let same = SurfaceParameters::Axes(None, None);
     Ok(match surface {
-        Surface::Bezier(b) => Surface::Bezier(b.affine_transformed(t)),
-        Surface::BSpline(b) => Surface::BSpline(b.affine_transformed(t)),
-        Surface::Plane(_) => {
-            let poles = vec![
-                vec![t.transform_point(surface.point(u1, v1)), t.transform_point(surface.point(u1, v2))],
-                vec![t.transform_point(surface.point(u2, v1)), t.transform_point(surface.point(u2, v2))],
-            ];
-            Surface::BSpline(BSplineSurface::try_new(poles, KnotVector::new(vec![u1, u2], vec![2, 2], 1), KnotVector::new(vec![v1, v2], vec![2, 2], 1))?)
+        Surface::Bezier(b) => (Surface::Bezier(b.affine_transformed(t)), same),
+        Surface::BSpline(b) => (Surface::BSpline(b.affine_transformed(t)), same),
+        Surface::Plane(plane) => {
+            // The frame's axes map to the new plane's u and v directions, no longer
+            // orthonormal: a new frame along the first, and (u, v) mapped linearly.
+            let frame = plane.frame();
+            let (x, y) = (t.transform_vector(Vector::from(frame.x())), t.transform_vector(Vector::from(frame.y())));
+            let (z, x_hint) = Direction::try_from_vector(x.cross(y)).zip(Direction::try_from_vector(x)).ok_or_else(|| Error::InvalidInput("the map collapses a plane".into()))?;
+            let image = Frame::new(t.transform_point(frame.origin()), z, x_hint);
+            let (ex, ey) = (Vector::from(image.x()), Vector::from(image.y()));
+            let a = [[x.dot(ex), y.dot(ex)], [x.dot(ey), y.dot(ey)]];
+            (Surface::Plane(Plane::from_frame(image)), SurfaceParameters::Linear(a))
         }
         other => {
-            let b = crate::geometry::convert::surface_to_bspline(other)
+            let (axes, basis) = surface_arcs(other, (u1, u2), (v1, v2));
+            let b = crate::geometry::convert::surface_patch_to_bspline(basis, (u1, u2), (v1, v2))
                 .ok_or_else(|| Error::InvalidInput("no B-spline form of the surface".into()))?;
-            Surface::BSpline(b.affine_transformed(t))
+            (Surface::BSpline(b.affine_transformed(t)), axes)
         }
     })
+}
+
+/// How [`surface_patch_to_bspline`](crate::geometry::convert::surface_patch_to_bspline)
+/// parametrizes `surface` over the rectangle: in which of u and v its B-spline form runs
+/// round an arc. Also the surface the conversion works on (a trimmed one's basis).
+fn surface_arcs<'a>(surface: &'a Surface, (u1, u2): (f64, f64), (v1, v2): (f64, f64)) -> (SurfaceParameters, &'a Surface) {
+    let arc = |a, b| Some(ArcParameters::elliptic(a, b));
+    let axes = match surface {
+        Surface::Cylinder(_) | Surface::Cone(_) => SurfaceParameters::Axes(arc(u1, u2), None),
+        Surface::Sphere(_) | Surface::Torus(_) => SurfaceParameters::Axes(arc(u1, u2), arc(v1, v2)),
+        Surface::Extrusion(e) => SurfaceParameters::Axes(arc_parameters(e.basis(), u1, u2), None),
+        Surface::Revolution(r) => SurfaceParameters::Axes(arc(u1, u2), arc_parameters(r.basis(), v1, v2)),
+        Surface::Trimmed(t) => return surface_arcs(t.basis(), (u1, u2), (v1, v2)),
+        _ => SurfaceParameters::Axes(None, None),
+    };
+    (axes, surface)
+}
+
+/// The pcurve, over `[first, last]`, of an edge copied by [`transform_affine`] on a face
+/// copied with it, with its new range: the original pcurve, run at the original edge's
+/// parameter and carried into the new surface's parameters. Exact where that keeps it a
+/// line, a B-spline, or the B-spline form of an arc; otherwise fitted.
+fn affine_pcurve(pcurve: &Curve2, first: f64, last: f64, edge: CurveParameters, surface: &SurfaceParameters) -> Result<(Curve2, f64, f64)> {
+    use crate::geometry::curve2::TrimmedCurve2;
+    let (a, b) = (edge.copied(first), edge.copied(last));
+    let map_poles = |c: &BSplineCurve2| {
+        let mut c = c.clone();
+        for i in 0..c.poles().len() {
+            let p = surface.copied(c.pole(i));
+            c.set_pole(i, p);
+        }
+        c
+    };
+    match (surface, edge, pcurve) {
+        (SurfaceParameters::Axes(None, None), CurveParameters::Same, _) => return Ok((pcurve.clone(), first, last)),
+        (SurfaceParameters::Linear(m), CurveParameters::Same | CurveParameters::Scaled(_), Curve2::Line(line)) => {
+            // A line's parameter, a distance, scales as the edge's does (both are the length
+            // the map gives a unit step along it).
+            let d = Vector2::new(m[0][0] * line.direction.x() + m[0][1] * line.direction.y(), m[1][0] * line.direction.x() + m[1][1] * line.direction.y());
+            let k = if let CurveParameters::Scaled(k) = edge { k } else { 1.0 };
+            if (d.length() - k).abs() <= 1e-12 * k {
+                return Ok((Curve2::Line(Line2::new(surface.copied(line.origin), Direction2::from_vector(d))), a, b));
+            }
+        }
+        (SurfaceParameters::Linear(_), CurveParameters::Same, Curve2::BSpline(c)) => return Ok((Curve2::BSpline(map_poles(c)), a, b)),
+        (SurfaceParameters::Linear(_), CurveParameters::Arc(arc), _) if arc.first == first => {
+            // The pcurve of an arc is an arc over the same range, whose B-spline form runs
+            // with the edge's.
+            let mut basis = pcurve;
+            while let Curve2::Trimmed(t) = basis {
+                basis = t.basis();
+            }
+            if matches!(basis, Curve2::Circle(_) | Curve2::Ellipse(_) | Curve2::Hyperbola(_)) {
+                let piece = Curve2::Trimmed(TrimmedCurve2::new(basis.clone(), first, last));
+                if let Some(c) = crate::geometry::convert::curve2_to_bspline(&piece) {
+                    return Ok((Curve2::BSpline(map_poles(&c)), a, b));
+                }
+            }
+        }
+        _ => {}
+    }
+    // Fitted, broken where the edge's B-spline form or the surface's has a knot.
+    let along = |t: f64| pcurve.point(edge.original(t));
+    let mut breaks: Vec<f64> = match edge {
+        CurveParameters::Arc(arc) => arc.knots(),
+        _ => Vec::new(),
+    };
+    if let SurfaceParameters::Axes(u, v) = surface {
+        for (axis, arc) in [(0, u), (1, v)] {
+            let Some(arc) = arc else { continue };
+            let coordinate = |t: f64| if axis == 0 { along(t).x } else { along(t).y };
+            for knot in arc.knots() {
+                breaks.extend(crossings(&|t| coordinate(t) - knot, a, b));
+            }
+        }
+    }
+    let margin = 1e-9 * (b - a);
+    breaks.retain(|&k| k > a + margin && k < b - margin);
+    breaks.sort_by(f64::total_cmp);
+    breaks.dedup_by(|x, y| (*x - *y).abs() <= margin);
+    let options = crate::geometry::convert::CurveApproximationOptions { tolerance: 1e-10, max_segments: 256, ..Default::default() };
+    let point = |t: f64| surface.copied(along(t));
+    let fitted = crate::geometry::convert::approximate_pieces(&point, a, b, &breaks, 5, &options)
+        .ok_or_else(|| Error::Failed("no pcurve on the mapped surface within 1e-10".into()))?;
+    Ok((Curve2::BSpline(fitted.curve), a, b))
+}
+
+/// Where `f` changes sign over `[a, b]` (from one side of 0 to the other, not where it
+/// only touches or runs along 0), to the last bit: the samples' sign changes, bisected.
+fn crossings(f: &dyn Fn(f64) -> f64, a: f64, b: f64) -> Vec<f64> {
+    const SAMPLES: usize = 256;
+    let mut found = Vec::new();
+    // The last sample off 0.
+    let mut last: Option<(f64, bool)> = None;
+    for i in 0..=SAMPLES {
+        let t = a + (b - a) * i as f64 / SAMPLES as f64;
+        let value = f(t);
+        if value == 0.0 {
+            continue;
+        }
+        if let Some((from, negative)) = last.filter(|&(_, negative)| negative != (value < 0.0)) {
+            let (mut lo, mut hi) = (from, t);
+            for _ in 0..100 {
+                let middle = 0.5 * (lo + hi);
+                if middle <= lo || middle >= hi {
+                    break;
+                }
+                let v = f(middle);
+                if v != 0.0 && (v < 0.0) == negative { lo = middle } else { hi = middle }
+            }
+            found.push(0.5 * (lo + hi));
+        }
+        last = Some((t, value < 0.0));
+    }
+    found
 }
 
 /// A deep copy of `shape`: new nodes all the way down, with geometry (and, if
@@ -655,6 +850,86 @@ mod tests {
             assert!(report.problems.is_empty(), "{report:?}");
         }
     }
+
+    /// Stretches, shears and mirrors (a negative determinant), and one shear that also
+    /// turns the parts.
+    fn stretches() -> Vec<AffineTransform> {
+        use crate::math::Matrix3;
+        let rows = [
+            [[2.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 0.5]],
+            [[1.3, 0.4, 0.0], [0.0, 0.8, 0.3], [0.2, 0.0, 1.1]],
+            [[-1.2, 0.3, 0.1], [0.2, 0.7, -0.4], [0.0, 0.5, 1.6]],
+            [[0.34, 0.05, -1.56], [-0.9, 0.6, 0.2], [0.4, 1.2, 0.3]],
+        ];
+        rows.iter().map(|r| AffineTransform::new(Matrix3::from_rows(*r), Vector::new(3.0, -1.0, 2.0))).collect()
+    }
+
+    /// Primitives with the closed form of how far inside each point is (negative
+    /// outside): a box, a cylinder, a frustum, a cone to its apex, a ball, a ring.
+    fn primitives_with_depth(model: &mut Model) -> Vec<(Shape, Box<dyn Fn(Point) -> f64>)> {
+        let radial = |p: Point| (p.x * p.x + p.y * p.y).sqrt();
+        vec![
+            (Cuboid::new(1.0, 2.0, 3.0).build(model).unwrap(), Box::new(|p: Point| [p.x, 1.0 - p.x, p.y, 2.0 - p.y, p.z, 3.0 - p.z].into_iter().fold(f64::MAX, f64::min))),
+            (Cylinder::new(1.5, 2.0).build(model).unwrap(), Box::new(move |p: Point| (1.5 - radial(p)).min(p.z).min(2.0 - p.z))),
+            // Within the side's slope the depth below the side is scaled, which keeps its sign.
+            (Cone::new(2.0, 1.0, 3.0).build(model).unwrap(), Box::new(move |p: Point| (2.0 - p.z / 3.0 - radial(p)).min(p.z).min(3.0 - p.z))),
+            (Cone::new(1.5, 0.0, 2.5).build(model).unwrap(), Box::new(move |p: Point| (1.5 * (1.0 - p.z / 2.5) - radial(p)).min(p.z).min(2.5 - p.z))),
+            (Sphere::new(1.5).build(model).unwrap(), Box::new(|p: Point| 1.5 - (p - Point::ORIGIN).length())),
+            (Torus::new(3.0, 1.0).build(model).unwrap(), Box::new(move |p: Point| 1.0 - ((radial(p) - 3.0).powi(2) + p.z * p.z).sqrt())),
+        ]
+    }
+
+    #[test]
+    fn affine_maps_of_primitives_are_valid_with_the_volumes_and_centroids_they_map_to() {
+        let mut model = Model::new();
+        let solids = primitives_with_depth(&mut model);
+        for t in stretches() {
+            let det = t.matrix().determinant();
+            for (shape, _) in &solids {
+                let mapped = transform_affine(&mut model, *shape, &t).unwrap();
+                let report = validity::check(&model, mapped);
+                assert!(report.problems.is_empty(), "{report:?}");
+                let (v, v2) = (properties::volume(&model, *shape), properties::volume(&model, mapped));
+                assert!((v2.mass - det.abs() * v.mass).abs() < 1e-7 * v2.mass, "volume {} against {}", v2.mass, det.abs() * v.mass);
+                assert!(v2.center_of_mass.distance(t.transform_point(v.center_of_mass)) < 1e-6, "centroid");
+            }
+        }
+    }
+
+    /// Points of a primitive's box, mapped, lie in its image exactly where they lie in it
+    /// (the images' faces B-splines with seams and poles: the classifier's feet and rays
+    /// there).
+    #[test]
+    fn affine_maps_of_primitives_place_points_as_their_preimages() {
+        use crate::boolean::{PointClassifier, PointLocation};
+        let mut model = Model::new();
+        let solids = primitives_with_depth(&mut model);
+        for t in stretches() {
+            for (shape, depth) in &solids {
+                let mapped = transform_affine(&mut model, *shape, &t).unwrap();
+                let bounds = crate::properties::bounding_box(&model, *shape);
+                let (lo, hi) = (bounds.min, bounds.max);
+                let classifier = PointClassifier::new(&model, mapped).unwrap();
+                let mut seed = 0x2545_f491_4f6c_dd1du64;
+                let mut next = || {
+                    seed ^= seed << 13;
+                    seed ^= seed >> 7;
+                    seed ^= seed << 17;
+                    (seed >> 11) as f64 / (1u64 << 53) as f64
+                };
+                for _ in 0..600 {
+                    let p = Point::new(lo.x + (hi.x - lo.x) * next(), lo.y + (hi.y - lo.y) * next(), lo.z + (hi.z - lo.z) * next());
+                    let d = depth(p);
+                    if d.abs() < 1e-4 {
+                        continue;
+                    }
+                    let q = t.transform_point(p);
+                    let want = if d > 0.0 { PointLocation::Inside } else { PointLocation::Outside };
+                    assert_eq!(classifier.locate(q), want, "{p:?} at depth {d} mapped to {q:?}");
+                }
+            }
+        }
+    }
 }
 
 /// Which sub-shapes [`set_tolerances`] and [`limit_tolerances`] change.
@@ -740,4 +1015,3 @@ pub fn update_tolerances(model: &mut Model, shape: Shape) -> Result<()> {
     }
     Ok(())
 }
-
