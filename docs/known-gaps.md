@@ -230,6 +230,27 @@ must bound two faces, it bounds 4").
   the other face all within 1e-6). It catches only some pairs, and accepting 1e-4 would be
   unsafe. Reverted.
 
+### Nearly coincident prisms with a seam inside a shallow crossing's band
+
+*Found 2026-11-25.*
+
+No figure: the error is a crescent 4.5e-5 in volume, too thin to see.
+
+Two prisms on the same circle (radius 3, height 4), one moved across by 3e-6, cross at
+two points at very shallow angles; within about ±1e-3 of the radius around each crossing
+their sides are within tolerance of each other. With both circles' seams at 0° (away
+from the crossings) every boolean is right (8adabf5, test
+`prisms_on_a_circle_and_the_same_moved_a_hair` and its neighbours in `boolean/mod.rs`).
+With both seams 30° from a crossing, the short face piece between a seam and the crossing
+is sampled as lying on the other face, and the intersection comes out off by one crescent
+(4.5e-5).
+
+- **Repro:** the circle-prism test above with both prisms' seams turned to 30° from a
+  crossing.
+- **Needed:** classification of a face piece that lies within tolerance of the other
+  face only over part of its length (decided from where it leaves the band, not from its
+  samples). Not in brep-conformance.
+
 ### Twisted prisms passing through each other with the same section
 
 *Found 2026-11-08 (`mryndzionek_cadquery_plaground/screw_cap_container.py`).*
