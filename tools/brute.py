@@ -46,6 +46,12 @@ Library (import tools/brute.py, or run it):
   rod's cut).
 - `turned_prism_held(...)`, `turned_exposed_side(...)`: whether points lie in that solid; the
   area of a side of the prism at the start or end of the motion that no place of it covers.
+- `seams(shape, n, smooth)`: how smoothly faces meet across each edge two of them share
+  where they meet tangentially (normals within `smooth` radians, 0.01, at the edge's middle), from
+  the faces' own surfaces at `n` points along it (each face's point found through its
+  pcurve): the most the normals part (tangency, G1), and the most their normal curvatures
+  differ across the edge and along it (curvature continuity, G2). Each face's normal and
+  curvatures as it faces in the shape.
 - `wire_offset(wire, distance, n)`: a planar wire's offset with round joins (and ends), as
   the boundary of its points within `distance` (shapely's buffer of the wire sampled `n`
   times an edge): around an open wire, outwards (inwards for a negative distance) from the
@@ -76,6 +82,10 @@ CLI:
         R by default) meet, as at a saddle vertex (three of each): no ball rolls everywhere
         there, and the closing then opening of PRE and its opening then closing differ. A
         fillet's corner lies between them: the voxels of each result outside that band.
+    brute.py seams SHAPE.brep [N] [--smooth=RAD] [--near=x,y,z,d]
+        the smooth edges' tangency and curvature jumps ([`seams`]), edge by edge, worst
+        first: those whose faces' normals part by less than RAD (0.01) at their middles;
+        only edges within d of x, y, z if given
     brute.py holds PRE.brep R.brep... --box=x0,y0,z0,x1,y1,z1 --r=R [--h=H]
         a fillet whose corners are left to the kernel (as where a round of the edge is
         tighter than the ball, which no ball of radius R rolls round touching both faces):
@@ -616,6 +626,126 @@ def wire_offset(wire, distance, n=2000):
     return sum(np.linalg.norm(np.diff(loop, axis=0), axis=1).sum() for loop in loops), len(loops)
 
 
+def _face_frame(face, uv):
+    """A face's point, outward normal and principal curvatures with their directions at
+    `uv` (curvatures positive where the face bends away from its normal, as a ball's)."""
+    from OCP.BRepAdaptor import BRepAdaptor_Surface
+    from OCP.BRepLProp import BRepLProp_SLProps
+    from OCP.TopAbs import TopAbs_REVERSED
+    from OCP.gp import gp_Dir
+
+    props = BRepLProp_SLProps(BRepAdaptor_Surface(face), uv[0], uv[1], 2, 1e-9)
+    if not props.IsNormalDefined():
+        return None
+    p, n = props.Value(), props.Normal()
+    sign = -1.0 if face.Orientation() == TopAbs_REVERSED else 1.0
+    normal = sign * np.array([n.X(), n.Y(), n.Z()])
+    if not props.IsCurvatureDefined():
+        return np.array([p.X(), p.Y(), p.Z()]), normal, None
+    d1, d2 = gp_Dir(), gp_Dir()
+    props.CurvatureDirections(d1, d2)
+    # (OCCT's curvatures are positive bending towards its normal: against the outward one,
+    # a ball's are negative.)
+    k = (-sign * props.MaxCurvature(), np.array([d1.X(), d1.Y(), d1.Z()]), -sign * props.MinCurvature(), np.array([d2.X(), d2.Y(), d2.Z()]))
+    return np.array([p.X(), p.Y(), p.Z()]), normal, k
+
+
+def _normal_curvature(k, d):
+    """The normal curvature in the unit tangent direction `d` from principal curvatures
+    and directions (Euler's formula)."""
+    k1, e1, k2, e2 = k
+    c, s = float(np.dot(d, e1)), float(np.dot(d, e2))
+    return (k1 * c * c + k2 * s * s) / max(c * c + s * s, 1e-300)
+
+
+def seams(shape, n=24, smooth=1e-2, near=None):
+    """For each edge two faces of `shape` share and meet tangentially across (their normals
+    within `smooth` radians at its middle): (edge index, its middle, the most the faces'
+    normals part along it in radians, the most their normal curvatures differ across the
+    edge, and along it), worst curvature jump first. Points at `n` parameters strictly
+    inside the edge, each face's taken through its pcurve. `near` = (point, distance)
+    keeps only edges whose middle lies that near."""
+    from OCP.BRep import BRep_Tool
+    from OCP.BRepAdaptor import BRepAdaptor_Curve
+    from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE
+    from OCP.TopExp import TopExp
+    from OCP.TopoDS import TopoDS
+    from OCP.TopTools import TopTools_IndexedDataMapOfShapeListOfShape
+
+    ancestors = TopTools_IndexedDataMapOfShapeListOfShape()
+    TopExp.MapShapesAndAncestors_s(shape, TopAbs_EDGE, TopAbs_FACE, ancestors)
+    rows = []
+    for i in range(1, ancestors.Extent() + 1):
+        edge = TopoDS.Edge_s(ancestors.FindKey(i))
+        if BRep_Tool.Degenerated_s(edge):
+            continue
+        faces = []
+        for f in ancestors.FindFromIndex(i):
+            if not any(f.IsSame(g) for g in faces):
+                faces.append(f)
+        if len(faces) != 2:
+            continue
+        faces = [TopoDS.Face_s(f) for f in faces]
+        curve = BRepAdaptor_Curve(edge)
+        t0, t1 = curve.FirstParameter(), curve.LastParameter()
+        mid = curve.Value(0.5 * (t0 + t1))
+        middle = np.array([mid.X(), mid.Y(), mid.Z()])
+        if near is not None and np.linalg.norm(middle - np.asarray(near[0])) > near[1]:
+            continue
+
+        def frames(t):
+            out = []
+            for f in faces:
+                pc = BRep_Tool.CurveOnSurface_s(edge, f, 0.0, 0.0)
+                if pc is None:
+                    return None
+                uv = pc.Value(t)
+                fr = _face_frame(f, (uv.X(), uv.Y()))
+                if fr is None:
+                    return None
+                out.append(fr)
+            return out
+
+        at_mid = frames(0.5 * (t0 + t1))
+        if at_mid is None or np.dot(at_mid[0][1], at_mid[1][1]) < np.cos(smooth):
+            continue
+        angle = across = along = 0.0
+        for k in range(1, n + 1):
+            t = t0 + (t1 - t0) * k / (n + 1)
+            fr = frames(t)
+            if fr is None:
+                continue
+            (_, n0, k0), (_, n1, k1) = fr
+            angle = max(angle, float(np.arccos(np.clip(np.dot(n0, n1), -1.0, 1.0))))
+            if k0 is None or k1 is None:
+                continue
+            d = curve.DN(t, 1)
+            tangent = np.array([d.X(), d.Y(), d.Z()])
+            tangent -= np.dot(tangent, n0) * n0
+            tangent /= np.linalg.norm(tangent)
+            cross = np.cross(n0, tangent)
+            along = max(along, abs(_normal_curvature(k0, tangent) - _normal_curvature(k1, tangent)))
+            across = max(across, abs(_normal_curvature(k0, cross) - _normal_curvature(k1, cross)))
+        rows.append((i, middle, angle, across, along))
+    rows.sort(key=lambda r: -max(r[3], r[4]))
+    return rows
+
+
+def _seams(argv):
+    args = [a for a in argv if not a.startswith("--")]
+    opts = dict(a[2:].split("=", 1) for a in argv if a.startswith("--"))
+    near = None
+    if "near" in opts:
+        x, y, z, d = (float(v) for v in opts["near"].split(","))
+        near = ((x, y, z), d)
+    rows = seams(load(args[0]), int(args[1]) if len(args) > 1 else 24, float(opts.get("smooth", 1e-2)), near=near)
+    for i, middle, angle, across, along in rows:
+        m = ", ".join(f"{c:.4g}" for c in middle)
+        print(f"edge {i} at ({m}): normals part {angle:.2e} rad; curvature jumps across {across:.3e}, along {along:.3e}")
+    if rows:
+        print(f"{len(rows)} smooth edges: normals part at most {max(r[2] for r in rows):.2e} rad, curvature jumps at most {max(max(r[3], r[4]) for r in rows):.3e}")
+
+
 def _round(argv):
     kind, pre, results = argv[0], argv[1], [a for a in argv[2:] if not a.startswith("--")]
     opts = dict(a[2:].split("=", 1) for a in argv if a.startswith("--") and "=" in a)
@@ -750,6 +880,8 @@ def main(argv):
                 common = turned_prism_volume(polygon, z0, z1, rise, t0, t1, breaks, nr, nphi, rclip=rmax, zclip=(zlo, zhi))
                 line += f", cut from the rod {np.pi * rmax * rmax * (zhi - zlo) - common:.10g}"
             print(line, flush=True)
+    elif cmd == "seams":
+        _seams(rest)
     elif cmd == "wire":
         from OCP.GProp import GProp_GProps
         from OCP.BRepGProp import BRepGProp
