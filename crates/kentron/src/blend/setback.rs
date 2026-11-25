@@ -46,6 +46,60 @@ pub fn fillet_setback(model: &mut Model, shape: Shape, edges: &[Shape], radius: 
     if edges.is_empty() {
         return Err(Error::InvalidInput("no edges to fillet".into()));
     }
+    // The stop on each edge: how far along it from the corner the chamfer meets it.
+    let reach = setback + (2.0 - 3f64.sqrt()) * radius;
+    let corners = set_back_corners(model, shape, edges, radius, reach)?;
+    if corners.is_empty() {
+        return fillet(model, shape, edges, radius);
+    }
+    // Each corner chamfered: cut by the plane through the points `reach` along its edges,
+    // with a tetrahedron whose other faces stand off the solid's faces outside it.
+    let mut cut = shape;
+    let before = volume_of(model, shape);
+    for &(vertex, along) in &corners {
+        let out = reach;
+        let apex = vertex - (along[0] + along[1] + along[2]) * out;
+        let base = along.map(|e| apex + e * (reach + 3.0 * out));
+        let tool = super::tetrahedron(model, [apex, base[0], base[1], base[2]])?;
+        cut = boolean::difference(model, cut, tool)?;
+    }
+    // The corners' tetrahedra, and nothing else, taken away.
+    let removed = before - volume_of(model, cut);
+    let expected = corners.len() as f64 * reach.powi(3) / 6.0;
+    if (removed - expected).abs() > 1e-6 * expected.max(before) {
+        return Err(Error::Failed("a set-back corner's chamfer cut more than the corner".into()));
+    }
+    // The named edges, as the chamfers left them, and the chamfers' edges.
+    let mut rounded: Vec<Shape> = Vec::new();
+    for &edge in edges {
+        let (curve, first, last) = model.edge_curve(Shape { orientation: Orientation::Forward, ..edge }).ok_or_else(|| Error::InvalidInput("an edge without a curve".into()))?;
+        let found = super::find_edge(model, cut, &curve, first, last).ok_or_else(|| Error::Failed("an edge lost to a set-back corner's chamfer".into()))?;
+        rounded.push(found);
+    }
+    for &(vertex, along) in &corners {
+        let stops = along.map(|e| vertex + e * reach);
+        for i in 0..3 {
+            let (a, b) = (stops[i], stops[(i + 1) % 3]);
+            let tol = 1e-6 * reach;
+            let side = model
+                .explore(cut, NodeKind::Edge)
+                .find(|&e| {
+                    let (p, q) = model.edge_vertices(e);
+                    let (p, q) = (model.point(p), model.point(q));
+                    (p.distance(a) <= tol && q.distance(b) <= tol) || (p.distance(b) <= tol && q.distance(a) <= tol)
+                })
+                .ok_or_else(|| Error::Failed("a set-back corner's chamfer edge not found".into()))?;
+            rounded.push(Shape { orientation: Orientation::Forward, ..side });
+        }
+    }
+    fillet(model, cut, &rounded, radius)
+}
+
+/// The corners where three of `edges` (with the edges continuing them tangentially) meet,
+/// each its vertex and the unit directions of its three edges away from it: refused unless
+/// every such corner is of three planes square to one another along straight convex edges,
+/// each edge long enough to hold the stops `reach` from the corners at its ends.
+pub(super) fn set_back_corners(model: &Model, shape: Shape, edges: &[Shape], radius: f64, reach: f64) -> Result<Vec<(Point, [Vector; 3])>> {
     let pairs: Vec<(Shape, f64)> = edges.iter().map(|&e| (e, radius)).collect();
     let chains: Vec<Shape> = tangent_chains(model, shape, &pairs, 0.0).into_iter().map(|e| e.0).collect();
     // The vertices where three edges of the chains meet, with those edges.
@@ -64,8 +118,6 @@ pub fn fillet_setback(model: &mut Model, shape: Shape, edges: &[Shape], radius: 
             }
         }
     }
-    // The stop on each edge: how far along it from the corner the chamfer meets it.
-    let reach = setback + (2.0 - 3f64.sqrt()) * radius;
     let mut corners: Vec<(Point, [Vector; 3])> = Vec::new();
     // How much of each edge the corners at its ends take.
     let mut taken: Vec<(NodeId, f64, f64)> = Vec::new();
@@ -117,48 +169,5 @@ pub fn fillet_setback(model: &mut Model, shape: Shape, edges: &[Shape], radius: 
             return Err(Error::InvalidInput("an edge too short for its set-back stops".into()));
         }
     }
-    if corners.is_empty() {
-        return fillet(model, shape, edges, radius);
-    }
-    // Each corner chamfered: cut by the plane through the points `reach` along its edges,
-    // with a tetrahedron whose other faces stand off the solid's faces outside it.
-    let mut cut = shape;
-    let before = volume_of(model, shape);
-    for &(vertex, along) in &corners {
-        let out = reach;
-        let apex = vertex - (along[0] + along[1] + along[2]) * out;
-        let base = along.map(|e| apex + e * (reach + 3.0 * out));
-        let tool = super::tetrahedron(model, [apex, base[0], base[1], base[2]])?;
-        cut = boolean::difference(model, cut, tool)?;
-    }
-    // The corners' tetrahedra, and nothing else, taken away.
-    let removed = before - volume_of(model, cut);
-    let expected = corners.len() as f64 * reach.powi(3) / 6.0;
-    if (removed - expected).abs() > 1e-6 * expected.max(before) {
-        return Err(Error::Failed("a set-back corner's chamfer cut more than the corner".into()));
-    }
-    // The named edges, as the chamfers left them, and the chamfers' edges.
-    let mut rounded: Vec<Shape> = Vec::new();
-    for &edge in edges {
-        let (curve, first, last) = model.edge_curve(Shape { orientation: Orientation::Forward, ..edge }).ok_or_else(|| Error::InvalidInput("an edge without a curve".into()))?;
-        let found = super::find_edge(model, cut, &curve, first, last).ok_or_else(|| Error::Failed("an edge lost to a set-back corner's chamfer".into()))?;
-        rounded.push(found);
-    }
-    for &(vertex, along) in &corners {
-        let stops = along.map(|e| vertex + e * reach);
-        for i in 0..3 {
-            let (a, b) = (stops[i], stops[(i + 1) % 3]);
-            let tol = 1e-6 * reach;
-            let side = model
-                .explore(cut, NodeKind::Edge)
-                .find(|&e| {
-                    let (p, q) = model.edge_vertices(e);
-                    let (p, q) = (model.point(p), model.point(q));
-                    (p.distance(a) <= tol && q.distance(b) <= tol) || (p.distance(b) <= tol && q.distance(a) <= tol)
-                })
-                .ok_or_else(|| Error::Failed("a set-back corner's chamfer edge not found".into()))?;
-            rounded.push(Shape { orientation: Orientation::Forward, ..side });
-        }
-    }
-    fillet(model, cut, &rounded, radius)
+    Ok(corners)
 }

@@ -2,10 +2,12 @@
 
 mod ball;
 mod exact;
+mod g2_corner;
 mod corner2d;
 mod runover;
 mod sections;
 mod setback;
+mod setback_g2;
 mod tight;
 #[cfg(test)]
 mod setback_tests;
@@ -15,6 +17,7 @@ mod tight_tests;
 pub use corner2d::{chamfer_2d, fillet_2d, fillet_wire_2d, Corner2d};
 pub use sections::{fillet_conic, fillet_conic_edges, fillet_g2, ConicFilletEdge, ConicSection};
 pub use setback::fillet_setback;
+pub use setback_g2::fillet_setback_g2;
 
 use crate::error::{Error, Result};
 use crate::geometry::curve::{Circle, Curve};

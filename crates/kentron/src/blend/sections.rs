@@ -56,6 +56,8 @@ enum Kind {
     /// The blend section of order 2 between the contacts of the ball of `offset`, its apex on
     /// the edge, at the thumbweight whose section has radius `center` at its middle.
     G2 { offset: f64, center: f64 },
+    /// The same at the thumbweight `w`.
+    G2Weight { offset: f64, w: f64 },
 }
 
 /// An edge to blend: the edge, the face its first distance is measured on, and the section.
@@ -135,6 +137,15 @@ pub fn fillet_g2(model: &mut Model, shape: Shape, edges: &[Shape], offset: f64, 
     shaped(model, shape, &wanted, offset)
 }
 
+/// [`fillet_g2`] at the thumbweight `w` (below 1) rather than at a center radius.
+pub(super) fn fillet_g2_weight(model: &mut Model, shape: Shape, edges: &[Shape], offset: f64, w: f64) -> Result<Shape> {
+    if !(offset > tolerance::LINEAR) || !(w < 1.0) {
+        return Err(Error::InvalidInput(format!("a G2 fillet's offset must be positive and its thumbweight below 1, got {offset} and {w}")));
+    }
+    let wanted: Vec<Wanted> = edges.iter().map(|&edge| Wanted { edge, face: None, kind: Kind::G2Weight { offset, w } }).collect();
+    shaped(model, shape, &wanted, offset)
+}
+
 fn shaped(model: &mut Model, shape: Shape, edges: &[Wanted], reach: f64) -> Result<Shape> {
     if edges.is_empty() {
         return Err(Error::InvalidInput("no edges to fillet".into()));
@@ -150,7 +161,7 @@ fn shaped(model: &mut Model, shape: Shape, edges: &[Wanted], reach: f64) -> Resu
 }
 
 /// A section curve: a rational Bézier from one contact to the other.
-struct Section {
+pub(super) struct Section {
     poles: Vec<Point>,
     weights: Vec<f64>,
 }
@@ -169,7 +180,7 @@ impl Section {
     /// the rational quintic it is: with `A = a − apex`, `B = b − apex`, the point times the
     /// denominator `D = (t̄³ + t³)(1 − w + wt)(1 − wt)` is
     /// `apex·D + (1 − w)t̄⁴(1 − wt)·A + (1 − w)t⁴(1 − w + wt)·B`.
-    fn g2(a: Point, apex: Point, b: Point, w: f64) -> Section {
+    pub(super) fn g2(a: Point, apex: Point, b: Point, w: f64) -> Section {
         let k = 1.0 - w;
         let (d1, d2) = ([k, 1.0], [1.0, k]);
         let x: Vec<f64> = bernstein_product(&[1.0, 0.0, 0.0, 0.0, 0.0], &d2).into_iter().map(|c| k * c).collect();
@@ -196,7 +207,8 @@ impl Section {
         d1.length().powi(3) / d1.cross(d2).length()
     }
 
-    fn edge(&self, model: &mut Model) -> Result<Shape> {
+    /// The curve over `[0, 1]`.
+    pub(super) fn curve(&self) -> Result<BSplineCurve> {
         let degree = self.degree();
         let mut curve = BSplineCurve::try_new(self.poles.clone(), vec![0.0, 1.0], vec![degree + 1, degree + 1], degree)?.with_weights(self.weights.clone());
         // (The quintic in eight spans, the same curve: its speed changes much along it, most
@@ -205,6 +217,11 @@ impl Section {
         if degree > 2 {
             curve.insert_knots(&(1..8).map(|k| (k as f64 / 8.0, 1)).collect::<Vec<_>>());
         }
+        Ok(curve)
+    }
+
+    fn edge(&self, model: &mut Model) -> Result<Shape> {
+        let curve = self.curve()?;
         make::edge_from_curve(model, Curve::BSpline(curve))
     }
 }
@@ -289,6 +306,10 @@ impl Corner {
             Kind::G2 { offset, center } => {
                 let (_, t1, t2) = self.ball(offset)?;
                 Section::g2(t1, o, t2, g2_thumbweight(t1, o, t2, center)?)
+            }
+            Kind::G2Weight { offset, w } => {
+                let (_, t1, t2) = self.ball(offset)?;
+                Section::g2(t1, o, t2, w)
             }
         })
     }
