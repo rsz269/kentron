@@ -98,6 +98,17 @@ pub fn distance_within(model: &mut Model, a: Shape, b: Shape, limit: f64) -> Res
     if below > limit {
         return Ok(ShapeDistance { value: below, on_first: Point::ORIGIN, on_second: Point::ORIGIN });
     }
+    // Meshes within their deviations of each other (touching, or crossing): where a point of
+    // one's boundary lies inside a solid of the other (clear of its boundary), the solids
+    // overlap, at distance zero. The nearest points on the exact geometry may not tell so:
+    // where their faces cross at a shallow angle, the meshes cross over a long stretch about
+    // the crossing, and the exact points found near where they do may still lie apart by
+    // the angle times the way left to it.
+    if nearest <= 2.0 * slack {
+        if let Some(p) = overlap_point(model, [a, b], [print_a, print_b], [ta, tb])? {
+            return Ok(ShapeDistance { value: 0.0, on_first: p, on_second: p });
+        }
+    }
     let threshold = nearest + 2.0 * slack + 1e-12 * scale;
     // (Per pair of pieces, its nearest pair of triangles: the first by their indices among
     // equally near ones, so that the points do not depend on the order pairs are met in.)
@@ -151,6 +162,39 @@ pub fn distance_within(model: &mut Model, a: Shape, b: Shape, limit: f64) -> Res
     let (value, on_first, on_second) = best.expect("the nearest pair is a candidate");
     Ok(ShapeDistance { value, on_first, on_second })
 }
+
+/// A point of either shape's boundary lying inside a solid of the other (not on its boundary):
+/// among the nodes of its triangles in the box the two shapes' triangles share, a spread of at
+/// most [`OVERLAP_SAMPLES`]. `None` where none of those does (or neither has a solid).
+fn overlap_point(model: &Model, shapes: [Shape; 2], prints: [u64; 2], triangles: [&Triangles; 2]) -> Result<Option<Point>> {
+    let boxes = triangles.map(|t| {
+        let mut b = BoundingBox::EMPTY;
+        for &p in &t.nodes {
+            b.add_point(p);
+        }
+        b
+    });
+    let shared = |p: Point| (0..2).all(|k| boxes[k].contains(p));
+    for (outer, inner) in [(0, 1), (1, 0)] {
+        if model.explore(shapes[outer], NodeKind::Solid).next().is_none() {
+            continue;
+        }
+        let nodes: Vec<Point> = triangles[inner].nodes.iter().copied().filter(|&p| shared(p)).collect();
+        if nodes.is_empty() {
+            continue;
+        }
+        let kept = model.derived(shapes[outer].node, prints[outer], || KeptClassifier(PointClassifier::new(model, shapes[outer])));
+        let classifier = kept.0.as_ref().map_err(Clone::clone)?;
+        let step = nodes.len().div_ceil(OVERLAP_SAMPLES).max(1);
+        if let Some(&p) = nodes.iter().step_by(step).find(|&&p| classifier.locate(p) == PointLocation::Inside) {
+            return Ok(Some(p));
+        }
+    }
+    Ok(None)
+}
+
+/// How many points of a shape's boundary [`overlap_point`] tries.
+const OVERLAP_SAMPLES: usize = 64;
 
 /// The distance from `vertex` to `faces` (a face, or a shell or compound holding faces only,
 /// none of them placed) on planes, cylinders, cones, spheres and tori, and the point of them
@@ -1155,6 +1199,34 @@ mod tests {
     use super::*;
     use crate::math::{Direction, Frame};
     use crate::primitives::{Cuboid, Cylinder, Sphere};
+
+    /// Prisms on an ellipse (as a periodic rational B-spline) and on the same turned by
+    /// 1e-4 about its centre, the second raised: they overlap (the ellipses' centre lies in
+    /// both over the height they share), at distance zero either way round. Their sides
+    /// cross at angles of about 1e-4, the meshes crossing over long stretches about each
+    /// crossing; the nearest points refined on the exact sides near where the meshes cross
+    /// were found apart.
+    #[test]
+    fn prisms_crossing_at_shallow_angles_are_at_no_distance() {
+        use crate::geometry::curve::{Curve, Ellipse};
+        let prism = |model: &mut Model, turn: f64, z: f64| {
+            let x = Direction::new(turn.cos(), turn.sin(), 0.0);
+            let ellipse = Curve::Ellipse(Ellipse::new(Frame::new(Point::new(0.0, 0.0, z), Direction::Z, x), 5.0, 3.0));
+            let mut spline = crate::geometry::convert::curve_to_bspline(&ellipse).unwrap();
+            spline.set_origin(1);
+            let edge = crate::make::edge_from_curve(model, Curve::BSpline(spline)).unwrap();
+            let wire = crate::make::wire(model, &[edge]).unwrap();
+            let face = crate::make::planar_face(model, wire).unwrap();
+            crate::sweep::extrude(model, face, Vector::new(0.0, 0.0, 4.0)).unwrap().shape
+        };
+        let mut model = Model::new();
+        let a = prism(&mut model, 0.0, 0.0);
+        let b = prism(&mut model, 1e-4, 1.5);
+        for (x, y) in [(a, b), (b, a)] {
+            let d = distance(&mut model, x, y).unwrap();
+            assert_eq!(d.value, 0.0, "{d:?}");
+        }
+    }
 
     /// The nearest faces of shapes on elementary surfaces, found without meshes where that
     /// can be told, are those the meshes find: from points all about them, by their edges
