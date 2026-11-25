@@ -223,6 +223,67 @@ pub(super) fn foot_on(surface: &Surface, p: Point) -> crate::geometry::extrema::
         (best, (grid.samples[best.1].0, grid.samples[best.1].1))
     });
     let mut foot = crate::geometry::extrema::newton_foot_from_sample(p, surface, start);
+    // (Off the surface at a collapsed row, a pole or an apex where a free-form surface's
+    // every u (or v) is one point, or from a sample there: the steps may stay at it, the
+    // distance not changing along the row, or run into it from the side away from the foot.
+    // From the nearest of a finer row of samples just beside it too.)
+    if freeform(surface) && foot.point.distance(p) > on_tol() {
+        let (u0, u1, v0, v1) = surface.bounds();
+        let collapsed = |u: f64, v: f64| {
+            let (_, su, sv) = surface.d1(u, v);
+            let (lu, lv) = (su.length(), sv.length());
+            (lu <= 1e-9 * lv, lv <= 1e-9 * lu)
+        };
+        let (at_start, at_foot) = (collapsed(start.0, start.1), collapsed(foot.u, foot.v));
+        let (along_u, along_v) = (at_start.0 || at_foot.0, at_start.1 || at_foot.1);
+        if (along_u || along_v) && [u0, u1, v0, v1].iter().all(|x| x.is_finite()) {
+            let (nu, nv) = grid_steps(surface);
+            // The collapsed row's parameter, and rows a fraction of a grid step in from it.
+            let (row, (lo, hi), steps, from) = if along_u {
+                (if at_foot.0 { foot.v } else { start.1 }, (v0, v1), nv, (u0, u1))
+            } else {
+                (if at_foot.1 { foot.u } else { start.0 }, (u0, u1), nu, (v0, v1))
+            };
+            let step = (hi - lo) / steps.max(1) as f64;
+            let mut nearest = (f64::INFINITY, start);
+            for k in [1.0, 0.5, 0.25, 0.125] {
+                for side in [-1.0, 1.0] {
+                    let w = row + side * k * step;
+                    if w < lo || w > hi {
+                        continue;
+                    }
+                    for i in 0..=64 {
+                        let t = from.0 + (from.1 - from.0) * i as f64 / 64.0;
+                        let (u, v) = if along_u { (t, w) } else { (w, t) };
+                        let d = surface.point(u, v).distance(p);
+                        if d < nearest.0 {
+                            nearest = (d, (u, v));
+                        }
+                    }
+                }
+            }
+            if nearest.0.is_finite() {
+                let steps = if along_u { ((from.1 - from.0) / 64.0, step) } else { (step, (from.1 - from.0) / 64.0) };
+                let second = narrowed(surface, p, nearest.1, steps);
+                if second.point.distance(p) < foot.point.distance(p) {
+                    foot = second;
+                }
+            }
+        }
+    }
+    // (No nearer than the nearest sample itself, the steps having run off or stalled, as
+    // from beside a pole or where the distance is not convex: narrowed down from that
+    // sample.)
+    if freeform(surface) && foot.point.distance(p) > on_tol() && foot.point.distance(p) > best.0.sqrt() * (1.0 - 1e-9) {
+        let (u0, u1, v0, v1) = surface.bounds();
+        let (nu, nv) = grid_steps(surface);
+        if [u0, u1, v0, v1].iter().all(|x| x.is_finite()) {
+            let second = narrowed(surface, p, start, ((u1 - u0) / nu.max(1) as f64, (v1 - v0) / nv.max(1) as f64));
+            if second.point.distance(p) < foot.point.distance(p) {
+                foot = second;
+            }
+        }
+    }
     // (From a sample far off compared with the foot found, as on a long narrow strip
     // sampled only by its spans, the steps may settle off the true foot: the general search
     // too, kept where it finds the point on the surface.)
@@ -240,7 +301,19 @@ pub(super) fn foot_on(surface: &Surface, p: Point) -> crate::geometry::extrema::
     // back onto itself, as a thread whose flanks touch from turn to turn, the point may lie
     // on the next turn, its nearest sample on this one.)
     let grazing = distance > on_tol() && distance < 1e-3 * best.0.sqrt();
-    let astray = distance > best.0.sqrt() * (1.0 + 1e-9) + 1e-12 || grazing || on_bound(foot.u, u0, u1, surface.u_period().is_some()) || on_bound(foot.v, v0, v1, surface.v_period().is_some());
+    let (u_bound, v_bound) = (on_bound(foot.u, u0, u1, surface.u_period().is_some()), on_bound(foot.v, v0, v1, surface.v_period().is_some()));
+    // On a bound of a surface closed there without a period (a B-spline round a whole
+    // turn), the steps may have run into the seam from the side away from the foot: from
+    // the seam's other copy too.
+    if (u_bound && surface.is_u_closed()) || (v_bound && surface.is_v_closed()) {
+        let across = |x: f64, a: f64, b: f64| if (x - a).abs() < (x - b).abs() { b } else { a };
+        let start = (if u_bound && surface.is_u_closed() { across(foot.u, u0, u1) } else { foot.u }, if v_bound && surface.is_v_closed() { across(foot.v, v0, v1) } else { foot.v });
+        let second = crate::geometry::extrema::newton_foot_from_sample(p, surface, start);
+        if second.point.distance(p) < distance {
+            return second;
+        }
+    }
+    let astray = distance > best.0.sqrt() * (1.0 + 1e-9) + 1e-12 || grazing || u_bound || v_bound;
     if !astray || winding_samples(surface) == 0 {
         return foot;
     }
@@ -280,6 +353,35 @@ pub(super) fn foot_on(surface: &Surface, p: Point) -> crate::geometry::extrema::
         return foot_from_nearest_samples(surface, p, nearer, 32);
     }
     nearer
+}
+
+/// The point of `surface` nearest `p` about `start`, narrowed down by ever finer grids of
+/// 5 × 5 points round the nearest found (from steps of `steps`, halved each time), then
+/// Newton's steps from there where they come nearer still: slow, but sure where the steps
+/// alone run off (near a pole, where u barely moves the point).
+fn narrowed(surface: &Surface, p: Point, start: (f64, f64), steps: (f64, f64)) -> crate::geometry::extrema::SurfaceFoot {
+    let (u0, u1, v0, v1) = surface.bounds();
+    let (mut du, mut dv) = steps;
+    let mut nearest = (surface.point(start.0, start.1).distance(p), start);
+    for _ in 0..40 {
+        let (cu, cv) = nearest.1;
+        for i in -2..=2 {
+            for j in -2..=2 {
+                let (u, v) = ((cu + i as f64 * du).clamp(u0, u1), (cv + j as f64 * dv).clamp(v0, v1));
+                let d = surface.point(u, v).distance(p);
+                if d < nearest.0 {
+                    nearest = (d, (u, v));
+                }
+            }
+        }
+        du *= 0.5;
+        dv *= 0.5;
+    }
+    let (u, v) = nearest.1;
+    let (point, su, sv) = surface.d1(u, v);
+    let found = crate::geometry::extrema::SurfaceFoot { u, v, point, du: su, dv: sv };
+    let polished = crate::geometry::extrema::newton_foot_from_sample(p, surface, nearest.1);
+    if polished.point.distance(p) < found.point.distance(p) { polished } else { found }
 }
 
 /// Where the last point's foot was found on a free-form surface: its parameters, the point
@@ -658,14 +760,27 @@ fn patch_ray_hits(surface: &Surface, origin: Point, direction: Vector) -> Option
                 // The patch strays from its corners' quad by a fraction of the cell.
                 let margin = 0.5 * size + on_tol();
                 if lo[0] - margin <= 0.0 && hi[0] + margin >= 0.0 && lo[1] - margin <= 0.0 && hi[1] + margin >= 0.0 {
-                    let t = corners.iter().map(|c| (c.2 - origin).dot(d)).sum::<f64>() / 4.0;
-                    starts.push((0.5 * (corners[0].0 + corners[3].0), 0.5 * (corners[0].1 + corners[3].1), t));
+                    // (From the middle of the corners' reach along the ray, and from either end
+                    // of it: a ray in and out again across one cell, as by a rim, meets it
+                    // twice.)
+                    let along: Vec<f64> = corners.iter().map(|c| (c.2 - origin).dot(d)).collect();
+                    let (first, last) = along.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), &t| (a.min(t), b.max(t)));
+                    let (u, v) = (0.5 * (corners[0].0 + corners[3].0), 0.5 * (corners[0].1 + corners[3].1));
+                    starts.push((u, v, along.iter().sum::<f64>() / 4.0));
+                    starts.push((u, v, first - margin));
+                    starts.push((u, v, last + margin));
+                    // (And from its corners: two hits in one cell, Newton's steps from its
+                    // middle all may run to the one.)
+                    for (c, &t) in corners.iter().zip(&along) {
+                        starts.push((c.0, c.1, t));
+                    }
                 }
             }
         }
         starts
     });
     let mut hits: Vec<f64> = Vec::new();
+    let cell = ((u1 - u0) / nu.max(1) as f64, (v1 - v0) / nv.max(1) as f64);
     for (mut u, mut v, mut t) in starts {
         let mut converged = false;
         let mut residual = f64::INFINITY;
@@ -682,9 +797,11 @@ fn patch_ray_hits(surface: &Surface, origin: Point, direction: Vector) -> Option
             if det.abs() <= 1e-300 {
                 break;
             }
-            let du = -f.dot(sv.cross(-d)) / det;
-            let dv = -su.dot(f.cross(-d)) / det;
-            let dt = -su.dot(sv.cross(f)) / det;
+            let (du, dv, dt) = (-f.dot(sv.cross(-d)) / det, -su.dot(f.cross(-d)) / det, -su.dot(sv.cross(f)) / det);
+            // (Each step at most a cell's size: from a cell's middle, the full step may leap
+            // to another cell's hit, the one in this cell never found.)
+            let k = (cell.0 / du.abs().max(1e-300)).min(cell.1 / dv.abs().max(1e-300)).min(1.0);
+            let (du, dv, dt) = (k * du, k * dv, k * dt);
             u = (u + du).clamp(u0, u1);
             v = (v + dv).clamp(v0, v1);
             t += dt;

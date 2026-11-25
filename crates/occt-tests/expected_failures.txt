@@ -54,7 +54,6 @@ tests/boolean/bcut_complex/E3
 tests/boolean/bcut_complex/F2
 tests/boolean/bcut_complex/F7
 tests/boolean/bcut_complex/O5
-tests/boolean/bcut_complex/Q9
 tests/boolean/bcut_simple/L9
 tests/boolean/bcut_simple/M1
 tests/boolean/bfuse_complex/M2

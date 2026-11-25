@@ -179,17 +179,14 @@ fn q6() -> DrawResult<()> {
 
 /// `tests/boolean/bcut_complex/Q9`
 #[test]
-#[should_panic]
-fn q9() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.dset(&["SCALE", "100"])?;
-        d.restore(&[data_file("CTO907_topo001.brep").as_str(), "m"])?;
-        d.explode(&["m"])?;
-        d.compound(&["m_2", "m_3", "m_4", "m_5", "c1"])?;
-        d.bcut(&["result", "m_1", "c1"])?;
-        d.checkprops(&["result", "-s", "57618.4"])?;
-        d.checkshape(&["result"])?;
-        Ok(())
-    })
+fn q9() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.dset(&["SCALE", "100"])?;
+    d.restore(&[data_file("CTO907_topo001.brep").as_str(), "m"])?;
+    d.explode(&["m"])?;
+    d.compound(&["m_2", "m_3", "m_4", "m_5", "c1"])?;
+    d.bcut(&["result", "m_1", "c1"])?;
+    d.checkprops(&["result", "-s", "57618.4"])?;
+    d.checkshape(&["result"])?;
+    Ok(())
 }

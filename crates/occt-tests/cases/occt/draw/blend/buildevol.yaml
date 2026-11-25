@@ -1497,7 +1497,6 @@ ported_from:
   file: tests/blend/buildevol/K2
 notes:
   - "OCCT TODO OCC22817 (All): Faulty shapes in variables faulty_1 to faulty_2"
-expect: not_done
 build:
   - s: {load: {brep: "6_G56.draw"}}
   - s: {scale: {shape: s, center: [0, 0, 0], factor: 1}}
