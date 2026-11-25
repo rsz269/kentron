@@ -520,9 +520,9 @@ impl<'a> Writer<'a> {
                 // (Parameters too where the curve is written on its own (not interpolated
                 // anew, over a range of its own).)
                 let own = match &curve {
-                    Curve::Trimmed(t) => !matches!(t.basis(), Curve::BSpline(b) if b.is_periodic() && !within_period(b, first, last)) && matches!(t.basis(), Curve::Line(_) | Curve::Circle(_) | Curve::Ellipse(_) | Curve::BSpline(_)),
+                    Curve::Trimmed(t) => !matches!(t.basis(), Curve::BSpline(b) if !written_exactly(b, first, last)) && matches!(t.basis(), Curve::Line(_) | Curve::Circle(_) | Curve::Ellipse(_) | Curve::BSpline(_)),
                     Curve::Line(_) | Curve::Circle(_) | Curve::Ellipse(_) => true,
-                    Curve::BSpline(b) => !b.is_periodic() || within_period(b, first, last),
+                    Curve::BSpline(b) => written_exactly(b, first, last),
                     _ => false,
                 };
                 let trims = if own {
@@ -582,7 +582,7 @@ impl<'a> Writer<'a> {
         let model = self.model;
         let local = Shape { orientation: Orientation::Forward, placement: Transform::IDENTITY, ..face };
         let surface = model.surface(local).ok_or_else(|| Error::InvalidInput("writing STEP: a face without a surface".into()))?.transformed(&face.placement);
-        let (surface_id, flipped) = self.surface(&surface)?;
+        let (surface_id, flipped) = self.surface(&surface, Some(model.face_uv_bounds(local)))?;
         let forward = face.orientation != Orientation::Reversed;
         let mut bounds = Vec::new();
         for (i, wire) in model.children_local(local).collect::<Vec<_>>().into_iter().enumerate() {
@@ -681,6 +681,19 @@ impl<'a> Writer<'a> {
     /// A curve, its parameter increasing from the edge's start to its end over `[first,
     /// last]`.
     fn curve(&mut self, curve: &Curve, first: f64, last: f64) -> Result<usize> {
+        // A periodic B-spline along part of a period: the same curve made non-periodic from
+        // the knot before the edge that leaves it the most room, its knots moved by whole
+        // periods to hold the edge's parameters. (Its ends then inside the curve's range,
+        // not at its ends: there a reader finding the edge's ends on the curve, closed,
+        // may take either end for the other, and the edge for the rest of the curve; and
+        // over the curve's origin, the edge runs on.)
+        if let Curve::BSpline(b) = curve {
+            if b.is_periodic() && !whole_period(b, first, last) {
+                if let Some((knots, b)) = from_knot_before(b, first, last) {
+                    return Ok(self.bspline_curve(b.degree(), b.poles(), b.weights(), &knots, b.multiplicities()));
+                }
+            }
+        }
         Ok(match curve {
             Curve::Line(l) => {
                 let p = self.point(l.origin);
@@ -720,8 +733,8 @@ impl<'a> Writer<'a> {
                 self.bspline_curve(b.degree(), b.poles(), b.weights(), b.knots(), b.multiplicities())
             }
             Curve::Trimmed(t) => self.curve(t.basis(), first, last)?,
-            // Others (degenerate parabolas, offsets, periodic B-splines over their origin):
-            // interpolated through points of the edge.
+            // Others (degenerate parabolas, offsets, periodic B-splines over more than a
+            // period): interpolated through points of the edge.
             other => {
                 let n = 64;
                 let points: Vec<Point> = (0..=n).map(|i| other.point(first + (last - first) * i as f64 / n as f64)).collect();
@@ -750,7 +763,10 @@ impl<'a> Writer<'a> {
 
     /// A surface; with whether its written normal runs against the model's `∂u × ∂v` (a
     /// reflected elementary surface, written right-handed).
-    fn surface(&mut self, surface: &Surface) -> Result<(usize, bool)> {
+    /// A surface, for a face over `bounds` (its `(u0, u1, v0, v1)`, where known): a surface
+    /// of extrusion of a periodic curve is written over the curve's period the face's range
+    /// of `u` keeps within.
+    fn surface(&mut self, surface: &Surface, bounds: Option<(f64, f64, f64, f64)>) -> Result<(usize, bool)> {
         let left_handed = |f: &Frame| Vector::from(f.x()).cross(Vector::from(f.y())).dot(Vector::from(f.z())) < 0.0;
         Ok(match surface {
             Surface::Plane(p) => {
@@ -806,18 +822,22 @@ impl<'a> Writer<'a> {
                 (self.add(format!("SURFACE_OF_REVOLUTION('',#{c},#{a})")), false)
             }
             Surface::Extrusion(e) => {
-                let (lo, hi) = (e.basis().first_parameter(), e.basis().last_parameter());
+                let whole = (e.basis().first_parameter(), e.basis().last_parameter());
+                let (lo, hi) = match (e.basis(), bounds) {
+                    (Curve::BSpline(b), Some((u0, u1, _, _))) if b.is_periodic() && u1 - u0 < whole.1 - whole.0 => (u0, u1),
+                    _ => whole,
+                };
                 let c = self.curve(e.basis(), lo, hi)?;
                 let d = self.direction(e.direction());
                 let v = self.add(format!("VECTOR('',#{d},1.)"));
                 (self.add(format!("SURFACE_OF_LINEAR_EXTRUSION('',#{c},#{v})")), false)
             }
             Surface::Offset(o) => {
-                let (basis, flipped) = self.surface(o.basis())?;
+                let (basis, flipped) = self.surface(o.basis(), bounds)?;
                 let distance = if flipped { -o.offset() } else { o.offset() };
                 (self.add(format!("OFFSET_SURFACE('',#{basis},{},.F.)", real(distance))), flipped)
             }
-            Surface::Trimmed(t) => self.surface(t.basis())?,
+            Surface::Trimmed(t) => self.surface(t.basis(), bounds)?,
         })
     }
 
@@ -860,6 +880,47 @@ impl<'a> Writer<'a> {
             }
         }
     }
+}
+
+/// The periodic B-spline `b` made non-periodic from the knot before `[first, last]` that
+/// leaves it the most room either side, with its knots (moved by the whole periods that bring
+/// the range within them): the same curve at the same parameters over the range. `None`
+/// where the range is longer than a period.
+fn from_knot_before(b: &crate::geometry::curve::BSplineCurve, first: f64, last: f64) -> Option<(Vec<f64>, crate::geometry::curve::BSplineCurve)> {
+    if !b.is_periodic() {
+        return None;
+    }
+    let knots = b.knots();
+    let period = knots[knots.len() - 1] - knots[0];
+    let (lo, hi) = (first.min(last), first.max(last));
+    let slack = 1e-12 * period.abs().max(1.0);
+    if !(period > 0.0) || hi - lo > period + slack {
+        return None;
+    }
+    // Each knot of a period, moved by whole periods to the last place not past `lo`; its
+    // room: the least of the way from it to `lo` and from `hi` to a period on.
+    let (i, start) = (0..knots.len() - 1)
+        .map(|i| (i, knots[i] + ((lo + slack - knots[i]) / period).floor() * period))
+        .filter(|&(_, start)| hi <= start + period + slack)
+        .max_by(|x, y| (lo - x.1).min(x.1 + period - hi).total_cmp(&(lo - y.1).min(y.1 + period - hi)))?;
+    let mut curve = b.clone();
+    curve.set_origin(i);
+    curve.set_not_periodic();
+    let shift = start - curve.knots()[0];
+    Some((curve.knots().iter().map(|k| k + shift).collect(), curve))
+}
+
+/// Whether `[first, last]` is a whole period of the periodic B-spline `b` (to rounding).
+fn whole_period(b: &crate::geometry::curve::BSplineCurve, first: f64, last: f64) -> bool {
+    let knots = b.knots();
+    let period = knots[knots.len() - 1] - knots[0];
+    (last - first).abs() >= period - 1e-12 * period.abs().max(1.0)
+}
+
+/// Whether a B-spline is written as itself over `[first, last]`, at the same parameters (a
+/// periodic one over no more than a period).
+fn written_exactly(b: &crate::geometry::curve::BSplineCurve, first: f64, last: f64) -> bool {
+    !b.is_periodic() || within_period(b, first, last) || from_knot_before(b, first, last).is_some()
 }
 
 /// Whether `[first, last]` keeps within the knots of the periodic B-spline `b` (so that the
@@ -973,6 +1034,55 @@ mod tests {
             let t = first + (last - first) * f64::from(i) / 48.0;
             assert!(written.point(t).distance(curve.point(t)) <= 1e-12, "at {t}");
         }
+    }
+
+    /// Two prisms on a closed periodic B-spline outline (eleven poles about a circle, its knots
+    /// from 3), the second's moved across by 2e-4 and up by a quarter of their height: the
+    /// union's sides each run all round the outline below the other's end, their edges
+    /// along the outlines' pieces between where the outlines cross, some ending at the
+    /// curves' origins (where their sides have seams) and some running across them. Written
+    /// with each piece's curve made non-periodic from a knot outside it, and the side's
+    /// surface from one outside its range, the union reads back with the same volume and
+    /// valid. (Written whole, made non-periodic at their origins, the pieces were read back
+    /// with their ends there taken at the other end of the curve, and the union came back
+    /// an eighth larger.)
+    #[test]
+    fn prisms_on_a_periodic_outline_and_the_same_moved_a_hair_written() {
+        use crate::geometry::curve::BSplineCurve;
+        let poles = [
+            (2.0287421860930874, 0.0),
+            (1.9082164839169744, 1.2263362702027996),
+            (0.870576301772249, 1.9062961946583574),
+            (-0.31242701423038965, 2.172977614001407),
+            (-1.4013433565211482, 1.6172364448156276),
+            (-1.7425155631923277, 0.5116487337106861),
+            (-1.627670835096333, -0.4779272789673983),
+            (-1.2325251501555514, -1.4224098488836912),
+            (-0.34547186371883687, -2.4028095905138143),
+            (1.0531481476137061, -2.3060727728523887),
+            (1.881460500340129, -1.2091412436522042),
+        ];
+        let height = 7.87355609995029;
+        let prism = |model: &mut Model, (dx, dy, z): (f64, f64, f64)| {
+            let curve = BSplineCurve::try_new_periodic(poles.iter().map(|&(x, y)| Point::new(x + dx, y + dy, z)).collect(), (3..=14).map(f64::from).collect(), vec![1; 12], 3).unwrap();
+            let rim = crate::make::edge_from_curve(model, Curve::BSpline(curve)).unwrap();
+            let rim = crate::make::wire(model, &[rim]).unwrap();
+            let face = crate::make::planar_face(model, rim).unwrap();
+            crate::sweep::extrude(model, face, crate::math::Vector::new(0.0, 0.0, height)).unwrap().shape
+        };
+        let mut model = Model::new();
+        let a = prism(&mut model, (0.0, 0.0, 0.0));
+        let b = prism(&mut model, (-1.1018005558799e-4, 1.8549186073198794e-4, 1.9838604188755724));
+        let union = crate::boolean::union(&mut model, a, b).unwrap();
+        let before = crate::properties::volume(&model, union).mass;
+        let mut bytes = Vec::new();
+        write(&model, union, "union", None, &mut bytes).unwrap();
+        let mut read_model = Model::new();
+        let read = super::super::read(&mut read_model, &mut bytes.as_slice()).unwrap();
+        let report = crate::validity::check(&read_model, read);
+        assert!(report.problems.is_empty(), "{report:?}");
+        let after = crate::properties::volume(&read_model, read).mass;
+        assert!((after - before).abs() < 1e-10 * before, "{after} against {before}");
     }
 
     /// A paraboloid of revolution (a parabola turned about its axis, the basis trimmed to the
