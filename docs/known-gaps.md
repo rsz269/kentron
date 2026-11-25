@@ -320,6 +320,33 @@ boolean may not find them on the surface.
   OCCT's tolerance checks in bug32945 and buc60555_1, whose real gaps are larger.
 - **Needed:** tighter section fitting, so that the true deviation is small.
 
+### A cylinder ending just short of or past where it touches a torus
+
+*Found 2026-11-25.*
+
+![A torus and a cylinder of its tube's radius ending 0.01 short of the meridian plane where they touch: kentron's union leaves the cylinder out, CadQuery's has both](known-gaps/meridian.svg)
+
+A cylinder of a torus's tube radius, its axis touching the torus's centre circle, touches
+the torus along that meridian circle. With the cylinder's end exactly in the meridian
+plane, or more than about 0.2 from it, booleans are right (eb48531). With the end between
+about 0.01 and 0.2 short of or past that plane, its circle is not on the torus within
+tolerance but crosses it at a very shallow angle, about s^2/(2Rr) for a shift s
+(1e-6 to 1e-3 rad). The crossing vertex snaps to the cylinder's seam vertex, about 2e-4
+from the true crossing, and the thin crescent of the end disc between its circle and the
+section (at most 5e-4 wide) is lost when the face is split.
+
+- **Repro:** torus R 12.8, r 3.315 about Z at height 3.7227; a cylinder of radius 3.315
+  along -Y through (12.8, *, 3.7227), length 16.885, its end at Y = -0.01 (`scene_meridian`
+  in `tools/gap_figures.py`).
+- **Evidence:** union 2776.558, valid, where the volumes give 3073.43 (CadQuery 3073.428):
+  the torus alone. The common part and the difference have the right volumes (286.076,
+  2490.483) but are invalid; at shifts of ±0.1 all three are invalid with the right
+  volumes. In the tube-and-shell cases of the same fix, B, C and D fail in this band, A
+  and E pass; B's common part at -0.01 comes out empty against 35.1.
+- **Needed:** vertices at shallow crossings placed at the true crossing rather than snapped
+  to a nearby vertex, and face splitting that keeps slivers thinner than the snapping
+  distance. Not a contained change.
+
 ### The part of a whole plane outside what it meets
 
 *Found 2026-11-22.*

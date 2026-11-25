@@ -175,6 +175,15 @@ def scene_lamp(cq, kernel):
     return {"arm": [(arm.val(), FIRST)], "hub": [(hub, SECOND)], "union": [(arm.union(hub).val(), BODY)], "start": (float(xs), float(ys), float(zs))}
 
 
+def scene_meridian(cq, kernel):
+    """A torus and a cylinder of its tube's radius, the cylinder's axis touching the torus's
+    centre circle and its end 0.01 short of the meridian plane there."""
+    R, r, z, length, short = 12.8, 3.315, 3.7227, 16.885, 0.01
+    torus = cq.Workplane("XZ").center(R, z).circle(r).revolve(360, [-R, 0], [-R, 1])
+    cylinder = cq.Workplane("XZ", origin=(0, -short, 0)).center(R, z).circle(r).extrude(length)
+    return {"torus": [(torus.val(), FIRST)], "cylinder": [(cylinder.val(), SECOND)], "union": [(torus.union(cylinder).val(), BODY)]}
+
+
 def draw_commands(commands):
     """kentron's DRAW interpreter run on commands (crates/occt-tests' draw_commands): what
     they print, or a RuntimeError saying which command failed and why."""
@@ -1302,6 +1311,21 @@ def figure_whole_plane(rebuild):
         figure.panel(x, y, width, height, drawing, title, note, verdict)
         figure.text(x + cx, y + cy + 4, "inside the box", "small", "middle")
         figure.text(x + 22, y + 32, "the rest of the plane" if column == 0 else "not built", "note small")
+    return figure
+
+
+def figure_meridian(rebuild):
+    kentron, cadquery = (scene("meridian", k, rebuild) for k in ("kentron", "cadquery"))
+    height = 300
+    figure = Figure(WIDTH, TOP + height + 56, "A torus and a cylinder of its tube's radius ending 0.01 short of the plane where they touch: kentron's union leaves the cylinder out, CadQuery's has both.")
+    view = View((0.55, -0.6, 0.6), (8, -6, 3.7), 46, SIDE, height)
+    close = View((0.55, -0.6, 0.6), (10, -6, 2), 36, MAIN, height)
+    figure.panel(COLUMNS[0], TOP, SIDE, height, render([cadquery["torus"], cadquery["cylinder"]], view), "Torus and cylinder", "its end 0.01 short of the meridian")
+    for x, mesh, title, verdict in (
+            (COLUMNS[1], kentron["union"], "kentron: their union", ("bad", "the torus alone: the cylinder outside it is lost,\nthough the result is valid")),
+            (COLUMNS[2], cadquery["union"], "CadQuery: their union", ("good", "torus and cylinder, one valid solid"))):
+        info = mesh["info"][0]
+        figure.panel(x, TOP, MAIN, height, render([mesh], close), title, "%d faces, volume %.1f" % (info["faces"], info["volume"]), verdict)
     return figure
 
 
