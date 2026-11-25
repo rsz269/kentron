@@ -262,6 +262,12 @@ fn point_within(model: &Model, cell: Shape) -> Result<Option<Point>> {
     Ok(None)
 }
 
+/// The volume a solid bounds, from its faces' volume terms, which the model keeps (the
+/// pieces' faces' found as the pieces were enclosed).
+fn volume_of(model: &Model, solid: Shape) -> f64 {
+    crate::properties::solid_volume(model, solid).map_or_else(|| crate::properties::volume(model, solid).mass, |(v, _)| v)
+}
+
 /// The product where it runs into itself (see the module's notes): its faces split where they
 /// cross, the pieces of space it winds round at least once, joined. An error where the
 /// pieces' volumes, each counted as often as the product winds round it, do not add up to the
@@ -285,12 +291,12 @@ fn resolved(model: &mut Model, product: Shape) -> Result<Shape> {
         };
         let Some(p) = found else { continue };
         let winding = classifier.winding(p).ok_or_else(|| Error::Failed("how often a sweep winds round a point of it".into()))?;
-        counted += winding as f64 * crate::properties::volume(model, cell).mass;
+        counted += winding as f64 * volume_of(model, cell);
         if winding >= 1 {
             kept.push(cell);
         }
     }
-    let whole = crate::properties::volume(model, product).mass;
+    let whole = volume_of(model, product);
     if !((counted - whole).abs() <= 1e-6 * whole.abs()) {
         return Err(Error::Failed(format!("a sweep running into itself: its pieces, as often as it winds round them, hold {counted}, not its {whole}")));
     }
