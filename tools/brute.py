@@ -36,6 +36,16 @@ Library (import tools/brute.py, or run it):
   the primitives), by the midpoint rule across y and z. `inside` combines the primitives'
   inside masks (a function of their list), so booleans of them, overlap and all, are exact
   along the lines.
+- `turned_prism_volume(polygon, z0, z1, rise, theta0, theta1, ...)`: the volume a prism (a
+  polygon in xy, z0 <= z <= z1) sweeps turning by theta about the z axis, theta0 to theta1,
+  risen by `rise(theta)` (increasing; a screw whose lead may change): no kernel involved, exact
+  along each line parallel to the axis (the line meets the prism turned by theta for theta in
+  intervals, each holding the prism's heights risen from the interval's start to its end; the
+  line holds their union), Gauss-Legendre across the radius between the radii where the
+  section's arcs change, the midpoint rule around. Within a radius and heights, if given (a
+  rod's cut).
+- `turned_prism_held(...)`, `turned_exposed_side(...)`: whether points lie in that solid; the
+  area of a side of the prism at the start or end of the motion that no place of it covers.
 - `wire_offset(wire, distance, n)`: a planar wire's offset with round joins (and ends), as
   the boundary of its points within `distance` (shapely's buffer of the wire sampled `n`
   times an edge): around an open wire, outwards (inwards for a negative distance) from the
@@ -48,6 +58,10 @@ CLI:
     brute.py area union|common|cut A.brep B.brep   boolean's area from the operands' meshes
     brute.py faces union|common|cut R.brep A.brep B.brep   misplaced faces of a result
         (in a union, faces inside an operand or off both; and so on)
+    brute.py turned X,Y;X,Y;... Z0 Z1 RISE THETA0 THETA1 [RMAX ZMIN ZMAX]
+        turned_prism_volume of the polygon (vertices anticlockwise), RISE a Python expression
+        in t (radians), the angles in degrees; with RMAX..ZMAX, also what it cuts from the rod
+        r <= RMAX, ZMIN <= z <= ZMAX: the rod's volume less the common part.
     brute.py wire WIRE.brep FRACTION              a wire's offset (round joins) by FRACTION of
         its length (as OCCT's offset tests take it), both ways for a closed wire: length, loops
     brute.py round open|close PRE.brep R.brep... --box=x0,y0,z0,x1,y1,z1 --r=R [--h=H] [--compare=BOX]
@@ -425,6 +439,131 @@ def line_volume(inside, solids, box, n=(2400, 1200), breaks=((), ())):
     return total
 
 
+def section_arcs(polygon, r):
+    """The angles a in [-pi, pi] at which (r cos a, r sin a) lies inside the polygon, as intervals
+    between the points where the circle of radius r crosses its sides."""
+    P = np.asarray(polygon, float)
+    cuts = [-np.pi, np.pi]
+    for a, b in zip(P, np.roll(P, -1, axis=0)):
+        d = b - a
+        A, B, C = d @ d, 2 * a @ d, a @ a - r * r
+        disc = B * B - 4 * A * C
+        if disc < 0:
+            continue
+        for s in ((-B - np.sqrt(disc)) / (2 * A), (-B + np.sqrt(disc)) / (2 * A)):
+            if 0 <= s <= 1:
+                q = a + s * d
+                cuts.append(np.arctan2(q[1], q[0]))
+    cuts = np.sort(cuts)
+    out = []
+    for lo, hi in zip(cuts, cuts[1:]):
+        m = 0.5 * (lo + hi)
+        if hi - lo > 1e-15 and _in_polygon(P, r * np.cos(m), r * np.sin(m)):
+            if out and abs(out[-1][1] - lo) < 1e-15:
+                out[-1][1] = hi
+            else:
+                out.append([lo, hi])
+    return out
+
+
+def _in_polygon(P, x, y):
+    inside = False
+    for a, b in zip(P, np.roll(P, -1, axis=0)):
+        if (a[1] > y) != (b[1] > y) and x < a[0] + (y - a[1]) * (b[0] - a[0]) / (b[1] - a[1]):
+            inside = not inside
+    return inside
+
+
+def union_length(lo, hi, clip=None):
+    """Per row, the length of the union of the intervals [lo, hi] (empty where lo >= hi), within
+    `clip` (lo, hi) if given."""
+    if clip is not None:
+        lo, hi = np.maximum(lo, clip[0]), np.minimum(hi, clip[1])
+    empty = ~(hi > lo)
+    lo, hi = np.where(empty, -np.inf, lo), np.where(empty, -np.inf, hi)
+    o = np.argsort(lo, axis=1)
+    lo, hi = np.take_along_axis(lo, o, 1), np.take_along_axis(hi, o, 1)
+    total, reach = np.zeros(lo.shape[0]), np.full(lo.shape[0], -np.inf)
+    for j in range(lo.shape[1]):
+        ok = np.isfinite(hi[:, j])
+        start = np.maximum(lo[:, j], reach)
+        total += np.where(ok & (hi[:, j] > start), hi[:, j] - np.where(ok, start, 0.0), 0.0)
+        reach = np.where(ok, np.maximum(reach, hi[:, j]), reach)
+    return total
+
+
+def _turned_intervals(polygon, r, phi, z0, z1, rise, theta0, theta1):
+    """At radius r, for each angle of `phi`, the heights each turn of each of the section's arcs
+    holds (lo, hi as (len(phi), m) arrays; empty ones lo = inf, hi = -inf)."""
+    los, his = [], []
+    kmin = int(np.floor((theta0 - np.pi) / (2 * np.pi))) - 1
+    kmax = int(np.ceil((theta1 + 3 * np.pi) / (2 * np.pi))) + 1
+    for alo, ahi in section_arcs(polygon, r):
+        for k in range(kmin, kmax + 1):
+            ta = np.clip(phi - ahi + 2 * np.pi * k, theta0, theta1)
+            tb = np.clip(phi - alo + 2 * np.pi * k, theta0, theta1)
+            valid = tb > ta
+            los.append(np.where(valid, rise(ta) + z0, np.inf))
+            his.append(np.where(valid, rise(tb) + z1, -np.inf))
+    if not los:
+        return np.full((len(phi), 1), np.inf), np.full((len(phi), 1), -np.inf)
+    return np.array(los).T, np.array(his).T
+
+
+def turned_prism_volume(polygon, z0, z1, rise, theta0, theta1, rbreaks=(), nr=64, nphi=20000, rclip=None, zclip=None):
+    """The volume the prism (polygon in xy, z0 <= z <= z1) sweeps turning by theta about the z
+    axis from theta0 to theta1 (radians) while risen rise(theta) (increasing, vectorised): along
+    each line parallel to the axis the union of the heights it holds, exactly; across the radius
+    Gauss-Legendre (nr nodes) between `rbreaks`, the radii where the section's arcs change (its
+    vertices' and its sides' nearest points'), on r = a + (b - a)(1 - cos pi s)/2 (the arcs' ends
+    move as the square root of the distance from a break); around, the midpoint rule (nphi).
+    Within r <= rclip and zclip = (lo, hi) if given."""
+    rmax = max(np.hypot(*v) for v in polygon)
+    rtop = rmax if rclip is None else min(rmax, rclip)
+    b = sorted({0.0, rtop, *(c for c in rbreaks if 0 < c < rtop)})
+    x, w = np.polynomial.legendre.leggauss(nr)
+    phi = (np.arange(nphi) + 0.5) / nphi * 2 * np.pi
+    total = 0.0
+    for ra, rb in zip(b, b[1:]):
+        for xi, wi in zip(x, w):
+            s = 0.5 * (xi + 1)
+            r = ra + (rb - ra) * 0.5 * (1 - np.cos(np.pi * s))
+            dr = (rb - ra) * 0.25 * np.pi * np.sin(np.pi * s) * wi
+            lo, hi = _turned_intervals(polygon, r, phi, z0, z1, rise, theta0, theta1)
+            total += dr * r * union_length(lo, hi, zclip).mean() * 2 * np.pi
+    return total
+
+
+def turned_prism_held(polygon, z0, z1, rise, theta0, theta1, points):
+    """Whether each point lies inside turned_prism_volume's solid (strictly within its line's
+    heights)."""
+    out = np.zeros(len(points), bool)
+    for i, (px, py, pz) in enumerate(points):
+        lo, hi = _turned_intervals(polygon, np.hypot(px, py), np.array([np.arctan2(py, px)]), z0, z1, rise, theta0, theta1)
+        out[i] = bool(((lo[0] < pz) & (pz < hi[0])).any())
+    return out
+
+
+def turned_exposed_side(polygon, z0, z1, rise, theta0, theta1, theta, a, b, n=8000, offset=1e-9):
+    """The area of the prism's side over its polygon's edge a -> b (the outside on its right),
+    placed at turn `theta` (the motion's start or end), that no place of the motion covers:
+    along each of n lines up the side (midpoint rule across it), just outside it, the side's
+    heights less the union of those its line holds, exactly."""
+    a, b = np.asarray(a, float), np.asarray(b, float)
+    d = b - a
+    out = np.array([d[1], -d[0]]) / np.hypot(*d)
+    c, s = np.cos(theta), np.sin(theta)
+    side = (rise(theta) + z0, rise(theta) + z1)
+    total = 0.0
+    for u in (np.arange(n) + 0.5) / n:
+        q = a + u * d + offset * out
+        x, y = c * q[0] - s * q[1], s * q[0] + c * q[1]
+        lo, hi = _turned_intervals(polygon, np.hypot(x, y), np.array([np.arctan2(y, x)]), z0, z1, rise, theta0, theta1)
+        both = union_length(np.append(lo, side[0])[None, :], np.append(hi, side[1])[None, :])[0]
+        total += both - union_length(lo, hi)[0]
+    return np.hypot(*d) * total / n
+
+
 def wire_points(wire, n=2000):
     """The wire's points in order, `n` along each edge, as 2D coordinates in the plane that
     fits them best; whether it is closed; and the plane (a point and two axes: a 3D point p
@@ -592,6 +731,25 @@ def main(argv):
         _between(rest)
     elif cmd == "holds":
         _holds(rest)
+    elif cmd == "turned":
+        polygon = [tuple(map(float, v.split(","))) for v in rest[0].split(";")]
+        z0, z1 = float(rest[1]), float(rest[2])
+        rise = eval("lambda t: " + rest[3], {"np": np, "pi": np.pi})
+        t0, t1 = np.radians(float(rest[4])), np.radians(float(rest[5]))
+        # (The breaks: the vertices' radii and the sides' nearest points to the axis.)
+        breaks = {np.hypot(*v) for v in polygon}
+        for a, b in zip(polygon, polygon[1:] + polygon[:1]):
+            a, b = np.array(a), np.array(b)
+            s = np.clip(-(a @ (b - a)) / ((b - a) @ (b - a)), 0, 1)
+            breaks.add(np.hypot(*(a + s * (b - a))))
+        for nr, nphi in ((32, 20000), (64, 60000), (96, 120000)):
+            v = turned_prism_volume(polygon, z0, z1, rise, t0, t1, breaks, nr, nphi)
+            line = f"nodes {nr} x {nphi}: volume {v:.10g}"
+            if len(rest) > 6:
+                rmax, zlo, zhi = map(float, rest[6:9])
+                common = turned_prism_volume(polygon, z0, z1, rise, t0, t1, breaks, nr, nphi, rclip=rmax, zclip=(zlo, zhi))
+                line += f", cut from the rod {np.pi * rmax * rmax * (zhi - zlo) - common:.10g}"
+            print(line, flush=True)
     elif cmd == "wire":
         from OCP.GProp import GProp_GProps
         from OCP.BRepGProp import BRepGProp
