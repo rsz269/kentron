@@ -667,6 +667,15 @@ impl<'a> Writer<'a> {
         self.add(triple("CARTESIAN_POINT('',(", [p.x, p.y, p.z]))
     }
 
+    /// The points' entities, one after another (as [`Self::point`] of each in turn): their
+    /// ids. (Formatted on the pool: a large B-spline's poles run to millions of reals.)
+    fn points(&mut self, points: &[Point]) -> Vec<usize> {
+        const CHUNK: usize = 4096;
+        let chunks: Vec<&[Point]> = points.chunks(CHUNK).collect();
+        let lines = crate::parallel::map(&chunks, |chunk| chunk.iter().map(|p| triple("CARTESIAN_POINT('',(", [p.x, p.y, p.z])).collect::<Vec<String>>());
+        lines.into_iter().flatten().map(|line| self.add(line)).collect()
+    }
+
     fn direction(&mut self, d: Direction) -> usize {
         self.add(triple("DIRECTION('',(", [d.x(), d.y(), d.z()]))
     }
@@ -746,7 +755,7 @@ impl<'a> Writer<'a> {
     }
 
     fn bspline_curve(&mut self, degree: usize, poles: &[Point], weights: Option<&[f64]>, knots: &[f64], multiplicities: &[usize]) -> usize {
-        let ids: Vec<usize> = poles.iter().map(|&p| self.point(p)).collect();
+        let ids = self.points(poles);
         let list = ids.iter().map(|v| format!("#{v}")).collect::<Vec<_>>().join(",");
         let mults = multiplicities.iter().map(|m| m.to_string()).collect::<Vec<_>>().join(",");
         let ks = knots.iter().map(|&k| real(k)).collect::<Vec<_>>().join(",");
@@ -850,14 +859,20 @@ impl<'a> Writer<'a> {
         (uk, um): (&[f64], &[usize]),
         (vk, vm): (&[f64], &[usize]),
     ) -> usize {
-        let rows: Vec<String> = poles
-            .iter()
-            .map(|row| {
-                let ids: Vec<usize> = row.iter().map(|&p| self.point(p)).collect();
-                format!("({})", ids.iter().map(|v| format!("#{v}")).collect::<Vec<_>>().join(","))
-            })
-            .collect();
-        let grid = rows.join(",");
+        let all: Vec<Point> = poles.iter().flatten().copied().collect();
+        let ids = self.points(&all);
+        let mut grid = String::with_capacity(ids.len() * 9);
+        let mut next = ids.iter();
+        for (i, row) in poles.iter().enumerate() {
+            grid.push_str(if i == 0 { "(" } else { ",(" });
+            for (j, id) in next.by_ref().take(row.len()).enumerate() {
+                if j > 0 {
+                    grid.push(',');
+                }
+                let _ = write!(grid, "#{id}");
+            }
+            grid.push(')');
+        }
         let join_u = |m: &[usize]| m.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(",");
         let join_r = |k: &[f64]| k.iter().map(|&x| real(x)).collect::<Vec<_>>().join(",");
         match weights {
@@ -937,6 +952,29 @@ fn within_period(b: &crate::geometry::curve::BSplineCurve, first: f64, last: f64
 mod tests {
     use super::*;
     use crate::primitives::{Cuboid, Cylinder};
+
+    /// A B-spline surface of more poles than one batch of points formatted together: its
+    /// points written one after another row by row, each as it would be alone, and the surface
+    /// naming them in that order, row by row.
+    #[test]
+    fn large_bspline_surfaces_name_their_points_in_order() {
+        let model = Model::new();
+        let (rows, columns) = (90, 70);
+        let poles: Vec<Vec<Point>> = (0..rows).map(|i| (0..columns).map(|j| Point::new(i as f64 * 0.1, j as f64 / 3.0, ((i * j) as f64).sin())).collect()).collect();
+        let knots = |n: usize| -> (Vec<f64>, Vec<usize>) {
+            let inner = n - 3;
+            ((0..=inner).map(|k| k as f64).collect(), (0..=inner).map(|k| if k == 0 || k == inner { 4 } else { 1 }).collect())
+        };
+        let ((uk, um), (vk, vm)) = (knots(rows), knots(columns));
+        let mut w = Writer::new(&model);
+        let id = w.bspline_surface(3, 3, &poles, None, (&uk, &um), (&vk, &vm));
+        assert_eq!(id, rows * columns + 1);
+        for (k, p) in poles.iter().flatten().enumerate() {
+            assert_eq!(w.lines[k], triple("CARTESIAN_POINT('',(", [p.x, p.y, p.z]));
+        }
+        let grid: Vec<String> = (0..rows).map(|i| format!("({})", (0..columns).map(|j| format!("#{}", i * columns + j + 1)).collect::<Vec<_>>().join(","))).collect();
+        assert!(w.lines[rows * columns].starts_with(&format!("B_SPLINE_SURFACE_WITH_KNOTS('',3,3,({}),", grid.join(","))));
+    }
 
     /// Every face's loops run anticlockwise about the face's normal (its surface's turned by
     /// `same_sense`), as ISO 10303-42 directs, and the normals point out of the solid: a cube's
