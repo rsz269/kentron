@@ -160,6 +160,10 @@ pub fn union(model: &mut Model, a: Shape, b: Shape) -> Result<Shape> {
 /// result is the same however many threads there are, and the same as [`union`] taken in
 /// that tree. Many tools to cut away at once (the moves of a mill) are cut faster as their
 /// union, made so, than one after another.
+///
+/// Fails where a union in the tree leaves open the shells of operands closed: what is built
+/// on such a step is not the union (an open shell's inside is not told), and [`union`] alone
+/// would hand it back as it is.
 pub fn union_all(model: &mut Model, shapes: &[Shape]) -> Result<Shape> {
     match shapes {
         [] => return Ok(model.new_empty(crate::topology::NodeKind::Compound)),
@@ -184,7 +188,17 @@ fn united_in_place(model: &mut Model, shapes: &[Shape]) -> Result<Shape> {
     let (first, second) = shapes.split_at(shapes.len() / 2);
     let a = united_in_place(model, first)?;
     let b = united_in_place(model, second)?;
-    union(model, a, b)
+    united_closed(model, a, b)
+}
+
+/// [`union`] of `a` and `b` for [`union_all`]: an error where it leaves a shell open that
+/// theirs were not.
+fn united_closed(model: &mut Model, a: Shape, b: Shape) -> Result<Shape> {
+    let united = union(model, a, b)?;
+    if !closed_shells(model, united) && closed_shells(model, a) && closed_shells(model, b) {
+        return Err(Error::Failed("a union of closed shells left a shell open".into()));
+    }
+    Ok(united)
 }
 
 /// [`union_all`] of `shapes` of `source` in a new model: the halves at once.
@@ -199,7 +213,7 @@ fn united_apart(source: &Model, shapes: &[Shape]) -> Result<(Model, Shape)> {
     let ((mut model, a), (other, b)) = (a?, b?);
     let b = model.import(&other, b)?;
     drop(other);
-    let united = union(&mut model, a, b)?;
+    let united = united_closed(&mut model, a, b)?;
     Ok((model, united))
 }
 
