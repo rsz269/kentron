@@ -139,12 +139,16 @@ impl Graph {
             // (Two sections, traced where different faces meet along one curve, within a
             // little of their length: one curve. So too a section traced along an operand's
             // edge, as where a sloped wall meets another's upright one along the ellipse they
-            // both end on.)
+            // both end on. Not a section given by its own curve (a line, a conic, an
+            // extruded curve moved along): that is where the surfaces meet, and an edge
+            // apart from it by more than the tolerance, ending where it does, is another, as
+            // the outline of one prism and that of another turned a hair from it, between
+            // two points where they cross.)
             let chord = self.vertices.points[p.start].distance(self.vertices.points[p.end]);
             let found = candidates.iter().copied().find(|&j| {
                 let q = &pieces[j];
                 let Some(curve) = &self.edges[q.edge].curve else { return false };
-                let traced = self.edges[p.edge].operand.is_none() || self.edges[q.edge].operand.is_none();
+                let traced = self.edges[p.edge].fitted || self.edges[q.edge].fitted;
                 // (Or within either edge's own tolerance: an edge read from a file straying
                 // from its surfaces that much, and another lying on them.)
                 let strays = self.edges[p.edge].tolerance.max(self.edges[q.edge].tolerance).min(1e-3 * chord);

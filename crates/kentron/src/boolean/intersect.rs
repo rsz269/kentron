@@ -4310,7 +4310,8 @@ impl Graph {
             }
             let (a, b) = (self.vertices.points[v0], self.vertices.points[v1]);
             let (curve, first, last) = section.edge_curve(t0, t1, a, b);
-            let edge = Edge::new(Some(curve), first, last, v0, v1, &self.vertices, None);
+            let mut edge = Edge::new(Some(curve), first, last, v0, v1, &self.vertices, None);
+            edge.fitted = matches!(section, Section::Chain(..) | Section::Sampled(..));
             self.edges.push(edge);
             let i = self.edges.len() - 1;
             self.faces[fa].sections.push(i);

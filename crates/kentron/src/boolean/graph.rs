@@ -124,6 +124,9 @@ pub(super) struct Edge {
     /// How far it may stray from the surfaces of its faces: its tolerance in the model (0
     /// for section edges).
     pub tolerance: f64,
+    /// A section edge whose curve is fitted through points of the section (traced, or a
+    /// quadrics' branch interpolated), not the section's own curve.
+    pub fitted: bool,
     /// Its samples and chords for finding crossings (made on first use; the curve and its
     /// range do not change).
     pub chords: std::sync::OnceLock<Chords>,
@@ -168,7 +171,7 @@ impl Edge {
     }
 
     pub fn with_box(curve: Option<Curve>, first: f64, last: f64, start: usize, end: usize, bbox: (Point, Point), operand: Option<usize>) -> Edge {
-        Edge { curve, first, last, start, end, paves: Vec::new(), bbox, operand, free: false, container: None, reversed: false, origin: None, source: None, tolerance: 0.0, chords: Default::default() }
+        Edge { curve, first, last, start, end, paves: Vec::new(), bbox, operand, free: false, container: None, reversed: false, origin: None, source: None, tolerance: 0.0, fitted: false, chords: Default::default() }
     }
 
     /// The box of the curve's samples (the start point for a degenerate edge).

@@ -2326,6 +2326,66 @@ mod tests {
         assert!((common - section * (h - 1.0)).abs() < 1e-8 * va, "{common} against {}", section * (h - 1.0));
     }
 
+    /// A prism along z, `height` tall, on a conic (an ellipse or circle in a plane square to
+    /// z) made a periodic rational B-spline, exactly, of three spans, its origin (where the
+    /// prism's side has its seam) moved to knot `origin`, a third of the way round from the
+    /// conic's for each.
+    fn conic_prism(model: &mut Model, conic: crate::geometry::curve::Curve, height: f64, origin: usize) -> Shape {
+        use crate::geometry::curve::Curve;
+        let mut spline = crate::geometry::convert::curve_to_bspline(&conic).unwrap();
+        assert!(crate::geometry::ParametricCurve::is_periodic(&spline));
+        assert_eq!(spline.knots().len(), 4);
+        spline.set_origin(origin);
+        let edge = crate::make::edge_from_curve(model, Curve::BSpline(spline)).unwrap();
+        let wire = crate::make::wire(model, &[edge]).unwrap();
+        let face = crate::make::planar_face(model, wire).unwrap();
+        crate::sweep::extrude(model, face, Vector::new(0.0, 0.0, height)).unwrap().shape
+    }
+
+    /// The ellipse with semi-axes `a` (along x turned by `turn` about z) and `b`, centred on
+    /// the z axis in the plane at height `z`.
+    fn turned_ellipse(a: f64, b: f64, turn: f64, z: f64) -> crate::geometry::curve::Curve {
+        let x = Direction::new(turn.cos(), turn.sin(), 0.0);
+        crate::geometry::curve::Curve::Ellipse(crate::geometry::curve::Ellipse::new(Frame::new(Point::new(0.0, 0.0, z), Direction::Z, x), a, b))
+    }
+
+    /// The area common to the ellipse of semi-axes `a > b` about the origin and the same
+    /// turned by a small `turn`: in polar form the two cross where the angle is `turn / 2`
+    /// plus quarter turns, each inside the other on alternate quarters, and the ellipse's
+    /// sector from angle 0 to φ has the area `ab/2 · ψ(φ)`, `ψ(φ) = atan2(a sin φ, b cos φ)`.
+    fn turned_ellipses_overlap(a: f64, b: f64, turn: f64) -> f64 {
+        let psi = |phi: f64| (a * phi.sin()).atan2(b * phi.cos());
+        let h = 0.5 * turn;
+        a * b * (psi(0.5 * PI + h) - psi(h) + psi(PI - h) - psi(0.5 * PI - h))
+    }
+
+    /// Prisms on an ellipse and on the same turned a little about its centre (a thousandth
+    /// to a ten-thousandth of a turn), the second raised: their sides cross along four lines
+    /// at shallow angles, between which the outlines lie a hair apart (2e-3 to 2e-4 at most).
+    /// Every result is valid, and its volume the outlines' overlap (in closed form) times the
+    /// height they share, or what is left of an operand: the slivers between the outlines
+    /// kept apart, each side cut to its own outline (two outlines between the same points,
+    /// a little apart, are not one edge).
+    #[test]
+    fn prisms_on_an_ellipse_and_the_same_turned_a_little() {
+        let (a, b, h, raised) = (5.0, 3.0, 4.0, 1.5);
+        for turn in [1e-3, 1e-4] {
+            let mut model = Model::new();
+            let first = conic_prism(&mut model, turned_ellipse(a, b, 0.0, 0.0), h, 1);
+            let second = conic_prism(&mut model, turned_ellipse(a, b, turn, raised), h, 1);
+            let whole = PI * a * b * h;
+            let common = turned_ellipses_overlap(a, b, turn) * (h - raised);
+            let expected = [(intersection as fn(&mut Model, Shape, Shape) -> Result<Shape>, first, second, common), (intersection, second, first, common), (union, first, second, 2.0 * whole - common), (difference, first, second, whole - common), (difference, second, first, whole - common)];
+            for (k, (op, x, y, want)) in expected.into_iter().enumerate() {
+                let r = op(&mut model, x, y).unwrap();
+                let report = validity::check(&model, r);
+                assert!(report.problems.is_empty(), "turned {turn}, result {k}: {report:?}");
+                let v = properties::volume(&model, r).mass;
+                assert!((v - want).abs() < 1e-10 * whole, "turned {turn}, result {k}: {v} against {want}");
+            }
+        }
+    }
+
     /// Two arched prisms, one on the other's side surface along all of it (moved along the
     /// direction of extrusion): their curved sides are one surface, met along no line, and
     /// the union is the prism made taller.
