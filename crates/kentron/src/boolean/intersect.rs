@@ -1587,6 +1587,19 @@ impl Section {
         }
     }
 
+    /// A chain's samples ([`ChainSamples`]), found now (where it is cheaper: on a thread of
+    /// their own, the same points as found when first needed).
+    fn sample_chain(&self) {
+        if let Section::Chain(branches, _, samples) = self {
+            let len = self.range().1;
+            let n = (len as usize) * 256;
+            samples.project.get_or_init(|| (0..n).map(|i| self.point(len * i as f64 / n as f64)).collect());
+            let n = branches.len() * 512;
+            let step = len / n as f64;
+            samples.passes.get_or_init(|| (0..n).map(|i| self.point(step * i as f64)).collect());
+        }
+    }
+
     /// The parameter of the point closest to `p`, and the distance.
     fn project(&self, p: Point) -> (f64, f64) {
         match self {
@@ -3634,6 +3647,10 @@ impl Graph {
                 return (Vec::new(), Vec::new());
             }
             let curves = sections(x, y, &crossings);
+            // (Chains' samples, needed for each below: found here, for all pairs at once.)
+            for c in &curves {
+                c.sample_chain();
+            }
             // Each curve's box (from samples, grown by their spacing): curves whose boxes are
             // apart do not cross (nearly tangent surfaces can give many short curves).
             let boxes: Vec<crate::math::BoundingBox> = curves
@@ -4079,9 +4096,11 @@ impl Graph {
         });
         // On a chain of quadric branches (slow to find points on), only points near a
         // polyline of it, sampled once, can be on it.
-        if let Section::Chain(branches, ..) = section {
-            let n = branches.len() * 256;
-            let polyline: Vec<Point> = (0..=n).map(|i| section.point(hi * i as f64 / n as f64)).collect();
+        if let Section::Chain(_, _, samples) = section {
+            // (The points projections start from, and the end.)
+            section.sample_chain();
+            let mut polyline: Vec<Point> = samples.project.get().expect("sampled").clone();
+            polyline.push(section.point(hi));
             let spacing = polyline.windows(2).map(|w| w[0].distance(w[1])).fold(0.0, f64::max) + on_tol();
             candidates.retain(|&v| {
                 let p = self.vertices.points[v];
