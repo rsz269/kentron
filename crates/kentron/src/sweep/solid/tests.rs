@@ -231,3 +231,106 @@ fn a_torus_slid_square_to_its_axis_past_its_hole() {
     assert_close("volume", volume, filled + length * (4.0 * big * small + PI * small * small), 1e-8);
     check(&model, swept);
 }
+
+/// A square bar screwed about a line it points at, rising faster as it turns (no screw
+/// carries it), comes back over where it started: the leading half of its far end, turned
+/// part of a turn, lands inside its start before it has risen past it. The product winds
+/// twice round what is covered twice, and is split there. Against the volume summed column by
+/// column: each line parallel to the axis meets the bar, turned by θ, for θ in intervals (where
+/// its turned point lies in the bar's section), each holding the heights the bar spans risen
+/// from the interval's start to its end; the line holds their union (tools/brute.py `turned`
+/// the same, finer, 8841.952 ± 0.001). The area against its pieces, found apart: the start's
+/// underside and the end's top (2 × 128); the sheets the bar's level edges sweep, whole
+/// (∫∫ √(h′² + x²) dx dθ: 2 × 1523.9247 + 2 × 800.2243); the cylinders r = 4 (60π) and
+/// r = √208 (its corners' ribbons' union, 1135.0351); the sides of the bar at the start and
+/// the end and the sheets its far end's edges sweep, where no place covers them (by the
+/// columns, 75.0907 and 54.0670).
+#[test]
+fn a_bar_screwed_at_a_growing_lead_over_its_own_start() {
+    use std::f64::consts::TAU;
+    let mut model = Model::new();
+    let bar = Cuboid::new(8.0, 16.0, 2.0).with_frame(Frame::from_z(Point::new(4.0, -8.0, -1.0), Direction::Z)).build(&mut model).unwrap();
+    let (from, to) = ((-90f64).to_radians(), 1260f64.to_radians());
+    let rise = |theta: f64| {
+        let s = theta / TAU;
+        6.0 * s + 0.3 * s * s
+    };
+    let place = move |t: f64| {
+        let theta = from + (to - from) * t;
+        Transform::translation(Vector::new(0.0, 0.0, rise(theta))) * Transform::rotation(Axis::new(Point::ORIGIN, Direction::Z), theta)
+    };
+    let swept = solid(&mut model, bar, &RigidMotion::Carried(Carriage(std::sync::Arc::new(place)))).unwrap();
+    check(&model, swept);
+    let (volume, area) = measure(&model, swept);
+    // The angles at which the circle of radius r lies in the section 4 ≤ x ≤ 12, |y| ≤ 8:
+    // between where it crosses the section's sides.
+    let section = [(4.0, -8.0), (12.0, -8.0), (12.0, 8.0), (4.0, 8.0)];
+    let inside = |x: f64, y: f64| (4.0..=12.0).contains(&x) && (-8.0..=8.0).contains(&y);
+    let arcs = |r: f64| -> Vec<(f64, f64)> {
+        let mut cuts = vec![-PI, PI];
+        for k in 0..4 {
+            let ((ax, ay), (bx, by)) = (section[k], section[(k + 1) % 4]);
+            let (dx, dy) = (bx - ax, by - ay);
+            let (a, b, c) = (dx * dx + dy * dy, 2.0 * (ax * dx + ay * dy), ax * ax + ay * ay - r * r);
+            let disc = b * b - 4.0 * a * c;
+            if disc >= 0.0 {
+                for s in [(-b - disc.sqrt()) / (2.0 * a), (-b + disc.sqrt()) / (2.0 * a)] {
+                    if (0.0..=1.0).contains(&s) {
+                        cuts.push((ay + s * dy).atan2(ax + s * dx));
+                    }
+                }
+            }
+        }
+        cuts.sort_by(f64::total_cmp);
+        cuts.windows(2).filter(|w| w[1] > w[0] && inside(r * (0.5 * (w[0] + w[1])).cos(), r * (0.5 * (w[0] + w[1])).sin())).map(|w| (w[0], w[1])).collect()
+    };
+    // Across r, Gauss–Legendre between the radii where the arcs change (r = 4, √80, 12,
+    // √208), on r = a + (b − a)(1 − cos πs)/2, as the arcs' ends move as the square root of
+    // the distance from them; around, the midpoint rule.
+    let (nodes, weights) = (
+        [-0.9815606342467192, -0.9041172563704749, -0.7699026741943047, -0.5873179542866175, -0.3678314989981802, -0.1252334085114689, 0.1252334085114689, 0.3678314989981802, 0.5873179542866175, 0.7699026741943047, 0.9041172563704749, 0.9815606342467192],
+        [0.0471753363865118, 0.1069393259953184, 0.1600783285433462, 0.2031674267230659, 0.2334925365383548, 0.2491470458134028, 0.2491470458134028, 0.2334925365383548, 0.2031674267230659, 0.1600783285433462, 0.1069393259953184, 0.0471753363865118],
+    );
+    let breaks = [4.0, 80f64.sqrt(), 12.0, 208f64.sqrt()];
+    let around = 20000;
+    let mut total = 0.0;
+    for w in breaks.windows(2) {
+        for sub in 0..4 {
+            // (Each stretch in four, twelve points each.)
+            let (a, b) = (w[0], w[1]);
+            for (x, wx) in nodes.iter().zip(weights) {
+                let s = (sub as f64 + 0.5 * (x + 1.0)) / 4.0;
+                let r = a + (b - a) * 0.5 * (1.0 - (PI * s).cos());
+                let dr = (b - a) * 0.5 * PI * (PI * s).sin() * 0.5 * wx / 4.0;
+                let arcs = arcs(r);
+                let mut length = 0.0;
+                for i in 0..around {
+                    let phi = TAU * (i as f64 + 0.5) / around as f64;
+                    let mut held: Vec<(f64, f64)> = Vec::new();
+                    for &(lo, hi) in &arcs {
+                        for k in -2..6 {
+                            let turn = TAU * k as f64;
+                            let (ta, tb) = ((phi - hi + turn).clamp(from, to), (phi - lo + turn).clamp(from, to));
+                            if tb > ta {
+                                held.push((rise(ta) - 1.0, rise(tb) + 1.0));
+                            }
+                        }
+                    }
+                    held.sort_by(|p, q| p.0.total_cmp(&q.0));
+                    let mut end = f64::NEG_INFINITY;
+                    for (lo, hi) in held {
+                        let start = lo.max(end);
+                        if hi > start {
+                            length += hi - start;
+                        }
+                        end = end.max(hi);
+                    }
+                }
+                total += dr * r * length * TAU / around as f64;
+            }
+        }
+    }
+    // (Unsplit, the product's is 9635.86: what is covered twice counted twice.)
+    assert_close("volume", volume, total, 1e-6);
+    assert_close("area", area, 6356.9864, 1e-6);
+}

@@ -456,7 +456,7 @@ impl Face {
 
     /// The outward unit normal at a point of the face.
     pub fn outward_normal(&self, p: Point) -> crate::math::Vector {
-        geom::normal_at_point(&self.surface, p) * self.outward
+        geom::normal_at_point_on(&self.surface, p) * self.outward
     }
 }
 

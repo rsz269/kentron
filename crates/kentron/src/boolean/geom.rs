@@ -724,6 +724,21 @@ pub(super) fn normal_at_point(surface: &Surface, p: Point) -> Vector {
     }
 }
 
+/// [`normal_at_point`] at a point of the surface found by other means (a ray's hit on it):
+/// on a free-form surface whose foot of the point is found off it (on another turn of a
+/// surface winding round, the steps from the nearest of its samples led astray), the foot
+/// from the samples nearest the point too, the nearer taken.
+pub(super) fn normal_at_point_on(surface: &Surface, p: Point) -> Vector {
+    if !freeform(surface) || surface.parameters(p).is_some() {
+        return normal_at_point(surface, p);
+    }
+    let mut foot = foot_on(surface, p);
+    if foot.point.distance(p) > on_tol() {
+        foot = foot_from_nearest_samples(surface, p, foot, 32);
+    }
+    unit_normal(foot.du, foot.dv)
+}
+
 /// The parameters `t > 0` where the ray `origin + t·direction` meets the surface, or
 /// `None` if it grazes it (tangent, ambiguous for counting crossings).
 pub(super) fn ray_hits(surface: &Surface, origin: Point, direction: Vector, bbox: &(Point, Point)) -> Option<Vec<f64>> {
