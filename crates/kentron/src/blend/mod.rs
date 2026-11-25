@@ -6,8 +6,11 @@ mod corner2d;
 mod runover;
 mod sections;
 mod setback;
+mod tight;
 #[cfg(test)]
 mod setback_tests;
+#[cfg(test)]
+mod tight_tests;
 
 pub use corner2d::{chamfer_2d, fillet_2d, fillet_wire_2d, Corner2d};
 pub use sections::{fillet_conic, fillet_conic_edges, fillet_g2, ConicFilletEdge, ConicSection};
@@ -1251,6 +1254,24 @@ fn fillet_solid_edges_as(model: &mut Model, shape: Shape, edges: &[(Shape, f64)]
     let saddled: Vec<usize> = saddle_edges(model, &turns).into_iter().map(|i| root(&mut group, i)).collect();
     for r in roots {
         let members: Vec<usize> = (0..n).filter(|&i| root(&mut group, i) == r).collect();
+        // A chain with rounds tighter than its ball: rolled with the ball as wide as each
+        // round round it, growing back to the radius along the straight edges on from it
+        // (see `tight`), where that leaves the solid as sound as it was. (Not an offset's
+        // rounds: theirs are the points within the offset's distance, as they are.)
+        if let ([first, ..], false) = (&members[..], ROUNDING_AN_OFFSET.with(|f| f.get())) {
+            let radius = classified[*first].1;
+            if members.iter().all(|&i| classified[i].1 == radius) {
+                let chain: Vec<Shape> = members.iter().map(|&i| Shape { placement: Transform::IDENTITY, ..classified[i].0 }).collect();
+                if let Some(laws) = tight::tight_laws(model, local, &chain, radius * unscale) {
+                    let edges: Vec<(Shape, &dyn Fn(f64) -> f64)> = chain.iter().zip(&laws).map(|(&e, law)| (e, law.as_ref())).collect();
+                    let before = fault_kinds(model, local);
+                    if let Ok(rounded) = ball::fillet_network(model, local, &edges).and_then(|r| sound(model, &before, r)) {
+                        local = rounded;
+                        continue;
+                    }
+                }
+            }
+        }
         // A chain of several edges of one radius whose ball would touch faces beyond the
         // edges' own somewhere rolls on onto them, all along the chain (where that can be
         // built and leaves the solid as sound as it was).
@@ -5197,9 +5218,14 @@ mod tests {
     }
 
     /// A 50 x 15 x 15 box with its upright edges rounded (R 2.5), its top outline then rounded
-    /// with a larger ball (R 3.7): over the rounded corners the fillet is a spindle torus,
-    /// whose part past the corner's axis the fillets on either side cut away; the result is
-    /// sound, with a face for each fillet (OCCT's volume, 10812.07, within 0.05%).
+    /// with a larger ball (R 3.7), which no ball of that radius rolls round (see `tight`): over
+    /// the rounded corners the ball is as wide as they are, growing back to 3.7 along the
+    /// straight edges; the result is sound, with a face for each fillet. Its volume lies between
+    /// the union of the balls of radius 3.7 inside the box (Steiner's formula over the top slab:
+    /// the outline moved in by 3.7, sharp, and swelled again) and the box less the ordinary
+    /// fillet along the straight edges outside the stretches the ball grows in (2 × 1.2 from
+    /// each corner). (OCCT's, 10812.07, takes away a spindle torus's piece at each corner and
+    /// leaves the fillets on either side meeting in a crease there.)
     #[test]
     fn a_rounded_outline_rounded_again_with_a_larger_ball() {
         let mut model = Model::new();
@@ -5219,7 +5245,13 @@ mod tests {
         assert!(report.is_valid(), "{report:?}");
         assert_eq!(model.unique_subshapes(result, NodeKind::Face).len(), 18);
         let volume = properties::volume(&model, result).mass;
-        assert!((volume - 10812.07).abs() < 5e-4 * 10812.07, "{volume}");
+        let (rho, r, k) = (2.5f64, 3.7f64, 1.0 - PI / 4.0);
+        let outline = 750.0 - 4.0 * k * rho * rho;
+        let (w, d) = (50.0 - 2.0 * r, 15.0 - 2.0 * r);
+        let least = outline * (15.0 - r) + w * d * r + PI * r * r / 4.0 * 2.0 * (w + d) + 2.0 * PI / 3.0 * r.powi(3);
+        let straight = 2.0 * (50.0 - 2.0 * rho - 4.0 * (r - rho)) + 2.0 * (15.0 - 2.0 * rho - 4.0 * (r - rho));
+        let most = outline * 15.0 - k * r * r * straight;
+        assert!(volume > least && volume < most, "{volume} not within [{least}, {most}]");
     }
 
     /// A spout (a loft through four ellipses along a rising curve, cut off at a height of

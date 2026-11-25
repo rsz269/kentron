@@ -62,6 +62,11 @@ CLI:
         R by default) meet, as at a saddle vertex (three of each): no ball rolls everywhere
         there, and the closing then opening of PRE and its opening then closing differ. A
         fillet's corner lies between them: the voxels of each result outside that band.
+    brute.py holds PRE.brep R.brep... --box=x0,y0,z0,x1,y1,z1 --r=R [--h=H]
+        a fillet whose corners are left to the kernel (as where a round of the edge is
+        tighter than the ball, which no ball of radius R rolls round touching both faces):
+        whatever it does there, every ball of radius R inside PRE stays inside it. The
+        voxels of the opening of PRE each result leaves out, and of each result outside PRE.
 """
 import sys
 
@@ -533,6 +538,33 @@ def _between(argv):
         print(f"{path}: outside the band: material extra {extra.sum() * h**3:.4g}, missing {missing.sum() * h**3:.4g}{where}")
 
 
+def _holds(argv):
+    pre, results = argv[0], [a for a in argv[1:] if not a.startswith("--")]
+    opts = dict(a[2:].split("=", 1) for a in argv if a.startswith("--") and "=" in a)
+    box = np.array([float(x) for x in opts["box"].split(",")])
+    r, h = float(opts["r"]), float(opts.get("h", 0.04))
+    from scipy.ndimage import distance_transform_edt as edt
+
+    lo, hi = box[:3], box[3:]
+    solid = voxelize(load(pre), lo, hi, h)
+    held = opening(solid, r, h)
+    xs, ys, zs = axes(lo, hi, h)
+    X, Y, Z = np.meshgrid(xs, ys, zs, indexing="ij")
+    m = (X > lo[0] + r + h) & (X < hi[0] - r - h) & (Y > lo[1] + r + h) & (Y < hi[1] - r - h) & (Z > lo[2] + r + h) & (Z < hi[2] - r - h)
+    # (Away from the bounds by more than a voxel and a half, where voxelization alone differs.)
+    near = lambda s: np.where(s, edt(s, sampling=h), edt(~s, sampling=h)) < 1.5 * h
+    m &= ~near(held) & ~near(solid)
+    print(f"compared {int(m.sum())} voxels of {h}; between the opening and the solid {((solid & ~held) & m).sum() * h**3:.4g}")
+    for path in results:
+        v = voxelize(load(path), lo, hi, h)
+        missing, extra = (~v & held & m), (v & ~solid & m)
+        where = ""
+        if (extra | missing).any():
+            idx = np.argwhere(extra | missing)
+            where = " around " + ", ".join(f"{a[int(k)]:.3f}" for a, k in zip((xs, ys, zs), idx.mean(axis=0)))
+        print(f"{path}: the opening's material missing {missing.sum() * h**3:.4g}, outside the solid {extra.sum() * h**3:.4g}{where}")
+
+
 def main(argv):
     if not argv or argv[0] in ("-h", "--help"):
         print(__doc__)
@@ -558,6 +590,8 @@ def main(argv):
         _round(rest)
     elif cmd == "between":
         _between(rest)
+    elif cmd == "holds":
+        _holds(rest)
     elif cmd == "wire":
         from OCP.GProp import GProp_GProps
         from OCP.BRepGProp import BRepGProp
