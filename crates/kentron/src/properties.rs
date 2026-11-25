@@ -491,9 +491,31 @@ fn integrate_face_refined(model: &Model, face: Shape, refine: usize, mut sample:
                 };
                 (low(b.u_knots(), b.u_multiplicities(), b.u_degree()), low(b.v_knots(), b.v_multiplicities(), b.v_degree()))
             }
+            // A surface of extrusion or revolution of a B-spline is only as smooth as its
+            // curve across the curve's knots: a trimmed face's Gauss pieces, starting where
+            // its boundary does, would span them.
+            Surface::Extrusion(e) => (curve_knots(e.basis()), Vec::new()),
+            Surface::Revolution(r) => (Vec::new(), curve_knots(r.basis())),
             Surface::Trimmed(t) => kinks(t.basis()),
             Surface::Offset(o) => kinks(o.basis()),
             _ => (Vec::new(), Vec::new()),
+        }
+    }
+    fn curve_knots(curve: &crate::geometry::curve::Curve) -> Vec<f64> {
+        use crate::geometry::curve::Curve;
+        match curve {
+            // (A periodic curve's with their copies a period either way, its first and last
+            // among them: a face may run across them.)
+            Curve::BSpline(b) if b.is_periodic() => {
+                let k = b.knots();
+                let period = k[k.len() - 1] - k[0];
+                let mut all: Vec<f64> = [-period, 0.0, period].iter().flat_map(|&s| k.iter().map(move |&x| x + s)).collect();
+                all.dedup_by(|a, b| (*a - *b).abs() <= 1e-15 * (1.0 + a.abs()));
+                all
+            }
+            Curve::BSpline(b) => b.knots().iter().copied().skip(1).take(b.knots().len().saturating_sub(2)).collect(),
+            Curve::Trimmed(t) => curve_knots(t.basis()),
+            _ => Vec::new(),
         }
     }
     let (u_kinks, v_kinks) = kinks(surface);
@@ -1764,6 +1786,34 @@ pub fn point_set_shape(points: &[Point], tolerance: f64) -> PointSetShape {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A prism on a closed B-spline outline, its sides cut by a plane along its height part
+    /// way along the outline's spans: the two pieces' volumes add up to the prism's (its
+    /// sides' Gauss pieces, starting where the cut does, broken at the outline's knots, where
+    /// the surface is only finitely smooth).
+    #[test]
+    fn pieces_of_a_spline_prism_add_up_to_it() {
+        use crate::geometry::curve::{BSplineCurve, Curve};
+        let mut model = Model::new();
+        let poles: Vec<Point> = (0..7).map(|i| {
+            let a = std::f64::consts::TAU * i as f64 / 7.0;
+            let r = 3.0 + 0.8 * (3.0 * a).cos();
+            Point::new(r * a.cos(), r * a.sin(), 0.0)
+        }).collect();
+        let spline = BSplineCurve::try_new_periodic(poles, (0..=7).map(|k| k as f64 * 0.37).collect(), vec![1; 8], 3).unwrap();
+        let edge = crate::make::edge_from_curve(&mut model, Curve::BSpline(spline)).unwrap();
+        let wire = crate::make::wire(&mut model, &[edge]).unwrap();
+        let face = crate::make::planar_face(&mut model, wire).unwrap();
+        let prism = crate::sweep::extrude(&mut model, face, Vector::new(0.0, 0.0, 5.0)).unwrap().shape;
+        let whole = volume(&model, prism).mass;
+        for x in [-1.3, 0.2, 0.77, 2.1] {
+            let block = crate::primitives::Cuboid::from_corners(Point::new(x, -10.0, -1.0), Point::new(10.0, 10.0, 6.0)).build(&mut model).unwrap();
+            let inside = crate::boolean::intersection(&mut model, prism, block).unwrap();
+            let outside = crate::boolean::difference(&mut model, prism, block).unwrap();
+            let sum = volume(&model, inside).mass + volume(&model, outside).mass;
+            assert!((sum - whole).abs() < 1e-11 * whole, "cut at x = {x}: {sum} against {whole}");
+        }
+    }
     use crate::math::Direction;
     use crate::primitives::Cuboid;
     use std::f64::consts::TAU;
