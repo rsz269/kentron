@@ -20,7 +20,7 @@ pub(super) const LOOSE_ON_TOL: f64 = 1.0e-5;
 
 /// The distance below which a point counts as lying on a curve or surface when
 /// classifying: [`ON_TOL`], or [`LOOSE_ON_TOL`] with the looser tolerances on.
-pub(super) fn on_tol() -> f64 {
+pub(crate) fn on_tol() -> f64 {
     if crate::tolerance::loosened() { LOOSE_ON_TOL } else { ON_TOL }
 }
 

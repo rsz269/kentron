@@ -52,7 +52,9 @@ pub(super) fn sweep(model: &mut Model, solid: Shape, steady: &Steady) -> Result<
 /// one steady motion the body's place at the start alone: one stage after another is the
 /// same motion.) Found at points on a grid of each face's parameters (inside it, 16 a side),
 /// each at 32 places along the whole motion: an overlap thinner than those steps may go
-/// unnoticed.
+/// unnoticed. (Where a point is found outside the body, the ball round it clear of the
+/// body's surfaces is kept, and points carried into one are outside without asking again:
+/// see [`Clearance`].)
 fn passes_back_into(model: &Model, solid: Shape, faces: &[Shape], sides: &[Vec<Side>], stages: &[Steady], junctions: &[Transform]) -> Result<bool> {
     const N: usize = 16;
     const STEPS: usize = 32;
@@ -60,6 +62,7 @@ fn passes_back_into(model: &Model, solid: Shape, faces: &[Shape], sides: &[Vec<S
     let one_motion = !matches!(stages[0], Steady::Carried(_)) && stages.iter().all(|s| same(s, &stages[0]));
     let per_stage = STEPS.div_ceil(n).max(1);
     let classifier = crate::boolean::PointClassifier::new(model, solid)?;
+    let mut clear = Clearance::new(model, solid);
     let starts: Vec<Transform> = junctions.iter().take(n).map(|j| j.inverse()).collect();
     for (k, steady) in stages.iter().enumerate() {
         if one_motion && k > 0 {
@@ -92,7 +95,7 @@ fn passes_back_into(model: &Model, solid: Shape, faces: &[Shape], sides: &[Vec<S
                     let p = surface.point(q.x, q.y).transformed(&face.placement);
                     for place in &places {
                         let carried = p.transformed(place);
-                        if references.iter().any(|r| classifier.locate(carried.transformed(r)) == crate::boolean::PointLocation::Inside) {
+                        if references.iter().any(|r| clear.inside(&classifier, carried.transformed(r))) {
                             return Ok(true);
                         }
                     }
@@ -101,6 +104,131 @@ fn passes_back_into(model: &Model, solid: Shape, faces: &[Shape], sides: &[Vec<S
         }
     }
     Ok(false)
+}
+
+/// Balls of space known to be outside a body, round points found outside it: as far from
+/// each as the body's faces' surfaces are (a bound below that distance), less twice the
+/// distance within which a point counts as on a face. No point of the body's boundary lies
+/// within one, so the whole ball is on the side its centre is on, and a point in it is told
+/// outside, as [`crate::boolean::PointClassifier::locate`] tells it, without casting rays
+/// through the faces. Kept in the cells of a grid an eighth of the body's size a side, each
+/// ball in those its box meets, its radius at most a cell's side.
+struct Clearance {
+    /// The faces' surfaces, placed (or the boxes holding them); `None` where a face's
+    /// surface is one whose distance from a point is not bounded here: then no ball is kept.
+    surfaces: Option<Vec<Bounded>>,
+    /// Points within this of a face's surface may be on it.
+    margin: f64,
+    cell: f64,
+    balls: Vec<(Point, f64)>,
+    grid: HashMap<(i64, i64, i64), Vec<u32>>,
+}
+
+/// A surface whose distance from a point is bounded below: exactly, or by a box holding it.
+enum Bounded {
+    Exact(Surface),
+    Within(crate::math::BoundingBox),
+}
+
+impl Clearance {
+    fn new(model: &Model, solid: Shape) -> Clearance {
+        let surfaces: Option<Vec<Bounded>> = model
+            .unique_subshapes(solid, NodeKind::Face)
+            .into_iter()
+            .map(|face| bounded(&model.surface(face)?.transformed(&face.placement)))
+            .collect();
+        let b = crate::properties::bounding_box(model, solid);
+        let size = (b.max - b.min).length();
+        Clearance { surfaces, margin: 2.0 * crate::boolean::on_tol(), cell: size / 8.0, balls: Vec::new(), grid: HashMap::new() }
+    }
+
+    fn key(&self, p: Point) -> (i64, i64, i64) {
+        ((p.x / self.cell).floor() as i64, (p.y / self.cell).floor() as i64, (p.z / self.cell).floor() as i64)
+    }
+
+    /// Whether `p` is inside the body: `classifier` asked where it is in no ball known
+    /// outside, and a ball kept round it where it is found outside.
+    fn inside(&mut self, classifier: &crate::boolean::PointClassifier, p: Point) -> bool {
+        let located = |p: Point| classifier.locate(p);
+        let Some(surfaces) = &self.surfaces else {
+            return located(p) == crate::boolean::PointLocation::Inside;
+        };
+        // (Cells keyed by integers: none for a point too far out, or a body of no size.)
+        if !(self.cell > 0.0) || ![p.x, p.y, p.z].iter().all(|c| (c / self.cell).abs() < 1e15) {
+            return located(p) == crate::boolean::PointLocation::Inside;
+        }
+        if self.grid.get(&self.key(p)).is_some_and(|near| near.iter().any(|&k| self.balls[k as usize].0.distance(p) < self.balls[k as usize].1)) {
+            return false;
+        }
+        let at = located(p);
+        if at == crate::boolean::PointLocation::Outside {
+            let clear = surfaces.iter().map(|s| s.distance_bound(p)).fold(f64::INFINITY, f64::min);
+            let r = (clear - self.margin).min(self.cell);
+            if r > 0.0 {
+                let k = self.balls.len() as u32;
+                self.balls.push((p, r));
+                let (lo, hi) = (self.key(p - Vector::new(r, r, r)), self.key(p + Vector::new(r, r, r)));
+                for i in lo.0..=hi.0 {
+                    for j in lo.1..=hi.1 {
+                        for l in lo.2..=hi.2 {
+                            self.grid.entry((i, j, l)).or_default().push(k);
+                        }
+                    }
+                }
+            }
+        }
+        at == crate::boolean::PointLocation::Inside
+    }
+}
+
+/// `surface` as [`Bounded`]: a plane, cylinder, cone, sphere or torus exactly, a free-form
+/// surface by the box of its poles; `None` for others.
+fn bounded(surface: &Surface) -> Option<Bounded> {
+    match surface {
+        Surface::Plane(_) | Surface::Cylinder(_) | Surface::Cone(_) | Surface::Sphere(_) | Surface::Torus(_) => Some(Bounded::Exact(surface.clone())),
+        Surface::BSpline(_) | Surface::Bezier(_) => crate::properties::control_box(surface).map(Bounded::Within),
+        Surface::Trimmed(t) => bounded(t.basis()),
+        _ => None,
+    }
+}
+
+impl Bounded {
+    /// A bound below the distance from `p` to the surface (the whole of it, untrimmed):
+    /// exact for a plane, cylinder, sphere and torus; for a cone, the distance to the two
+    /// lines it cuts in the plane through `p` and its axis; for a box, to the box.
+    fn distance_bound(&self, p: Point) -> f64 {
+        // `p` in a frame's coordinates: how far from its z axis, and how far along it.
+        let local = |f: &Frame| {
+            let d = p - f.origin();
+            let z = d.dot(Vector::from(f.z()));
+            ((d - Vector::from(f.z()) * z).length(), z)
+        };
+        match self {
+            Bounded::Within(b) => {
+                let gap = |x: f64, lo: f64, hi: f64| (lo - x).max(x - hi).max(0.0);
+                Vector::new(gap(p.x, b.min.x, b.max.x), gap(p.y, b.min.y, b.max.y), gap(p.z, b.min.z, b.max.z)).length()
+            }
+            Bounded::Exact(Surface::Plane(s)) => (p - s.origin()).dot(Vector::from(s.normal())).abs(),
+            Bounded::Exact(Surface::Cylinder(s)) => (local(s.frame()).0 - s.radius()).abs(),
+            Bounded::Exact(Surface::Sphere(s)) => (p.distance(s.frame().origin()) - s.radius()).abs(),
+            Bounded::Exact(Surface::Torus(s)) => {
+                // (The tube's circles are centred on its centre circle, as near `p` as its
+                // nearest point and as far as its farthest: the tube passes through `p` where
+                // its radius lies between those distances.)
+                let (rho, z) = local(s.frame());
+                let (near, far) = ((rho - s.major_radius()).hypot(z), (rho + s.major_radius()).hypot(z));
+                let r = s.minor_radius();
+                if r < near { near - r } else if r > far { r - far } else { 0.0 }
+            }
+            Bounded::Exact(Surface::Cone(s)) => {
+                let (rho, z) = local(s.frame());
+                let (sin, cos) = s.semi_angle_sin_cos();
+                let off_line = |x: f64| ((x - s.radius()) * cos - z * sin).abs();
+                off_line(rho).min(off_line(-rho))
+            }
+            Bounded::Exact(_) => 0.0,
+        }
+    }
 }
 
 /// A point inside `cell`: just inside a face of it, off a point well inside the face (in its
