@@ -782,16 +782,24 @@ impl Surface {
     /// The points at `u` and each of `vs`, as [`ParametricSurface::point`] gives them (with
     /// one sine and cosine of `u` for a cylinder or cone).
     pub(crate) fn points_along_v<const N: usize>(&self, u: f64, vs: [f64; N]) -> [Point; N] {
+        self.points_along_v_of(u, u.sin_cos(), vs)
+    }
+
+    /// [`Self::points_along_v`], given `u.sin_cos()` as `su`.
+    pub(crate) fn points_along_v_of<const N: usize>(&self, u: f64, su: (f64, f64), vs: [f64; N]) -> [Point; N] {
         match self {
-            Surface::Cylinder(c) => {
-                let su = u.sin_cos();
-                vs.map(|v| c.point_of(su, v))
-            }
-            Surface::Cone(c) => {
-                let su = u.sin_cos();
-                vs.map(|v| c.point_of(su, v))
-            }
+            Surface::Cylinder(c) => vs.map(|v| c.point_of(su, v)),
+            Surface::Cone(c) => vs.map(|v| c.point_of(su, v)),
             _ => vs.map(|v| self.point(u, v)),
+        }
+    }
+
+    /// The point at `u` and `v`, given `u.sin_cos()` as `su` (the same as [`ParametricSurface::point`]).
+    pub(crate) fn point_of_u(&self, u: f64, su: (f64, f64), v: f64) -> Point {
+        match self {
+            Surface::Cylinder(c) => c.point_of(su, v),
+            Surface::Cone(c) => c.point_of(su, v),
+            _ => self.point(u, v),
         }
     }
 }

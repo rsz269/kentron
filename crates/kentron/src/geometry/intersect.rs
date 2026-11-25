@@ -1048,7 +1048,12 @@ impl QuadricCurve {
     /// The coefficients `(a, b, c)` of `a v² + b v + c = 0` for the generator parameter at
     /// `angle` (the quadric along the generator is quadratic in `v`).
     fn height_equation(&self, angle: f64) -> (f64, f64, f64) {
-        let points = self.base.points_along_v(angle, [-1.0, 0.0, 1.0]);
+        self.height_equation_of(angle, angle.sin_cos())
+    }
+
+    /// [`Self::height_equation`], given `angle.sin_cos()` as `su`.
+    fn height_equation_of(&self, angle: f64, su: (f64, f64)) -> (f64, f64, f64) {
+        let points = self.base.points_along_v_of(angle, su, [-1.0, 0.0, 1.0]);
         let [minus, zero, plus] = points.map(|p| quadric_value(&self.quadric, p));
         // A plane is met along a generator linearly: the rounding left in `a` is noise (where
         // the generator runs nearly along the plane it can outweigh `b`).
@@ -1063,7 +1068,12 @@ impl QuadricCurve {
 
     /// The branch's generator parameter at `angle`; `None` where it does not exist.
     fn height(&self, angle: f64) -> Option<f64> {
-        let (a, b, c) = self.height_equation(angle);
+        self.height_of(angle, angle.sin_cos())
+    }
+
+    /// [`Self::height`], given `angle.sin_cos()` as `su`.
+    fn height_of(&self, angle: f64, su: (f64, f64)) -> Option<f64> {
+        let (a, b, c) = self.height_equation_of(angle, su);
         let scale = a.abs().max(b.abs()).max(c.abs()).max(1e-300);
         if a.abs() <= 1e-12 * scale {
             return (b.abs() > 1e-12 * scale).then(|| -c / b);
@@ -1071,7 +1081,7 @@ impl QuadricCurve {
         let disc = b * b - 4.0 * a * c;
         // (Rounding in the discriminant goes with the size of its terms.)
         let within = disc >= -1e-12 * (b * b).max(4.0 * (a * c).abs());
-        if let Some(square) = self.near_double_root(angle, a, b, disc) {
+        if let Some(square) = self.near_double_root(angle, su, a, b, disc) {
             // (Off the quadric by more than the tolerance's square, and by the discriminant
             // too: no root.)
             return (within || square >= -1e-14).then(|| -b / (2.0 * a) + if self.upper { 1.0 } else { -1.0 } * square.max(0.0).sqrt());
@@ -1083,9 +1093,9 @@ impl QuadricCurve {
     /// meet) the discriminant `disc` is mostly rounding: the square of the roots' distance
     /// from the parabola's vertex, from the generator's depth into the quadric there, found
     /// from the other surface's own frame. `None` elsewhere.
-    fn near_double_root(&self, angle: f64, a: f64, b: f64, disc: f64) -> Option<f64> {
+    fn near_double_root(&self, angle: f64, su: (f64, f64), a: f64, b: f64, disc: f64) -> Option<f64> {
         // (Small against `b`, or within the rounding of `c`'s terms where `b` is small too.)
-        let vertex = self.base.point(angle, -b / (2.0 * a));
+        let vertex = self.base.point_of_u(angle, su, -b / (2.0 * a));
         let noise = 4.0 * a.abs() * 1e3 * f64::EPSILON * quadric_size(&self.quadric, vertex);
         if disc.abs() > (1e-4 * b * b).max(noise) {
             return None;
@@ -1102,26 +1112,28 @@ impl QuadricCurve {
 
     /// The point of the branch at `angle`, `None` outside its domain.
     pub fn point(&self, angle: f64) -> Option<Point> {
-        let v = self.height(angle)?;
-        Some(self.base.point(angle, v))
+        let su = angle.sin_cos();
+        let v = self.height_of(angle, su)?;
+        Some(self.base.point_of_u(angle, su, v))
     }
 
     /// The point at `angle` within the domain, robust at its ends (where the two
     /// branches meet and rounding may make the discriminant slightly negative).
     pub fn point_clamped(&self, angle: f64) -> Point {
         let angle = angle.clamp(self.first, self.last);
-        let (a, b, c) = self.height_equation(angle);
+        let su = angle.sin_cos();
+        let (a, b, c) = self.height_equation_of(angle, su);
         let scale = a.abs().max(b.abs()).max(c.abs()).max(1e-300);
         let v = if a.abs() <= 1e-12 * scale {
             -c / b
         } else {
             let disc = b * b - 4.0 * a * c;
-            match self.near_double_root(angle, a, b, disc) {
+            match self.near_double_root(angle, su, a, b, disc) {
                 Some(square) => -b / (2.0 * a) + if self.upper { 1.0 } else { -1.0 } * square.max(0.0).sqrt(),
                 None => self.root(a, b, disc),
             }
         };
-        self.base.point(angle, v)
+        self.base.point_of_u(angle, su, v)
     }
 }
 
