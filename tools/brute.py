@@ -30,6 +30,12 @@ Library (import tools/brute.py, or run it):
 - `inside_both(a, b, centre, radius, n)`: points near `centre` inside both solids (do
   shapes said to touch overlap?).
 - `polytope_volume(halfspaces)`: the exact volume of {x : A x + b <= 0}.
+- `line_volume(inside, solids, box, n, breaks)`: the volume of a solid made of analytic
+  primitives (`Cylinder`, `Torus`, `HalfSpace`, each placed anywhere; no kernel involved):
+  along each line in x the exact length inside (between the points where the lines cross
+  the primitives), by the midpoint rule across y and z. `inside` combines the primitives'
+  inside masks (a function of their list), so booleans of them, overlap and all, are exact
+  along the lines.
 - `wire_offset(wire, distance, n)`: a planar wire's offset with round joins (and ends), as
   the boundary of its points within `distance` (shapely's buffer of the wire sampled `n`
   times an edge): around an open wire, outwards (inwards for a negative distance) from the
@@ -322,6 +328,96 @@ def polytope_volume(halfspaces):
     # The Chebyshev centre, an interior point.
     res = linprog([0, 0, 0, -1], A_ub=np.hstack([hs[:, :3], norms[:, None]]), b_ub=-hs[:, 3], bounds=[(None, None)] * 3 + [(0, None)])
     return ConvexHull(HalfspaceIntersection(hs, res.x[:3]).intersections).volume
+
+
+class Cylinder:
+    """A solid cylinder of `radius` about the line through `centre` along y, from y = y0 to
+    y = y1 (along x or z with `axis`='x' or 'z': y0 and y1 are then x or z)."""
+
+    def __init__(self, centre, radius, y0=-np.inf, y1=np.inf, axis="y"):
+        self.c, self.r, self.y0, self.y1, self.axis = np.asarray(centre, float), radius, min(y0, y1), max(y0, y1), axis
+
+    def _local(self, x, y, z):
+        # (The coordinate along the axis, and those across it from the axis.)
+        dx, dy, dz = x - self.c[0], y - self.c[1], z - self.c[2]
+        return {"y": (y, dx, dz), "x": (x, dy, dz), "z": (z, dx, dy)}[self.axis]
+
+    def inside(self, x, y, z):
+        along, p, q = self._local(x, y, z)
+        return (p * p + q * q < self.r * self.r) & (along > self.y0) & (along < self.y1)
+
+    def x_crossings(self, y, z):
+        if self.axis == "x":
+            return [np.full_like(y, self.y0), np.full_like(y, self.y1)]
+        q = z - self.c[2] if self.axis == "y" else y - self.c[1]
+        w = np.sqrt(np.maximum(self.r * self.r - q * q, 0.0))
+        return [self.c[0] - w, self.c[0] + w]
+
+
+class Torus:
+    """A solid torus about the line through `centre` along z: centre circle of radius
+    `major`, tube radius `minor`."""
+
+    def __init__(self, centre, major, minor):
+        self.c, self.R, self.r = np.asarray(centre, float), major, minor
+
+    def inside(self, x, y, z):
+        rho = np.hypot(x - self.c[0], y - self.c[1])
+        return (rho - self.R) ** 2 + (z - self.c[2]) ** 2 < self.r * self.r
+
+    def x_crossings(self, y, z):
+        dz, dy = z - self.c[2], y - self.c[1]
+        w = np.sqrt(np.maximum(self.r * self.r - dz * dz, 0.0))
+        inner, outer = (np.sqrt(np.maximum((self.R + s * w) ** 2 - dy * dy, 0.0)) for s in (-1, 1))
+        return [self.c[0] + s * d for s in (-1, 1) for d in (inner, outer)]
+
+
+class HalfSpace:
+    """The points p with (p - point) . normal < 0."""
+
+    def __init__(self, point, normal):
+        self.p, self.n = np.asarray(point, float), np.asarray(normal, float)
+
+    def inside(self, x, y, z):
+        return (x - self.p[0]) * self.n[0] + (y - self.p[1]) * self.n[1] + (z - self.p[2]) * self.n[2] < 0
+
+    def x_crossings(self, y, z):
+        if self.n[0] == 0:
+            return []
+        return [self.p[0] - ((y - self.p[1]) * self.n[1] + (z - self.p[2]) * self.n[2]) / self.n[0]]
+
+
+def line_volume(inside, solids, box, n=(2400, 1200), breaks=((), ())):
+    """The volume of the region `inside(masks)` (masks: each of `solids`' inside masks) within
+    `box` ((x0, y0, z0), (x1, y1, z1)): along each line in x the exact length inside, by the
+    midpoint rule across y and z (`n` lines each way, in stretches between `breaks`, the
+    heights in y and in z where the lengths jump: the primitives' flat ends, say)."""
+    (x0, y0, z0), (x1, y1, z1) = box
+
+    def nodes(lo, hi, count, cuts):
+        b = sorted({lo, hi, *(c for c in cuts if lo < c < hi)})
+        out = []
+        for a, c in zip(b, b[1:]):
+            k = max(4, round(count * (c - a) / (hi - lo)))
+            h = (c - a) / k
+            out += [(a + h * (i + 0.5), h) for i in range(k)]
+        return np.array(out)
+
+    ys, zs = nodes(y0, y1, n[0], breaks[0]), nodes(z0, z1, n[1], breaks[1])
+    total = 0.0
+    for y, hy in ys:
+        z, hz = zs[:, 0], zs[:, 1]
+        yy = np.full_like(z, y)
+        cuts = [np.full_like(z, x0), np.full_like(z, x1)]
+        for s in solids:
+            cuts += s.x_crossings(yy, z)
+        xs = np.sort(np.clip(np.array(cuts), x0, x1), axis=0)
+        mid, length = 0.5 * (xs[1:] + xs[:-1]), xs[1:] - xs[:-1]
+        shape = mid.shape
+        flat = (mid.ravel(), np.broadcast_to(yy, shape).ravel(), np.broadcast_to(z, shape).ravel())
+        mask = inside([s.inside(*flat) for s in solids]).reshape(shape)
+        total += float(((length * mask).sum(axis=0) * hz).sum() * hy)
+    return total
 
 
 def wire_points(wire, n=2000):

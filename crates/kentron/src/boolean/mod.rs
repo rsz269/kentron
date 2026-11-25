@@ -3674,4 +3674,77 @@ mod tests {
             check_against_overlap(&mut model, top, outside, (v_top, PI * r * r * length, common), &what("shell's top"));
         }
     }
+
+    /// A tube (a cylinder bored through, along y from `-length` to 0) cut where a torus of its
+    /// bore's radius runs into it, moved by `moved`; and the top of the shell between that
+    /// torus and one of the tube's outside radius, with the tube's cylinder cut from it: a
+    /// compressor's outlet and the half of its volute it joins. Unmoved, the two touch along
+    /// pieces of that cylinder and of the torus, and across the tube's end, and each operand
+    /// has its own copy of the section of the cylinder with the torus.
+    fn outlet_and_volute(model: &mut Model, (big, r, wall, z0, length): (f64, f64, f64, f64, f64), turn: f64, moved: Vector) -> (Shape, Shape) {
+        let bore = r - wall;
+        let frame = Frame::new(Point::new(0.0, 0.0, z0), Direction::Z, Direction::new(f64::cos(turn), f64::sin(turn), 0.0));
+        let torus = |model: &mut Model, tube: f64| crate::primitives::Torus::new(big, tube).with_frame(frame).build(model).unwrap();
+        let outside = cylinder(model, (big, -length, z0), Direction::Y, r, length);
+        let inside = cylinder(model, (big, -length, z0), Direction::Y, bore, length);
+        let pipe = difference(model, outside, inside).unwrap();
+        let t = torus(model, bore);
+        let outlet = difference(model, pipe, t).unwrap();
+        let outlet = crate::modify::transform(model, outlet, &crate::math::Transform::translation(moved), Default::default()).unwrap();
+        let (outer, inner) = (torus(model, r), torus(model, bore));
+        let shell = difference(model, outer, inner).unwrap();
+        let slab = cuboid(model, (-2.0 * big, -2.0 * big, 0.5 * r), (4.0 * big, 4.0 * big, 2.0 * z0));
+        let top = intersection(model, shell, slab).unwrap();
+        let cut = cylinder(model, (big, -length, z0), Direction::Y, r, length);
+        let volute = difference(model, top, cut).unwrap();
+        (outlet, volute)
+    }
+
+    /// The outlet and volute of [`outlet_and_volute`]: each operand's section of the cylinder
+    /// with the torus was fitted only to within a ten-thousandth, the two passed each other
+    /// back and forth, crossing at points found along both, and the faces between them were
+    /// slivers (the union invalid and 33.5 short, the intersection failing, the difference
+    /// invalid). The operands against quadrature of exact lengths along lines (within its
+    /// error, 1e-4 of them); the operations against their volumes. Touching, the torus's seam
+    /// turned, a smaller ring, and the outlet moved 1e-3 and 0.1 away along the tube and
+    /// across it.
+    #[test]
+    fn an_outlet_against_the_volute_it_touches_along_a_torus_and_a_cylinder() {
+        let housing = (12.8, 3.315, 0.3377, 3.7227, 16.885);
+        let still = Vector::new(0.0, 0.0, 0.0);
+        let cases = [
+            (housing, 0.0, still),
+            (housing, 0.4, still),
+            ((8.0, 2.5, 0.4, 2.6, 10.0), 0.0, still),
+            (housing, 0.0, Vector::new(0.0, -1e-3, 0.0)),
+            (housing, 0.0, Vector::new(0.0, -0.1, 0.0)),
+            (housing, 0.0, Vector::new(1e-3, 0.0, 0.0)),
+            (housing, 0.0, Vector::new(0.1, 0.0, 0.0)),
+        ];
+        for (sizes, turn, moved) in cases {
+            let (big, r, wall, z0, length) = sizes;
+            let bore = r - wall;
+            let mut model = Model::new();
+            let (outlet, volute) = outlet_and_volute(&mut model, sizes, turn, moved);
+            let what = format!("ring {big}, turned {turn}, moved {moved:?}");
+            let z_min = 0.5 * r;
+            // (Pappus: the area of each disc above the cut turned about the axis at `big`.)
+            let above = |radius: f64| {
+                let d = z0 - z_min;
+                PI * radius * radius - (radius * radius * (d / radius).acos() - d * (radius * radius - d * d).sqrt())
+            };
+            let expected = [
+                PI * (r * r - bore * bore) * length - ring_tube_overlap(big, z0, (bore, 0.0), f64::NEG_INFINITY, (r, bore), (-length, 0.0)),
+                2.0 * PI * big * (above(r) - above(bore)) - ring_tube_overlap(big, z0, (r, bore), z_min, (r, 0.0), (-length, 0.0)),
+            ];
+            let mut volumes = [0.0; 2];
+            for ((part, expected), volume) in [outlet, volute].into_iter().zip(expected).zip(&mut volumes) {
+                let report = validity::check(&model, part);
+                assert!(report.is_valid(), "{what}: {report:?}");
+                *volume = properties::volume(&model, part).mass;
+                assert!((*volume - expected).abs() <= 1e-4 * expected, "{what}: {volume} against {expected}");
+            }
+            check_against_overlap(&mut model, outlet, volute, (volumes[0], volumes[1], 0.0), &what);
+        }
+    }
 }

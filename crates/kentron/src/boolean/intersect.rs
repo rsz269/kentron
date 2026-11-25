@@ -1870,7 +1870,14 @@ impl Section {
                     // touch: its first fit stands, unless it strays from them clearly (by a
                     // ten-thousandth, as a section of a plane with a torus through a few dozen
                     // samples), then refined as far as the tolerance, the samples doubled to a
-                    // few hundred.)
+                    // few hundred. On two surfaces given exactly (no free-form patches), whose
+                    // points converge, refined until it strays by no more than half the
+                    // classifying distance: another operand made where the same surfaces met
+                    // has its own copy of the section, and the two are to lie within that
+                    // distance of each other where they coincide, as a cylinder and a torus
+                    // touching in a compressor's housing, each operand cut by the other's
+                    // surfaces. Within a ten-thousandth, they passed each other back and forth,
+                    // crossing at points found along both, and the faces between were slivers.)
                     let traced = matches!(self, Section::Sampled(..));
                     let as_curve = Curve::BSpline(curve.clone());
                     let (c0, c1) = (curve.first_parameter(), curve.last_parameter());
@@ -1893,7 +1900,9 @@ impl Section {
                             .map(|w| geom::project_among(&as_curve, c0, c1, Some(&samples), self.point(0.5 * (w[0] + w[1]))).1)
                             .fold(0.0, f64::max),
                     };
-                    if error <= 1e-9 * size || n >= 3072 || (traced && ((n == 48 && error <= 1e-4) || error <= 0.1 * on_tol())) {
+                    let exact = matches!(self, Section::Sampled(_, _, t) if !geom::freeform(&t.base) && !geom::freeform(&t.other));
+                    let close_enough = if exact { error <= 0.5 * on_tol() } else { (n == 48 && error <= 1e-4) || error <= 0.1 * on_tol() };
+                    if error <= 1e-9 * size || n >= 3072 || (traced && close_enough) {
                         break curve;
                     }
                     // (Refined only while that converges, the error at least halving with each
