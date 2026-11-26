@@ -400,9 +400,12 @@ fn fitted_pcurve(graph: &Graph, pieces: &[Piece], face_data: &super::graph::Face
     // (On the surface computed with where it is the output one cut
     // down near the face (the same parameters): carried on past the face,
     // the output one may fold back over it, a foot found on the fold.)
-    let near = match (&face_data.surface, surface) {
-        (crate::geometry::surface::Surface::BSpline(_), crate::geometry::surface::Surface::BSpline(_)) => &face_data.surface,
-        _ => surface,
+    let near = {
+        use crate::geometry::surface::Surface::{BSpline, Bezier, Extrusion};
+        match (&face_data.surface, surface) {
+            (BSpline(_), BSpline(_) | Bezier(_)) | (Extrusion(_), Extrusion(_)) => &face_data.surface,
+            _ => surface,
+        }
     };
     // (Across a seam where the surface closes without a period, its two
     // uses taken to their sides by the bounds' width, as by a period.)

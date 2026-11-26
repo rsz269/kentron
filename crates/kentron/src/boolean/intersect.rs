@@ -769,9 +769,9 @@ fn stretch_ends(curve: &Curve, first: f64, last: f64, surface: &Surface, ts: Vec
 /// or, for a plane square to the direction, planar across it). A plane tilted from square to
 /// the direction takes the projection along it, oblique to the plane (not one nearly along
 /// the direction, which stretches the curve without bound).
-fn plane_across_extrusion(plane: &Surface, extrusion: &Surface) -> Option<Section> {
+fn plane_across_extrusion(plane: &Surface, extruded: &Face) -> Option<Section> {
     use crate::math::{AffineTransform, AffineTransformable, Matrix3, Transformable};
-    let (Surface::Plane(plane), Surface::Extrusion(extrusion)) = (plane, extrusion) else { return None };
+    let (Surface::Plane(plane), Surface::Extrusion(extrusion)) = (plane, &extruded.surface) else { return None };
     let (n, d) = (Vector::from(plane.normal()), Vector::from(extrusion.direction()));
     let square = n.cross(d).length() <= crate::tolerance::ANGULAR.sqrt();
     let slant = n.dot(d);
@@ -780,6 +780,12 @@ fn plane_across_extrusion(plane: &Surface, extrusion: &Surface) -> Option<Sectio
     }
     let basis = extrusion.basis();
     let (first, last) = (basis.first_parameter(), basis.last_parameter());
+    // (Of the face's own curve, over the range of the one computed with where that is cut
+    // down near the face (the same parameters): the section edges are made of it.)
+    let basis = match &extruded.output {
+        Surface::Extrusion(own) if own.direction() == extrusion.direction() => own.basis(),
+        _ => basis,
+    };
     let projection = if square {
         AffineTransform::plane_affinity(plane.origin(), plane.normal(), 0.0)
     } else {
@@ -2100,7 +2106,7 @@ fn size(face: &Face) -> f64 {
 fn sections(fa: &Face, fb: &Face, crossings: &[Point]) -> Vec<Section> {
     let (a, b) = (&fa.surface, &fb.surface);
     let boxes = [&fa.bbox, &fb.bbox];
-    if let Some(section) = plane_across_extrusion(a, b).or_else(|| plane_across_extrusion(b, a)) {
+    if let Some(section) = plane_across_extrusion(a, fb).or_else(|| plane_across_extrusion(b, fa)) {
         return vec![section];
     }
     if let Some(sections) = plane_along_extrusion(fa, fb) {

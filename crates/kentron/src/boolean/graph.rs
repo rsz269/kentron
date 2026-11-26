@@ -1316,16 +1316,16 @@ fn unplaced_surface(model: &Model, id: FaceId) -> Option<Surface> {
     })
 }
 
-/// A B-spline surface reaching far past its face's range (three times as far across, or
-/// more, as the face, widened by a quarter each side), cut down to that widened range (the
-/// same parameters), for the operation to compute with: carried on past the face, it may
-/// fold back over it, and points on the face are found on the fold, or crossings with it.
+/// A free-form surface reaching past its face's range (widened by a quarter each side), cut
+/// down to that widened range (the same parameters), for the operation to compute with:
+/// carried on past the face, it may fold back over it (or pass through the face's points
+/// again, as a patch symmetric about a fold), and points on the face are found on the fold,
+/// or crossings with it. A B-spline or Bézier patch is cut both ways; an extrusion of a
+/// B-spline or Bézier curve along its curve's parameter (as the side of a column under such a
+/// face, swept from its edges).
 fn near_face(surface: Surface, u_range: (f64, f64), v_range: (f64, f64)) -> Surface {
-    use crate::geometry::ParametricSurface;
-    let Surface::BSpline(b) = &surface else { return surface };
-    if b.u_knot_vector().periodic || b.v_knot_vector().periodic {
-        return surface;
-    }
+    use crate::geometry::curve::Curve;
+    use crate::geometry::{ParametricCurve, ParametricSurface};
     let (bu0, bu1, bv0, bv1) = surface.bounds();
     let widened = |(a, c): (f64, f64), (lo, hi): (f64, f64)| {
         let m = 0.25 * (c - a);
@@ -1334,16 +1334,38 @@ fn near_face(surface: Surface, u_range: (f64, f64), v_range: (f64, f64)) -> Surf
     let ((u0, u1), (v0, v1)) = (widened(u_range, (bu0, bu1)), widened(v_range, (bv0, bv1)));
     // (Not for a face of no width either way: nothing would be left.)
     let room = 2.0 * crate::tolerance::PARAMETRIC;
-    if !(u1 - u0 > room && v1 - v0 > room) {
-        return surface;
+    // (Where the surface reaches past the widened range at all.)
+    let past = |(a, c): (f64, f64), (lo, hi): (f64, f64)| c - a > room && (a > lo + room || c < hi - room);
+    let (cut_u, cut_v) = (past((u0, u1), (bu0, bu1)), past((v0, v1), (bv0, bv1)));
+    match &surface {
+        Surface::BSpline(_) | Surface::Bezier(_) => {
+            if !(u1 - u0 > room && v1 - v0 > room) || !(cut_u || cut_v) {
+                return surface;
+            }
+            let mut cut = match &surface {
+                Surface::BSpline(b) => {
+                    if b.u_knot_vector().periodic || b.v_knot_vector().periodic {
+                        return surface;
+                    }
+                    b.clone()
+                }
+                Surface::Bezier(b) => b.to_bspline(),
+                _ => unreachable!(),
+            };
+            cut.segment(u0, u1, v0, v1);
+            Surface::BSpline(cut)
+        }
+        Surface::Extrusion(e) if cut_u => {
+            let mut basis = match e.basis() {
+                Curve::BSpline(c) if !c.is_periodic() => c.clone(),
+                Curve::Bezier(c) => c.to_bspline(),
+                _ => return surface,
+            };
+            basis.segment(u0, u1);
+            Surface::Extrusion(crate::geometry::surface::ExtrusionSurface::new(Curve::BSpline(basis), e.direction()))
+        }
+        _ => surface,
     }
-    let far = |(a, c): (f64, f64), (lo, hi): (f64, f64)| c > a && hi - lo > 3.0 * (c - a);
-    if !(far((u0, u1), (bu0, bu1)) || far((v0, v1), (bv0, bv1))) {
-        return surface;
-    }
-    let mut cut = b.clone();
-    cut.segment(u0, u1, v0, v1);
-    Surface::BSpline(cut)
 }
 
 /// `surface` without the trimming of a trimmed surface (its basis has the same

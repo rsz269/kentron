@@ -1060,6 +1060,24 @@ mod tests {
         assert!((v - 0.541622195).abs() <= 1e-6, "volume {v}");
     }
 
+    /// The column under a face on 0.65 ≤ u ≤ 1 of a patch folding along u = 1/2, symmetric
+    /// about the fold (u and 1 − u give the same point: the face's points lie on the patch
+    /// twice, as do those of the column's sides, extrusions of its edges' curves), met with a
+    /// box standing on z = 0: points on the face, and sections, are found on the face's own
+    /// part of the patch, not on its mirror image. Its volume, ∫∫ z dx dy over the face,
+    /// integrated numerically, is 0.6004271.
+    #[test]
+    fn a_column_under_part_of_a_folded_patch_met_with_a_box() {
+        let mut model = Model::new();
+        let column = column_under_a_partial_patch(&mut model, [1.0, 0.0, -1.0 / 3.0, 0.0, 1.0], 0.65);
+        assert!(validity::check(&model, column).is_valid(), "{:?}", validity::check(&model, column));
+        let floor = Cuboid::from_corners(Point::new(-1.0, -1.0, 0.0), Point::new(2.0, 2.0, 2.0)).build(&mut model).unwrap();
+        let result = intersection(&mut model, column, floor).unwrap();
+        assert!(validity::check(&model, result).is_valid(), "{:?}", validity::check(&model, result));
+        let v = properties::volume(&model, result).mass;
+        assert!((v - 0.6004271).abs() <= 1e-6, "volume {v}");
+    }
+
     #[test]
     fn solids_apart_are_kept_as_they_are() {
         let mut model = Model::new();
