@@ -26,7 +26,9 @@ pub(crate) struct SurfaceShared {
     patches: OnceLock<Option<Patches>>,
     pub(crate) turning: OnceLock<((f64, bool), (f64, bool))>,
     pub(crate) close_samples: OnceLock<(usize, usize)>,
-    pub(crate) balanced_samples: OnceLock<(usize, usize)>,
+    /// A grid of points balanced across a patch whose sample grid's cells are much longer one
+    /// way than the other, with that longer side (see `boolean::geom`); `None` for others.
+    pub(crate) balanced_grid: OnceLock<Option<(Vec<(f64, f64, Point)>, f64)>>,
 }
 
 impl PartialEq for PatchCache {

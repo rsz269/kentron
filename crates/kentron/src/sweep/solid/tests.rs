@@ -461,6 +461,17 @@ fn a_bar_screwed_along_a_fine_thread() {
     assert_close("swept volume", measure(&model, swept).0, 1666.14910, 1e-6);
     let cut = crate::boolean::difference(&mut model, rod, swept).unwrap();
     assert_close("cut volume", measure(&model, cut).0, 1540.64197, 1e-6);
+
+    // A quarter turn, met by a disc of the rod 0.3 thick at its foot: the plane z = 0 meets
+    // the sheet the bar's top edge sweeps along one of its iso-lines, near where its rulings
+    // turn (the part the disc and the sweep share against Monte Carlo, 400 000 points:
+    // 0.5917, within 0.3%).
+    let mut model = Model::new();
+    let disc = Cylinder::new(5.0, 0.3).build(&mut model).unwrap();
+    let tool = bar(&mut model);
+    let swept = solid(&mut model, tool, &screw(0.25)).unwrap();
+    let common = crate::boolean::intersection(&mut model, disc, swept).unwrap();
+    assert_close("common volume", measure(&model, common).0, 0.5917, 1e-2);
 }
 
 /// What a turn about the z axis by `angle` sweeps `inside` through, summed circle by circle

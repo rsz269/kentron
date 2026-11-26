@@ -226,6 +226,25 @@ pub(super) fn foot_on(surface: &Surface, p: Point) -> crate::geometry::extrema::
         (best, (grid.samples[best.1].0, grid.samples[best.1].1))
     });
     let mut foot = crate::geometry::extrema::newton_foot_from_sample(p, surface, start);
+    // (A patch sampled in cells much longer one way than the other, as a ruled strip whose
+    // rulings turn: the nearest sample may lie far from the foot, and the steps from it settle
+    // on another, farther one (off a point lying on the surface). Where the foot found is
+    // nearer than such a cell is long, from the nearest of a grid as close both ways too:
+    // the nearer foot.)
+    if foot.point.distance(p) > on_tol() {
+        if let Some((grid, cell)) = balanced_grid(surface) {
+            let d = foot.point.distance(p);
+            if d < *cell {
+                let nearest = grid.iter().map(|&(u, v, q)| (q.distance(p), (u, v))).fold((f64::INFINITY, start), |a, b| if b.0 < a.0 { b } else { a });
+                if nearest.0 < d {
+                    let second = crate::geometry::extrema::newton_foot_from_sample(p, surface, nearest.1);
+                    if second.point.distance(p) < d {
+                        foot = second;
+                    }
+                }
+            }
+        }
+    }
     // (Off the surface at a collapsed row, a pole or an apex where a free-form surface's
     // every u (or v) is one point, or from a sample there: the steps may stay at it, the
     // distance not changing along the row, or run into it from the side away from the foot.
@@ -619,8 +638,7 @@ fn grid_steps(surface: &Surface) -> (usize, usize) {
         Surface::BSpline(b) => {
             let (wu, wv) = crate::geometry::extrema::windings_from(surface, 2.0);
             let (cu, cv) = crate::geometry::extrema::close_samples(surface);
-            let (bu, bv) = *b.shared().balanced_samples.get_or_init(|| balanced(surface, (by(b.u_knots().len() - 1, b.u_degree()), by(b.v_knots().len() - 1, b.v_degree()))));
-            (bu.max(wu).max(cu), bv.max(wv).max(cv))
+            (by(b.u_knots().len() - 1, b.u_degree()).max(wu).max(cu), by(b.v_knots().len() - 1, b.v_degree()).max(wv).max(cv))
         }
         Surface::Bezier(b) => (by(1, b.u_degree()), by(1, b.v_degree())),
         _ => (32, 32),
@@ -628,15 +646,40 @@ fn grid_steps(surface: &Surface) -> (usize, usize) {
 }
 
 
-/// Steps `(nu, nv)` for a surface's sample grid, the coarser way made finer (up to 32) where
-/// its cells are much longer that way than across: a patch with few spans one way, as a
-/// ruled strip whose rulings turn (a straight edge carried along a screw), is sampled across
-/// its rulings as closely as along them, so that the sample nearest a point lies near its
-/// foot (from a far sample the steps may settle on another, farther foot).
-fn balanced(surface: &Surface, (nu, nv): (usize, usize)) -> (usize, usize) {
+/// For a B-spline patch whose sample grid ([`grid_steps`]) has cells more than twice as long
+/// one way as the other, with several spans the other way (a patch with few spans one way, as
+/// a ruled strip whose rulings turn: a straight edge carried along a screw), a grid as close
+/// that way as the other (up to 32), and the longer side of the sample grid's cells; `None`
+/// for others. Kept with the surface.
+fn balanced_grid(surface: &Surface) -> Option<&(Vec<(f64, f64, Point)>, f64)> {
+    let Surface::BSpline(b) = surface else { return None };
+    b.shared()
+        .balanced_grid
+        .get_or_init(|| {
+            let (nu, nv) = grid_steps(surface);
+            let ((bu, bv), cell) = balanced(surface, (nu, nv))?;
+            // (Only along a patch of several spans the other way, which its rulings turn
+            // along: a single patch (a bilinear one, as a loft between two segments) may fold
+            // over itself, and a foot found on the far fold is not the one its sections
+            // follow.)
+            let spans = |knots: &[f64]| knots.len().saturating_sub(1);
+            if (bu != nu && spans(b.v_knots()) < 2) || (bv != nv && spans(b.u_knots()) < 2) {
+                return None;
+            }
+            let (u0, u1, v0, v1) = surface.bounds();
+            let grid = (0..=bu).flat_map(|i| (0..=bv).map(move |j| (u0 + (u1 - u0) * i as f64 / bu as f64, v0 + (v1 - v0) * j as f64 / bv as f64))).map(|(u, v)| (u, v, surface.point(u, v))).collect();
+            Some((grid, cell))
+        })
+        .as_ref()
+}
+
+/// Steps `(nu, nv)` with the coarser way made finer (up to 32) where the cells are more than
+/// twice as long that way as across, and the longer side of the cells before; `None` where
+/// they are not.
+fn balanced(surface: &Surface, (nu, nv): (usize, usize)) -> Option<((usize, usize), f64)> {
     let (u0, u1, v0, v1) = surface.bounds();
     if ![u0, u1, v0, v1].iter().all(|x| x.is_finite()) {
-        return (nu, nv);
+        return None;
     }
     const N: usize = 16;
     // The longest of three iso-lines each way.
@@ -654,11 +697,12 @@ fn balanced(surface: &Surface, (nu, nv): (usize, usize)) -> (usize, usize) {
     };
     let (lu, lv) = (length(true), length(false));
     if !(lu > 0.0 && lv > 0.0) {
-        return (nu, nv);
+        return None;
     }
     let (cell_u, cell_v) = (lu / nu as f64, lv / nv as f64);
     let finer = |n: usize, cell: f64, other: f64, length: f64| if cell > 2.0 * other { ((length / other).ceil() as usize).clamp(n, 32.max(n)) } else { n };
-    (finer(nu, cell_u, cell_v, lu), finer(nv, cell_v, cell_u, lv))
+    let steps = (finer(nu, cell_u, cell_v, lu), finer(nv, cell_v, cell_u, lv));
+    (steps != (nu, nv)).then_some((steps, cell_u.max(cell_v)))
 }
 
 /// The samples of a surface winding round twice or more, its turns close together
