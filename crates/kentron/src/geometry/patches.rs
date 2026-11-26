@@ -151,8 +151,10 @@ pub(super) struct Patches {
     u_degree: usize,
     v_degree: usize,
     /// Patch `(a, b)` holds `(u_degree + 1) × (v_degree + 1)` points from
-    /// `(a · v_patches + b) · (u_degree + 1) · (v_degree + 1)`, row by row along u.
-    points: Vec<[f64; 4]>,
+    /// `(a · v_patches + b) · (u_degree + 1) · (v_degree + 1)`, row by row along u: each
+    /// `(w P, w)`, four numbers, on a rational surface, else `P`, three (a long sweep's
+    /// surfaces hold millions of them).
+    points: Vec<f64>,
     /// Weights other than 1 (else the sums skip them and the quotient rule).
     rational: bool,
     /// The patches along u and v found last, tried first.
@@ -202,19 +204,32 @@ impl Patches {
         }
         let grid = split(&v_flat, v.degree, nv, &columns, 4 * r);
         // Patch by patch: row a (pu + 1) + i, column b (pv + 1) + j at (column r + row) 4.
-        let mut points = Vec::with_capacity(grid.len() / 4);
-        for a in 0..npu {
-            for b in 0..npv {
-                for i in 0..=pu {
-                    for j in 0..=pv {
-                        let at = ((b * (pv + 1) + j) * r + a * (pu + 1) + i) * 4;
-                        points.push([grid[at], grid[at + 1], grid[at + 2], grid[at + 3]]);
+        let at = |a: usize, b: usize, i: usize, j: usize| ((b * (pv + 1) + j) * r + a * (pu + 1) + i) * 4;
+        let each = |f: &mut dyn FnMut(usize)| {
+            for a in 0..npu {
+                for b in 0..npv {
+                    for i in 0..=pu {
+                        for j in 0..=pv {
+                            f(at(a, b, i, j));
+                        }
                     }
                 }
             }
-        }
-        let rational = points.iter().any(|q| q[3] != 1.0);
+        };
+        let mut rational = false;
+        each(&mut |k| rational |= grid[k + 3] != 1.0);
+        let lanes = if rational { 4 } else { 3 };
+        let mut points = Vec::with_capacity(npu * npv * (pu + 1) * (pv + 1) * lanes);
+        each(&mut |k| points.extend_from_slice(&grid[k..k + lanes]));
         Some(Patches { u_breaks, v_breaks, u_degree: pu, v_degree: pv, points, rational, hints: Hint::default() })
+    }
+
+    /// Patch `k`'s points, of `C` numbers each (`C` 4 on a rational surface, else 3).
+    #[inline(always)]
+    fn patch<const C: usize>(&self, k: usize) -> &[[f64; C]] {
+        debug_assert_eq!(C, if self.rational { 4 } else { 3 });
+        let n = (self.u_degree + 1) * (self.v_degree + 1);
+        self.points[k * n * C..][..n * C].as_chunks::<C>().0
     }
 
     /// The parameter bounds `(u0, u1, v0, v1)`.
@@ -245,16 +260,19 @@ impl Patches {
         if !(u0..=u1).contains(&u) || !(v0..=v1).contains(&v) {
             return None;
         }
-        match self.u_degree.max(self.v_degree) {
-            0..=3 => Some(self.sums3::<4>(u, v)),
-            4..=8 => Some(self.sums3::<9>(u, v)),
-            9..=25 => Some(self.sums3::<26>(u, v)),
+        match (self.u_degree.max(self.v_degree), self.rational) {
+            (0..=3, false) => Some(self.sums3::<4, 3>(u, v)),
+            (0..=3, true) => Some(self.sums3::<4, 4>(u, v)),
+            (4..=8, false) => Some(self.sums3::<9, 3>(u, v)),
+            (4..=8, true) => Some(self.sums3::<9, 4>(u, v)),
+            (9..=25, false) => Some(self.sums3::<26, 3>(u, v)),
+            (9..=25, true) => Some(self.sums3::<26, 4>(u, v)),
             _ => None,
         }
     }
 
     /// [`Self::evaluate3`] with arrays of `N` (more than the degrees).
-    fn sums3<const N: usize>(&self, u: f64, v: f64) -> [[[f64; 3]; 4]; 4] {
+    fn sums3<const N: usize, const C: usize>(&self, u: f64, v: f64) -> [[[f64; 3]; 4]; 4] {
         const ORDER: usize = 3;
         let (pu, pv) = (self.u_degree, self.v_degree);
         let (a, s, ku) = locate(&self.u_breaks, u, &self.hints.0[0]);
@@ -262,7 +280,7 @@ impl Patches {
         let bu = bernstein3::<N>(pu, s, ku);
         let bv = bernstein3::<N>(pv, t, kv);
         let npv = self.v_breaks.len() - 1;
-        let patch = &self.points[(a * npv + b) * (pu + 1) * (pv + 1)..][..(pu + 1) * (pv + 1)];
+        let patch = self.patch::<C>(a * npv + b);
         // Homogeneous sums h[k][l] = Σ B_i^(k) B_j^(l) (w P, w) for k + l <= 3, along v first.
         let mut h = [[[0.0f64; 4]; 4]; 4];
         for i in 0..=pu {
@@ -272,7 +290,7 @@ impl Patches {
                 let q = row[j];
                 for l in 0..=ORDER {
                     let f = bv[l][j];
-                    for c in 0..4 {
+                    for c in 0..C {
                         r[l][c] += f * q[c];
                     }
                 }
@@ -280,7 +298,7 @@ impl Patches {
             for k in 0..=ORDER {
                 let f = bu[k][i];
                 for l in 0..=ORDER - k {
-                    for c in 0..4 {
+                    for c in 0..C {
                         h[k][l][c] += f * r[l][c];
                     }
                 }
@@ -389,7 +407,7 @@ impl Patches {
             let (a, s, ku) = locate(&self.u_breaks, u, &self.hints.0[0]);
             if a != summed {
                 summed = a;
-                let patch = &self.points[(a * npv + b) * (pu + 1) * (pv + 1)..][..(pu + 1) * (pv + 1)];
+                let patch = self.patch::<C>(a * npv + b);
                 for i in 0..NU {
                     if i > pu {
                         break;
@@ -479,7 +497,7 @@ impl Patches {
         let bu = bernstein::<NU, ORDER>(pu, s, ku);
         let bv = bernstein::<NV, ORDER>(pv, t, kv);
         let npv = self.v_breaks.len() - 1;
-        let patch = &self.points[(a * npv + b) * (pu + 1) * (pv + 1)..][..(pu + 1) * (pv + 1)];
+        let patch = self.patch::<C>(a * npv + b);
         // Homogeneous sums h[k][l] = Σ B_i^(k) B_j^(l) (w P, w) for k + l <= ORDER.
         // (Every loop over a range known to the compiler, cut short at the degree: with the
         // exact sizes they unroll, the sums kept in registers, in the same order.)
