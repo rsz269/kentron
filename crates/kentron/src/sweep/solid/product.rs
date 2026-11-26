@@ -451,7 +451,13 @@ fn staged_sweep(model: &mut Model, solid: Shape, stages: &[Steady], junctions: V
     let faces = model.unique_subshapes(solid, NodeKind::Face);
     let mut sides: Vec<Vec<Side>> = Vec::with_capacity(stages.len());
     let mut folds = 0;
-    for steady in stages {
+    for (k, steady) in stages.iter().enumerate() {
+        // (A stage the same motion as the one before: the same sides, and its folds already
+        // split, none having been found.)
+        if k > 0 && same(steady, &stages[k - 1]) && folds == 0 {
+            sides.push(sides[k - 1].clone());
+            continue;
+        }
         let speed = speed_bound(model, solid, steady);
         let s: Vec<Side> = faces.iter().map(|&f| side(model, f, steady, speed)).collect::<Result<_>>()?;
         folds += split_folds(model, &faces, &s, steady)?;
