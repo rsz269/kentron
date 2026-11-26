@@ -20,7 +20,11 @@
 //! products of fixed curves and the motion: a slide sweeps a curve into the B-spline surface
 //! of its extrusion, a turn into its surface of revolution (both exact), a screw into the
 //! B-spline surface whose columns follow its poles' helices (as [`super::screw_extrude`] sweeps
-//! an edge, within about 1e-10 of the body's size), in stages of at most a quarter turn. Edges
+//! an edge, within about 1e-10 of the body's size), in stages of at most a quarter turn (a
+//! straight edge's strip kept with the segment and screw it is swept from, and the screw's
+//! paths with the screw, so that the booleans resolving and uniting such sweeps find feet on
+//! the strips, and their sections with one another and with cylinders about the axis, from
+//! the helicoids and helices they are: see `geometry::screw_strip`). Edges
 //! are swept as the exact B-splines they convert to (a circle's arcs rational), their parameters
 //! mapped; characteristic curves that are lines or arcs (a cylinder's or cone's lines, a
 //! torus's circles) are cut exactly, others fitted within 1e-9 of the body's size.
@@ -89,6 +93,8 @@ mod carried;
 mod contour;
 mod exact;
 mod product;
+
+pub(crate) use product::helix_arc;
 
 use std::f64::consts::TAU;
 

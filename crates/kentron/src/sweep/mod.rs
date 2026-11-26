@@ -22,6 +22,7 @@ mod pipe;
 mod section;
 mod solid;
 pub use solid::{solid, Carriage, RigidMotion};
+pub(crate) use solid::helix_arc;
 pub use middle::middle_path;
 mod pipe_shell;
 // (For the guide-plane trihedron, not wired in yet.)

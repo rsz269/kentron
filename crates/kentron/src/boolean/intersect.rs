@@ -177,6 +177,7 @@ fn surface_contact(curve: &Curve, first: f64, last: f64, surface: &Surface, tole
         .or_else(|| coaxial_contact(curve, first, last, surface))
         .or_else(|| extrusion_contact(curve, first, last, surface))
         .or_else(|| line_quadric_contact(curve, first, last, surface))
+        .or_else(|| helix_contact(curve, first, last, surface))
     {
         return contact;
     }
@@ -505,6 +506,114 @@ fn coaxial_contact(curve: &Curve, first: f64, last: f64, surface: &Surface) -> O
     }
     let g = geom::signed_distance(surface, curve.point(first));
     Some(if g.abs() <= on_tol() && geom::signed_distance(surface, curve.point(0.5 * (first + last))).abs() <= on_tol() { Contact::On } else { Contact::At(Vec::new()) })
+}
+
+/// [`surface_contact`] in closed form for a helix of a screw (a curve kept with the screw, its
+/// samples all on one helix: as far from the axis, at one phase, see [`screw_sections`]) against a strip
+/// of the same screw, or a cylinder about its axis: made of such helices, the surface holds
+/// the curve's or keeps clear of it. Clear where the curve's helix is none of the surface's
+/// (no point of the strip's segment, or of the cylinder, on it); on it where it is one and
+/// the curve runs within the strip's turns. `None` otherwise, or where that is unsure.
+fn helix_contact(curve: &Curve, first: f64, last: f64, surface: &Surface) -> Option<Contact> {
+    use crate::geometry::ParametricSurface;
+    let Curve::BSpline(b) = curve else { return None };
+    let helix = b.helix()?;
+    let (axis, k, strip) = match surface {
+        Surface::Cylinder(c) => (crate::math::Axis::new(c.frame().origin(), c.frame().z()), None, None),
+        other => {
+            let strip = screw_strip_of(other)?;
+            (strip.axis, Some(strip.rise_per_radian()), Some(strip))
+        }
+    };
+    let reach = b.poles().iter().map(|p| (*p - Point::ORIGIN).length()).fold(0.0, f64::max);
+    if !helix.same_screw(axis, k.unwrap_or(helix.rise_per_radian), reach) {
+        return None;
+    }
+    let (o, z) = (axis.origin, Vector::from(axis.direction));
+    let perp = |v: Vector| v - z * v.dot(z);
+    const N: usize = 16;
+    let points: Vec<Point> = (0..=N).map(|i| curve.point(first + (last - first) * i as f64 / N as f64)).collect();
+    let radii: Vec<f64> = points.iter().map(|&p| perp(p - o).length()).collect();
+    let r = radii[0];
+    let scale = 1.0 + r + (points[0] - Point::ORIGIN).length();
+    let tight = 1e-9 * scale;
+    if radii.iter().any(|&x| (x - r).abs() > tight) || !(r > 1e3 * tight) {
+        return None;
+    }
+    let near = on_tol();
+    match (k, strip) {
+        // (About a cylinder's axis: any curve as far from it all along, a helix or not.)
+        (None, _) => {
+            let Surface::Cylinder(c) = surface else { return None };
+            let gap = (r - c.radius()).abs();
+            if gap <= near {
+                Some(Contact::On)
+            } else if gap > 2.0 * near {
+                Some(Contact::At(Vec::new()))
+            } else {
+                None
+            }
+        }
+        (Some(k), Some(strip)) => {
+            if !(k.is_finite() && k != 0.0) {
+                return None;
+            }
+            // One phase all along (the angle about the axis less the turn the height rises):
+            // a helix of the screw.
+            let e1 = Vector::from(Direction::from_vector(perp(if z.x.abs() < 0.9 { Vector::new(1.0, 0.0, 0.0) } else { Vector::new(0.0, 1.0, 0.0) })));
+            let e2 = z.cross(e1);
+            let phase = |p: Point| {
+                let q = p - o;
+                q.dot(e2).atan2(q.dot(e1)) - q.dot(z) / k
+            };
+            let wrap = |x: f64| x - TAU * (x / TAU).round();
+            let phi = phase(points[0]);
+            if points.iter().any(|&p| wrap(phase(p) - phi).abs() * r > tight) {
+                return None;
+            }
+            // The strip's segment's points as far from the axis (two at most), and how far
+            // round their helices lie from the curve's.
+            let (u0, u1, v0, v1) = surface.bounds();
+            let (sa, sb) = ((u0 - strip.u0) / (strip.u1 - strip.u0), (u1 - strip.u0) / (strip.u1 - strip.u0));
+            let (sa, sb) = (sa.min(sb), sa.max(sb));
+            let d = strip.end - strip.start;
+            let (p0, q) = (perp(strip.start - o), perp(d));
+            let (qq, pq, pp) = (q.dot(q), p0.dot(q), p0.dot(p0));
+            if !(qq > 0.0) {
+                return None;
+            }
+            let disc = pq * pq - qq * (pp - r * r);
+            let mut on = None;
+            if disc >= 0.0 {
+                for t in [(-pq - disc.sqrt()) / qq, (-pq + disc.sqrt()) / qq] {
+                    if t < sa - 1e-9 || t > sb + 1e-9 {
+                        continue;
+                    }
+                    let x = strip.start + d * t;
+                    let gap = wrap(phase(x) - phi).abs() * r;
+                    if gap <= near {
+                        on = Some(x);
+                    } else if gap <= 2.0 * near {
+                        return None;
+                    }
+                }
+            }
+            // (Near an end of the segment, unsure.)
+            if disc.abs() <= 1e-12 * pq * pq {
+                return None;
+            }
+            let Some(x) = on else { return Some(Contact::At(Vec::new())) };
+            // The curve's turns from x along their helix, within the strip's.
+            let turn_of = |p: Point| (p - x).dot(z) / k;
+            let (c0, c1) = (turn_of(points[0]), turn_of(points[N]));
+            let (t0, t1) = (strip.turn * (v0 - strip.v0), strip.turn * (v1 - strip.v0));
+            let sign = Vector::from(strip.axis.direction).dot(z).signum();
+            let (t0, t1) = (sign * t0, sign * t1);
+            let margin = near / r;
+            (c0.min(c1) >= t0.min(t1) - margin && c0.max(c1) <= t0.max(t1) + margin).then_some(Contact::On)
+        }
+        _ => None,
+    }
 }
 
 /// [`surface_contact`] in closed form against a surface of extrusion, for a line along its
@@ -2105,6 +2214,9 @@ fn size(face: &Face) -> f64 {
 
 fn sections(fa: &Face, fb: &Face, crossings: &[Point]) -> Vec<Section> {
     let (a, b) = (&fa.surface, &fb.surface);
+    if let Some(sections) = screw_sections(fa, fb).or_else(|| screw_sections(fb, fa)) {
+        return sections;
+    }
     let boxes = [&fa.bbox, &fb.bbox];
     if let Some(section) = plane_across_extrusion(a, fb).or_else(|| plane_across_extrusion(b, fa)) {
         return vec![section];
@@ -2410,6 +2522,204 @@ fn parallels(base: &Face, other: &Face) -> Vec<Section> {
             })
         })
         .collect()
+}
+
+/// The strip a B-spline surface is kept with, where it is one a segment sweeps along a screw.
+fn screw_strip_of(surface: &Surface) -> Option<&crate::geometry::screw_strip::ScrewStrip> {
+    match surface {
+        Surface::BSpline(b) => b.screw_strip(),
+        _ => None,
+    }
+}
+
+/// The sections where a strip a segment sweeps along a screw (`fa`'s surface, see
+/// [`crate::geometry::screw_strip`]) meets another such strip of the same screw, or a
+/// cylinder about the screw's axis. Both are made of the screw's helices (each point's path
+/// as the screw turns it), so they meet along whole helices: those through the points where
+/// the first strip's segment meets the other's helices (on the cylinder, where it is the
+/// cylinder's radius from the axis; on a strip, where its distance from the axis is the other
+/// segment's at some point, and the two points' helices are one, the turn between them what
+/// their heights' difference rises), each over the turns both surfaces span there. Found
+/// along the segment, where the turn between the helices changes sign (bisected); `None`
+/// (for the general search) for other surfaces, and where the surfaces may meet otherwise:
+/// along a stretch of a helix family (one surface lying on the other) or touching (the turn
+/// between the helices coming near nought without changing sign).
+fn screw_sections(fa: &Face, fb: &Face) -> Option<Vec<Section>> {
+    use crate::geometry::ParametricSurface;
+    let strip = screw_strip_of(&fa.surface)?;
+    let axis = strip.axis;
+    let (o, z) = (axis.origin, Vector::from(axis.direction));
+    let k = strip.rise_per_radian();
+    if !(k.is_finite() && k != 0.0) {
+        return None;
+    }
+    let scale = 1.0 + (strip.start - o).length() + (strip.end - o).length();
+    let on_axis_line = |p: Point, d: Vector| {
+        let r = p - o;
+        d.cross(z).length() <= 1e-12 && (r - z * r.dot(z)).length() <= 1e-9 * scale
+    };
+    let perp = |v: Vector| v - z * v.dot(z);
+    // The strip's own range: the segment's stretch and the turns, as the surface's bounds.
+    let range = |s: &crate::geometry::screw_strip::ScrewStrip, surface: &Surface| {
+        let (u0, u1, v0, v1) = surface.bounds();
+        let (a, b) = ((u0 - s.u0) / (s.u1 - s.u0), (u1 - s.u0) / (s.u1 - s.u0));
+        let (ta, tb) = (s.turn * (v0 - s.v0), s.turn * (v1 - s.v0));
+        ((a.min(b), a.max(b)), (ta.min(tb), ta.max(tb)))
+    };
+    let ((sa0, sa1), turns_a) = range(strip, &fa.surface);
+    let da = strip.end - strip.start;
+    let at_a = |s: f64| strip.start + da * s;
+    // The phase of a point: its angle about the axis less the turn its height rises, mod 2π
+    // (one for all points of a helix), in a frame square to the axis.
+    let e1 = Vector::from(crate::math::Direction::from_vector(perp(if z.x.abs() < 0.9 { Vector::new(1.0, 0.0, 0.0) } else { Vector::new(0.0, 1.0, 0.0) })));
+    let e2 = z.cross(e1);
+    let phase = |p: Point| {
+        let r = p - o;
+        r.dot(e2).atan2(r.dot(e1)) - r.dot(z) / k
+    };
+    let wrap = |x: f64| x - TAU * (x / TAU).round();
+    // A helix through `p` (on `fa`'s strip), over the turns (relative to p, about the axis's
+    // direction) both surfaces span.
+    let helix = |p: Point, (lo, hi): (f64, f64)| -> Option<Section> {
+        if !(hi - lo > 1e-9) {
+            return None;
+        }
+        let from = {
+            use crate::math::Transformable;
+            p.transformed(&(crate::math::Transform::translation(z * (k * lo)) * crate::math::Transform::rotation(axis, lo)))
+        };
+        let curve = crate::sweep::helix_arc(axis, k, from, hi - lo).ok()?;
+        Some(Section::Open(Curve::BSpline(curve), 0.0, 1.0))
+    };
+    let samples = 256;
+    let step = (sa1 - sa0) / samples as f64;
+    let bisect = |g: &dyn Fn(f64) -> Option<f64>, mut lo: f64, mut hi: f64| -> Option<f64> {
+        let mut glo = g(lo)?;
+        for _ in 0..80 {
+            let mid = 0.5 * (lo + hi);
+            let gm = g(mid)?;
+            if (gm >= 0.0) == (glo >= 0.0) {
+                (lo, glo) = (mid, gm);
+            } else {
+                hi = mid;
+            }
+        }
+        Some(0.5 * (lo + hi))
+    };
+    // The roots of g along the segment (sampled, bisected where it changes sign), `None` where
+    // it comes near nought without changing sign; `Err` with a point where it stays there.
+    let roots = |g: &dyn Fn(f64) -> Option<f64>, near: f64| -> Option<std::result::Result<Vec<f64>, f64>> {
+        let values: Vec<Option<f64>> = (0..=samples).map(|i| g(sa0 + step * i as f64)).collect();
+        let mut found = Vec::new();
+        let mut small = 0;
+        for i in 0..=samples {
+            let Some(x) = values[i] else { continue };
+            if x.abs() <= near {
+                small += 1;
+                if small > 2 {
+                    return Some(Err(sa0 + step * i as f64));
+                }
+            } else {
+                small = 0;
+            }
+            if i == samples {
+                break;
+            }
+            let Some(y) = values[i + 1] else { continue };
+            let (a, b) = (sa0 + step * i as f64, sa0 + step * (i + 1) as f64);
+            // (Not across a jump of the wrapped turn between helices: a change of sign far from 0.)
+            if (x >= 0.0) != (y >= 0.0) && x.abs() < 1.0 && y.abs() < 1.0 {
+                found.push(bisect(g, a, b)?);
+            } else if i > 0 {
+                if let Some(w) = values[i - 1] {
+                    // A local least |g| near nought without a change of sign: touching.
+                    if x.abs() < w.abs() && x.abs() < y.abs() && (w >= 0.0) == (y >= 0.0) && x.abs() <= 1e3 * near {
+                        return None;
+                    }
+                }
+            }
+        }
+        Some(Ok(found))
+    };
+    let tol = 1e-9;
+    match &fb.surface {
+        Surface::Cylinder(c) => {
+            let f = c.frame();
+            if !on_axis_line(f.origin(), Vector::from(f.z())) {
+                return None;
+            }
+            let radius = c.radius();
+            let g = |s: f64| Some(perp(at_a(s) - o).length() - radius);
+            let mut sections = Vec::new();
+            // (Along the cylinder for a stretch: the segment lies on it, square to its helices.)
+            for s in roots(&g, tol * scale)?.ok()? {
+                sections.extend(helix(at_a(s), turns_a));
+            }
+            Some(sections)
+        }
+        other => {
+            let strip_b = screw_strip_of(other)?;
+            let zb = Vector::from(strip_b.axis.direction);
+            if !on_axis_line(strip_b.axis.origin, zb) || (strip_b.rise_per_radian() - k).abs() > 1e-12 * k.abs() {
+                return None;
+            }
+            // (About z: a strip turning about -z turns the other way about z.)
+            let sigma = zb.dot(z).signum();
+            let ((sb0, sb1), (tb0, tb1)) = range(strip_b, other);
+            let turns_b = if sigma > 0.0 { (tb0, tb1) } else { (-tb1, -tb0) };
+            let db = strip_b.end - strip_b.start;
+            let (pb, qb) = (perp(strip_b.start - o), perp(db));
+            let (qa2, pq, pp) = (qb.dot(qb), pb.dot(qb), pb.dot(pb));
+            if !(qa2 > 1e-24 * scale * scale) {
+                return None;
+            }
+            let margin = 1e-9;
+            // The other segment's point as far from the axis as `fa`'s at s, on either branch.
+            let other_at = |s: f64, branch: f64| -> Option<f64> {
+                let r2 = perp(at_a(s) - o).dot(perp(at_a(s) - o));
+                let disc = pq * pq - qa2 * (pp - r2);
+                if disc < 0.0 {
+                    return None;
+                }
+                let t = (-pq + branch * disc.sqrt()) / qa2;
+                (t >= sb0 - margin && t <= sb1 + margin).then_some(t)
+            };
+            let mut sections = Vec::new();
+            for branch in [-1.0, 1.0] {
+                let g = |s: f64| -> Option<f64> {
+                    let t = other_at(s, branch)?;
+                    Some(wrap(phase(at_a(s)) - phase(strip_b.start + db * t)))
+                };
+                // The turn from `fa`'s point at s to the other's on its helix (the rise between
+                // them), and the turns both strips span there, relative to the first.
+                let common = |s: f64, t: f64| {
+                    let (pa, pbt) = (at_a(s), strip_b.start + db * t);
+                    let psi = (pbt - pa).dot(z) / k;
+                    (pa, (turns_a.0.max(psi + turns_b.0), turns_a.1.min(psi + turns_b.1)))
+                };
+                match roots(&g, tol)? {
+                    Ok(found) => {
+                        for s in found {
+                            let Some(t) = other_at(s, branch) else { continue };
+                            let (pa, turns) = common(s, t);
+                            sections.extend(helix(pa, turns));
+                        }
+                    }
+                    // (One helicoid along a stretch: no section where the strips' turns only
+                    // meet end to end (one stage's after the stage before), else left to the
+                    // general search, as coincident surfaces are.)
+                    Err(s) => {
+                        let t = other_at(s, branch)?;
+                        let (_, (lo, hi)) = common(s, t);
+                        if hi - lo > 1e-9 {
+                            return None;
+                        }
+                    }
+                }
+            }
+            Some(sections)
+        }
+    }
 }
 
 /// A bound on how fast a meridian (the basis of a surface of revolution) moves along its
@@ -5109,13 +5419,23 @@ fn crossing_near(a: &Section, b: &Section, start_a: f64, start_b: f64, within_a:
     (sa, sb)
 }
 
+/// Whether two curves are helices of one screw (see [`crate::geometry::screw_strip::Helix`]):
+/// two paths along it are one, or apart all along (a screw carries points at one distance
+/// from each other), so they cross nowhere.
+fn same_screw_helices(c1: &Curve, c2: &Curve) -> bool {
+    let (Curve::BSpline(a), Curve::BSpline(b)) = (c1, c2) else { return false };
+    let (Some(h1), Some(h2)) = (a.helix(), b.helix()) else { return false };
+    let scale = a.poles().iter().chain(b.poles()).map(|p| (*p - Point::ORIGIN).length()).fold(0.0, f64::max);
+    h1.same_screw(h2.axis, h2.rise_per_radian, scale)
+}
+
 /// Points where two edges cross (pass within `tolerance`) away from their ends: `(t on e1,
 /// s on e2)`.
 fn edge_crossings(e1: &Edge, e2: &Edge, tolerance: f64) -> Vec<(f64, f64)> {
     let (Some(c1), Some(c2)) = (&e1.curve, &e2.curve) else { return Vec::new() };
     // On one circle or line (pieces of coincident edges of the two operands) the edges
     // cross nowhere: their ends split each other as vertices lying on them.
-    if same_carrier(c1, c2) {
+    if same_carrier(c1, c2) || same_screw_helices(c1, c2) {
         return Vec::new();
     }
     // The edges' samples (kept with them: an edge meets many others).

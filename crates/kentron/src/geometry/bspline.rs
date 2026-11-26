@@ -1376,7 +1376,27 @@ impl Transformable for BSplineCurve<Point> {
         if *t == Transform::IDENTITY {
             return self.clone();
         }
-        Self { poles: self.poles.iter().map(|p| p.transformed(t)).collect(), segments: Default::default(), ..self.clone() }
+        let moved = Self { poles: self.poles.iter().map(|p| p.transformed(t)).collect(), segments: Default::default(), ..self.clone() };
+        // (A helix moved rigidly is a helix of the moved screw.)
+        match self.helix().and_then(|h| h.transformed(t)) {
+            Some(helix) => moved.with_helix(helix),
+            None => moved,
+        }
+    }
+}
+
+impl BSplineCurve<Point> {
+    /// The screw the curve is a helix of, where it is one (kept with its clones until it
+    /// changes).
+    pub(crate) fn helix(&self) -> Option<&super::screw_strip::Helix> {
+        self.segments.shared().helix.get()
+    }
+
+    /// The curve, kept with the screw it is a helix of (which the caller vouches for: it lies
+    /// on one point's path along it).
+    pub(crate) fn with_helix(self, helix: super::screw_strip::Helix) -> Self {
+        let _ = self.segments.shared().helix.set(helix);
+        self
     }
 }
 
@@ -1515,6 +1535,19 @@ impl BSplineSurface {
     /// What the surface's clones share (until it changes).
     pub(crate) fn shared(&self) -> &super::patches::SurfaceShared {
         self.patches.shared()
+    }
+
+    /// The segment and screw the surface was swept from, where it is such a strip (kept with
+    /// its clones until it changes).
+    pub(crate) fn screw_strip(&self) -> Option<&super::screw_strip::ScrewStrip> {
+        self.shared().screw.get()
+    }
+
+    /// The surface, kept with the segment and screw it was swept from (which the caller
+    /// vouches for: it lies on the strip they make, at the same parameters).
+    pub(crate) fn with_screw_strip(self, strip: super::screw_strip::ScrewStrip) -> Self {
+        let _ = self.shared().screw.set(strip);
+        self
     }
 
     /// The surface as Bézier patches (made on first use); `None` for one with too many.
@@ -2653,7 +2686,12 @@ impl Transformable for BSplineSurface {
             return self.clone();
         }
         let poles = std::sync::Arc::new(self.poles.iter().map(|row| row.iter().map(|p| p.transformed(t)).collect()).collect());
-        BSplineSurface { poles, weights: self.weights.clone(), u: self.u.clone(), v: self.v.clone(), patches: Default::default(), unrolled: Default::default(), flat_knots: Default::default() }
+        let moved = BSplineSurface { poles, weights: self.weights.clone(), u: self.u.clone(), v: self.v.clone(), patches: Default::default(), unrolled: Default::default(), flat_knots: Default::default() };
+        // (A screw strip moved rigidly is the moved segment along the moved screw.)
+        match self.screw_strip().and_then(|s| s.transformed(t)) {
+            Some(strip) => moved.with_screw_strip(strip),
+            None => moved,
+        }
     }
 }
 

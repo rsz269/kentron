@@ -216,11 +216,48 @@ fn foot_from_nearest_samples(surface: &Surface, p: Point, foot: crate::geometry:
     nearest
 }
 
+/// The foot of `p` on a B-spline strip kept with the segment and screw it is swept from
+/// ([`crate::geometry::screw_strip`]): Newton steps on the strip from the point of their
+/// helicoid nearest `p` (within the strip's parameters), which lies within about 1e-10 of the
+/// size of the strip's foot. `None` for other surfaces, or where the steps come out farther
+/// than that point (then the general search is taken).
+fn screw_strip_foot(surface: &Surface, p: Point) -> Option<crate::geometry::extrema::SurfaceFoot> {
+    let Surface::BSpline(b) = surface else { return None };
+    let strip = b.screw_strip()?;
+    let (u0, u1, v0, v1) = surface.bounds();
+    let (u, v, d) = strip.nearest(p, (u0, u1), (v0, v1));
+    // (One Newton step on the strip from there, about 1e-10 of the size off its foot: then
+    // as near as rounding allows.)
+    let at = surface.d2(u, v);
+    let r = at.point - p;
+    let (gu, gv) = (r.dot(at.du), r.dot(at.dv));
+    let (huu, huv, hvv) = (at.du.dot(at.du) + r.dot(at.duu), at.du.dot(at.dv) + r.dot(at.duv), at.dv.dot(at.dv) + r.dot(at.dvv));
+    let det = huu * hvv - huv * huv;
+    let (mut nu, mut nv) = (u, v);
+    if det > 0.0 && huu > 0.0 {
+        nu = (u + (-gu * hvv + gv * huv) / det).clamp(u0, u1);
+        nv = (v + (-gv * huu + gu * huv) / det).clamp(v0, v1);
+    }
+    let (point, du, dv) = surface.d1(nu, nv);
+    let foot = if point.distance(p) <= at.point.distance(p) {
+        crate::geometry::extrema::SurfaceFoot { u: nu, v: nv, point, du, dv }
+    } else {
+        crate::geometry::extrema::SurfaceFoot { u, v, point: at.point, du: at.du, dv: at.dv }
+    };
+    let o = strip.axis.origin;
+    let slack = 1e-8 * (1.0 + strip.start.distance(o) + strip.end.distance(o));
+    (foot.point.distance(p) <= d + slack).then_some(foot)
+}
+
 /// The foot of `p` on a free-form surface: Newton steps from the nearest of a grid of the
 /// surface's points. Where that leads astray (to a foot on the surface's bounds, or farther
 /// than the sample it started from) and another part of the surface passes nearly as near
 /// (the next turn of one winding round), from the nearest sample there too: the nearer foot.
 pub(super) fn foot_on(surface: &Surface, p: Point) -> crate::geometry::extrema::SurfaceFoot {
+    // (A strip a segment sweeps along a screw: from the exact surface's nearest point.)
+    if let Some(foot) = screw_strip_foot(surface, p) {
+        return foot;
+    }
     let (best, start) = with_samples(surface, |grid| {
         let best = grid.nearest_of_all(p);
         (best, (grid.samples[best.1].0, grid.samples[best.1].1))
@@ -1060,6 +1097,9 @@ pub(super) fn project_among(curve: &Curve, first: f64, last: f64, samples: Optio
     if let Some(found) = conic_foot(curve, first, last, p) {
         return found;
     }
+    if let Some(found) = helix_foot(curve, first, last, p) {
+        return found;
+    }
     // Coarse sampling, then Newton steps on (C(t) - p)·C'(t) = 0.
     let n = PROJECTION_SAMPLES;
     let mut best = (first, f64::INFINITY);
@@ -1096,6 +1136,47 @@ pub(super) fn project_among(curve: &Curve, first: f64, last: f64, samples: Optio
     }
     let d = curve.point(t).distance(p);
     if d < best.1 { (t, d) } else { best }
+}
+
+/// [`project_among`] on a B-spline kept with the screw it is a helix of
+/// ([`crate::geometry::screw_strip::Helix`]): from the point of the exact helix nearest `p`
+/// (its parameter taken as turning evenly, as the screw's paths do, within about 1e-10 of
+/// the size), Newton steps on the curve. `None` for other curves, or where the steps come out
+/// farther than that point (then the general search is taken).
+fn helix_foot(curve: &Curve, first: f64, last: f64, p: Point) -> Option<(f64, f64)> {
+    let Curve::BSpline(b) = curve else { return None };
+    let helix = b.helix()?;
+    let k = helix.rise_per_radian;
+    let (f0, f1) = (b.first_parameter(), b.last_parameter());
+    let (c0, c1) = (b.point(f0), b.point(f1));
+    let z = Vector::from(helix.axis.direction);
+    if !(k.is_finite() && k != 0.0 && f1 > f0) {
+        return None;
+    }
+    // The turn over the curve's whole range, from the rise between its ends.
+    let angle = (c1 - c0).dot(z) / k;
+    let rate = angle / (f1 - f0);
+    let exact = crate::geometry::screw_strip::ScrewStrip { axis: helix.axis, turn: rate, rise: k * rate, v0: f0, start: c0, end: c0, u0: 0.0, u1: 1.0 };
+    let (lo, hi) = (first.min(last), first.max(last));
+    let (_, mut t, d) = exact.nearest(p, (0.0, 1.0), (lo, hi));
+    for _ in 0..3 {
+        let (c, d1, d2) = curve.d2(t);
+        let f = (c - p).dot(d1);
+        let df = d1.dot(d1) + (c - p).dot(d2);
+        if !(df > 1e-300) {
+            break;
+        }
+        let next = (t - f / df).clamp(lo, hi);
+        let done = (next - t).abs() <= 1e-15 * (1.0 + t.abs());
+        t = next;
+        if done {
+            break;
+        }
+    }
+    let found = curve.point(t).distance(p);
+    let o = helix.axis.origin;
+    let slack = 1e-8 * (1.0 + c0.distance(o) + c1.distance(o));
+    (found <= d + slack).then_some((t, found))
 }
 
 /// [`project_among`] on a circle or an ellipse in closed form: the parameter in

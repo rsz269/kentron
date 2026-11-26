@@ -1352,8 +1352,13 @@ fn near_face(surface: Surface, u_range: (f64, f64), v_range: (f64, f64)) -> Surf
                 Surface::Bezier(b) => b.to_bspline(),
                 _ => unreachable!(),
             };
+            let strip = cut.screw_strip().cloned();
             cut.segment(u0, u1, v0, v1);
-            Surface::BSpline(cut)
+            // (The same parameters: a screw strip's segment and screw are its part's too.)
+            Surface::BSpline(match strip {
+                Some(strip) => cut.with_screw_strip(strip),
+                None => cut,
+            })
         }
         Surface::Extrusion(e) if cut_u => {
             let mut basis = match e.basis() {

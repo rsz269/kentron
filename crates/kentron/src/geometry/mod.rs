@@ -55,6 +55,7 @@ mod patches;
 pub mod project;
 pub mod props;
 pub mod sample;
+pub(crate) mod screw_strip;
 pub mod surface;
 pub mod tangency;
 

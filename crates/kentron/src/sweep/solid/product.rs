@@ -852,7 +852,12 @@ impl<'m> Builder<'m> {
         let (curve, first, last) = match self.stages[k] {
             Steady::Slide { by } => (Curve::Line(Line::new(p, Direction::from_vector(by))), 0.0, by.length()),
             Steady::Turn { axis, angle } => (Curve::Circle(turn_circle(axis, p)?), 0.0, angle),
-            Steady::Screw { .. } | Steady::Carried(_) => (Curve::BSpline(path(self.motions[k].as_ref().expect("a screw's motion"), p)?), 0.0, 1.0),
+            // (A screw's path kept with the screw it is a helix of.)
+            Steady::Screw { axis, angle, rise } => {
+                let helix = crate::geometry::screw_strip::Helix { axis, rise_per_radian: rise / angle };
+                (Curve::BSpline(path(self.motions[k].as_ref().expect("a screw's motion"), p)?.with_helix(helix)), 0.0, 1.0)
+            }
+            Steady::Carried(_) => (Curve::BSpline(path(self.motions[k].as_ref().expect("a screw's motion"), p)?), 0.0, 1.0),
         };
         self.model.set_edge_curve(edge.into(), curve, tol)?;
         self.model.set_edge_range(edge.into(), first, last)?;
@@ -1014,6 +1019,11 @@ impl<'m> Builder<'m> {
                 let knots = path(motion, Point::ORIGIN)?;
                 let knots = KnotVector::new(knots.knots().to_vec(), knots.multiplicities().to_vec(), knots.degree());
                 let swept = profiled_surface(&profile.spline, &|q| Ok(path(motion, q)?.poles().to_vec()), knots)?;
+                // (A straight edge's strip kept with the segment and screw it is swept from.)
+                let swept = match (&self.stages[k], swept) {
+                    (&Steady::Screw { axis, angle, rise }, Surface::BSpline(strip)) => Surface::BSpline(with_screw_strip(strip, &profile.spline, axis, angle, rise, self.size)),
+                    (_, swept) => swept,
+                };
                 let uses = profile.uses(e, top, start_path, end_path, a, b, 1.0);
                 (swept, Box::new(move |s, t| Point2::new(profile.at(s), t)), uses)
             }
@@ -1257,6 +1267,27 @@ pub(super) fn profiled_surface(profile: &BSplineCurve, path_poles: &dyn Fn(Point
     Ok(Surface::BSpline(swept))
 }
 
+/// `strip`, the surface a profile of one straight span sweeps along a screw (turning `angle`
+/// about `axis` and rising `rise` over `v` from 0 to 1), kept with the segment and screw it
+/// is made from ([`crate::geometry::screw_strip`]) where it lies on their helicoid within
+/// 1e-9 of `size` at the same parameters (checked on a grid); as it is otherwise.
+fn with_screw_strip(strip: BSplineSurface, profile: &BSplineCurve, axis: crate::math::Axis, angle: f64, rise: f64, size: f64) -> BSplineSurface {
+    if profile.degree() != 1 || profile.poles().len() != 2 || profile.weights().is_some() || !(angle != 0.0 && angle.is_finite()) {
+        return strip;
+    }
+    let (u0, u1) = (profile.first_parameter(), profile.last_parameter());
+    let screw = crate::geometry::screw_strip::ScrewStrip { axis, turn: angle, rise, v0: 0.0, start: profile.poles()[0], end: profile.poles()[1], u0, u1 };
+    use crate::geometry::ParametricSurface;
+    let (_, _, v0, v1) = strip.bounds();
+    let on = (0..=4).all(|i| {
+        (0..=16).all(|j| {
+            let (u, v) = (u0 + (u1 - u0) * i as f64 / 4.0, v0 + (v1 - v0) * j as f64 / 16.0);
+            strip.point(u, v).distance(screw.point(u, v)) <= 1e-9 * size
+        })
+    });
+    if on { strip.with_screw_strip(screw) } else { strip }
+}
+
 /// The uses round a side face whose surface has the curve's parameter `s` along one direction
 /// and the motion (`0..extent` over the motion) along the other: `s_first` says whether `s` is
 /// u. Counter-clockwise in (u, v).
@@ -1334,6 +1365,19 @@ pub(super) fn screw_motion(axis: crate::math::Axis, angle: f64, rise: f64, size:
         }
         samples *= 2;
     }
+}
+
+/// The helix `from` runs along as the screw about `axis` (right-handed, rising
+/// `rise_per_radian` along it for each radian turned) turns it by `angle`: the B-spline the
+/// screw's sweeps carry points along ([`screw_motion`]), within 1e-10 of its size, its
+/// parameter from 0 to 1.
+pub(crate) fn helix_arc(axis: crate::math::Axis, rise_per_radian: f64, from: Point, angle: f64) -> Result<BSplineCurve> {
+    let z = Vector::from(axis.direction);
+    let rel = from - axis.origin;
+    let reach = (rel - z * rel.dot(z)).length();
+    let size = reach + (from - Point::ORIGIN).length() + (rise_per_radian * angle).abs();
+    let motion = screw_motion(axis, angle, rise_per_radian * angle, size, reach)?;
+    Ok(path(&motion, from)?.with_helix(crate::geometry::screw_strip::Helix { axis, rise_per_radian }))
 }
 
 /// A stretch of a carried motion sampled as the pipes' motions are (its points' velocities and

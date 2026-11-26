@@ -112,6 +112,8 @@ pub(crate) struct SurfaceShared {
     pub(crate) close_samples: OnceLock<(usize, usize)>,
     /// The rulings of a strip ruled one way (see `boolean::geom`); `None` for others.
     pub(crate) rulings: OnceLock<Option<Rulings>>,
+    /// The segment and screw a strip was swept from, where it was (see [`super::screw_strip`]).
+    pub(crate) screw: OnceLock<super::screw_strip::ScrewStrip>,
 }
 
 impl PartialEq for PatchCache {
@@ -126,8 +128,42 @@ impl std::fmt::Debug for PatchCache {
         f.write_str("Shared")
     }
 }
-/// The Bézier segments of a curve.
-pub(super) type SegmentCache = Shared<Segments>;
+/// The Bézier segments of a curve, with what else is kept with it: clones share them
+/// (until changed).
+#[derive(Clone, Default)]
+pub(super) struct SegmentCache(Arc<CurveShared>);
+
+/// What a curve's clones share: its segments, and the screw it is a helix of where it is one
+/// (see [`super::screw_strip`]).
+#[derive(Default)]
+pub(crate) struct CurveShared {
+    segments: OnceLock<Option<Segments>>,
+    pub(crate) helix: OnceLock<super::screw_strip::Helix>,
+}
+
+impl PartialEq for SegmentCache {
+    /// (What the curve is, not the cache, makes them equal.)
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl std::fmt::Debug for SegmentCache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Shared")
+    }
+}
+
+impl SegmentCache {
+    /// The segments `make` makes the first time (`None`: too many to keep).
+    pub(super) fn get(&self, make: impl FnOnce() -> Option<Segments>) -> Option<&Segments> {
+        self.0.segments.get_or_init(make).as_ref()
+    }
+
+    pub(super) fn shared(&self) -> &CurveShared {
+        &self.0
+    }
+}
 
 impl<T> Clone for Shared<T> {
     fn clone(&self) -> Self {
