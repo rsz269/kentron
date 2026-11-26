@@ -361,38 +361,42 @@ fn volume_of(model: &Model, solid: Shape) -> f64 {
 
 /// The product where it runs into itself (see the module's notes): its faces split where they
 /// cross, the pieces of space it winds round at least once, joined. Split all at once first
-/// (quicker for many faces, but not split alike everywhere), then, where the pieces found so
-/// do not add up, one face after another. An error where the pieces' volumes, each counted
-/// as often as the product winds round it, do not add up to the product's either way (pieces
-/// missed or misjudged).
+/// (quicker for many faces, but not split alike everywhere), then, where that finds no
+/// pieces or pieces holding less than the product (pieces missed), one face after another.
+/// (Not where they hold more: then windings are misjudged, which splitting again does not
+/// mend.) An error where the pieces' volumes, each counted as often as the product winds
+/// round it, do not add up to the product's (pieces missed or misjudged).
 fn resolved(model: &mut Model, product: Shape) -> Result<Shape> {
     match resolved_split(model, product, true) {
         Ok(resolved) => Ok(resolved),
-        Err(at_once) => resolved_split(model, product, false).map_err(|_| at_once),
+        Err((at_once, true)) => resolved_split(model, product, false).map_err(|_| at_once),
+        Err((at_once, false)) => Err(at_once),
     }
 }
 
-/// [`resolved`] with the faces split all at once or one after another.
-fn resolved_split(model: &mut Model, product: Shape, at_once: bool) -> Result<Shape> {
+/// [`resolved`] with the faces split all at once or one after another; the error with
+/// whether pieces were missed (none found, or holding less than the product).
+fn resolved_split(model: &mut Model, product: Shape, at_once: bool) -> std::result::Result<Shape, (Error, bool)> {
     let faces = model.unique_subshapes(product, NodeKind::Face);
+    let failed = |e: Error| (e, false);
     // (The volumes adding up below check the pieces.)
-    let cells = if at_once { crate::boolean::enclosed_solids_at_once(model, &faces)? } else { crate::boolean::enclosed_solids(model, &faces)? };
+    let cells = if at_once { crate::boolean::enclosed_solids_at_once(model, &faces) } else { crate::boolean::enclosed_solids(model, &faces) }.map_err(failed)?;
     let cells = model.unique_subshapes(cells, NodeKind::Solid);
     if cells.is_empty() {
-        return Err(Error::Failed("a sweep running into itself, not split into pieces".into()));
+        return Err((Error::Failed("a sweep running into itself, not split into pieces".into()), true));
     }
-    let classifier = crate::boolean::PointClassifier::new(model, product)?;
+    let classifier = crate::boolean::PointClassifier::new(model, product).map_err(failed)?;
     let mut kept = Vec::new();
     let mut counted = 0.0;
     for &cell in &cells {
         // (A sliver with no point found inside it left out: the volumes adding up below tell
         // whether it held anything.)
-        let found = match crate::boolean::point_inside(model, cell)? {
+        let found = match crate::boolean::point_inside(model, cell).map_err(failed)? {
             Some(p) => Some(p),
-            None => point_within(model, cell)?,
+            None => point_within(model, cell).map_err(failed)?,
         };
         let Some(p) = found else { continue };
-        let winding = classifier.winding(p).ok_or_else(|| Error::Failed("how often a sweep winds round a point of it".into()))?;
+        let winding = classifier.winding(p).ok_or_else(|| failed(Error::Failed("how often a sweep winds round a point of it".into())))?;
         counted += winding as f64 * volume_of(model, cell);
         if winding >= 1 {
             kept.push(cell);
@@ -400,9 +404,9 @@ fn resolved_split(model: &mut Model, product: Shape, at_once: bool) -> Result<Sh
     }
     let whole = volume_of(model, product);
     if !((counted - whole).abs() <= 1e-6 * whole.abs()) {
-        return Err(Error::Failed(format!("a sweep running into itself: its pieces, as often as it winds round them, hold {counted}, not its {whole}")));
+        return Err((Error::Failed(format!("a sweep running into itself: its pieces, as often as it winds round them, hold {counted}, not its {whole}")), counted < whole));
     }
-    super::super::joined(model, &kept)
+    super::super::joined(model, &kept).map_err(failed)
 }
 
 /// The swept solid of `solid` (unplaced; changed) under motions one after another, each steady
