@@ -9,7 +9,18 @@ use super::Continuity;
 
 /// Solves the square system `rows · x = rhs` (three right-hand sides) by Gaussian
 /// elimination with partial pivoting; `None` if it is singular.
-fn solve_dense(mut rows: Vec<Vec<f64>>, mut rhs: Vec<[f64; 3]>) -> Option<Vec<[f64; 3]>> {
+fn solve_dense(rows: Vec<Vec<f64>>, rhs: Vec<[f64; 3]>) -> Option<Vec<[f64; 3]>> {
+    let n = rhs.len();
+    let mut many = solve_dense_many(rows, vec![rhs])?;
+    debug_assert_eq!(many[0].len(), n);
+    many.pop()
+}
+
+/// [`solve_dense`] for several sets of three right-hand sides at once (`rhs[s][row]`), the
+/// matrix eliminated once: each set's solution the same as solved alone. (Each pivot row is
+/// subtracted only as far as its last non-zero entry: past it, it changes nothing, which
+/// makes banded systems, as least-squares B-spline fits give, cheap.)
+fn solve_dense_many(mut rows: Vec<Vec<f64>>, mut rhs: Vec<Vec<[f64; 3]>>) -> Option<Vec<Vec<[f64; 3]>>> {
     let n = rows.len();
     for col in 0..n {
         let pivot = (col..n).max_by(|&a, &b| rows[a][col].abs().total_cmp(&rows[b][col].abs()))?;
@@ -17,28 +28,40 @@ fn solve_dense(mut rows: Vec<Vec<f64>>, mut rhs: Vec<[f64; 3]>) -> Option<Vec<[f
             return None;
         }
         rows.swap(col, pivot);
-        rhs.swap(col, pivot);
+        for set in &mut rhs {
+            set.swap(col, pivot);
+        }
+        let end = (col..n).rev().find(|&k| rows[col][k] != 0.0).map_or(col + 1, |k| k + 1);
         for r in col + 1..n {
             let f = rows[r][col] / rows[col][col];
             if f == 0.0 {
                 continue;
             }
-            for k in col..n {
-                rows[r][k] -= f * rows[col][k];
+            let (above, below) = rows.split_at_mut(r);
+            let (pivot_row, row) = (&above[col], &mut below[0]);
+            for k in col..end {
+                row[k] -= f * pivot_row[k];
             }
+            for set in &mut rhs {
+                let from = set[col];
+                for d in 0..3 {
+                    set[r][d] -= f * from[d];
+                }
+            }
+        }
+    }
+    let mut solutions = Vec::with_capacity(rhs.len());
+    for set in &rhs {
+        let mut x = vec![[0.0; 3]; n];
+        for r in (0..n).rev() {
             for d in 0..3 {
-                rhs[r][d] -= f * rhs[col][d];
+                let s: f64 = (r + 1..n).map(|k| rows[r][k] * x[k][d]).sum();
+                x[r][d] = (set[r][d] - s) / rows[r][r];
             }
         }
+        solutions.push(x);
     }
-    let mut x = vec![[0.0; 3]; n];
-    for r in (0..n).rev() {
-        for d in 0..3 {
-            let s: f64 = (r + 1..n).map(|k| rows[r][k] * x[k][d]).sum();
-            x[r][d] = (rhs[r][d] - s) / rows[r][r];
-        }
-    }
-    Some(x)
+    Some(solutions)
 }
 
 /// The least-squares B-spline of `degree` with `m` poles through the first and last of
@@ -57,43 +80,14 @@ pub(crate) fn least_squares_with_knots<P: ControlPoint>(q: &[[f64; 3]], params: 
 /// `(order, weight)` of `fairing`, `weight` times the integral of the square of the curve's
 /// derivative of that order (as a share of the fit's own size: 1 weighs them alike).
 fn faired_least_squares<P: ControlPoint>(q: &[[f64; 3]], params: &[f64], degree: usize, flat: Vec<f64>, fairing: &[(usize, f64)]) -> Option<BSplineCurve<P>> {
-    let (n, p) = (q.len(), degree);
-    let m = flat.len() - p - 1;
-    if flat.windows(2).any(|w| w[1] < w[0]) || m < 2 {
-        return None;
-    }
-    let basis = |t: f64| -> Vec<f64> {
-        let span = (p..m).rev().find(|&k| flat[k] <= t && flat[k] < flat[k + 1]).unwrap_or(p).min(m - 1);
-        let b = crate::geometry::bspline::basis_derivatives(&flat, span, t, p, 0);
-        let mut row = vec![0.0; m];
-        for (j, &v) in b[0].iter().enumerate() {
-            row[span - p + j] = v;
-        }
-        row
-    };
-    // Interior poles from the normal equations, the end ones fixed at the end points.
+    let system = Normal::new(&params[..q.len().min(params.len())], degree, &flat)?;
+    let (m, p) = (system.m, degree);
+    let first = q[0];
+    let last = q[q.len() - 1];
+    let mut a = system.a.clone();
+    let mut b = system.rhs(q);
     let inner = m - 2;
-    let (first, last) = (q[0], q[n - 1]);
-    let mut poles = vec![first];
-    if inner > 0 {
-        let mut a = vec![vec![0.0; inner]; inner];
-        let mut b = vec![[0.0; 3]; inner];
-        for (k, &t) in params.iter().enumerate().take(n - 1).skip(1) {
-            let row = basis(t);
-            let r: [f64; 3] = std::array::from_fn(|c| q[k][c] - row[0] * first[c] - row[m - 1] * last[c]);
-            for i in 0..inner {
-                let ni = row[i + 1];
-                if ni == 0.0 {
-                    continue;
-                }
-                for j in 0..inner {
-                    a[i][j] += ni * row[j + 1];
-                }
-                for c in 0..3 {
-                    b[i][c] += ni * r[c];
-                }
-            }
-        }
+    let interior = if inner > 0 {
         let fit_size: f64 = (0..inner).map(|i| a[i][i]).sum();
         for &(order, weight) in fairing {
             if weight <= 0.0 || order > p {
@@ -114,11 +108,103 @@ fn faired_least_squares<P: ControlPoint>(q: &[[f64; 3]], params: &[f64], degree:
                 }
             }
         }
-        poles.extend(solve_dense(a, b)?);
-    }
+        solve_dense(a, b)?
+    } else {
+        Vec::new()
+    };
+    curve_of(first, interior, last, &flat, p)
+}
+
+/// The curve of degree `p` on flat knots `flat` with poles `first`, `interior` and `last`.
+fn curve_of<P: ControlPoint>(first: [f64; 3], interior: Vec<[f64; 3]>, last: [f64; 3], flat: &[f64], p: usize) -> Option<BSplineCurve<P>> {
+    let mut poles = Vec::with_capacity(interior.len() + 2);
+    poles.push(first);
+    poles.extend(interior);
     poles.push(last);
-    let (knots, multiplicities) = super::knots::group(&flat);
+    let (knots, multiplicities) = super::knots::group(flat);
     BSplineCurve::try_new(poles.into_iter().map(P::from_coords).collect(), knots, multiplicities, p).ok()
+}
+
+/// The normal equations of a least-squares B-spline fit at `params` (degree `p`, flat knots,
+/// `m` poles, the end ones fixed at the end points): the basis functions at each interior
+/// parameter (non-zero over `p + 1` poles from its span's first) and the matrix of the
+/// interior poles, alike for every set of points fitted at those parameters.
+struct Normal {
+    m: usize,
+    /// For each parameter, the index of the first pole its basis functions reach, and them.
+    bases: Vec<(usize, Vec<f64>)>,
+    a: Vec<Vec<f64>>,
+}
+
+impl Normal {
+    fn new(params: &[f64], p: usize, flat: &[f64]) -> Option<Normal> {
+        let m = flat.len().checked_sub(p + 1)?;
+        if flat.windows(2).any(|w| w[1] < w[0]) || m < 2 {
+            return None;
+        }
+        let n = params.len();
+        let bases: Vec<(usize, Vec<f64>)> = params
+            .iter()
+            .map(|&t| {
+                let span = (p..m).rev().find(|&k| flat[k] <= t && flat[k] < flat[k + 1]).unwrap_or(p).min(m - 1);
+                let mut b = crate::geometry::bspline::basis_derivatives(flat, span, t, p, 0);
+                (span - p, b.swap_remove(0))
+            })
+            .collect();
+        // (Each product added only where both basis functions are non-zero: zero ones add
+        // nothing.)
+        let inner = m - 2;
+        let mut a = vec![vec![0.0; inner]; inner];
+        for (from, values) in bases.iter().take(n.saturating_sub(1)).skip(1) {
+            for (x, &ni) in values.iter().enumerate() {
+                let Some(i) = (from + x).checked_sub(1).filter(|&i| i < inner) else { continue };
+                if ni == 0.0 {
+                    continue;
+                }
+                for (y, &nj) in values.iter().enumerate() {
+                    if let Some(j) = (from + y).checked_sub(1).filter(|&j| j < inner) {
+                        a[i][j] += ni * nj;
+                    }
+                }
+            }
+        }
+        Some(Normal { m, bases, a })
+    }
+
+    /// The right-hand sides for the points `q` (one at each parameter).
+    fn rhs(&self, q: &[[f64; 3]]) -> Vec<[f64; 3]> {
+        let (m, n) = (self.m, q.len());
+        let inner = m - 2;
+        let (first, last) = (q[0], q[n - 1]);
+        let mut b = vec![[0.0; 3]; inner];
+        for (k, (from, values)) in self.bases.iter().enumerate().take(n - 1).skip(1) {
+            let at = |pole: usize| pole.checked_sub(*from).and_then(|x| values.get(x)).copied().unwrap_or(0.0);
+            let r: [f64; 3] = std::array::from_fn(|c| q[k][c] - at(0) * first[c] - at(m - 1) * last[c]);
+            for (x, &ni) in values.iter().enumerate() {
+                let Some(i) = (from + x).checked_sub(1).filter(|&i| i < inner) else { continue };
+                if ni == 0.0 {
+                    continue;
+                }
+                for c in 0..3 {
+                    b[i][c] += ni * r[c];
+                }
+            }
+        }
+        b
+    }
+}
+
+/// [`least_squares_with_knots`] for several sets of points at the same parameters: the
+/// normal equations made and eliminated once, each curve the same as fitted alone.
+fn least_squares_alike<P: ControlPoint>(rows: &[Vec<[f64; 3]>], params: &[f64], degree: usize, flat: &[f64]) -> Option<Vec<BSplineCurve<P>>> {
+    let count = rows.iter().map(Vec::len).min()?;
+    let system = Normal::new(&params[..count.min(params.len())], degree, flat)?;
+    let interiors = if system.m > 2 {
+        solve_dense_many(system.a.clone(), rows.iter().map(|q| system.rhs(q)).collect())?
+    } else {
+        vec![Vec::new(); rows.len()]
+    };
+    rows.iter().zip(interiors).map(|(q, interior)| curve_of(q[0], interior, q[q.len() - 1], flat, degree)).collect()
 }
 
 /// The integrals over the knots' range of the products of the B-spline basis functions'
@@ -908,16 +994,8 @@ pub(crate) fn approximate_alike(points: &[Vec<crate::math::Point>], params: &[f6
         return Err(Error::InvalidInput("curves fitted alike need as many points each".into()));
     }
     let p = degree.min(n - 1);
-    let fit = |m: usize| -> Option<Vec<BSplineCurve>> {
-        let knots = knots_for(params, p, m);
-        points
-            .iter()
-            .map(|row| {
-                let q3: Vec<[f64; 3]> = row.iter().map(|q| q.coords()).collect();
-                least_squares_with_knots::<Point>(&q3, params, p, knots.clone())
-            })
-            .collect()
-    };
+    let rows: Vec<Vec<[f64; 3]>> = points.iter().map(|row| row.iter().map(|q| q.coords()).collect()).collect();
+    let fit = |m: usize| -> Option<Vec<BSplineCurve>> { least_squares_alike::<Point>(&rows, params, p, &knots_for(params, p, m)) };
     // (Near the curves through the points, at them and between: a curve near them only at
     // the points may swing between, where they turn sharply.)
     let through: Vec<BSplineCurve> = points.iter().map(|row| interpolate_with_parameters(row, params)).collect::<Result<_>>()?;
@@ -1223,6 +1301,77 @@ mod tests {
         for i in 0..=10 {
             let p = curve.point(i as f64 / 10.0);
             assert!(((p - Point::ORIGIN).length() - 1.0).abs() < 1e-14);
+        }
+    }
+
+    /// The band-limited elimination solves as the full one does (the old way), bit for bit,
+    /// with row swaps by pivoting; several right-hand sides at once as each alone.
+    #[test]
+    fn eliminating_within_the_band_solves_as_the_full_elimination() {
+        fn full(mut rows: Vec<Vec<f64>>, mut rhs: Vec<[f64; 3]>) -> Option<Vec<[f64; 3]>> {
+            let n = rows.len();
+            for col in 0..n {
+                let pivot = (col..n).max_by(|&a, &b| rows[a][col].abs().total_cmp(&rows[b][col].abs()))?;
+                if rows[pivot][col].abs() < 1e-300 {
+                    return None;
+                }
+                rows.swap(col, pivot);
+                rhs.swap(col, pivot);
+                for r in col + 1..n {
+                    let f = rows[r][col] / rows[col][col];
+                    if f == 0.0 {
+                        continue;
+                    }
+                    for k in col..n {
+                        rows[r][k] -= f * rows[col][k];
+                    }
+                    for d in 0..3 {
+                        rhs[r][d] -= f * rhs[col][d];
+                    }
+                }
+            }
+            let mut x = vec![[0.0; 3]; n];
+            for r in (0..n).rev() {
+                for d in 0..3 {
+                    let s: f64 = (r + 1..n).map(|k| rows[r][k] * x[k][d]).sum();
+                    x[r][d] = (rhs[r][d] - s) / rows[r][r];
+                }
+            }
+            Some(x)
+        }
+        // A banded matrix whose sub-diagonal entries outweigh the diagonal (pivoting swaps
+        // rows, widening the band), and three sets of right-hand sides.
+        let n: usize = 40;
+        let mut seed = 12345u64;
+        let mut next = || {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (seed >> 11) as f64 / (1u64 << 53) as f64 - 0.5
+        };
+        let rows: Vec<Vec<f64>> = (0..n).map(|i| (0..n).map(|j| if i.abs_diff(j) <= 2 { if j + 1 == i { 3.0 + next() } else { next() } } else { 0.0 }).collect()).collect();
+        let sets: Vec<Vec<[f64; 3]>> = (0..3).map(|_| (0..n).map(|_| [next(), next(), next()]).collect()).collect();
+        let many = solve_dense_many(rows.clone(), sets.clone()).unwrap();
+        for (set, got) in sets.iter().zip(&many) {
+            let want = full(rows.clone(), set.clone()).unwrap();
+            assert_eq!(got.iter().flatten().map(|x| x.to_bits()).collect::<Vec<_>>(), want.iter().flatten().map(|x| x.to_bits()).collect::<Vec<_>>());
+            assert_eq!(&solve_dense(rows.clone(), set.clone()).unwrap(), got);
+        }
+    }
+
+    /// Curves fitted alike (one system for all) are those fitted one by one, bit for bit.
+    #[test]
+    fn curves_fitted_alike_are_those_fitted_alone() {
+        let params: Vec<f64> = (0..=30).map(|i| (i as f64 / 30.0).powf(1.3)).collect();
+        let rows: Vec<Vec<[f64; 3]>> = (0..4)
+            .map(|r| params.iter().map(|&t| [t, (3.0 * t + r as f64).sin(), (r as f64 * t * t).cos()]).collect())
+            .collect();
+        for m in [4, 7, 12, 31] {
+            let flat = knots_for(&params, 3, m);
+            let alike = least_squares_alike::<Point>(&rows, &params, 3, &flat).unwrap();
+            for (row, curve) in rows.iter().zip(&alike) {
+                let alone = least_squares_with_knots::<Point>(row, &params, 3, flat.clone()).unwrap();
+                let bits = |c: &BSplineCurve<Point>| c.poles().iter().flat_map(|p| [p.x, p.y, p.z]).map(f64::to_bits).collect::<Vec<_>>();
+                assert_eq!(bits(curve), bits(&alone), "{m} poles");
+            }
         }
     }
 }
