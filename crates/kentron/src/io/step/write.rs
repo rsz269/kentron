@@ -61,7 +61,7 @@ pub fn write_assembly_in(model: &Model, roots: &[Node], unit: LengthUnit, out: &
         out.write_all(b"ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION(('kentron model'),'2;1');\n")?;
         writeln!(out, "FILE_NAME('{}','',(''),(''),'kentron','kentron','');", w.escape(roots.first().map_or("", |r| r.name.as_str())))?;
         out.write_all(b"FILE_SCHEMA(('AUTOMOTIVE_DESIGN { 1 0 10303 214 1 1 1 1 }'));\nENDSEC;\nDATA;\n")?;
-        for (i, line) in w.lines.iter().enumerate() {
+        for (i, line) in (0..w.lines.len()).map(|i| &w.lines[i]).enumerate() {
             writeln!(out, "#{} = {};", i + 1, line)?;
         }
         out.write_all(b"ENDSEC;\nEND-ISO-10303-21;\n")?;
@@ -95,7 +95,7 @@ struct Mark {
 
 struct Writer<'a> {
     model: &'a Model,
-    lines: Vec<String>,
+    lines: Lines,
     /// The marks of the product being written's faces and edges, by node.
     marks: HashMap<NodeId, Mark>,
     /// The marks of its solids, shells and compounds of their own (styled as wholes).
@@ -127,11 +127,50 @@ fn key(t: &Transform) -> [u64; 12] {
     k
 }
 
+/// The entities made so far, in order: their text one after another in one buffer (a file of
+/// large B-splines holds millions of points, and a string of its own for each would take
+/// twice the room of their text), a line changed after it was made kept apart.
+#[derive(Default)]
+struct Lines {
+    text: String,
+    /// Where each line's text ends in `text`.
+    ends: Vec<usize>,
+    /// Lines changed since they were made (named afterwards), by index.
+    changed: HashMap<usize, String>,
+}
+
+impl Lines {
+    fn push(&mut self, line: &str) {
+        self.text.push_str(line);
+        self.ends.push(self.text.len());
+    }
+
+    fn len(&self) -> usize {
+        self.ends.len()
+    }
+
+    fn replace(&mut self, i: usize, line: String) {
+        self.changed.insert(i, line);
+    }
+}
+
+impl std::ops::Index<usize> for Lines {
+    type Output = str;
+
+    fn index(&self, i: usize) -> &str {
+        if let Some(line) = self.changed.get(&i) {
+            return line;
+        }
+        let start = if i == 0 { 0 } else { self.ends[i - 1] };
+        &self.text[start..self.ends[i]]
+    }
+}
+
 impl<'a> Writer<'a> {
     fn new(model: &'a Model) -> Self {
         Writer {
             model,
-            lines: Vec::new(),
+            lines: Lines::default(),
             marks: HashMap::default(),
             body_marks: HashMap::default(),
             products: HashMap::default(),
@@ -147,7 +186,7 @@ impl<'a> Writer<'a> {
 
     /// Adds an entity; its number.
     fn add(&mut self, line: String) -> usize {
-        self.lines.push(line);
+        self.lines.push(&line);
         self.lines.len()
     }
 
@@ -157,12 +196,15 @@ impl<'a> Writer<'a> {
         if name.is_empty() {
             return;
         }
-        let line = &mut self.lines[id - 1];
+        let mut line = self.lines[id - 1].to_string();
         if line.contains("REPRESENTATION_ITEM('')") {
-            *line = line.replacen("REPRESENTATION_ITEM('')", &format!("REPRESENTATION_ITEM('{name}')"), 1);
+            line = line.replacen("REPRESENTATION_ITEM('')", &format!("REPRESENTATION_ITEM('{name}')"), 1);
         } else if let Some(at) = line.find("(''") {
             line.replace_range(at..at + 3, &format!("('{name}'"));
+        } else {
+            return;
         }
+        self.lines.replace(id - 1, line);
     }
 
     /// A string in STEP's form: quotes doubled, non-ASCII characters encoded (`\X2\..\X0\`).
@@ -403,7 +445,7 @@ impl<'a> Writer<'a> {
         }
         let context = self.geometric_context();
         // (Units of area and volume: the length unit squared and cubed.)
-        let length = self.lines.iter().position(|l| l.contains("LENGTH_UNIT()")).map_or(0, |i| i + 1);
+        let length = (0..self.lines.len()).position(|i| self.lines[i].contains("LENGTH_UNIT()")).map_or(0, |i| i + 1);
         let mut items: Vec<(&str, String)> = Vec::new();
         if let Some(c) = v.centroid {
             items.push(("centroid", format!("CARTESIAN_POINT('centre point',({},{},{}))", real(c.x), real(c.y), real(c.z))));
@@ -672,8 +714,25 @@ impl<'a> Writer<'a> {
     fn points(&mut self, points: &[Point]) -> Vec<usize> {
         const CHUNK: usize = 4096;
         let chunks: Vec<&[Point]> = points.chunks(CHUNK).collect();
-        let lines = crate::parallel::map(&chunks, |chunk| chunk.iter().map(|p| triple("CARTESIAN_POINT('',(", [p.x, p.y, p.z])).collect::<Vec<String>>());
-        lines.into_iter().flatten().map(|line| self.add(line)).collect()
+        // (Each chunk's lines in one string, with where each ends.)
+        let lines = crate::parallel::map(&chunks, |chunk| {
+            let (mut text, mut ends) = (String::new(), Vec::with_capacity(chunk.len()));
+            for p in chunk.iter() {
+                text.push_str(&triple("CARTESIAN_POINT('',(", [p.x, p.y, p.z]));
+                ends.push(text.len());
+            }
+            (text, ends)
+        });
+        let mut ids = Vec::with_capacity(points.len());
+        for (text, ends) in lines {
+            let mut start = 0;
+            for end in ends {
+                self.lines.push(&text[start..end]);
+                ids.push(self.lines.len());
+                start = end;
+            }
+        }
+        ids
     }
 
     fn direction(&mut self, d: Direction) -> usize {
