@@ -636,7 +636,7 @@ fn offset_faces(model: &mut Model, shape: Shape, distance: f64, own: &[(NodeId, 
         }
         own.iter().find(|(n, _)| *n == node).map_or(distance, |(_, d)| *d)
     };
-    // (Faces of tori whose tubes, moved, reach their axis within the faces' bounds: the
+    // (Faces of tori whose tubes, moved, pass their axis within the faces' bounds: the
     // moved face would close on the axis there and pass through itself.)
     let mut across_axis: Vec<NodeId> = Vec::new();
     // (Each face's parameter bounds: an offset may be a simpler surface over the face alone.)
@@ -648,7 +648,7 @@ fn offset_faces(model: &mut Model, shape: Shape, distance: f64, own: &[(NodeId, 
         let along = if face.orientation == Orientation::Reversed { -d } else { d };
         if let Some((minor, major)) = moved_tube(surface, along) {
             let (_, _, v0, v1) = model.face_uv_bounds(Shape { orientation: Orientation::Forward, ..face });
-            if d != 0.0 && reaches_axis(major, minor, v0, v1) {
+            if d != 0.0 && passes_axis(major, minor, v0, v1) {
                 across_axis.push(face.node);
             }
         }
@@ -1094,9 +1094,10 @@ fn spindle(surface: &Surface, distance: f64) -> Option<Surface> {
 }
 
 /// Whether a torus's tube of (signed) radius `minor` about its middle circle of radius
-/// `major` reaches the axis between the tube's angles `v0` and `v1`: its circles' radii,
-/// `major + minor cos v`, vanish or turn negative there.
-fn reaches_axis(major: f64, minor: f64, v0: f64, v1: f64) -> bool {
+/// `major` passes its axis between the tube's angles `v0` and `v1`: its circles' radii,
+/// `major + minor cos v`, turn negative there. (A tube reaching the axis just there, a
+/// horn torus's, its circle at the axis a point, does not pass through itself.)
+fn passes_axis(major: f64, minor: f64, v0: f64, v1: f64) -> bool {
     let pi = std::f64::consts::PI;
     let mut angles = vec![v0, v1];
     let mut k = (v0 / pi).ceil();
@@ -1104,7 +1105,7 @@ fn reaches_axis(major: f64, minor: f64, v0: f64, v1: f64) -> bool {
         angles.push(k * pi);
         k += 1.0;
     }
-    angles.iter().any(|&v| major + minor * v.cos() <= crate::tolerance::LINEAR)
+    angles.iter().any(|&v| major + minor * v.cos() < -crate::tolerance::LINEAR)
 }
 
 /// Whether `surface` (a torus, or one trimmed) moved `distance` along its normal `∂u × ∂v`
@@ -2292,6 +2293,23 @@ mod tests {
             let expected = v0 - 2.0 * dimple;
             assert!((v - expected).abs() < 1e-9 * expected, "{k}: {v}, not {expected}");
         }
+    }
+
+    /// A torus (tube 2 about a circle of radius 4) grown by 2: the grown tube, of radius 4,
+    /// just reaches the axis, at the origin, without passing it: the horn torus, one face as
+    /// the torus's (not refused as a tube carried across its axis).
+    #[test]
+    fn a_torus_grown_just_to_its_hole_is_a_horn_torus() {
+        let mut model = Model::new();
+        let torus = crate::primitives::Torus::new(4.0, 2.0).build(&mut model).unwrap();
+        let grown = shape(&mut model, torus, 2.0, Join::Arc).unwrap();
+        valid(&model, grown);
+        assert_eq!(model.unique_subshapes(grown, NodeKind::Face).len(), 1);
+        let pi = std::f64::consts::PI;
+        let (v, a) = (volume(&model, grown).mass, crate::properties::area(&model, grown).mass);
+        let (volume_expected, area_expected) = (2.0 * pi * pi * 64.0, 4.0 * pi * pi * 16.0);
+        assert!((v - volume_expected).abs() < 1e-9 * volume_expected, "{v}, not {volume_expected}");
+        assert!((a - area_expected).abs() < 1e-9 * area_expected, "{a}, not {area_expected}");
     }
 
     /// A torus (tube 2 about a circle of radius 4) grown by 3: the grown tube, of radius 5,
