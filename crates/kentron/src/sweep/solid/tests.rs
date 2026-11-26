@@ -786,3 +786,206 @@ fn a_ring_turned_nearly_whole() {
     }
 }
 
+
+// Sweeps known in closed form (see `exact`): each built face by face, checked against its
+// closed form.
+
+/// The exact sweep, its refusal shown (not left to the general sweep).
+fn exact_sweep(model: &mut Model, tool: Shape, motion: &RigidMotion) -> Option<Shape> {
+    let tool = exact::recognised(model, tool).expect("a tool known in closed form");
+    exact::sweep(model, tool, motion).map(|swept| swept.unwrap())
+}
+
+fn face_count(model: &Model, shape: Shape) -> usize {
+    model.unique_subshapes(shape, NodeKind::Face).len()
+}
+
+/// A ball-end mill as a CAM tool is drawn: its half section (the quarter circle of radius `r`
+/// from its tip up to its equator, the side up to `length` above the tip) revolved about its
+/// axis (z), its tip at `tip`.
+fn ball_end_mill(model: &mut Model, r: f64, length: f64, tip: Point) -> Shape {
+    use crate::sketch::{self, Outcome, Step};
+    let xz = Frame::new(Point::ORIGIN, Direction::new(0.0, -1.0, 0.0), Direction::X);
+    let half = [Step::Start(0.0, 0.0), Step::Heading(0.0), Step::Arc { radius: r, angle: 90.0 }, Step::To(r, length), Step::To(0.0, length)];
+    let face = sketch::profile(model, xz, &half, Outcome::Face).unwrap();
+    let mill = crate::sweep::revolve(model, face, Axis::new(Point::ORIGIN, Direction::Z), TAU).unwrap().shape;
+    crate::modify::transform(model, mill, &Transform::translation(tip - Point::ORIGIN), Default::default()).unwrap()
+}
+
+/// The volume of a ball-end mill of radius `r` whose cylinder rises `h` above the ball's
+/// centre, slid by `length` at the slope `beta` to the plane square to its axis: the mill and,
+/// along the slide, its shadow on the plane square to it (Cavalieri): the half disc of the
+/// half ball's outline, the rectangle between the cylinder's lines, and the half of the
+/// top's ellipse.
+fn ball_end_slid_volume(r: f64, h: f64, length: f64, beta: f64) -> f64 {
+    let mill = 2.0 / 3.0 * PI * r.powi(3) + PI * r * r * h;
+    mill + length * (0.5 * PI * r * r + 2.0 * r * h * beta.cos() + 0.5 * PI * r * r * beta.sin().abs())
+}
+
+/// Its area: the mill's (but where the slide sweeps across it: one half ball, the cylinder,
+/// the top once) and the outline slid: the half circle, the cylinder's lines (parallelograms),
+/// the top's half rim seen along the slide (half the ellipse's perimeter).
+fn ball_end_slid_area(r: f64, h: f64, length: f64, beta: f64) -> f64 {
+    let n = 20000;
+    let half_ellipse: f64 = (0..n)
+        .map(|i| {
+            let phi = PI * (i as f64 + 0.5) / n as f64;
+            (r * r * phi.sin().powi(2) + (r * beta.sin() * phi.cos()).powi(2)).sqrt() * PI / n as f64
+        })
+        .sum();
+    3.0 * PI * r * r + 2.0 * PI * r * h + length * (PI * r + 2.0 * h * beta.cos() + half_ellipse)
+}
+
+/// A ball slid is built as a cylinder between two half spheres.
+#[test]
+fn a_ball_slid_is_built_as_a_capsule() {
+    let mut model = Model::new();
+    let ball = Sphere::new(1.5).with_frame(Frame::from_z(Point::new(1.0, 2.0, 3.0), Direction::Z)).build(&mut model).unwrap();
+    let by = Vector::new(3.0, -2.0, 4.0);
+    let swept = exact_sweep(&mut model, ball, &RigidMotion::Slide { by }).unwrap();
+    assert_eq!(face_count(&model, swept), 3);
+    let (volume, area) = measure(&model, swept);
+    let (r, l) = (1.5f64, by.length());
+    assert_close("volume", volume, 4.0 / 3.0 * PI * r.powi(3) + PI * r * r * l, 1e-10);
+    assert_close("area", area, 4.0 * PI * r * r + 2.0 * PI * r * l, 1e-10);
+    check(&model, swept);
+}
+
+/// A ball turned partway about a line clear of it: a piece of torus, half balls at its ends
+/// (Pappus: the disc's area times its centre's path, and one ball).
+#[test]
+fn a_ball_turned_partway_is_a_torus_piece() {
+    let mut model = Model::new();
+    let (r, big) = (1.25, 4.0);
+    let axis = Axis::new(Point::new(1.0, -1.0, 2.0), Direction::new(0.3, -0.2, 1.0));
+    let off = Vector::from(perpendicular_to(axis.direction)) * big;
+    let ball = Sphere::new(r).with_frame(Frame::from_z(axis.origin + off + Vector::from(axis.direction) * 0.7, Direction::X)).build(&mut model).unwrap();
+    for (from, to) in [(0.3, 2.5), (1.0, -3.0), (-0.5, 4.9)] {
+        let swept = exact_sweep(&mut model, ball, &RigidMotion::Turn { axis, from, to }).unwrap();
+        assert_eq!(face_count(&model, swept), 3);
+        let angle = f64::abs(to - from);
+        let (volume, area) = measure(&model, swept);
+        assert_close("volume", volume, PI * r * r * big * angle + 4.0 / 3.0 * PI * r.powi(3), 1e-9);
+        assert_close("area", area, 2.0 * PI * r * big * angle + 4.0 * PI * r * r, 1e-9);
+        check(&model, swept);
+    }
+    // (A whole turn or more: the whole torus.)
+    let swept = exact_sweep(&mut model, ball, &RigidMotion::Turn { axis, from: 0.0, to: 7.0 }).unwrap();
+    let (volume, area) = measure(&model, swept);
+    assert_close("volume", volume, 2.0 * PI * PI * big * r * r, 1e-9);
+    assert_close("area", area, 4.0 * PI * PI * big * r, 1e-9);
+    check(&model, swept);
+    // (Turned so far that the end balls meet, or about a line through the ball: left to the
+    // general sweep.)
+    assert!(exact_sweep(&mut model, ball, &RigidMotion::Turn { axis, from: 0.0, to: TAU - 0.4 }).is_none());
+    let near = Sphere::new(r).with_frame(Frame::from_z(axis.origin + off * 0.25, Direction::Z)).build(&mut model).unwrap();
+    assert!(exact_sweep(&mut model, near, &RigidMotion::Turn { axis, from: 0.0, to: 1.0 }).is_none());
+    // (A ball turned about a line through its centre: itself.)
+    let on = Sphere::new(r).with_frame(Frame::from_z(axis.origin, Direction::Z)).build(&mut model).unwrap();
+    let swept = exact_sweep(&mut model, on, &RigidMotion::Turn { axis, from: 0.0, to: 1.0 }).unwrap();
+    assert_close("volume", measure(&model, swept).0, 4.0 / 3.0 * PI * r.powi(3), 1e-10);
+    check(&model, swept);
+}
+
+fn perpendicular_to(d: Direction) -> Direction {
+    let v = Vector::from(d);
+    Direction::from_vector(v.cross(Vector::new(1.0, 0.0, 0.0)))
+}
+
+/// A ball screwed six turns round a rod (a thread's groove): the tube about its centre's helix
+/// (its volume the disc's area times the helix's length, as for any embedded tube, and one
+/// ball) in quarter turns, without resolving.
+#[test]
+fn a_ball_screwed_six_turns_is_a_helical_tube() {
+    let mut model = Model::new();
+    let (r, big, lead) = (1.0, 5.0, 4.0);
+    let ball = Sphere::new(r).with_frame(Frame::from_z(Point::new(big, 0.0, -2.0), Direction::Z)).build(&mut model).unwrap();
+    let screw = RigidMotion::Screw { axis: Axis::new(Point::ORIGIN, Direction::Z), lead, from: 0.0, to: 6.0 * TAU };
+    let swept = exact_sweep(&mut model, ball, &screw).unwrap();
+    assert_eq!(face_count(&model, swept), 24 + 2);
+    let (volume, area) = measure(&model, swept);
+    let length = 6.0 * TAU * (big * big + (lead / TAU).powi(2)).sqrt();
+    assert_close("volume", volume, PI * r * r * length + 4.0 / 3.0 * PI * r.powi(3), 1e-8);
+    assert_close("area", area, 2.0 * PI * r * length + 4.0 * PI * r * r, 1e-8);
+    check(&model, swept);
+    // (Screwed backwards, down the other way.)
+    let back = RigidMotion::Screw { axis: Axis::new(Point::new(0.0, 0.0, 1.0), Direction::new(0.0, 0.0, -1.0)), lead: 2.5, from: 1.0, to: -2.0 };
+    let swept = exact_sweep(&mut model, ball, &back).unwrap();
+    let length = 3.0 * (big * big + (2.5 / TAU).powi(2)).sqrt();
+    assert_close("volume", measure(&model, swept).0, PI * r * r * length + 4.0 / 3.0 * PI * r.powi(3), 1e-8);
+    check(&model, swept);
+}
+
+/// Helices the tube about which runs into itself are left to the general sweep: turns closer
+/// than the ball's width, a curvature tighter than the ball.
+#[test]
+fn a_ball_screwed_into_itself_is_left_to_the_general_sweep() {
+    let mut model = Model::new();
+    let ball = Sphere::new(1.0).with_frame(Frame::from_z(Point::new(5.0, 0.0, 0.0), Direction::Z)).build(&mut model).unwrap();
+    let axis = Axis::new(Point::ORIGIN, Direction::Z);
+    assert!(exact_sweep(&mut model, ball, &RigidMotion::Screw { axis, lead: 1.5, from: 0.0, to: 2.0 * TAU }).is_none());
+    // (But for less than a turn the turns do not come round.)
+    assert!(exact_sweep(&mut model, ball, &RigidMotion::Screw { axis, lead: 1.5, from: 0.0, to: 0.8 * TAU }).is_some());
+    let tight = Sphere::new(2.0).with_frame(Frame::from_z(Point::new(1.5, 0.0, 0.0), Direction::Z)).build(&mut model).unwrap();
+    assert!(exact_sweep(&mut model, tight, &RigidMotion::Screw { axis, lead: 3.0, from: 0.0, to: 2.0 * TAU }).is_none());
+}
+
+/// A ball-end mill slid level, up and down aslant, and along its axis: built face by face,
+/// its volume and area the closed forms (Cavalieri along the slide).
+#[test]
+fn a_ball_end_mill_slid() {
+    let (r, length) = (3.0, 30.0);
+    let h = length - r;
+    for by in [Vector::new(5.0, 0.0, 0.0), Vector::new(4.0, 3.0, -1.2), Vector::new(-2.0, 1.0, 2.5), Vector::new(0.0, 0.0, -7.0), Vector::new(0.0, 0.0, 4.0), Vector::new(1e-3, 0.0, 5.0)] {
+        let mut model = Model::new();
+        let mill = ball_end_mill(&mut model, r, length, Point::new(10.0, 4.0, -3.0));
+        let swept = exact_sweep(&mut model, mill, &RigidMotion::Slide { by }).unwrap();
+        check(&model, swept);
+        let (volume, area) = measure(&model, swept);
+        let across = (by.x * by.x + by.y * by.y).sqrt();
+        let beta = by.z.atan2(across);
+        if across == 0.0 {
+            let lengthened = 2.0 / 3.0 * PI * r.powi(3) + PI * r * r * (h + by.z.abs());
+            assert_close("volume", volume, lengthened, 1e-9);
+            continue;
+        }
+        assert_close("volume", volume, ball_end_slid_volume(r, h, by.length(), beta), 1e-9);
+        assert_close("area", area, ball_end_slid_area(r, h, by.length(), beta), 1e-8);
+    }
+}
+
+/// Tools that are not a ball or a ball-end mill (a drum; a ball on a cylinder of another
+/// radius; a ball cut by a plane through it) are not taken for one.
+#[test]
+fn tools_not_known_in_closed_form() {
+    let mut model = Model::new();
+    let drum = Cylinder::new(3.0, 6.0).build(&mut model).unwrap();
+    assert!(exact::recognised(&model, drum).is_none());
+    use crate::sketch::{self, Outcome, Step};
+    let xz = Frame::new(Point::ORIGIN, Direction::new(0.0, -1.0, 0.0), Direction::X);
+    let wide = [Step::Start(0.0, 0.0), Step::Heading(0.0), Step::Arc { radius: 3.0, angle: 90.0 }, Step::To(3.5, 3.0), Step::To(3.5, 10.0), Step::To(0.0, 10.0)];
+    let face = sketch::profile(&mut model, xz, &wide, Outcome::Face).unwrap();
+    let stepped = crate::sweep::revolve(&mut model, face, Axis::new(Point::ORIGIN, Direction::Z), TAU).unwrap().shape;
+    assert!(exact::recognised(&model, stepped).is_none());
+    let cap = [Step::Start(0.0, 0.0), Step::Heading(0.0), Step::Arc { radius: 3.0, angle: 60.0 }, Step::ToX(0.0)];
+    let face = sketch::profile(&mut model, xz, &cap, Outcome::Face).unwrap();
+    let cap = crate::sweep::revolve(&mut model, face, Axis::new(Point::ORIGIN, Direction::Z), TAU).unwrap().shape;
+    assert!(exact::recognised(&model, cap).is_none());
+}
+
+/// Consecutive moves of a ball-end mill along a sampled surface, each swept exactly, united:
+/// one closed shell.
+#[test]
+fn consecutive_moves_of_a_ball_end_mill_united() {
+    let mut model = Model::new();
+    let f = |x: f64, y: f64| -5.0 + 4.0 * (PI * x / 50.0).sin() * (PI * y / 40.0).sin();
+    let y = 4.0;
+    let points: Vec<Point> = (0..5).map(|i| Point::new(5.0 + 5.0 * i as f64, y, f(5.0 + 5.0 * i as f64, y))).collect();
+    let mut sweeps = Vec::new();
+    for w in points.windows(2) {
+        let mill = ball_end_mill(&mut model, 3.0, 30.0, w[0]);
+        sweeps.push(exact_sweep(&mut model, mill, &RigidMotion::Slide { by: w[1] - w[0] }).unwrap());
+    }
+    let union = crate::boolean::union_all(&mut model, &sweeps).unwrap();
+    check(&model, union);
+}

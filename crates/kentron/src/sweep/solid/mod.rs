@@ -79,6 +79,7 @@
 
 mod carried;
 mod contour;
+mod exact;
 mod product;
 
 use std::f64::consts::TAU;
@@ -221,6 +222,13 @@ pub fn solid(model: &mut Model, tool: Shape, motion: &RigidMotion) -> Result<Sha
     let solids = model.unique_subshapes(tool, NodeKind::Solid);
     if solids.len() != 1 || model.unique_subshapes(solids[0], NodeKind::Shell).len() != 1 {
         return Err(Error::InvalidInput("a sweep carries one solid of one shell".into()));
+    }
+    // (A tool whose sweep is known in closed form, a ball or a ball-end mill, built so where
+    // the motion is one taken for it; the general sweep where that fails.)
+    if let Some(tool) = exact::recognised(model, solids[0]) {
+        if let Some(Ok(swept)) = exact::sweep(model, tool, motion) {
+            return Ok(swept);
+        }
     }
     if let RigidMotion::Carried(carriage) = motion {
         // (Where the curves it grazes the tool along move over it, a prism moved in the plane

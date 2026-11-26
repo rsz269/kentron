@@ -1232,7 +1232,7 @@ fn screwed_along_itself(curve: &Curve, axis: crate::math::Axis) -> bool {
 /// The surface through the paths of `profile`'s poles (each pole's path's poles over `knots`,
 /// the same for all): u the profile's parameter, v the motion's. The motion is rigid, so the
 /// surface's iso-curves are the profile moved, exactly where the paths are.
-fn profiled_surface(profile: &BSplineCurve, path_poles: &dyn Fn(Point) -> Result<Vec<Point>>, knots: KnotVector) -> Result<Surface> {
+pub(super) fn profiled_surface(profile: &BSplineCurve, path_poles: &dyn Fn(Point) -> Result<Vec<Point>>, knots: KnotVector) -> Result<Surface> {
     let poles: Vec<Vec<Point>> = profile.poles().iter().map(|&q| path_poles(q)).collect::<Result<_>>()?;
     let u = if profile.is_periodic() {
         KnotVector::periodic(profile.knots().to_vec(), profile.multiplicities().to_vec(), profile.degree())
@@ -1301,7 +1301,7 @@ fn turn_circle(axis: crate::math::Axis, p: Point) -> Result<Circle> {
 /// The screw sampled as the pipes' motions are, finely enough that the path of each point
 /// within `reach` of the axis (the quintics through its places, velocities and accelerations)
 /// lies within 1e-10 of `size` of its helix.
-fn screw_motion(axis: crate::math::Axis, angle: f64, rise: f64, size: f64, reach: f64) -> Result<PieceMotion> {
+pub(super) fn screw_motion(axis: crate::math::Axis, angle: f64, rise: f64, size: f64, reach: f64) -> Result<PieceMotion> {
     let along = Vector::from(axis.direction);
     let at = move |f: f64| Transform::translation(along * (rise * f)) * Transform::rotation(axis, angle * f);
     let rates = move |f: f64, p: Point| -> (Vector, Vector) {
@@ -1375,15 +1375,15 @@ fn perpendicular(d: Direction) -> Direction {
 /// An edge's curve over `[a, b]` as a B-spline: exactly where it converts so (a circle's
 /// arcs as rational quadratics), else cubics through its points within 1e-10 of the size. Where
 /// the B-spline's parameter is not the edge's, `sigma` maps the edge's to it.
-struct Profile {
-    spline: BSplineCurve,
+pub(super) struct Profile {
+    pub(super) spline: BSplineCurve,
     /// The B-spline's parameter (as the first coordinate) against the edge's, within 1e-12 of
     /// the size in space; `None` where they are one.
-    sigma: Option<crate::geometry::curve2::BSplineCurve2>,
+    pub(super) sigma: Option<crate::geometry::curve2::BSplineCurve2>,
 }
 
 impl Profile {
-    fn of(curve: &Curve, a: f64, b: f64, size: f64) -> Result<Profile> {
+    pub(super) fn of(curve: &Curve, a: f64, b: f64, size: f64) -> Result<Profile> {
         let exact = crate::geometry::convert::curve_to_bspline(&Curve::Trimmed(TrimmedCurve::new(curve.clone(), a, b)));
         if let Some(bs) = exact {
             let same = (bs.first_parameter() - a).abs() <= 1e-12 * (1.0 + a.abs()) && (bs.last_parameter() - b).abs() <= 1e-12 * (1.0 + b.abs());
