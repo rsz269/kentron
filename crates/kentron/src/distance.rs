@@ -252,7 +252,15 @@ fn vertex_to_faces(model: &Model, vertex: Shape, faces: Shape) -> Option<(f64, P
             let Ok(c) = &kept.0 else { return None };
             match c.locate_on_faces(q) {
                 PointLocation::Inside => nearest = Some((d, q)),
-                PointLocation::Boundary => return None,
+                // On the boundary: as near as the boundary's nearest point, within the
+                // tolerance, when that is (a sphere's face whose rim lies where the point's
+                // foot does); else not told here.
+                PointLocation::Boundary => {
+                    if nearest.is_some_and(|n| n.0 - d <= crate::tolerance::LINEAR) {
+                        continue;
+                    }
+                    return None;
+                }
                 PointLocation::Outside => {}
             }
         }
@@ -301,24 +309,40 @@ fn vertex_to_edges(model: &Model, vertex: Shape, edges: Shape) -> Option<(f64, P
 fn edge_nearest(model: &Model, edge: Shape, p: Point) -> Option<Point> {
     match model.edge_curve(Shape { orientation: Orientation::Forward, ..edge }) {
         Some((curve @ (Curve::Line(_) | Curve::Circle(_)), first, last)) => Some(crate::geometry::extrema::nearest_on_curve(p, &curve, first, last).point),
-        Some(_) => None,
+        // Other curves: the nearest of the distance's minima over the range, its ends
+        // included, all found by the search over the curve's samples (each span's).
+        Some((curve, first, last)) => nearest_by_search(&curve, first, last, p),
         None => Some(model.point(model.edge_vertices(edge).0)),
     }
+}
+
+/// The point of `curve` over `[first, last]` nearest to `p`: the nearest of the distance's
+/// minima there, the range's ends included. `None` where the search fails.
+fn nearest_by_search(curve: &Curve, first: f64, last: f64, p: Point) -> Option<Point> {
+    use crate::geometry::extrema::{PointCurveSearch, SearchMode};
+    let (lo, hi) = (first.min(last), first.max(last));
+    let found = PointCurveSearch::with_domain(curve, lo, hi).find_with(p, crate::tolerance::LINEAR, SearchMode::Min, true).ok()?;
+    let ends = [lo, hi].map(|t| curve.point(t));
+    found.iter().map(|e| e.point).chain(ends).min_by(|a, b| p.distance(*a).total_cmp(&p.distance(*b)))
 }
 
 /// The points of `surface` (a plane, cylinder, cone, sphere or torus, whole) where the
 /// distance from `p` is stationary: its foot on a plane; on the others, in the plane through
 /// the axis (or centre) and `p`, the feet on the meridians there (both sides of the axis).
-/// `None` for other surfaces, and where `p` lies on the axis or at the centre (the extrema
-/// there not isolated).
+/// Where `p` lies on the axis or at the centre, the extrema are not isolated: each is a
+/// circle round the axis (the whole sphere about its centre), and one point of it stands for
+/// it, in the plane through the axis and the frame's x direction. (A face holds such a
+/// connected set wholly, or not at all, or meets it on its boundary, whose nearest point is
+/// then as near: so one point of it tells, for [`vertex_to_faces`].) `None` for other
+/// surfaces, and for a point on a torus's core circle.
 fn surface_extrema(surface: &Surface, p: Point) -> Option<Vec<Point>> {
     let tiny = |d: Vector| d.length() <= 1e-12 * (1.0 + (p - Point::ORIGIN).length());
     // `p` from the axis through `origin` along `z`: the unit direction away from it in the
-    // plane through the axis and `p`.
-    let away = |origin: Point, z: Vector| -> Option<Vector> {
+    // plane through the axis and `p`; for `p` on the axis, the frame's x direction (`x`).
+    let away = |origin: Point, z: Vector, x: Vector| -> Option<Vector> {
         let d = p - origin;
         let radial = d - z * d.dot(z);
-        (!tiny(radial)).then(|| radial * (1.0 / radial.length()))
+        Some(if tiny(radial) { x } else { radial * (1.0 / radial.length()) })
     };
     Some(match surface {
         Surface::Plane(plane) => {
@@ -328,23 +352,20 @@ fn surface_extrema(surface: &Surface, p: Point) -> Option<Vec<Point>> {
         }
         Surface::Cylinder(c) => {
             let (o, z) = (c.frame().origin(), Vector::from(c.frame().z()));
-            let e = away(o, z)?;
+            let e = away(o, z, Vector::from(c.frame().x()))?;
             let at = o + z * (p - o).dot(z);
             vec![at + e * c.radius(), at - e * c.radius()]
         }
         Surface::Sphere(s) => {
             let d = p - s.frame().origin();
-            if tiny(d) {
-                return None;
-            }
-            let e = d * (1.0 / d.length());
+            let e = if tiny(d) { Vector::from(s.frame().x()) } else { d * (1.0 / d.length()) };
             vec![s.frame().origin() + e * s.radius(), s.frame().origin() - e * s.radius()]
         }
         Surface::Cone(c) => {
             // Each meridian line through the plane: from the circle at the frame, along the
             // generator (both nappes).
             let (o, z) = (c.frame().origin(), Vector::from(c.frame().z()));
-            let e = away(o, z)?;
+            let e = away(o, z, Vector::from(c.frame().x()))?;
             let (sin, cos) = c.semi_angle_sin_cos();
             [e, -e]
                 .iter()
@@ -356,7 +377,7 @@ fn surface_extrema(surface: &Surface, p: Point) -> Option<Vec<Point>> {
         }
         Surface::Torus(t) => {
             let (o, z) = (t.frame().origin(), Vector::from(t.frame().z()));
-            let e = away(o, z)?;
+            let e = away(o, z, Vector::from(t.frame().x()))?;
             let mut found = Vec::with_capacity(4);
             for centre in [o + e * t.major_radius(), o - e * t.major_radius()] {
                 let d = p - centre;
@@ -1379,5 +1400,42 @@ mod tests {
         let edge = crate::make::edge(&mut model, p, q).unwrap();
         assert!((distance(&mut model, edge, outside).unwrap().value - (100.0f64 + 49.0).sqrt()).abs() < 1e-9);
     }
-}
 
+    /// A point and faces whose nearest points are not isolated (on a cylinder's axis, at a
+    /// sphere's centre), or lie on the face's rim; and a point and a B-spline edge: found
+    /// exactly, without meshes, as the meshes find them.
+    #[test]
+    fn distances_found_exactly_where_extrema_are_not_isolated_or_on_a_rim() {
+        let mut model = Model::new();
+        let cylinder = Cylinder::new(4.0, 6.0).build(&mut model).unwrap();
+        let side = model.explore(cylinder, NodeKind::Face).find(|&f| matches!(model.surface(f), Some(Surface::Cylinder(_)))).unwrap();
+        // On the axis, within the side's height: its radius; above it, to its rim.
+        for (z, want) in [(3.0, 4.0), (8.0, (16.0f64 + 4.0).sqrt())] {
+            let v = crate::make::vertex(&mut model, Point::new(0.0, 0.0, z));
+            let exact = vertex_to_faces(&model, v, side).expect("found exactly").0;
+            assert!((exact - want).abs() < 1e-9, "{z}: {exact}");
+            let meshed = distance_within(&mut model, side, v, f64::INFINITY).unwrap().value;
+            assert!((exact - meshed).abs() < 1e-6, "{z}: {exact} {meshed}");
+        }
+        // A hemisphere from its centre (every point of it as near), and from a point whose
+        // foot lies on its rim.
+        let ball = Sphere::new(2.0).build(&mut model).unwrap();
+        let below = Cuboid::from_corners(Point::new(-5.0, -5.0, -5.0), Point::new(5.0, 5.0, 0.0)).build(&mut model).unwrap();
+        let half = crate::boolean::difference(&mut model, ball, below).unwrap();
+        let dome = model.explore(half, NodeKind::Face).find(|&f| matches!(model.surface(f), Some(Surface::Sphere(_)))).unwrap();
+        for (p, want) in [(Point::new(0.0, 0.0, 0.0), 2.0), (Point::new(3.0, 0.0, 0.0), 1.0), (Point::new(0.0, 4.0, -3.0), (4.0f64 - 2.0).hypot(3.0))] {
+            let v = crate::make::vertex(&mut model, p);
+            let exact = vertex_to_faces(&model, v, dome).expect("found exactly").0;
+            assert!((exact - want).abs() < 1e-9, "{p:?}: {exact}");
+        }
+        // A B-spline edge (a circle as one).
+        let arc = crate::geometry::curve::Curve::Circle(crate::geometry::curve::Circle::new(Frame::from_z(Point::ORIGIN, Direction::Z), 5.0));
+        let spline = crate::geometry::convert::curve_to_bspline(&arc).unwrap();
+        let edge = crate::make::edge_from_curve(&mut model, crate::geometry::curve::Curve::BSpline(spline)).unwrap();
+        for (p, want) in [(Point::new(1.0, 1.0, 1.0), (5.0 - 2f64.sqrt()).hypot(1.0)), (Point::new(9.0, 3.0, 0.0), 90f64.sqrt() - 5.0)] {
+            let v = crate::make::vertex(&mut model, p);
+            let exact = vertex_to_edges(&model, v, edge).expect("found exactly").0;
+            assert!((exact - want).abs() < 1e-9, "{p:?}: {exact}");
+        }
+    }
+}
