@@ -425,6 +425,45 @@ is not.
   `split_face`, the regions' interior points (outside every hole) and the faces built from
   them.
 
+### Consecutive moves of a ball-end mill united where their end poses coincide
+
+*Found 2026-11-26.*
+
+No figure: the missing face is a lune of the ball a few hundredths wide, too thin to see
+beside the moves' sweeps.
+
+A ball-end mill (a half ball of radius 3 under a cylinder up to 30 above its tip) slid along
+two consecutive aslant moves, the end of one the start of the next: `boolean::union` of
+the two sweeps has the right volume (2587.896: the sweeps, 1704.61 and 1703.17, less the
+tool at the shared pose) but leaves its shell open, and `union_all` of a pass's moves
+refuses ("a union of closed shells left a shell open"). At the shared pose the first
+sweep ends with the ball's half in front of its motion and the second starts with the half
+behind its own: the two halves, split by the two moves' characteristic great circles (a
+few degrees apart), overlap in a lune of the one sphere, where both sweeps' boundaries
+coincide with the solid on the same side. The union keeps the circles bounding the lune
+(on the first sweep's characteristic cylinder and the second's) and drops the lune
+itself, its edges then used once each.
+
+- **Repro:** the tool `sketch::profile` of [Start(0, 0), Heading(0), Arc { radius: 3,
+  angle: 90 }, To(3, 30), To(0, 30)] on the xz plane, revolved about z; placed at (10, 4,
+  f(10, 4)) and slid to (15, 4, f(15, 4)), and from there slid to (20, 4, f(20, 4)), with
+  f(x, y) = −5 + 4 sin(πx/50) sin(πy/40) (brep-bench's cnc/ball-end-surface-raster, its
+  pass at y = 4, moves 3 and 4); `boolean::union` of the two sweeps, then
+  `validity::check`. The open edges are the arcs of the two characteristic curves at x ≈ 15
+  from (15, 1, −1) and (15, 7, −1) down past the tip.
+- **Evidence:** each sweep is valid; the union's volume is right; `union_all` of the
+  moves refuses for each of passes 2 to 18 (passes 0 and 1, where the surface is level
+  or nearly, unite), in pass 2 first at moves 3 and 4. The bench case also meets a sweep
+  refusal of its own at pass 19 ("a point that does not settle on the curve").
+- **Tried:** the characteristic great circle of the ball taken exactly (a circle, its
+  pcurve fitted, so the first move's char sweep is an exact cylinder): the union fails
+  the same way; and the second move's circle passes close to the ball's pole, where its
+  pcurve is not fitted.
+- **Needed:** the boolean's handling of faces of two operands on one sphere overlapping in
+  a lune bounded by curves tangent to the other operand's faces (each characteristic
+  cylinder touches the ball along its circle): the lune classified as on both boundaries
+  with the solids on one side, and kept once.
+
 ## pykentron
 
 ### Solids from placed shells keep copies of their faces
