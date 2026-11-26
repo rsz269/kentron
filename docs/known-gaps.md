@@ -464,6 +464,45 @@ itself, its edges then used once each.
   cylinder touches the ball along its circle): the lune classified as on both boundaries
   with the solids on one side, and kept once.
 
+## Sweeps of solids
+
+### Turns whose copies of the tool touch on the axis
+
+*Found 2026-11-26.*
+
+No figure: `sweep::solid` has no pykentron binding, and the repro is a Rust test.
+
+`sweep::solid` takes a turn about an axis meeting the tool: the tool's points on the axis
+stand still, and its product (the body, `W` at the end and the sheets `W`'s boundary sweeps)
+runs into itself round the axis, where it is split into pieces and the pieces it winds round
+kept. Where the axis pierces a face at a point the face's normal runs along it, every copy
+of that face (at the start, at the end, and the sheets its characteristic curves sweep) is
+tangent to the others there; the split (`boolean::enclosed_solids_at_once`, or one sheet
+after another) then closes only the small pieces covered twice next to the axis, and the
+volumes they add up to fall far short of the product's. The sweep is refused, not returned
+running into itself. A whole turn makes the same kind of contact where several edges meeting
+on the axis sweep one cone (a cube turned about its long diagonal: the three edges at each
+corner make one angle with it).
+
+- **Repro:** `turns_whose_sheets_touch_on_the_axis_are_refused` in
+  `crates/kentron/src/sweep/solid/tests.rs` (a rod of radius 0.5 along x turned 120° about
+  z; a cube turned whole about its diagonal); brep-bench's `swept/rod-spun-about-a-line-
+  through-it`, `swept/cube-spun-on-its-diagonal-inside-a-block` and
+  `swept/cone-spun-about-a-line-through-it` (refused: "a sweep running into itself, not split
+  into pieces").
+- **Evidence:** the rod's product is valid (20 faces, volume 42.237 counting what is covered
+  twice twice; the swept solid's is 41.671 by integrating circle by circle about the axis);
+  its split finds two pieces of 0.114 each, wound round twice, and nothing else. The cube's
+  finds pieces adding up to 33.517 of the product's 37.021. Forcing the side faces back to
+  general surfaces of revolution changes nothing.
+- **Tried:** exact elementary side faces (which made the ball, coin, end-mill and ring cases
+  pass); splitting one sheet after another when the split at once fails (the same pieces).
+- **Needed:** either the split taking faces tangent at a point they all pass through, or a
+  construction that keeps the copies apart there: for instance the tool cut by a plane
+  through the axis into pieces each on one side of it, each piece's sweep made apart and
+  the pieces' sweeps united (which needs the union to take sweeps sharing faces on that
+  plane).
+
 ## pykentron
 
 ### Solids from placed shells keep copies of their faces

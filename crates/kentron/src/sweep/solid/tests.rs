@@ -1,7 +1,7 @@
 use std::f64::consts::PI;
 
 use super::*;
-use crate::math::{Direction, Frame, Transform};
+use crate::math::{Direction, Frame, Point2, Transform};
 use std::f64::consts::TAU;
 use crate::primitives::{Cuboid, Cylinder, Sphere, Torus};
 use crate::{properties, validity};
@@ -637,4 +637,74 @@ fn a_rounded_block_slid_aslant() {
     let m: f64 = g.iter().map(|x| PI * x.length()).sum();
     let r = 1.0;
     assert_close("volume", volume, v + r * s + r * r * m + 4.0 / 3.0 * PI * r.powi(3), 1e-6);
+}
+
+/// A square bar carried round on a planet, turning against the carrier: the lines where the
+/// motion grazes its sides move over them, so it is no product; it is a prism moved in the
+/// plane square to it, and its sweep the region its square sweeps, extruded. Against that
+/// region's area counted over a grid (a point covered where some place, of 2048, puts it in the
+/// square; the boundary's cells half either way).
+#[test]
+fn a_square_on_a_planet_carrier() {
+    let mut model = Model::new();
+    let bar = Cuboid::new(2.0, 2.0, 2.0).with_frame(Frame::from_z(Point::new(4.0, -1.0, 0.0), Direction::Z)).build(&mut model).unwrap();
+    let place = |s: f64| {
+        let t = s * TAU;
+        Transform::rotation(Axis::new(Point::ORIGIN, Direction::Z), t) * Transform::rotation(Axis::new(Point::new(5.0, 0.0, 0.0), Direction::Z), -3.0 * t)
+    };
+    let swept = solid(&mut model, bar, &RigidMotion::Carried(Carriage(std::sync::Arc::new(place)))).unwrap();
+    check(&model, swept);
+    let (volume, _) = measure(&model, swept);
+    // (Where the place at `s` takes (x, y) back to, in the square |x − 5|, |y| ≤ 1.)
+    let n = 400;
+    let h = 14.0 / n as f64;
+    let mut area = 0.0;
+    for i in 0..n {
+        for j in 0..n {
+            let (x, y) = (-7.0 + h * (i as f64 + 0.5), -7.0 + h * (j as f64 + 0.5));
+            let covered = (0..2048).any(|k| {
+                let t = TAU * k as f64 / 2048.0;
+                // Back through the carrier's turn, then the bar's own.
+                let (c, s) = (t.cos(), t.sin());
+                let (u, v) = (c * x + s * y - 5.0, -s * x + c * y);
+                let (c3, s3) = ((3.0 * t).cos(), (3.0 * t).sin());
+                let (p, q) = (c3 * u - s3 * v, s3 * u + c3 * v);
+                p.abs() <= 1.0 && q.abs() <= 1.0
+            });
+            if covered {
+                area += h * h;
+            }
+        }
+    }
+    assert_close("volume", volume, 2.0 * area, 3e-3);
+}
+
+
+/// The bar on the planet carried a quarter turn, given by its places, against the same motion
+/// given as turns to the planar cut (`cut_by_motion`, whose velocities are exact): what the cut
+/// takes from a disc.
+#[test]
+fn a_square_on_a_planet_carrier_as_the_planar_cut_takes_it() {
+    use crate::sweep::{cut_by_motion, Blank, Motion, MotionStep, Tool};
+    let quarter = TAU / 4.0;
+    let mut model = Model::new();
+    let bar = Cuboid::new(2.0, 2.0, 2.0).with_frame(Frame::from_z(Point::new(4.0, -1.0, 0.0), Direction::Z)).build(&mut model).unwrap();
+    let place = move |s: f64| {
+        let t = s * quarter;
+        Transform::rotation(Axis::new(Point::ORIGIN, Direction::Z), t) * Transform::rotation(Axis::new(Point::new(5.0, 0.0, 0.0), Direction::Z), -3.0 * t)
+    };
+    let swept = solid(&mut model, bar, &RigidMotion::Carried(Carriage(std::sync::Arc::new(place)))).unwrap();
+    check(&model, swept);
+    let tool = Tool::Prism { frame: Frame::from_z(Point::new(0.0, 0.0, -1.0), Direction::Z), outline: vec![Point2::new(4.0, -1.0), Point2::new(6.0, -1.0), Point2::new(6.0, 1.0), Point2::new(4.0, 1.0)], from: 0.0, to: 4.0 };
+    let motion = Motion {
+        steps: vec![
+            MotionStep { axis: Axis::new(Point::new(5.0, 0.0, 0.0), Direction::Z), turn: -3.0, advance: 0.0 },
+            MotionStep { axis: Axis::new(Point::ORIGIN, Direction::Z), turn: 1.0, advance: 0.0 },
+        ],
+        from: 0.0,
+        to: quarter,
+    };
+    let blank = Blank::Disc { frame: Frame::from_z(Point::ORIGIN, Direction::Z), radius: 9.0, height: 2.0 };
+    let left = cut_by_motion(&mut model, &blank, &tool, &motion).unwrap();
+    assert_close("volume", measure(&model, swept).0, PI * 81.0 * 2.0 - measure(&model, left).0, 1e-9);
 }

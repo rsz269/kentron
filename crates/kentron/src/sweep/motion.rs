@@ -503,7 +503,7 @@ fn planar_cut(model: &mut Model, blank_frame: &Frame, radius: f64, height: f64, 
     if section::signed_area(&body) < 0.0 {
         body.reverse();
     }
-    let planar = Planar { motion, plane, body };
+    let planar = Planar { motion, steps: Some(motion), plane, body };
     let (candidates, slope) = planar.candidates(size)?;
     let tool_size = planar.body.iter().map(|&p| norm(sub(p, planar.body[0]))).fold(0.0, f64::max);
     // (Depths are taken in world coordinates: rounding grows with their size.)
@@ -517,8 +517,62 @@ fn planar_cut(model: &mut Model, blank_frame: &Frame, radius: f64, height: f64, 
     Ok(super::extrude(model, faces, Vector::new(normal[0], normal[1], normal[2]) * height)?.shape)
 }
 
+/// A motion of a prism in the plane square to it: where it puts the tool's points, and back.
+pub(super) trait PlaneMotion: Sync {
+    /// The motion's parameters, from and to.
+    fn span(&self) -> (f64, f64);
+    /// Where the tool's point `p` (as placed) is at `t`, and its velocity there.
+    fn moving(&self, t: f64, p: V3) -> (V3, V3);
+    /// The tool's point (as placed) that `t` puts at `q`.
+    fn back(&self, t: f64, q: V3) -> V3;
+}
+
+impl PlaneMotion for Motion {
+    fn span(&self) -> (f64, f64) {
+        (self.from, self.to)
+    }
+
+    fn moving(&self, t: f64, p: V3) -> (V3, V3) {
+        Motion::moving(self, t, p)
+    }
+
+    fn back(&self, t: f64, q: V3) -> V3 {
+        self.rigid(t).unapply(q)
+    }
+}
+
+/// A motion given by its places, `t` from 0 to 1 (velocities by central differences, the
+/// places asked for up to 2e-3 past the ends).
+pub(super) struct Placed<'a>(pub &'a (dyn Fn(f64) -> Transform + Send + Sync));
+
+impl PlaneMotion for Placed<'_> {
+    fn span(&self) -> (f64, f64) {
+        (0.0, 1.0)
+    }
+
+    fn moving(&self, t: f64, p: V3) -> (V3, V3) {
+        use crate::math::Transformable;
+        let at = |t: f64| pt(Point::new(p[0], p[1], p[2]).transformed(&(self.0)(t)));
+        // (The velocity from five places either side of `t`, to the fourth order: a motion's
+        // places are asked for a little past its ends there, as a motion given by a formula
+        // gives them. Differences on one side alone, near the ends, are not as close, and the
+        // envelopes found from them miss the sides they start on.)
+        let h = 1e-3;
+        let origin = at(t);
+        let v = add3(scale3(sub3(at(t + h), at(t - h)), 8.0 / (12.0 * h)), scale3(sub3(at(t - 2.0 * h), at(t + 2.0 * h)), 1.0 / (12.0 * h)));
+        (origin, v)
+    }
+
+    fn back(&self, t: f64, q: V3) -> V3 {
+        use crate::math::Transformable;
+        pt(Point::new(q[0], q[1], q[2]).transformed(&(self.0)(t).inverse()))
+    }
+}
+
 struct Planar<'a> {
-    motion: &'a Motion,
+    motion: &'a dyn PlaneMotion,
+    /// The motion as turns and slides, where it is given so: a sure bound on its speeds.
+    steps: Option<&'a Motion>,
     plane: Coordinates,
     /// The outline as placed, in the plane's coordinates, counter-clockwise.
     body: Vec<P2>,
@@ -544,7 +598,7 @@ impl Planar<'_> {
     /// The candidates: the paths of the convex corners, the envelopes of the sides, the
     /// sides where the motion starts and ends. With the fastest any corner moves.
     fn candidates(&self, size: f64) -> Result<(Vec<Candidate<'_>>, f64)> {
-        let (t0, t1) = (self.motion.from, self.motion.to);
+        let (t0, t1) = self.motion.span();
         let n = self.body.len();
         let mut slope = 0.0f64;
         for i in 0..=1000 {
@@ -561,6 +615,10 @@ impl Planar<'_> {
         let mut corner_breaks: Vec<Vec<f64>> = vec![Vec::new(); n];
         let mut end_breaks: [Vec<Vec<f64>>; 2] = [vec![Vec::new(); n], vec![Vec::new(); n]];
         let mut candidates: Vec<Candidate> = Vec::new();
+        // (A motion ending where it starts goes round: no sides where it starts and ends, and
+        // an envelope running across its start one piece.)
+        let round = self.body.iter().all(|&p| norm(sub(self.moving(t0, p).0, self.moving(t1, p).0)) <= 1e-12 * size);
+        let period = t1 - t0;
         // The sides' envelopes: on side i (a to b), the fraction μ where the velocity runs
         // along it, the velocity being affine along the side.
         for i in 0..n {
@@ -576,8 +634,28 @@ impl Planar<'_> {
                 Some((mu, [pa[0] + d[0] * mu, pa[1] + d[1] * mu]))
             };
             let valid = |t: f64| fraction(t).is_some_and(|(mu, _)| (0.0..=1.0).contains(&mu));
-            for (from, to) in runs(&valid, t0, t1, 4096) {
-                for s in [from, to] {
+            let mut found = runs(&valid, t0, t1, 4096);
+            // (Going round: a run reaching the end carried on into one from the start.)
+            let mut whole = false;
+            if round && found.len() == 1 && found[0] == (t0, t1) {
+                whole = true;
+            } else if round && found.len() > 1 && found[0].0 == t0 && found[found.len() - 1].1 == t1 {
+                let first = found.remove(0);
+                let last = found.last_mut().expect("a run");
+                last.1 = first.1 + period;
+            }
+            let wrap = move |t: f64| if t > t1 { t - period } else { t };
+            for (from, to) in found {
+                if whole {
+                    candidates.push(Candidate {
+                        point: Box::new(move |t: f64| fraction(t).map(|(_, p)| p).unwrap_or_else(|| self.moving(t, a).0)),
+                        range: (from, to),
+                        closed: true,
+                        breaks: Vec::new(),
+                    });
+                    continue;
+                }
+                for s in [from, wrap(to)] {
                     let Some((mu, _)) = fraction(s) else { continue };
                     if s == t0 || s == t1 {
                         // (Starting or ending with the motion: on the side where it starts or ends.)
@@ -589,7 +667,10 @@ impl Planar<'_> {
                     }
                 }
                 candidates.push(Candidate {
-                    point: Box::new(move |t: f64| fraction(t).map(|(_, p)| p).unwrap_or_else(|| self.moving(t, a).0)),
+                    point: Box::new(move |t: f64| {
+                        let t = wrap(t);
+                        fraction(t).map(|(_, p)| p).unwrap_or_else(|| self.moving(t, a).0)
+                    }),
                     range: (from, to),
                     closed: false,
                     breaks: Vec::new(),
@@ -610,8 +691,8 @@ impl Planar<'_> {
                 breaks: std::mem::take(&mut corner_breaks[i]),
             });
         }
-        // The sides where the motion starts and where it ends.
-        for (which, t) in [(0, t0), (1, t1)] {
+        // The sides where the motion starts and where it ends (none going round).
+        for (which, t) in if round { vec![] } else { vec![(0, t0), (1, t1)] } {
             for i in 0..n {
                 let (a, b) = (self.moving(t, self.body[i]).0, self.moving(t, self.body[(i + 1) % n]).0);
                 candidates.push(Candidate {
@@ -624,6 +705,66 @@ impl Planar<'_> {
         }
         Ok((candidates, slope))
     }
+}
+
+/// What the prism on `outline` (in `frame`'s xy plane, counter-clockwise or not, from height
+/// 0 to `height` along its z axis) passes through as `motion` carries it in that plane: the
+/// region its outline sweeps, extruded. Found as [`planar_cut`]'s, cut from a disc holding
+/// every place of the outline: what the cut leaves within the disc, its loops off the disc's
+/// circle, bound it.
+pub(super) fn planar_swept(model: &mut Model, frame: &Frame, outline: &[P2], height: f64, motion: &dyn PlaneMotion) -> Result<Shape> {
+    let plane = Coordinates::of(frame);
+    let mut body = outline.to_vec();
+    if body.len() < 3 || !(height > 0.0) {
+        return Err(Error::InvalidInput("a prism of three corners or more, of some height".into()));
+    }
+    if section::signed_area(&body) < 0.0 {
+        body.reverse();
+    }
+    let planar = Planar { motion, steps: None, plane, body };
+    // (A disc holding every place of the outline, with room round it.)
+    let tool_size = planar.body.iter().map(|&p| norm(sub(p, planar.body[0]))).fold(0.0, f64::max);
+    let (t0, t1) = motion.span();
+    let mut reach = 0.0f64;
+    for i in 0..=1024 {
+        let t = t0 + (t1 - t0) * i as f64 / 1024.0;
+        for &p in &planar.body {
+            reach = reach.max(norm(planar.moving(t, p).0));
+        }
+    }
+    let radius = reach + tool_size;
+    let size = 2.0 * radius;
+    let (candidates, slope) = planar.candidates(size)?;
+    let cover = PlanarCover { planar: &planar, step: 0.02 * tool_size / slope, slope, enough: 1e-11 * size, margin: 1e-9 * size };
+    // (The disc less the swept region: its loops but the disc's own bound the region, run
+    // the other way round.)
+    let left = section::region(&candidates, &cover, Outline::Disc { centre: [0.0, 0.0], radius })?;
+    let loops: Vec<Loop> = left
+        .into_iter()
+        .filter(|l| !l.pieces.iter().any(|p| matches!(p, Piece::Arc { .. })))
+        .map(|l| {
+            let n = l.pieces.len();
+            let pieces = l
+                .pieces
+                .iter()
+                .rev()
+                .map(|p| match *p {
+                    Piece::Candidate { index, from, to } => Piece::Candidate { index, from: to, to: from },
+                    Piece::Arc { centre, radius, from, to } => Piece::Arc { centre, radius, from: to, to: from },
+                    Piece::Segment { from, to } => Piece::Segment { from: to, to: from },
+                })
+                .collect();
+            // (Piece k now starts where the old piece n − 1 − k ended.)
+            let junctions = (0..n).map(|k| l.junctions[(n - k) % n]).collect();
+            Loop { pieces, junctions }
+        })
+        .collect();
+    if loops.is_empty() {
+        return Err(Error::Failed("a planar sweep whose region was not found within the disc round it".into()));
+    }
+    let map = PlaneMap { origin: plane.origin, x: plane.x, y: plane.y, splines: false };
+    let faces = section_faces(model, &candidates, &loops, &map, size)?;
+    Ok(super::extrude(model, faces, Vector::new(plane.z[0], plane.z[1], plane.z[2]) * height)?.shape)
 }
 
 struct PlanarCover<'a> {
@@ -647,7 +788,8 @@ impl PlanarCover<'_> {
         let (mid, half) = (0.5 * (t0 + t1), 0.5 * (t1 - t0));
         let (mut centre, mut radius) = (p, 0.0f64);
         let mut rate = 0.0;
-        for step in self.planar.motion.steps.iter().rev() {
+        let Some(motion) = self.planar.steps else { return f64::INFINITY };
+        for step in motion.steps.iter().rev() {
             if step.turn != 0.0 {
                 let o = self.planar.flat(pt(step.axis.origin));
                 let distance = norm(sub(centre, o));
@@ -674,10 +816,11 @@ impl Cover for PlanarCover<'_> {
     fn depth(&self, p: P2) -> f64 {
         let q = self.planar.lift(p);
         let motion = self.planar.motion;
-        let at = |t: f64| polygon_depth(&self.planar.body, self.planar.flat(motion.rigid(t).unapply(q)));
+        let at = |t: f64| polygon_depth(&self.planar.body, self.planar.flat(motion.back(t, q)));
         let over = |t0: f64, t1: f64| self.rate(p, t0, t1);
         let rate = section::Rate { over: &over, margin: self.margin + 1e-9 * norm(p) };
-        section::largest(&at, motion.from, motion.to, self.step, self.slope, false, self.enough, Some(&rate))
+        let (from, to) = motion.span();
+        section::largest(&at, from, to, self.step, self.slope, false, self.enough, self.planar.steps.map(|_| &rate))
     }
 }
 
