@@ -432,6 +432,37 @@ fn a_box_screwed_two_turns() {
     assert_close("volume", measure(&model, swept).0, 48.48010, 1e-6);
 }
 
+/// A bar carried along a fine screw (rising 1 a turn, 0.9 thick along the axis, 16 wide), its
+/// tip 0.5 inside a rod of radius 5: at most radii its turns overlap their neighbours', and
+/// each turn's sweep runs into itself. Over 21 turns, by turns: the rod threaded with sharp
+/// crests, against the closed form (π ρf²·20 − 20·2π∫ ρ w(ρ) dρ from 4.5 to ρf, w(ρ) = 0.9 +
+/// acos(4.5/ρ)/π, ρf = 4.5/cos(π/10); 1276.7029992078 by quadrature); over 2½ turns
+/// (stretches of ⅚ turn), the sweep and the rod less it against tools/brute.py's `turned`
+/// (1666.14910 and 1540.64197, converged to about 1e-7).
+#[test]
+fn a_bar_screwed_along_a_fine_thread() {
+    let bar = |model: &mut Model| Cuboid::from_corners(Point::new(4.5, -8.0, -0.45), Point::new(12.0, 8.0, 0.45)).build(model).unwrap();
+    let screw = |turns: f64| RigidMotion::Screw { axis: crate::math::Axis::Z, lead: 1.0, from: -PI, to: -PI + turns * TAU };
+    let mut model = Model::new();
+    let rod = Cylinder::new(5.0, 20.0).build(&mut model).unwrap();
+    let tool = bar(&mut model);
+    let swept = solid(&mut model, tool, &screw(21.0)).unwrap();
+    check(&model, swept);
+    let threaded = crate::boolean::difference(&mut model, rod, swept).unwrap();
+    check(&model, threaded);
+    assert_close("volume", measure(&model, threaded).0, 1276.7029992078067, 1e-9);
+    assert_close("area", measure(&model, threaded).1, 916.12039648761102, 1e-6);
+
+    let mut model = Model::new();
+    let rod = Cylinder::new(5.0, 20.0).build(&mut model).unwrap();
+    let tool = bar(&mut model);
+    let swept = solid(&mut model, tool, &screw(2.5)).unwrap();
+    check(&model, swept);
+    assert_close("swept volume", measure(&model, swept).0, 1666.14910, 1e-6);
+    let cut = crate::boolean::difference(&mut model, rod, swept).unwrap();
+    assert_close("cut volume", measure(&model, cut).0, 1540.64197, 1e-6);
+}
+
 /// What a turn about the z axis by `angle` sweeps `inside` through, summed circle by circle
 /// about the axis: each circle (radius ρ, height z, the midpoints of an `n` by `n` grid over
 /// `[0, reach]` by `heights`) meets the tool in runs of angles (sampled 1024 times round,

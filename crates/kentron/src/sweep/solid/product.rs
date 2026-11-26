@@ -32,6 +32,36 @@ enum Side {
 /// face winds round its axis: each is a strip short enough that a point's place on it is found
 /// from any start on it).
 pub(super) fn sweep(model: &mut Model, solid: Shape, steady: &Steady) -> Result<Shape> {
+    // (A screw of two whole turns or more running into itself: by turns, see [`by_turns`];
+    // as a whole where that fails.)
+    if let Steady::Screw { angle, .. } = *steady {
+        if angle >= 2.0 * std::f64::consts::TAU {
+            let spare = crate::modify::copy(model, solid, false)?;
+            if let Some(swept) = staged(model, solid, steady, Resolution::Deferred)? {
+                return Ok(swept);
+            }
+            if let Ok(swept) = by_turns(model, spare, steady) {
+                return Ok(swept);
+            }
+            return staged(model, spare, steady, Resolution::AsBefore).map(|s| s.expect("not deferred"));
+        }
+    }
+    staged(model, solid, steady, Resolution::AsBefore).map(|s| s.expect("not deferred"))
+}
+
+/// What [`staged_sweep`] does with a product running into itself.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Resolution {
+    /// Resolved; where that fails, the product as it is (but for a turn).
+    AsBefore,
+    /// Resolved; where that fails, an error.
+    Strict,
+    /// Not built: `None`.
+    Deferred,
+}
+
+/// [`sweep`] as one product, in stages of at most a quarter turn.
+fn staged(model: &mut Model, solid: Shape, steady: &Steady, resolution: Resolution) -> Result<Option<Shape>> {
     let (stage, n) = match steady.clone() {
         Steady::Screw { axis, angle, rise } => {
             let n = (angle / std::f64::consts::FRAC_PI_2).ceil().max(1.0);
@@ -40,7 +70,26 @@ pub(super) fn sweep(model: &mut Model, solid: Shape, steady: &Steady) -> Result<
         other => (other, 1),
     };
     let junctions = (0..=n).map(|k| steady.at(k as f64 / n as f64)).collect();
-    sweep_in_stages(model, solid, &vec![stage; n], junctions)
+    staged_sweep(model, solid, &vec![stage; n], junctions, resolution)
+}
+
+/// The sweep under a screw of two whole turns or more whose product runs into itself (as
+/// a long thread's does where the tool's turns overlap): the union of its `k` stretches of
+/// at most a turn each (two thirds of one at least), which are one stretch's sweep
+/// placed along the screw (a screw carries a sweep under itself along itself). Each
+/// stretch's product is resolved on its own, its faces against one another's, and the
+/// stretches' unions meet only their neighbours, where the whole product split all at once
+/// would put every turn's faces against every other's that its boxes meet, many more and
+/// slower to find. An error where a stretch's product is not resolved.
+fn by_turns(model: &mut Model, solid: Shape, steady: &Steady) -> Result<Shape> {
+    let Steady::Screw { axis, angle, rise } = *steady else { return Err(Error::Failed("by turns: not a screw".into())) };
+    // (A turn at most each: 21 turns' angle in radians may come out a hair past them.)
+    let k = (angle / std::f64::consts::TAU * (1.0 - 1e-12)).ceil().max(1.0);
+    let stretch = Steady::Screw { axis, angle: angle / k, rise: rise / k };
+    let tool = crate::modify::copy(model, solid, false)?;
+    let swept = staged(model, tool, &stretch, Resolution::Strict)?.expect("not deferred");
+    let pieces: Vec<Shape> = (0..k as usize).map(|i| swept.moved(&steady.at(i as f64 / k))).collect();
+    crate::boolean::union_all(model, &pieces)
 }
 
 /// Whether `W` passes back into the body: a point inside one of a stage's faces in `W`,
@@ -319,6 +368,11 @@ fn resolved(model: &mut Model, product: Shape) -> Result<Shape> {
 /// does. Where a face of the body passes from `W` to outside it, or back, at a junction, it
 /// closes the stages' sweeps there, facing the way the stage before carried it.
 pub(super) fn sweep_in_stages(model: &mut Model, solid: Shape, stages: &[Steady], junctions: Vec<Transform>) -> Result<Shape> {
+    staged_sweep(model, solid, stages, junctions, Resolution::AsBefore).map(|s| s.expect("not deferred"))
+}
+
+/// [`sweep_in_stages`], a product running into itself as `resolution` says.
+fn staged_sweep(model: &mut Model, solid: Shape, stages: &[Steady], junctions: Vec<Transform>, resolution: Resolution) -> Result<Option<Shape>> {
     let bounds = crate::properties::bounding_box(model, solid);
     let size = (bounds.max - bounds.min).length();
     // The characteristic curves within a billionth of the body's size.
@@ -381,6 +435,9 @@ pub(super) fn sweep_in_stages(model: &mut Model, solid: Shape, stages: &[Steady]
     // over, and always runs into itself.)
     let whole = is_whole_turn(stages);
     let runs_into_itself = whole || passes_back_into(model, solid, &faces, &sides, stages, &junctions)?;
+    if runs_into_itself && resolution == Resolution::Deferred {
+        return Ok(None);
+    }
     let mut builder = Builder::new(model, stages, junctions, size, reach)?;
     let product = builder.product(&faces, &sides)?;
     // (Where the split fails, the product as it is: a solid running into itself, its volume
@@ -390,12 +447,12 @@ pub(super) fn sweep_in_stages(model: &mut Model, solid: Shape, stages: &[Steady]
     // it.)
     if runs_into_itself {
         match resolved(model, product) {
-            Ok(resolved) => return Ok(resolved),
-            Err(e) if still_axis(stages).is_some() => return Err(e),
+            Ok(resolved) => return Ok(Some(resolved)),
+            Err(e) if still_axis(stages).is_some() || resolution == Resolution::Strict => return Err(e),
             Err(_) => {}
         }
     }
-    Ok(product)
+    Ok(Some(product))
 }
 
 /// The axis of a turn (one stage), whose points stand still.
