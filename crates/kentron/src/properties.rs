@@ -1642,20 +1642,20 @@ fn face_extremes(model: &Model, face: Shape, surface: &Surface) -> Vec<Point> {
             found.push(surface.point(uv[0], uv[1]));
         }
     }
+    let near_border = |uv: [f64; 2]| {
+        loops.iter().any(|points| {
+            (0..points.len()).any(|i| {
+                let (a, b) = (points[i], points[(i + 1) % points.len()]);
+                let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+                let len2 = dx * dx + dy * dy;
+                let t = if len2 > 0.0 { (((uv[0] - a[0]) * dx + (uv[1] - a[1]) * dy) / len2).clamp(0.0, 1.0) } else { 0.0 };
+                (uv[0] - a[0] - t * dx).hypot(uv[1] - a[1] - t * dy) <= 1e-9
+            })
+        })
+    };
     // A sphere's extremes in closed form (often on the border of its parameters, at a
     // pole or the seam, where the search above stops short), where the face has them.
     if let Surface::Sphere(sphere) = surface {
-        let near_border = |uv: [f64; 2]| {
-            loops.iter().any(|points| {
-                (0..points.len()).any(|i| {
-                    let (a, b) = (points[i], points[(i + 1) % points.len()]);
-                    let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
-                    let len2 = dx * dx + dy * dy;
-                    let t = if len2 > 0.0 { (((uv[0] - a[0]) * dx + (uv[1] - a[1]) * dy) / len2).clamp(0.0, 1.0) } else { 0.0 };
-                    (uv[0] - a[0] - t * dx).hypot(uv[1] - a[1] - t * dy) <= 1e-9
-                })
-            })
-        };
         let c = sphere.frame().origin();
         for k in 0..3 {
             for sign in [1.0, -1.0] {
@@ -1668,6 +1668,48 @@ fn face_extremes(model: &Model, face: Shape, surface: &Surface) -> Vec<Point> {
                 let us: Vec<f64> = if at_pole { vec![0.5 * (lo[0] + hi[0])] } else { vec![u, u - tau, u + tau] };
                 if us.iter().any(|&u| inside([u, v]) || near_border([u, v])) {
                     found.push(p);
+                }
+            }
+        }
+    }
+    // A torus's too: a coordinate along a direction d not along the axis is stationary at
+    // the four points c ± R ρ ± r d (ρ the unit radial direction d leans towards), along the
+    // axis on the two circles of the tube's top and bottom. The grid's best point may lie on
+    // another hump of a face holding one of them, or Newton's steps leave the face's polygon
+    // short of it.
+    if let Surface::Torus(torus) = surface {
+        let tau = std::f64::consts::TAU;
+        let f = torus.frame();
+        let (c, x, y) = (f.origin(), Vector::from(f.x()), Vector::from(f.y()));
+        let (big, small) = (torus.major_radius(), torus.minor_radius());
+        let holds = |p: Point| {
+            let (u, v) = torus.parameters(p);
+            [u, u - tau, u + tau].iter().any(|&u| [v, v - tau, v + tau].iter().any(|&v| inside([u, v]) || near_border([u, v])))
+        };
+        for k in 0..3 {
+            for sign in [1.0, -1.0] {
+                let mut e = [0.0; 3];
+                e[k] = sign;
+                let d = Vector::new(e[0], e[1], e[2]);
+                let (dx, dy) = (d.dot(x), d.dot(y));
+                let m = dx.hypot(dy);
+                if m <= 1e-12 {
+                    // (On a circle: any of its points the face holds, among its u range's.)
+                    const STEPS: usize = 64;
+                    for s2 in [1.0, -1.0] {
+                        let on = (0..=STEPS).map(|i| lo[0] + (hi[0] - lo[0]) * i as f64 / STEPS as f64).map(|u| c + (x * u.cos() + y * u.sin()) * big + d * (s2 * small)).find(|&p| holds(p));
+                        found.extend(on);
+                    }
+                    continue;
+                }
+                let rho = (x * dx + y * dy) / m;
+                for s1 in [1.0, -1.0] {
+                    for s2 in [1.0, -1.0] {
+                        let p = c + rho * (s1 * big) + d * (s2 * small);
+                        if holds(p) {
+                            found.push(p);
+                        }
+                    }
                 }
             }
         }
@@ -1850,6 +1892,61 @@ mod tests {
         let b = tight_bounding_box(&model, ball);
         let expected = Vector::new(1.5, 1.5, 1.5);
         assert!(b.min.distance(c - expected) < 1e-12 && b.max.distance(c + expected) < 1e-12, "{b:?}");
+    }
+
+    /// Tori turned any way, united with a cylinder or a cone that cuts their faces: the
+    /// union is boxed as tightly as its operands together (a torus's extremes in closed
+    /// form, c ± R ρ ± r d, where the face holds them; the grid's best point was elsewhere,
+    /// or Newton's steps left the face short of them, the box up to 1e-2 small).
+    #[test]
+    fn tori_cut_by_others_boxed_tightly() {
+        let frame = |o: [f64; 3], x: [f64; 3], z: [f64; 3]| crate::math::Frame::new(Point::new(o[0], o[1], o[2]), Direction::new(z[0], z[1], z[2]), Direction::new(x[0], x[1], x[2]));
+        // (torus origin, x, z, R, r; other: cylinder or cone origin, x, z, bottom, top, height)
+        let cases = [
+            (
+                ([-1.473069842327006, 0.1270866416223706, -2.004460212564372], [0.4094691044010673, -0.9052021527360543, 0.11377220760361806], [-0.8972505028520898, -0.42213549239912157, -0.12939536772474902], 3.204046488716312, 1.2839264574127807),
+                ([-3.3319490100687954, 3.064902296099552, 3.8844649974933834], [0.4053203293356742, 0.6384664925760012, -0.6542751473844316], [0.24153363113975293, -0.7650602328201735, -0.596945847783187], 1.7645379190533226, 1.7645379190533226, 2.988663580458713),
+            ),
+            (
+                ([3.0829344931593496, -2.258156888904158, -0.9944841074121786], [0.9115008386874968, 0.07156528883586755, 0.4050242344673079], [0.018505273667140998, -0.9908844677269482, 0.13343735033335546], 2.4188563123335713, 1.160967311118164),
+                ([-2.948542363319456, -4.611532649141972, 1.0814220827007839], [-0.016926326232900024, -0.988807185133041, 0.14823579226870115], [0.5475768799322227, 0.11487990450456367, 0.8288318092983127], 0.8485405505727177, 0.8153169668284805, 1.4204467715961218),
+            ),
+        ];
+        for ((to, tx, tz, big, small), (co, cx, cz, bottom, top, height)) in cases {
+            let mut model = Model::new();
+            let torus = crate::primitives::Torus::new(big, small).with_frame(frame(to, tx, tz)).build(&mut model).unwrap();
+            let other = if bottom == top {
+                crate::primitives::Cylinder::new(bottom, height).with_frame(frame(co, cx, cz)).build(&mut model).unwrap()
+            } else {
+                crate::primitives::Cone::new(bottom, top, height).with_frame(frame(co, cx, cz)).build(&mut model).unwrap()
+            };
+            let union = crate::boolean::union(&mut model, torus, other).unwrap();
+            // The operands' boxes in closed form: a torus's c ± (R √(1 − z_k²) + r), a
+            // cylinder's or cone's rims' centres ± their radii √(1 − z_k²).
+            let mut want = BoundingBox::EMPTY;
+            for k in 0..3 {
+                let reach = big * (1.0 - tz[k] * tz[k]).sqrt() + small;
+                let mut lo = to;
+                let mut hi = to;
+                lo[k] -= reach;
+                hi[k] += reach;
+                want.add_point(Point::new(lo[0], lo[1], lo[2]));
+                want.add_point(Point::new(hi[0], hi[1], hi[2]));
+            }
+            for (h, r) in [(0.0, bottom), (height, top)] {
+                let centre = Point::new(co[0] + h * cz[0], co[1] + h * cz[1], co[2] + h * cz[2]);
+                for k in 0..3 {
+                    let reach = r * (1.0 - cz[k] * cz[k]).sqrt();
+                    let mut e = [0.0; 3];
+                    e[k] = reach;
+                    want.add_point(centre + Vector::new(e[0], e[1], e[2]));
+                    want.add_point(centre - Vector::new(e[0], e[1], e[2]));
+                }
+            }
+            let got = tight_bounding_box(&model, union);
+            let off = (got.min - want.min).length().max((got.max - want.max).length());
+            assert!(off < 1e-9, "{got:?} against {want:?}: off by {off:.3e}");
+        }
     }
 
     /// Steep height fields' tops (bicubic, one to four spans each way, heights changing by
