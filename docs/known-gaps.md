@@ -536,46 +536,42 @@ to the product's. They are refused, not returned running into itself.
   tool cut by a plane through the axis, each piece's sweep made apart and united, which
   needs the union to take sweeps sharing faces on that plane).
 
-### Screws of one to two turns whose product is not resolved, returned as it is
+### Screws of a tool without straight edges whose product is not resolved, returned as it is
 
-*Found 2026-11-26.*
+*Found 2026-11-26; narrowed 2026-11-27.*
 
 No figure: `sweep::solid` has no pykentron binding, and the repro is a Rust probe.
 
 Where a screw's product runs into itself, `sweep::solid` splits it into pieces
-(`boolean::enclosed_solids_at_once`), takes each piece's winding from
+(`boolean::enclosed_solids_at_once`, then one face after another where that finds no
+pieces or pieces holding less than the product), takes each piece's winding from
 `PointClassifier::winding`, and keeps those wound round at least once; it checks that the
 pieces' volumes, each counted as often as it is wound round, add up to the product's. Where
 they do not, a turn is refused, but a screw hands back the product as it is: a solid running
 into itself, whose volume counts what is covered twice twice. Screws of two whole turns or
 more are swept by turns (`by_turns` in `sweep/solid/product.rs`, stretches of at most a
-turn, each resolved strictly), so this is left for screws of one to two turns and for the
-fallback when a stretch fails.
+turn, each resolved strictly).
 
-The pieces kept look right; the windings look wrong. For a bar screwed two turns as a whole
-(before the by-turns path), the pieces kept held exactly the union of the two one-turn
-sweeps, but the windings did not account for the doubly covered part: some pieces covered
-twice were reported as wound round once.
+The windings came out wrong on the B-spline strips straight edges sweep (where a point's
+foot on a long strip, found from its samples, could settle off it). Since the strips are kept with the segment and
+screw they are swept from (`geometry::screw_strip`: feet, ray hits and sections on the exact
+helicoid), the bar of the old repro below resolves, 1¼ turns as a whole: 929.128119, the
+union of two one-turn sweeps overlapping by a quarter turn to the last digit printed (before:
+pieces holding 929.13 against the product's 1147.76). What is left is a tool whose
+edges are not straight, its strips the general B-splines.
 
-- **Repro:** the box 4.5 ≤ x ≤ 12, |y| ≤ 8, |z| ≤ 0.45 screwed about the z axis, lead 1,
-  `RigidMotion::Screw { from: -π, to: -π + 1.25·2π }` (1¼ turns, the whole path), then
-  `sweep::solid`. Or 2 turns with `by_turns` disabled.
-- **Evidence:** 2 turns: pieces as often as wound round hold 1371.34, against the product's
-  1771.61. The union of the two one-turn sweeps (each resolved, then united) is
-  1371.3402 (Monte Carlo 1367.8 ± 0.5%), so the pieces kept are the right ones and only
-  their windings are short by the doubly covered 400.27. 1¼ turns: 929.13 against 1147.76.
-- **Why not refused:** refusing here as a turn does (ff4cbbc) breaks three passing
-  brep-bench cases, `swept/spheroid-wheel-screwed-through-rod`,
-  `swept/square-bar-screwed-partway-up-rod` and `swept/square-thread-with-a-run-out`. Their
-  resolve fails the same way (or finds no pieces), but the boolean they feed takes the
-  unresolved product right.
-- **Needed:** find where `winding` (in `boolean/classify.rs`: signed face crossings along
-  the first ray of `DIRECTIONS` with no grazing or boundary hit) loses a sheet. Candidates,
-  not yet checked: `geom::ray_hits` missing a second hit on a long free-form strip (a
-  quarter-turn helical sheet the ray crosses twice), or `faces_along_ray` passing a face
-  over by its box. A check: compare the winding from each of `DIRECTIONS` at a point of a
-  piece covered twice. With the windings right, the screw path could refuse like the turn
-  path does.
+- **Repro:** brep-bench's `swept/spheroid-wheel-screwed-through-rod` (a spheroid wheel
+  turned about x by −(90° + atan(2π·4.75/30)), centred at (10.5, 0, 0), screwed about z,
+  lead 30, from −90° to 330°). Old repro, now resolved: the box 4.5 ≤ x ≤ 12, |y| ≤ 8,
+  |z| ≤ 0.45 screwed about z, lead 1, from −π to −π + 1.25·2π.
+- **Evidence:** the spheroid's product (14 faces, 4403.98) split all at once gives one
+  piece, counted as 5423.38; handed back as it is, the cut from the rod still matches the
+  reference (the boolean takes the product right).
+- **Why not refused:** refusing breaks the passing spheroid case.
+- **Needed:** feet and ray hits on the general strips as sure as on the straight ones: a
+  strip of any profile curve kept with its curve and screw (the foot is still a search along
+  the screw, the profile's nearest point a curve projection), or the winding check in
+  `boolean/classify.rs` made to take a sheet it now loses.
 
 ## pykentron
 
