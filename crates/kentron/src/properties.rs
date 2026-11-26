@@ -414,7 +414,11 @@ fn integrate_face_refined(model: &Model, face: Shape, refine: usize, mut sample:
             // the surface): across dozens of spans (a swept surface fitted through hundreds of
             // sections) a Gauss rule converges only as fast as the spans' joins are smooth (a
             // sweep's volume 1e-3 short with 8 pieces across 510 spans, 7e-7 with four spans a
-            // piece). More where the surface turns further, each piece short in angle.
+            // piece). More where the surface turns further, each piece short in angle: its
+            // iso-lines' tangents, and its normal along them (the area's integrand, |S_u × S_v|,
+            // is no polynomial: a Gauss rule integrates it as well as the normal turns little
+            // across a piece, even across a single span, a steep height field's top 4e-5 of
+            // its area off with one piece across its span).
             Surface::BSpline(b) => {
                 use crate::geometry::ParametricSurface;
                 let angle = |x: Vector, y: Vector| {
@@ -429,13 +433,21 @@ fn integrate_face_refined(model: &Model, face: Shape, refine: usize, mut sample:
                     let points: Vec<Point> = (0..=CHORDS).map(|i| at(i as f64 / CHORDS as f64)).collect();
                     points.windows(3).map(|w| angle(w[1] - w[0], w[2] - w[1])).sum::<f64>()
                 };
-                let u_turn = turned(&|s| b.point(u0 + (u1 - u0) * s, 0.5 * (v0 + v1)));
-                let v_turn = turned(&|s| b.point(0.5 * (u0 + u1), v0 + (v1 - v0) * s));
+                // (The normal's along the iso-lines at both ends and the middle.)
+                let normal_turned = |at: &dyn Fn(f64) -> (Point, Vector, Vector)| {
+                    let normals: Vec<Vector> = (0..=CHORDS).map(|i| at(i as f64 / CHORDS as f64)).map(|(_, du, dv)| du.cross(dv)).collect();
+                    normals.windows(2).map(|w| angle(w[0], w[1])).sum::<f64>()
+                };
+                let across = [0.0, 0.5, 1.0];
+                let u_normal = across.iter().map(|&t| normal_turned(&|s| b.d1(u0 + (u1 - u0) * s, v0 + (v1 - v0) * t))).fold(0.0, f64::max);
+                let v_normal = across.iter().map(|&t| normal_turned(&|s| b.d1(u0 + (u1 - u0) * t, v0 + (v1 - v0) * s))).fold(0.0, f64::max);
+                let u_turn = turned(&|s| b.point(u0 + (u1 - u0) * s, 0.5 * (v0 + v1))).max(u_normal);
+                let v_turn = turned(&|s| b.point(0.5 * (u0 + u1), v0 + (v1 - v0) * s)).max(v_normal);
                 let density = |knots: &[f64], turn: f64| {
                     let spans = knots.len().saturating_sub(1);
                     let range = knots[knots.len() - 1] - knots[0];
                     let pieces = (spans.div_ceil(4).max(spans.min(SPAN_PIECES)).min(256) as f64).max((turn / MAX_ANGLE_STEP).ceil().min(4.0 * spans as f64));
-                    if spans > 1 && range > 0.0 { pieces / range } else { 0.0 }
+                    if spans >= 1 && range > 0.0 { pieces / range } else { 0.0 }
                 };
                 (density(b.u_knots(), u_turn), density(b.v_knots(), v_turn))
             }
@@ -1838,6 +1850,29 @@ mod tests {
         let b = tight_bounding_box(&model, ball);
         let expected = Vector::new(1.5, 1.5, 1.5);
         assert!(b.min.distance(c - expected) < 1e-12 && b.max.distance(c + expected) < 1e-12, "{b:?}");
+    }
+
+    /// Steep height fields' tops (bicubic, one to four spans each way, heights changing by
+    /// up to 4 between poles): their areas as Gauss rules over 48 × 48 pieces of the whole
+    /// surface give them. (Counted by their knot spans alone, a single span had one piece:
+    /// up to 4e-5 of the area off.)
+    #[test]
+    fn steep_height_fields_measured() {
+        let knots = |inner: &[f64]| [&[0.0; 4][..], inner, &[1.0; 4][..]].concat();
+        let cases = [
+            (7.341863321008581, 4.490802919473344, knots(&[]), knots(&[0.25, 0.5, 0.75]), vec![vec![1.5242903227342643, 2.609859665351866, 5.492029488340494, 1.4599768458411737, 2.193919465117062, 4.618910570517873, 5.390208908051521], vec![4.557339982751789, 2.6683553751406404, 5.705754563685984, 3.637619933010142, 1.6838087659208556, 3.054464569466726, 5.269725689381368], vec![3.598062339023429, 2.0807728572383297, 4.686939644674567, 2.3617902982858445, 1.7007255921663538, 3.6001533134781676, 2.5297757833743453], vec![2.1086996707824133, 4.9058868565204055, 1.593500474870225, 2.551044864831914, 3.121458152172109, 4.845891476836629, 4.449036677342873]]),
+            (4.69662871880055, 8.76037025976353, knots(&[1.0 / 3.0, 2.0 / 3.0]), knots(&[]), vec![vec![6.529001699576653, 3.1336876970215117, 6.4604510455504, 3.717949396527012], vec![3.410638096498, 6.376887793959724, 6.0685291604671505, 3.236270479402756], vec![2.746913129254346, 6.398056345773379, 4.177310592815987, 5.23409864983094], vec![3.881545158972054, 6.13535052191261, 3.4363833266715615, 6.759035730504793], vec![3.3812092318639344, 3.898734646467391, 3.0074498558007736, 6.715715923839846], vec![5.500707668762602, 4.767548262900723, 3.810443651977182, 6.142906681032016]]),
+        ];
+        for (su, sv, ku, kv, heights) in cases {
+            let mut model = Model::new();
+            let slab = crate::primitives::Slab::new(su, sv, ku, kv, heights).build(&mut model).unwrap();
+            let top = model.explore(slab, NodeKind::Face).find(|&f| !matches!(model.surface(f), Some(Surface::Plane(_)))).unwrap();
+            let mut want = 0.0;
+            // (48 pieces each way: breaking at thirds and quarters, where the knots are.)
+            natural_bounds_area(model.surface(top).unwrap(), &crate::math::Transform::IDENTITY, 6, &mut |_, n, w| want += n.length() * w);
+            let got = area(&model, top).mass;
+            assert!((got - want).abs() < 1e-9 * want, "{got} against {want}: off by {:.3e}", got - want);
+        }
     }
 
     #[test]
