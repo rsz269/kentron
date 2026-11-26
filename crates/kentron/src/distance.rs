@@ -765,6 +765,96 @@ fn refine(ea: &Exact, eb: &Exact, p: Point, q: Point, reach: f64, scale: f64) ->
             }
         }
     }
+    // Then Newton's method on where the distance is stationary, (x − y)·∂x = 0 and
+    // (x − y)·∂y = 0, the pieces' second derivatives counted: where they lie apart, curved
+    // round each other (a ball in a hollow about as wide, round nearly its centre), both
+    // steps above converge slowly (their model of the distance, the pieces' tangents alone,
+    // is flat there) and stop short of the nearest points.
+    let Some(start) = best else { return None };
+    if start.0 > 1e-13 * (1.0 + scale) {
+        let mut r = residual(&w);
+        for _ in 0..50 {
+            let (u, v) = split(&w);
+            let (_, da, dda) = ea.evaluate2(u);
+            let (_, db, ddb) = eb.evaluate2(v);
+            let columns: Vec<Vector> = da[..na].iter().copied().chain(db[..nb].iter().map(|&d| -d)).collect();
+            // Second derivatives of the residual x(u) − y(v): per pair of parameters.
+            let second = |i: usize, j: usize| -> Vector {
+                let index = |i: usize, j: usize| if i == j { if i == 0 { 0 } else { 2 } } else { 1 };
+                if i < na && j < na {
+                    dda[index(i, j)]
+                } else if i >= na && j >= na {
+                    -ddb[index(i - na, j - na)]
+                } else {
+                    Vector::new(0.0, 0.0, 0.0)
+                }
+            };
+            let mut m = [[0.0; 4]; 4];
+            let mut g = [0.0; 4];
+            for i in 0..4 {
+                for j in 0..4 {
+                    m[i][j] = if i < n && j < n { columns[i].dot(columns[j]) + r.dot(second(i, j)) } else if i == j { 1.0 } else { 0.0 };
+                }
+                if i < n {
+                    g[i] = -columns[i].dot(r);
+                }
+            }
+            let Some(step) = solve4(m, g) else { break };
+            // (Shortened while it does not bring the pieces nearer: away from a minimum
+            // the step may lead towards a saddle. Nor across where a surface degenerates,
+            // its normal turning round there: through a cone's apex onto its other nappe,
+            // off the face.)
+            let normals = |w: &[f64; 4]| {
+                let (u, v) = split(w);
+                let normal = |e: &Exact, x: [f64; 2]| match e {
+                    Exact::Surface(_) => {
+                        let (_, d) = e.evaluate(x);
+                        Some(d[0].cross(d[1]))
+                    }
+                    _ => None,
+                };
+                [normal(ea, u), normal(eb, v)]
+            };
+            let before = normals(&w);
+            let kept_side = |w: &[f64; 4]| normals(w).iter().zip(&before).all(|(after, before)| match (after, before) {
+                (Some(a), Some(b)) => a.dot(*b) > 0.0,
+                _ => true,
+            });
+            let mut scale_step = 1.0;
+            let mut taken = None;
+            for _ in 0..8 {
+                let mut trial = [0.0; 4];
+                for k in 0..4 {
+                    trial[k] = w[k] + scale_step * step[k];
+                }
+                let (u, v) = split(&trial);
+                let (u, v) = (ea.clamp(u), eb.clamp(v));
+                trial[..na].copy_from_slice(&u[..na]);
+                trial[na..n].copy_from_slice(&v[..nb]);
+                let rt = residual(&trial);
+                if rt.length() <= r.length() && kept_side(&trial) {
+                    taken = Some((trial, rt));
+                    break;
+                }
+                scale_step *= 0.5;
+            }
+            let Some((trial, rt)) = taken else { break };
+            let moved = (0..n).map(|k| (trial[k] - w[k]).abs()).fold(0.0, f64::max);
+            let gain = r.length() - rt.length();
+            (w, r) = (trial, rt);
+            let (u, v) = split(&w);
+            let (x, y) = (ea.evaluate(u).0, eb.evaluate(v).0);
+            if x.distance(p) > reach || y.distance(q) > reach {
+                break;
+            }
+            if best.is_none_or(|b| r.length() < b.0) {
+                best = Some((r.length(), x, y));
+            }
+            if moved <= 1e-15 * (1.0 + w.iter().fold(0.0f64, |a, &b| a.max(b.abs()))) || (gain == 0.0 && scale_step < 1.0) {
+                break;
+            }
+        }
+    }
     best
 }
 
@@ -920,6 +1010,24 @@ impl Exact {
                 (p, [d, Vector::new(0.0, 0.0, 0.0)])
             }
             Exact::Point(p) => (*p, [Vector::new(0.0, 0.0, 0.0); 2]),
+            Exact::Unknown => unreachable!("no geometry"),
+        }
+    }
+
+    /// [`Exact::evaluate`] with the second derivatives: along the first parameter twice, along
+    /// both, along the second twice.
+    fn evaluate2(&self, w: [f64; 2]) -> (Point, [Vector; 2], [Vector; 3]) {
+        let zero = Vector::new(0.0, 0.0, 0.0);
+        match self {
+            Exact::Surface(s) => {
+                let d = s.d2(w[0], w[1]);
+                (d.point, [d.du, d.dv], [d.duu, d.duv, d.dvv])
+            }
+            Exact::Curve(c, ..) => {
+                let (p, d, dd) = c.d2(w[0]);
+                (p, [d, zero], [dd, zero, zero])
+            }
+            Exact::Point(p) => (*p, [zero; 2], [zero; 3]),
             Exact::Unknown => unreachable!("no geometry"),
         }
     }
@@ -1443,6 +1551,33 @@ mod tests {
             let v = crate::make::vertex(&mut model, p);
             let exact = vertex_to_edges(&model, v, edge).expect("found exactly").0;
             assert!((exact - want).abs() < 1e-9, "{p:?}: {exact}");
+        }
+    }
+
+    /// A ball in the hollow a ball cut from a box leaves, nearly at its centre: the distance
+    /// is the radii's difference less the centres', both ways. (The nearest points' steps,
+    /// by the faces' tangents alone, found the distance flat there and stopped up to 4e-5
+    /// short.)
+    #[test]
+    fn a_ball_in_a_hollow_nearly_round_it() {
+        use crate::math::{Direction, Frame};
+        let at = |c: [f64; 3]| Frame::new(Point::new(c[0], c[1], c[2]), Direction::new(0.0, 0.0, 1.0), Direction::new(1.0, 0.0, 0.0));
+        for (size, hollow, inner, centre) in [
+            (8.197012627823039, 2.0886290246429224, 1.2893445655050564, [4.085950854006598, 4.0602346786651955, 4.098506313911519]),
+            (11.967455774301314, 4.230835143221918, 1.224050838100904, [5.973987718703603, 5.920874233253989, 5.983727887150657]),
+            (9.112998354377488, 3.522244775318219, 1.91065058857232, [4.586626169098771, 4.55727472475218, 4.556499177188744]),
+        ] {
+            let mut model = Model::new();
+            let middle = 0.5 * size;
+            let block = crate::primitives::Cuboid::new(size, size, size).build(&mut model).unwrap();
+            let cut = crate::primitives::Sphere::new(hollow).with_frame(at([middle; 3])).build(&mut model).unwrap();
+            let hollowed = crate::boolean::difference(&mut model, block, cut).unwrap();
+            let ball = crate::primitives::Sphere::new(inner).with_frame(at(centre)).build(&mut model).unwrap();
+            let want = hollow - inner - Point::new(middle, middle, middle).distance(Point::new(centre[0], centre[1], centre[2]));
+            for (a, b) in [(hollowed, ball), (ball, hollowed)] {
+                let got = distance(&mut model, a, b).unwrap().value;
+                assert!((got - want).abs() < 1e-9, "{got} against {want}: off by {:.3e}", got - want);
+            }
         }
     }
 }
