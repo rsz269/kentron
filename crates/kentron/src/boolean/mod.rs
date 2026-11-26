@@ -1035,6 +1035,31 @@ mod tests {
         assert!((volume - lens).abs() < 1e-6 * lens, "volume {volume}, lens {lens}");
     }
 
+    /// The column under a face on part of a curved Bézier patch's parameters (an extruded
+    /// face), the patch, degree 4 in u and 1 in v, with the control points (xᵢ, j, zᵢ + j/10).
+    fn column_under_a_partial_patch(model: &mut Model, x: [f64; 5], u1: f64) -> Shape {
+        use crate::geometry::surface::{BezierSurface, Surface};
+        let z = [0.8, 0.2, 0.8, 0.2, 0.8];
+        let poles = (0..5).map(|i| (0..2).map(|j| Point::new(x[i], j as f64, z[i] + j as f64 / 10.0)).collect()).collect();
+        let top = crate::make::face_on_domain(model, Surface::Bezier(BezierSurface::new(poles)), u1, 1.0, 0.0, 1.0).unwrap();
+        crate::sweep::extrude(model, top, Vector::new(0.0, 0.0, -2.0)).unwrap().shape
+    }
+
+    /// The column under a face on 0.09 ≤ u ≤ 1 of a quartic graph z = B(x) + y/10, met with
+    /// a box standing on z = 0: what is left is the part of the column above z = 0, of volume
+    /// ∫ B over [0.09, 1] + 0.91/20 = 0.541622 (integrated numerically).
+    #[test]
+    fn a_column_under_part_of_a_curved_patch_met_with_a_box() {
+        let mut model = Model::new();
+        let column = column_under_a_partial_patch(&mut model, [0.0, 0.25, 0.5, 0.75, 1.0], 0.09);
+        assert!(validity::check(&model, column).is_valid(), "{:?}", validity::check(&model, column));
+        let floor = Cuboid::from_corners(Point::new(-1.0, -1.0, 0.0), Point::new(2.0, 2.0, 2.0)).build(&mut model).unwrap();
+        let result = intersection(&mut model, column, floor).unwrap();
+        assert!(validity::check(&model, result).is_valid(), "{:?}", validity::check(&model, result));
+        let v = properties::volume(&model, result).mass;
+        assert!((v - 0.541622195).abs() <= 1e-6, "volume {v}");
+    }
+
     #[test]
     fn solids_apart_are_kept_as_they_are() {
         let mut model = Model::new();

@@ -960,6 +960,16 @@ fn numeric_ray_hits(surface: &Surface, origin: Point, direction: Vector, bbox: &
                 hits.push(t);
             }
         } else if i > 0 && fs[i].abs() <= on_tol() && fs[i].abs() <= fs[i - 1].abs() && fs[i].abs() <= fs[i + 1].abs() {
+            // (A sample on the surface, or next to it, between samples on either side of
+            // it: a crossing, not a graze. One on it exactly is a hit there; one next to it
+            // is found by the sign change on its other side.)
+            if fs[i - 1] * fs[i + 1] < 0.0 {
+                let q = origin + direction * ts[i];
+                if fs[i] == 0.0 && surface_point(surface, uv_of(surface, q)).distance(q) <= 10.0 * on_tol() {
+                    hits.push(ts[i]);
+                }
+                continue;
+            }
             return None;
         }
     }
