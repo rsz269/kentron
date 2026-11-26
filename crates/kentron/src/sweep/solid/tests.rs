@@ -526,20 +526,40 @@ fn a_ball_swung_across_its_own_centre_line() {
 }
 
 /// A rod spun about a line square to it through it: the line pierces its side where the curves
-/// it is grazed along (its ring there and its top and bottom lines) cross, and every copy of
-/// its side, and the sheets the curves sweep, touch there. Splitting the product where it runs
-/// into itself does not take that (it finds only the pieces covered twice), so the sweep is
-/// refused rather than returned running into itself; as is a cube turned whole about its
-/// diagonal, whose three edges at each corner on the axis sweep one cone.
+/// it is grazed along (its ring there and its top and bottom lines) cross, and the copies of
+/// its side, and the sheets the curves sweep, all touch there; the product, running into
+/// itself round the axis, is split there.
 #[test]
-fn turns_whose_sheets_touch_on_the_axis_are_refused() {
+fn a_rod_spun_about_a_line_through_it() {
     let mut model = Model::new();
     let rod = Cylinder::new(0.5, 8.0).with_frame(Frame::from_z(Point::new(-3.0, 0.0, 0.0), Direction::X)).build(&mut model).unwrap();
-    let turn = RigidMotion::Turn { axis: Axis::new(Point::ORIGIN, Direction::Z), from: 0.0, to: 120f64.to_radians() };
-    assert!(solid(&mut model, rod, &turn).is_err());
+    let angle = 120f64.to_radians();
+    let swept = solid(&mut model, rod, &RigidMotion::Turn { axis: Axis::new(Point::ORIGIN, Direction::Z), from: 0.0, to: angle }).unwrap();
+    check(&model, swept);
+    let inside = |p: Point| p.y * p.y + p.z * p.z <= 0.25 && (-3.0..=5.0).contains(&p.x);
+    assert_close("volume", measure(&model, swept).0, turned_volume(&inside, angle, 5.1, (-0.5, 0.5), 300), 1e-3);
+}
+
+/// A cube turned whole about its long diagonal: the three edges at each corner on the axis
+/// sweep one cone. Where its product is not split apart there, the sweep is refused, not
+/// returned running into itself; where it is, against the volume summed circle by circle.
+#[test]
+fn a_cube_turned_whole_about_its_diagonal() {
+    let mut model = Model::new();
     let cube = Cuboid::new(2.0, 2.0, 2.0).with_frame(Frame::from_z(Point::new(-1.0, -1.0, -1.0), Direction::Z)).build(&mut model).unwrap();
-    let whole = RigidMotion::Turn { axis: Axis::new(Point::ORIGIN, Direction::new(1.0, 1.0, 1.0)), from: 0.0, to: TAU };
-    assert!(solid(&mut model, cube, &whole).is_err());
+    let diagonal = Direction::new(1.0, 1.0, 1.0);
+    let whole = RigidMotion::Turn { axis: Axis::new(Point::ORIGIN, diagonal), from: 0.0, to: TAU };
+    if let Ok(swept) = solid(&mut model, cube, &whole) {
+        check(&model, swept);
+        let frame = Frame::from_z(Point::ORIGIN, diagonal);
+        let (x, y, z) = (Vector::from(frame.x()), Vector::from(frame.y()), Vector::from(frame.z()));
+        let inside = |p: Point| {
+            let r = x * p.x + y * p.y + z * p.z;
+            r.x.abs() <= 1.0 && r.y.abs() <= 1.0 && r.z.abs() <= 1.0
+        };
+        let half = 3f64.sqrt();
+        assert_close("volume", measure(&model, swept).0, turned_volume(&inside, TAU, 1.7, (-half, half), 300), 1e-3);
+    }
 }
 
 /// An end mill turned about a line through it parallel to its axis: the line pierces its flat
@@ -708,3 +728,19 @@ fn a_square_on_a_planet_carrier_as_the_planar_cut_takes_it() {
     let left = cut_by_motion(&mut model, &blank, &tool, &motion).unwrap();
     assert_close("volume", measure(&model, swept).0, PI * 81.0 * 2.0 - measure(&model, left).0, 1e-9);
 }
+
+/// A ring turned nearly whole about a line beside it runs into itself (its end comes back
+/// over its start); where that is not split apart, the sweep is refused, not returned holding
+/// twice what is covered twice; where it is, against the volume summed circle by circle.
+#[test]
+fn a_ring_turned_nearly_whole() {
+    let mut model = Model::new();
+    let ring = Torus::new(3.0, 1.0).with_frame(Frame::from_z(Point::new(8.0, 0.0, 0.0), Direction::Z)).build(&mut model).unwrap();
+    let angle = TAU - 0.3;
+    if let Ok(swept) = solid(&mut model, ring, &RigidMotion::Turn { axis: Axis::new(Point::ORIGIN, Direction::Z), from: 0.0, to: angle }) {
+        check(&model, swept);
+        let inside = |p: Point| ((p.x - 8.0).hypot(p.y) - 3.0).powi(2) + p.z * p.z <= 1.0;
+        assert_close("volume", measure(&model, swept).0, turned_volume(&inside, angle, 12.0, (-1.0, 1.0), 300), 1e-3);
+    }
+}
+

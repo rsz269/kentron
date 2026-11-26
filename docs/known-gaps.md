@@ -475,33 +475,28 @@ No figure: `sweep::solid` has no pykentron binding, and the repro is a Rust test
 `sweep::solid` takes a turn about an axis meeting the tool: the tool's points on the axis
 stand still, and its product (the body, `W` at the end and the sheets `W`'s boundary sweeps)
 runs into itself round the axis, where it is split into pieces and the pieces it winds round
-kept. Where the axis pierces a face at a point the face's normal runs along it, every copy
-of that face (at the start, at the end, and the sheets its characteristic curves sweep) is
-tangent to the others there; the split (`boolean::enclosed_solids_at_once`, or one sheet
-after another) then closes only the small pieces covered twice next to the axis, and the
-volumes they add up to fall far short of the product's. The sweep is refused, not returned
-running into itself. A whole turn makes the same kind of contact where several edges meeting
-on the axis sweep one cone (a cube turned about its long diagonal: the three edges at each
-corner make one angle with it).
+kept. Where the axis pierces a face at a point where the face's normal runs along it, every
+copy of the face is tangent to the others there. A rod turned about a line square to it
+through it is split right now (its volume within 3e-9 of brep-bench's reference); a cone
+turned about a line through it, and a cube turned whole about its long diagonal (the three
+edges at each corner on the axis sweeping one cone), are not: the split
+(`boolean::enclosed_solids_at_once`) finds no pieces, or pieces whose volumes do not add up
+to the product's. They are refused, not returned running into itself.
 
-- **Repro:** `turns_whose_sheets_touch_on_the_axis_are_refused` in
-  `crates/kentron/src/sweep/solid/tests.rs` (a rod of radius 0.5 along x turned 120° about
-  z; a cube turned whole about its diagonal); brep-bench's `swept/rod-spun-about-a-line-
-  through-it`, `swept/cube-spun-on-its-diagonal-inside-a-block` and
-  `swept/cone-spun-about-a-line-through-it` (refused: "a sweep running into itself, not split
-  into pieces").
-- **Evidence:** the rod's product is valid (20 faces, volume 42.237 counting what is covered
-  twice twice; the swept solid's is 41.671 by integrating circle by circle about the axis);
-  its split finds two pieces of 0.114 each, wound round twice, and nothing else. The cube's
-  finds pieces adding up to 33.517 of the product's 37.021. Forcing the side faces back to
-  general surfaces of revolution changes nothing.
-- **Tried:** exact elementary side faces (which made the ball, coin, end-mill and ring cases
-  pass); splitting one sheet after another when the split at once fails (the same pieces).
-- **Needed:** either the split taking faces tangent at a point they all pass through, or a
-  construction that keeps the copies apart there: for instance the tool cut by a plane
-  through the axis into pieces each on one side of it, each piece's sweep made apart and
-  the pieces' sweeps united (which needs the union to take sweeps sharing faces on that
-  plane).
+- **Repro:** `a_cube_turned_whole_about_its_diagonal` in
+  `crates/kentron/src/sweep/solid/tests.rs` (accepting a refusal); brep-bench's
+  `swept/cone-spun-about-a-line-through-it` ("a sweep running into itself, not split into
+  pieces") and `swept/cube-spun-on-its-diagonal-inside-a-block`.
+- **Evidence:** the cube's product is valid; its split finds pieces adding up to 33.517 of
+  the product's 37.021 (brep-bench's swept void is 14.510). Before the planar side faces and
+  finer overlap steps of e6005d4, the rod failed the same way (two pieces of 0.114 each,
+  wound round twice, against a product of 42.237).
+- **Tried:** exact elementary side faces; general surfaces of revolution instead (no change);
+  splitting one sheet after another when the split at once fails (the same pieces).
+- **Needed:** the split taking faces tangent at a point they all pass through, and several
+  coincident cones from one corner; or a construction keeping the copies apart there (the
+  tool cut by a plane through the axis, each piece's sweep made apart and united, which
+  needs the union to take sweeps sharing faces on that plane).
 
 ## pykentron
 

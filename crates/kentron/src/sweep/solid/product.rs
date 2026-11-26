@@ -385,20 +385,14 @@ pub(super) fn sweep_in_stages(model: &mut Model, solid: Shape, stages: &[Steady]
     let product = builder.product(&faces, &sides)?;
     // (Where the split fails, the product as it is: a solid running into itself, its volume
     // counting what is covered twice twice, which a boolean operation with it may yet take
-    // right. Not for a whole turn, whose product holds the body's faces within it, nor for a
-    // turn about an axis meeting the tool, whose copies all meet on the axis.)
+    // right. Not for a turn: its product, as it is, is a wrong solid (a ring turned nearly
+    // whole holds 1208 where it sweeps 761), and a whole turn's holds the body's faces within
+    // it.)
     if runs_into_itself {
         match resolved(model, product) {
             Ok(resolved) => return Ok(resolved),
-            Err(e) => {
-                let meets_axis = match still_axis(stages) {
-                    Some(axis) => meets(model, solid, axis)?,
-                    None => false,
-                };
-                if whole || meets_axis {
-                    return Err(e);
-                }
-            }
+            Err(e) if still_axis(stages).is_some() => return Err(e),
+            Err(_) => {}
         }
     }
     Ok(product)
@@ -415,15 +409,6 @@ fn still_axis(stages: &[Steady]) -> Option<crate::math::Axis> {
 /// Whether the stages are one whole turn.
 fn is_whole_turn(stages: &[Steady]) -> bool {
     matches!(stages, [Steady::Turn { angle, .. }] if *angle >= std::f64::consts::TAU)
-}
-
-/// Whether the line `axis` meets the solid (within the tolerance).
-fn meets(model: &mut Model, solid: Shape, axis: crate::math::Axis) -> Result<bool> {
-    let bounds = crate::properties::bounding_box(model, solid);
-    let reach = (bounds.max - bounds.min).length() + (axis.origin - bounds.min).length();
-    let d = Vector::from(axis.direction);
-    let line = crate::make::edge_between(model, axis.origin - d * reach, axis.origin + d * reach)?;
-    Ok(crate::distance::distance(model, solid, line)?.value <= tolerance::LINEAR)
 }
 
 /// How far `p` lies from the line `axis`.
