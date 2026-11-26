@@ -432,6 +432,33 @@ fn a_box_screwed_two_turns() {
     assert_close("volume", measure(&model, swept).0, 48.48010, 1e-6);
 }
 
+/// The box of [`a_box_screwed_two_turns`] and its screw turned rigidly so that the axis is
+/// (1, 2, 2)/3, built in that frame: a corner's cylinder passes through the box's other outer
+/// upright edge, and split all at once the product's pieces did not add up (it came out
+/// unresolved, 2.8% too large); split one face after another, the swept volume is the
+/// untilted one's.
+#[test]
+fn a_box_screwed_about_a_tilted_axis() {
+    let (u, w) = (Direction::new(2.0, -2.0, 1.0), Direction::new(1.0, 2.0, 2.0));
+    let (uv, vv, wv) = (Vector::from(u), Vector::from(w).cross(Vector::from(u)), Vector::from(w));
+    let at = |x: f64, y: f64, z: f64| Point::ORIGIN + uv * x + vv * y + wv * z;
+    let swept_volume = |turns: f64, tilted: bool| {
+        let mut model = Model::new();
+        let (frame, axis) = if tilted {
+            (Frame::new(at(2.5, -0.5, 2.0), w, u), crate::math::Axis::new(Point::ORIGIN, w))
+        } else {
+            (Frame::from_z(Point::new(2.5, -0.5, 2.0), Direction::Z), crate::math::Axis::Z)
+        };
+        let block = Cuboid::new(1.0, 1.0, 1.0).with_frame(frame).build(&mut model).unwrap();
+        let swept = solid(&mut model, block, &RigidMotion::Screw { axis, lead: 4.0, from: 0.0, to: turns * TAU }).unwrap();
+        check(&model, swept);
+        measure(&model, swept).0
+    };
+    for turns in [0.25, 2.0] {
+        assert_close("volume", swept_volume(turns, true), swept_volume(turns, false), 1e-9);
+    }
+}
+
 /// A bar carried along a fine screw (rising 1 a turn, 0.9 thick along the axis, 16 wide), its
 /// tip 0.5 inside a rod of radius 5: at most radii its turns overlap their neighbours', and
 /// each turn's sweep runs into itself. Over 21 turns, by turns: the rod threaded with sharp

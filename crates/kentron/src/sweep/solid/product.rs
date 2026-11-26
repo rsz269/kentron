@@ -327,13 +327,23 @@ fn volume_of(model: &Model, solid: Shape) -> f64 {
 }
 
 /// The product where it runs into itself (see the module's notes): its faces split where they
-/// cross, the pieces of space it winds round at least once, joined. An error where the
-/// pieces' volumes, each counted as often as the product winds round it, do not add up to the
-/// product's (pieces missed or misjudged).
+/// cross, the pieces of space it winds round at least once, joined. Split all at once first
+/// (quicker for many faces, but not split alike everywhere), then, where the pieces found so
+/// do not add up, one face after another. An error where the pieces' volumes, each counted
+/// as often as the product winds round it, do not add up to the product's either way (pieces
+/// missed or misjudged).
 fn resolved(model: &mut Model, product: Shape) -> Result<Shape> {
+    match resolved_split(model, product, true) {
+        Ok(resolved) => Ok(resolved),
+        Err(at_once) => resolved_split(model, product, false).map_err(|_| at_once),
+    }
+}
+
+/// [`resolved`] with the faces split all at once or one after another.
+fn resolved_split(model: &mut Model, product: Shape, at_once: bool) -> Result<Shape> {
     let faces = model.unique_subshapes(product, NodeKind::Face);
-    // (Split all at once: the volumes adding up below check the pieces.)
-    let cells = crate::boolean::enclosed_solids_at_once(model, &faces)?;
+    // (The volumes adding up below check the pieces.)
+    let cells = if at_once { crate::boolean::enclosed_solids_at_once(model, &faces)? } else { crate::boolean::enclosed_solids(model, &faces)? };
     let cells = model.unique_subshapes(cells, NodeKind::Solid);
     if cells.is_empty() {
         return Err(Error::Failed("a sweep running into itself, not split into pieces".into()));
