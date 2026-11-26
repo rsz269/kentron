@@ -1139,10 +1139,17 @@ impl Triangles {
     }
 
     /// Whether `p` lies within the mesh's deviation of piece `k`'s mesh (so on the piece, not
-    /// out on its surface's extension).
+    /// out on its surface's extension), or within a boundary edge's polyline's deviation of
+    /// that polyline: by a curved edge a point of the face lies beyond the chords, off its
+    /// mesh, even on a plane, whose mesh deviates by nothing. (Whether such a point is on the
+    /// face is the face's exact bounds' to tell.)
     fn near_piece(&self, k: usize, p: Point, scale: f64) -> bool {
         let reach = 2.0 * self.deviation[k] + 1e-9 * scale;
         self.ranges[k].clone().any(|i| point_triangle(p, self.corners(i)).distance(p) <= reach)
+            || self.piece_edges[k].iter().any(|&e| {
+                let (_, points, deviation) = &self.edges[e];
+                *deviation > 0.0 && polyline_distance(points, p) <= 2.0 * deviation + 1e-9 * scale
+            })
     }
 
     /// Whether `p` lies on piece `k` for sure: on a face's mesh and inside its boundary, as
@@ -1578,6 +1585,41 @@ mod tests {
                 let got = distance(&mut model, a, b).unwrap().value;
                 assert!((got - want).abs() < 1e-9, "{got} against {want}: off by {:.3e}", got - want);
             }
+        }
+    }
+
+    /// Coaxial cylinders, the shorter within the longer's height and 7e-6 wider: its ends
+    /// cross the longer's side just inside their rims, so they overlap, at distance zero
+    /// both ways. (A point of a plane face by its curved rim lies beyond its mesh's chords;
+    /// taken for a point off the face, the crossing was dropped for the rim's 7e-6.)
+    #[test]
+    fn coaxial_cylinders_a_hair_wider_overlap() {
+        use crate::math::{Direction, Frame};
+        let at = |z: f64| Frame::new(Point::new(0.0, 0.0, z), Direction::new(0.0, 0.0, 1.0), Direction::new(1.0, 0.0, 0.0));
+        let mut model = Model::new();
+        let long = crate::primitives::Cylinder::new(6.973937130991848, 10.228411771948597).with_frame(at(0.6821156716510983)).build(&mut model).unwrap();
+        let wide = crate::primitives::Cylinder::new(6.973944104928979, 4.598228155659472).with_frame(at(0.686742248888502)).build(&mut model).unwrap();
+        for (a, b) in [(long, wide), (wide, long)] {
+            let got = distance(&mut model, a, b).unwrap().value;
+            assert!(got < 1e-9, "{got}");
+        }
+    }
+
+    /// A cone standing on its apex, turned a little, above a box: as far from it as its
+    /// apex is high. (Its surface's other nappe crosses the box's top 0.42 from the apex,
+    /// just beyond twice its mesh's deviation: a point there is no point of the face, which
+    /// widening every piece's reach by its boundary's deviations would have let through.)
+    #[test]
+    fn a_cone_on_its_apex_above_a_box() {
+        use crate::math::{Direction, Frame};
+        let mut model = Model::new();
+        let frame = Frame::new(Point::new(0.0, 0.0, 0.35380730268266536), Direction::new(-0.008895878743841385, 0.10121214185884421, 0.9948250930096808), Direction::new(0.99996043088783, 0.0009004065696693049, 0.008850193593047857));
+        let cone = crate::primitives::Cone::new(0.0, 3.538073026826653, 4.433996006208814).with_frame(frame).build(&mut model).unwrap();
+        let low = -15.944138066070934;
+        let block = Cuboid::from_corners(Point::new(low, low, low), Point::new(-low, -low, 0.0)).build(&mut model).unwrap();
+        for (a, b) in [(cone, block), (block, cone)] {
+            let got = distance(&mut model, a, b).unwrap().value;
+            assert!((got - 0.35380730268266536).abs() < 1e-9, "{got}");
         }
     }
 }
