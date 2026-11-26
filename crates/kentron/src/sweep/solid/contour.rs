@@ -190,8 +190,31 @@ fn crossing(gauge: &Gauge, start: Point2, k: (f64, f64), tolerance: f64) -> Opti
 /// where it crosses itself, each branch carried on straight through the crossing.
 fn chains(gauge: &Gauge, b: (f64, f64, f64, f64), nu: usize, nv: usize, tolerance: f64) -> Vec<Chain> {
     let (u0, u1, v0, v1) = b;
-    let us: Vec<f64> = (0..=nu).map(|i| u0 + (u1 - u0) * i as f64 / nu as f64).collect();
-    let vs: Vec<f64> = (0..=nv).map(|j| v0 + (v1 - v0) * j as f64 / nv as f64).collect();
+    let mut us: Vec<f64> = (0..=nu).map(|i| u0 + (u1 - u0) * i as f64 / nu as f64).collect();
+    let mut vs: Vec<f64> = (0..=nv).map(|j| v0 + (v1 - v0) * j as f64 / nv as f64).collect();
+    // (A side of the box the surface pinches to a point, as a sphere's pole: every point of it
+    // is one, where `g` is zero but for rounding. The grid line is moved a hair into the
+    // surface, where `g`'s signs tell where the curves reach the point.)
+    let pinched = |p: Point, q: Point, r: Point| p.distance(q).max(p.distance(r)) <= 1e-3 * tolerance;
+    for (k, inward) in [(0usize, 1.0f64), (nv, -1.0)] {
+        let v = vs[k];
+        if pinched(gauge.surface.point(u0, v), gauge.surface.point(0.5 * (u0 + u1), v), gauge.surface.point(u1, v)) {
+            vs[k] = v + inward * 1e-4 * (v1 - v0) / nv as f64;
+        }
+    }
+    for (k, inward) in [(0usize, 1.0f64), (nu, -1.0)] {
+        let u = us[k];
+        if pinched(gauge.surface.point(u, v0), gauge.surface.point(u, 0.5 * (v0 + v1)), gauge.surface.point(u, v1)) {
+            us[k] = u + inward * 1e-4 * (u1 - u0) / nu as f64;
+        }
+    }
+    let (us, vs) = (us, vs);
+    // (Points found on a moved line are put back on the side, the point itself.)
+    let restore = |p: Point2| {
+        let x = if p.x == us[0] { u0 } else if p.x == us[nu] { u1 } else { p.x };
+        let y = if p.y == vs[0] { v0 } else if p.y == vs[nv] { v1 } else { p.y };
+        Point2::new(x, y)
+    };
     let values: Vec<Vec<f64>> = us.iter().map(|&u| vs.iter().map(|&v| gauge.g(u, v)).collect()).collect();
     let positive = |i: usize, j: usize| values[i][j] >= 0.0;
     // Crossing points, by grid line: along u (i, j)–(i+1, j), and along v (i, j)–(i, j+1).
@@ -338,7 +361,7 @@ fn chains(gauge: &Gauge, b: (f64, f64, f64, f64), nu: usize, nv: usize, toleranc
             at = next;
         }
         let closed = chain.len() > 2 && links[at].contains(&start);
-        Chain { points: chain.iter().map(|&k| points[k].expect("a crossing")).collect(), closed }
+        Chain { points: chain.iter().map(|&k| restore(points[k].expect("a crossing"))).collect(), closed }
     };
     for k in 0..count {
         if points[k].is_some() && !used[k] && links[k].len() == 1 {
@@ -535,6 +558,11 @@ pub(super) fn cuts(model: &Model, face: Shape, steady: &Steady, tolerance: f64) 
     let bounds = model.face_uv_bounds(face);
     let (b, held) = search_box(surface, bounds);
     let (nu, nv) = grid_size(&gauge, b);
+    // (A face the motion runs along everywhere, as a cylinder slid along its axis: `g` is zero
+    // but for rounding, whose signs mark no curve.)
+    if runs_along_everywhere(&gauge, b, nu, nv) {
+        return Ok(Vec::new());
+    }
     let h = (1e-7 * (b.1 - b.0), 1e-7 * (b.3 - b.2));
     let scale = (bounds.1 - bounds.0).hypot(bounds.3 - bounds.2);
     let mut out = Vec::new();
@@ -564,6 +592,23 @@ pub(super) fn cuts(model: &Model, face: Shape, steady: &Steady, tolerance: f64) 
         out.push(Cut { pcurve: Curve2::BSpline(fitted.pcurve), curve: Curve::BSpline(fitted.curve), first: fitted.first, last: fitted.last });
     }
     Ok(out)
+}
+
+/// Whether `g` vanishes all over the grid but for rounding: within a billionth of the fastest
+/// any of its points moves.
+fn runs_along_everywhere(gauge: &Gauge, b: (f64, f64, f64, f64), nu: usize, nv: usize) -> bool {
+    let (u0, u1, v0, v1) = b;
+    let (mut most_g, mut most_v) = (0.0f64, 0.0f64);
+    for i in 0..=nu {
+        for j in 0..=nv {
+            let (u, v) = (u0 + (u1 - u0) * i as f64 / nu as f64, v0 + (v1 - v0) * j as f64 / nv as f64);
+            let (p, n) = gauge.normal(u, v);
+            let velocity = gauge.steady.velocity(p);
+            most_g = most_g.max(n.dot(velocity).abs());
+            most_v = most_v.max(velocity.length());
+        }
+    }
+    most_g <= 1e-9 * most_v
 }
 
 /// Whether `q` lies on a side of the box the surface ends at (where a curve could not be

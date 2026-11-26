@@ -2,6 +2,7 @@ use std::f64::consts::PI;
 
 use super::*;
 use crate::math::{Direction, Frame, Transform};
+use std::f64::consts::TAU;
 use crate::primitives::{Cuboid, Cylinder, Sphere, Torus};
 use crate::{properties, validity};
 
@@ -429,4 +430,211 @@ fn a_box_screwed_two_turns() {
     let corners = model.unique_subshapes(swept, NodeKind::Face).into_iter().filter(|&f| matches!(model.surface(f), Some(Surface::Cylinder(c)) if (c.radius() - 12.5f64.sqrt()).abs() < 1e-12)).count();
     assert!(corners > 0, "no cylinder swept by the outer edges");
     assert_close("volume", measure(&model, swept).0, 48.48010, 1e-6);
+}
+
+/// What a turn about the z axis by `angle` sweeps `inside` through, summed circle by circle
+/// about the axis: each circle (radius ρ, height z, the midpoints of an `n` by `n` grid over
+/// `[0, reach]` by `heights`) meets the tool in runs of angles (sampled 1024 times round,
+/// each end narrowed by bisection), each reaching `angle` further round; the circle holds
+/// their union (all of it for a whole turn).
+fn turned_volume(inside: &dyn Fn(Point) -> bool, angle: f64, reach: f64, heights: (f64, f64), n: usize) -> f64 {
+    const AROUND: usize = 1024;
+    let (h0, h1) = heights;
+    let (dr, dz) = (reach / n as f64, (h1 - h0) / n as f64);
+    let mut total = 0.0;
+    for i in 0..n {
+        let rho = dr * (i as f64 + 0.5);
+        for j in 0..n {
+            let z = h0 + dz * (j as f64 + 0.5);
+            let at = |phi: f64| inside(Point::new(rho * phi.cos(), rho * phi.sin(), z));
+            let step = TAU / AROUND as f64;
+            let states: Vec<bool> = (0..AROUND).map(|k| at(step * k as f64)).collect();
+            if !states.iter().any(|&s| s) {
+                continue;
+            }
+            if states.iter().all(|&s| s) {
+                total += TAU * rho * dr * dz;
+                continue;
+            }
+            // Where the circle passes in or out, narrowed.
+            let edge = |k: usize| {
+                let (mut lo, mut hi) = (step * k as f64, step * (k + 1) as f64);
+                let from = states[k];
+                for _ in 0..40 {
+                    let m = 0.5 * (lo + hi);
+                    if at(m) == from { lo = m } else { hi = m }
+                }
+                0.5 * (lo + hi)
+            };
+            let first_in = (0..AROUND).find(|&k| !states[k] && states[(k + 1) % AROUND]).unwrap();
+            let mut runs: Vec<(f64, f64)> = Vec::new();
+            let mut k = first_in;
+            let mut start = edge(k);
+            for _ in 0..AROUND {
+                let next = (k + 1) % AROUND;
+                if states[k] && !states[next] {
+                    let mut end = edge(k);
+                    while end < start {
+                        end += TAU;
+                    }
+                    runs.push((start, end + angle));
+                } else if !states[k] && states[next] {
+                    start = edge(k);
+                }
+                k = next;
+            }
+            // Their union round the circle.
+            let mut pieces: Vec<(f64, f64)> = Vec::new();
+            for (a, b) in runs {
+                let a = a.rem_euclid(TAU);
+                let b = a + (b - a.min(b)).min(TAU);
+                let b = if b - a >= TAU { a + TAU } else { b };
+                pieces.push((a, b));
+                pieces.push((a - TAU, b - TAU));
+            }
+            pieces.sort_by(|p, q| p.0.total_cmp(&q.0));
+            let mut length = 0.0;
+            let mut end = f64::NEG_INFINITY;
+            for (a, b) in pieces {
+                let (a, b) = (a.max(0.0), b.min(TAU));
+                let s = a.max(end);
+                if b > s {
+                    length += b - s;
+                }
+                end = end.max(b);
+            }
+            total += length.min(TAU) * rho * dr * dz;
+        }
+    }
+    total
+}
+
+/// A ball reaching across the axis it is swung about: the tube its centre's arc carries is a
+/// spindle torus's, passing through itself on the axis, its inner part inside the balls at the
+/// ends. The ball's points on the axis stand still, and the curve where it is grazed (its
+/// great circle through the axis) passes through them.
+#[test]
+fn a_ball_swung_across_its_own_centre_line() {
+    let mut model = Model::new();
+    let ball = Sphere::new(2.0).with_frame(Frame::from_z(Point::new(1.0, 0.0, 0.0), Direction::Z)).build(&mut model).unwrap();
+    let angle = 120f64.to_radians();
+    let swept = solid(&mut model, ball, &RigidMotion::Turn { axis: Axis::new(Point::ORIGIN, Direction::Z), from: 0.0, to: angle }).unwrap();
+    check(&model, swept);
+    let (volume, _) = measure(&model, swept);
+    let inside = |p: Point| p.distance(Point::new(1.0, 0.0, 0.0)) <= 2.0;
+    assert_close("volume", volume, turned_volume(&inside, angle, 3.0, (-2.0, 2.0), 300), 1e-3);
+}
+
+/// A rod spun about a line square to it through it: the line pierces its side where the curves
+/// it is grazed along (its ring there and its top and bottom lines) cross, and every copy of
+/// its side, and the sheets the curves sweep, touch there. Splitting the product where it runs
+/// into itself does not take that (it finds only the pieces covered twice), so the sweep is
+/// refused rather than returned running into itself; as is a cube turned whole about its
+/// diagonal, whose three edges at each corner on the axis sweep one cone.
+#[test]
+fn turns_whose_sheets_touch_on_the_axis_are_refused() {
+    let mut model = Model::new();
+    let rod = Cylinder::new(0.5, 8.0).with_frame(Frame::from_z(Point::new(-3.0, 0.0, 0.0), Direction::X)).build(&mut model).unwrap();
+    let turn = RigidMotion::Turn { axis: Axis::new(Point::ORIGIN, Direction::Z), from: 0.0, to: 120f64.to_radians() };
+    assert!(solid(&mut model, rod, &turn).is_err());
+    let cube = Cuboid::new(2.0, 2.0, 2.0).with_frame(Frame::from_z(Point::new(-1.0, -1.0, -1.0), Direction::Z)).build(&mut model).unwrap();
+    let whole = RigidMotion::Turn { axis: Axis::new(Point::ORIGIN, Direction::new(1.0, 1.0, 1.0)), from: 0.0, to: TAU };
+    assert!(solid(&mut model, cube, &whole).is_err());
+}
+
+/// An end mill turned about a line through it parallel to its axis: the line pierces its flat
+/// ends, which the turn runs along.
+#[test]
+fn an_end_mill_turned_about_a_line_through_its_ends() {
+    let mut model = Model::new();
+    let mill = Cylinder::new(3.0, 6.0).with_frame(Frame::from_z(Point::new(1.5, 0.0, -2.0), Direction::Z)).build(&mut model).unwrap();
+    let angle = 120f64.to_radians();
+    let swept = solid(&mut model, mill, &RigidMotion::Turn { axis: Axis::new(Point::ORIGIN, Direction::Z), from: 0.0, to: angle }).unwrap();
+    check(&model, swept);
+    let (volume, _) = measure(&model, swept);
+    // (The section: the disc and, beyond 1.5 out, the turn's reach of the circle through its
+    // far point, ρ ≤ 4.5, over the angles the disc's rim reaches at each radius.)
+    let inside = |p: Point| (p.x - 1.5).powi(2) + p.y * p.y <= 9.0;
+    assert_close("volume", volume, 6.0 * turned_volume(&|p| inside(Point::new(p.x, p.y, 0.0)), angle, 4.5, (-0.5, 0.5), 400), 1e-3);
+}
+
+/// A coin turned about a line through its rim: the line touches the rim, which is split there.
+#[test]
+fn a_coin_turned_about_a_line_through_its_rim() {
+    let mut model = Model::new();
+    let coin = Cylinder::new(2.0, 0.5).with_frame(Frame::from_z(Point::new(2.0, 0.0, 0.0), Direction::Y)).build(&mut model).unwrap();
+    let angle = 90f64.to_radians();
+    let swept = solid(&mut model, coin, &RigidMotion::Turn { axis: Axis::new(Point::ORIGIN, Direction::Z), from: 0.0, to: angle }).unwrap();
+    check(&model, swept);
+    let (volume, _) = measure(&model, swept);
+    let inside = |p: Point| (p.x - 2.0).powi(2) + p.z * p.z <= 4.0 && (0.0..=0.5).contains(&p.y);
+    assert_close("volume", volume, turned_volume(&inside, angle, 4.1, (-2.0, 2.0), 300), 1e-3);
+}
+
+/// A ring lying flat turned a whole turn about a line beside it: the solid of revolution of
+/// its shadow in a half plane through the axis (Pappus: `2πD(4rR + πr²)`).
+#[test]
+fn a_ring_turned_a_whole_turn() {
+    let mut model = Model::new();
+    let ring = Torus::new(3.0, 1.0).with_frame(Frame::from_z(Point::new(8.0, 0.0, 0.0), Direction::Z)).build(&mut model).unwrap();
+    for turned in [TAU, 1.5 * TAU] {
+        let swept = solid(&mut model, ring, &RigidMotion::Turn { axis: Axis::new(Point::ORIGIN, Direction::Z), from: 0.3, to: 0.3 + turned }).unwrap();
+        check(&model, swept);
+        let (volume, area) = measure(&model, swept);
+        assert_close("volume", volume, TAU * 8.0 * (12.0 + PI), 1e-8);
+        assert_close("area", area, 2.0 * TAU * 8.0 * (PI + 6.0), 1e-8);
+    }
+}
+
+/// A tube (a cylinder less a narrower one, by a boolean difference) slid along its own leaning
+/// axis: the slide runs along both its cylinders everywhere, which divide nothing. Swept, it is
+/// the tube lengthened by the slide.
+#[test]
+fn a_tube_slid_along_its_axis() {
+    let mut model = Model::new();
+    let (sin, cos) = (30f64.to_radians().sin(), 30f64.to_radians().cos());
+    let axis = Direction::new(sin, 0.0, cos);
+    let start = Frame::from_z(Point::new(-18.0 * sin, 0.0, 2.0 - 18.0 * cos), axis);
+    let outer = Cylinder::new(2.5, 12.0).with_frame(start).build(&mut model).unwrap();
+    let inner = Cylinder::new(1.5, 12.0).with_frame(start).build(&mut model).unwrap();
+    let tube = crate::boolean::difference(&mut model, outer, inner).unwrap();
+    let swept = solid(&mut model, tube, &RigidMotion::Slide { by: Vector::from(axis) * 24.0 }).unwrap();
+    check(&model, swept);
+    let (volume, area) = measure(&model, swept);
+    let length = 36.0;
+    assert_close("volume", volume, PI * (2.5f64.powi(2) - 1.5f64.powi(2)) * length, 1e-9);
+    assert_close("area", area, 2.0 * PI * (2.5 + 1.5) * length + 2.0 * PI * (2.5f64.powi(2) - 1.5f64.powi(2)), 1e-9);
+}
+
+/// A box with every edge rounded slid aslant: everything within the radius of the inner box
+/// slid, a convex zonotope grown by the radius, whose volume is Steiner's `V + rS + r²M +
+/// 4πr³/3`.
+#[test]
+fn a_rounded_block_slid_aslant() {
+    let mut model = Model::new();
+    let block = Cuboid::new(10.0, 6.0, 4.0).build(&mut model).unwrap();
+    let edges = model.unique_subshapes(block, NodeKind::Edge);
+    let rounded = crate::blend::fillet(&mut model, block, &edges, 1.0).unwrap();
+    let by = Vector::new(8.0, 5.0, 3.0);
+    let swept = solid(&mut model, rounded, &RigidMotion::Slide { by }).unwrap();
+    check(&model, swept);
+    let (volume, _) = measure(&model, swept);
+    // The inner box (8 × 4 × 2) slid by `by` is the zonotope of the generators the box's edges
+    // and `by`: its volume the sum of |det| over each three generators, its area twice the sum
+    // of |cross| over each two, and M (half the sum over edges of length times exterior angle)
+    // π|g| for each generator (the edges parallel to it turning once round it).
+    let g = [Vector::new(8.0, 0.0, 0.0), Vector::new(0.0, 4.0, 0.0), Vector::new(0.0, 0.0, 2.0), by];
+    let mut v = 0.0;
+    let mut s = 0.0;
+    for i in 0..4 {
+        for j in i + 1..4 {
+            s += 2.0 * g[i].cross(g[j]).length();
+            for k in j + 1..4 {
+                v += g[i].cross(g[j]).dot(g[k]).abs();
+            }
+        }
+    }
+    let m: f64 = g.iter().map(|x| PI * x.length()).sum();
+    let r = 1.0;
+    assert_close("volume", volume, v + r * s + r * r * m + 4.0 / 3.0 * PI * r.powi(3), 1e-6);
 }

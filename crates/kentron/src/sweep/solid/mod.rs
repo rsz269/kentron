@@ -25,6 +25,17 @@
 //! mapped; characteristic curves that are lines or arcs (a cylinder's or cone's lines, a
 //! torus's circles) are cut exactly, others fitted within 1e-9 of the body's size.
 //!
+//! A turn sweeps a curve into the surface the revolve module makes of it: a plane, cylinder,
+//! cone, sphere or torus where the curve is a line or a circle placed so, a plane where the
+//! curve lies square to the axis, else the general surface of revolution. Its axis may meet
+//! the tool: points on it stand still, so the edges are split where they cross it, and each
+//! piece's end there sweeps nothing (a degenerate edge, each face its own), an edge along the
+//! axis nothing at all. A whole turn, or more, is the tool turned whole: its end is its start,
+//! the copies there the body's own, and its product, holding all of the body, is always split
+//! where it runs into itself (refused where that fails, as is a turn about an axis meeting the
+//! tool whose split fails: its copies all meet on the axis, and its product, as it is, would
+//! count twice what is covered twice).
+//!
 //! A general motion ([`RigidMotion::Carried`], given by its places) is taken where, over
 //! stretches of it, `W` stays where it is on the body (each face's `V·n` keeps its sign, or
 //! vanishes along curves that stay put, only scaled): a screw whose rise is any function of
@@ -192,12 +203,11 @@ impl Steady {
 /// `motion.at(t)·tool`.
 ///
 /// Taken: one solid of one shell, under a slide, a turn, a screw or a carried motion (see the
-/// module's notes). A turn about an axis meeting the tool is refused (a point on the axis
-/// stands still there, and the curves where the motion grazes the tool meet at it), as is a
-/// turn of a whole turn or more (its ends would be one); so are carried motions under which
-/// the curves where they graze the tool move over it, or which turn while running along a face
-/// beside faces they carry out, and sweeps running into themselves where their faces are not
-/// split apart (see the module's notes).
+/// module's notes). A turn may be about an axis meeting the tool (its points on the axis stand
+/// still), and may be a whole turn or more (the tool turned whole). Refused are carried motions
+/// under which the curves where they graze the tool move over it, or which turn while running
+/// along a face beside faces they carry out, and sweeps running into themselves where their
+/// faces are not split apart (see the module's notes).
 pub fn solid(model: &mut Model, tool: Shape, motion: &RigidMotion) -> Result<Shape> {
     let solids = model.unique_subshapes(tool, NodeKind::Solid);
     if solids.len() != 1 || model.unique_subshapes(solids[0], NodeKind::Shell).len() != 1 {
@@ -207,28 +217,13 @@ pub fn solid(model: &mut Model, tool: Shape, motion: &RigidMotion) -> Result<Sha
         return carried::sweep(model, solids[0], carriage);
     }
     let (start, steady) = motion.steady()?;
-    if let Steady::Turn { angle, .. } = steady {
-        if angle >= TAU {
-            return Err(Error::InvalidInput("a turn of a whole turn or more ends where it starts".into()));
-        }
-    }
+    // (A whole turn or more fills what a whole turn does: the tool turned whole.)
+    let steady = match steady {
+        Steady::Turn { axis, angle } if angle >= TAU => Steady::Turn { axis, angle: TAU },
+        other => other,
+    };
     let placed = crate::modify::transform(model, solids[0], &start, Default::default())?;
-    if let Steady::Turn { axis, .. } = steady {
-        if meets_axis(model, placed, axis)? {
-            return Err(Error::InvalidInput("a turn about an axis meeting the tool".into()));
-        }
-    }
     product::sweep(model, placed, &steady)
-}
-
-/// Whether the line `axis` meets the solid (within the tolerance).
-fn meets_axis(model: &mut Model, solid: Shape, axis: Axis) -> Result<bool> {
-    let bounds = crate::properties::bounding_box(model, solid);
-    let reach = (bounds.max - bounds.min).length() + (axis.origin - bounds.min).length();
-    let d = Vector::from(axis.direction);
-    let line = crate::make::edge_between(model, axis.origin - d * reach, axis.origin + d * reach)?;
-    let distance = crate::distance::distance(model, solid, line)?.value;
-    Ok(distance <= crate::tolerance::LINEAR)
 }
 
 #[cfg(test)]

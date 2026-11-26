@@ -342,6 +342,11 @@ pub(super) fn sweep_in_stages(model: &mut Model, solid: Shape, stages: &[Steady]
             }
         }
     }
+    // (Under a turn, the points on its axis stand still: edges are split where they cross
+    // it, so that each piece's path ends there, at a point.)
+    if let Some(axis) = still_axis(stages) {
+        split_at_axis(model, solid, axis, tolerance::LINEAR.max(tolerance))?;
+    }
     let faces = model.unique_subshapes(solid, NodeKind::Face);
     let mut sides: Vec<Vec<Side>> = Vec::with_capacity(stages.len());
     let mut folds = 0;
@@ -372,18 +377,128 @@ pub(super) fn sweep_in_stages(model: &mut Model, solid: Shape, stages: &[Steady]
             }
         })
         .fold(0.0, f64::max);
-    let runs_into_itself = passes_back_into(model, solid, &faces, &sides, stages, &junctions)?;
+    // (A whole turn ends where it starts: its product holds the whole body, which `W` passes
+    // over, and always runs into itself.)
+    let whole = is_whole_turn(stages);
+    let runs_into_itself = whole || passes_back_into(model, solid, &faces, &sides, stages, &junctions)?;
     let mut builder = Builder::new(model, stages, junctions, size, reach)?;
     let product = builder.product(&faces, &sides)?;
     // (Where the split fails, the product as it is: a solid running into itself, its volume
     // counting what is covered twice twice, which a boolean operation with it may yet take
-    // right.)
+    // right. Not for a whole turn, whose product holds the body's faces within it, nor for a
+    // turn about an axis meeting the tool, whose copies all meet on the axis.)
     if runs_into_itself {
-        if let Ok(resolved) = resolved(model, product) {
-            return Ok(resolved);
+        match resolved(model, product) {
+            Ok(resolved) => return Ok(resolved),
+            Err(e) => {
+                let meets_axis = match still_axis(stages) {
+                    Some(axis) => meets(model, solid, axis)?,
+                    None => false,
+                };
+                if whole || meets_axis {
+                    return Err(e);
+                }
+            }
         }
     }
     Ok(product)
+}
+
+/// The axis of a turn (one stage), whose points stand still.
+fn still_axis(stages: &[Steady]) -> Option<crate::math::Axis> {
+    match stages {
+        [Steady::Turn { axis, .. }] => Some(*axis),
+        _ => None,
+    }
+}
+
+/// Whether the stages are one whole turn.
+fn is_whole_turn(stages: &[Steady]) -> bool {
+    matches!(stages, [Steady::Turn { angle, .. }] if *angle >= std::f64::consts::TAU)
+}
+
+/// Whether the line `axis` meets the solid (within the tolerance).
+fn meets(model: &mut Model, solid: Shape, axis: crate::math::Axis) -> Result<bool> {
+    let bounds = crate::properties::bounding_box(model, solid);
+    let reach = (bounds.max - bounds.min).length() + (axis.origin - bounds.min).length();
+    let d = Vector::from(axis.direction);
+    let line = crate::make::edge_between(model, axis.origin - d * reach, axis.origin + d * reach)?;
+    Ok(crate::distance::distance(model, solid, line)?.value <= tolerance::LINEAR)
+}
+
+/// How far `p` lies from the line `axis`.
+fn off_axis(axis: crate::math::Axis, p: Point) -> f64 {
+    let r = p - axis.origin;
+    let d = Vector::from(axis.direction);
+    (r - d * r.dot(d)).length()
+}
+
+/// Splits the solid's edges where they cross `axis` (pass within `tolerance` of it), but those
+/// lying along it. Found as the nearest points to the axis between samples along each edge,
+/// each narrowed by golden sections.
+fn split_at_axis(model: &mut Model, solid: Shape, axis: crate::math::Axis, tolerance: f64) -> Result<()> {
+    for edge in model.unique_subshapes(solid, NodeKind::Edge) {
+        let e = EdgeId::from_index(edge.node.index);
+        if model.is_degenerate(edge) {
+            continue;
+        }
+        let Some((curve, a, b)) = model.edge_curve(edge) else { continue };
+        let samples = match &curve {
+            Curve::BSpline(bs) => 64.max(4 * bs.poles().len()),
+            _ => 64,
+        };
+        let at = |i: usize| a + (b - a) * i as f64 / samples as f64;
+        let d: Vec<f64> = (0..=samples).map(|i| off_axis(axis, curve.point(at(i)))).collect();
+        if d.iter().all(|&x| x <= tolerance) {
+            continue;
+        }
+        let mut roots = Vec::new();
+        for i in 1..samples {
+            if !(d[i] <= d[i - 1] && d[i] <= d[i + 1]) {
+                continue;
+            }
+            // (Golden sections on the distance between the neighbours.)
+            let (mut lo, mut hi) = (at(i - 1), at(i + 1));
+            let g = 0.5 * (5f64.sqrt() - 1.0);
+            let f = |s: f64| off_axis(axis, curve.point(s));
+            let (mut x1, mut x2) = (hi - g * (hi - lo), lo + g * (hi - lo));
+            let (mut f1, mut f2) = (f(x1), f(x2));
+            for _ in 0..100 {
+                if f1 <= f2 {
+                    hi = x2;
+                    (x2, f2) = (x1, f1);
+                    x1 = hi - g * (hi - lo);
+                    f1 = f(x1);
+                } else {
+                    lo = x1;
+                    (x1, f1) = (x2, f2);
+                    x2 = lo + g * (hi - lo);
+                    f2 = f(x2);
+                }
+                if hi - lo <= 1e-15 * (b - a) {
+                    break;
+                }
+            }
+            let s = 0.5 * (lo + hi);
+            let p = curve.point(s);
+            let (start, end) = model.edge_end_vertices(e);
+            let near_end = [start, end].iter().any(|&v| model[v].point.distance(p) <= tolerance.max(model[v].tolerance));
+            if f(s) <= tolerance && !near_end && s > a + 1e-9 * (b - a) && s < b - 1e-9 * (b - a) && roots.last().is_none_or(|&r: &f64| s - r > 1e-9 * (b - a)) {
+                roots.push(s);
+            }
+        }
+        let mut piece = e;
+        for s in roots {
+            let tol = model[piece].tolerance;
+            // (The vertex on the axis, where the point stands still.)
+            let p = curve.point(s);
+            let d = Vector::from(axis.direction);
+            let foot = axis.origin + d * (p - axis.origin).dot(d);
+            let v = model.add_vertex(foot, tol.max(p.distance(foot)));
+            piece = model.split_edge(piece, v, s)?.1;
+        }
+    }
+    Ok(())
 }
 
 /// Whether two stages run along the body alike (the same steady motion).
@@ -524,6 +639,10 @@ struct Builder<'m> {
     /// points' paths quintics through them).
     motions: Vec<Option<PieceMotion>>,
     size: f64,
+    /// A turn's axis, whose points stand still.
+    still: Option<crate::math::Axis>,
+    /// A whole turn: its end is its start, the copies there the body's own.
+    whole: bool,
     vertex_copies: HashMap<(VertexId, usize), VertexId>,
     edge_copies: HashMap<(EdgeId, usize), EdgeId>,
     paths: HashMap<(VertexId, usize), EdgeId>,
@@ -539,7 +658,23 @@ impl<'m> Builder<'m> {
                 _ => None,
             });
         }
-        Ok(Builder { model, stages: stages.to_vec(), junctions, motions, size, vertex_copies: HashMap::new(), edge_copies: HashMap::new(), paths: HashMap::new() })
+        Ok(Builder { model, stages: stages.to_vec(), junctions, motions, size, still: still_axis(stages), whole: is_whole_turn(stages), vertex_copies: HashMap::new(), edge_copies: HashMap::new(), paths: HashMap::new() })
+    }
+
+    /// Whether the vertex lies on the turn's axis, standing still.
+    fn stands_still(&self, v: VertexId) -> bool {
+        self.still.is_some_and(|axis| off_axis(axis, self.model[v].point) <= tolerance::LINEAR.max(self.model[v].tolerance))
+    }
+
+    /// Whether the edge lies along the turn's axis (it sweeps nothing).
+    fn along_axis(&self, e: EdgeId) -> bool {
+        let Some(axis) = self.still else { return false };
+        let (a, b) = self.model.edge_end_vertices(e);
+        if !(self.stands_still(a) && self.stands_still(b)) || self.model.is_degenerate(Shape::from(e)) {
+            return false;
+        }
+        let Some((curve, first, last)) = self.model.edge_curve(Shape::from(e)) else { return false };
+        (0..=8).all(|i| off_axis(axis, curve.point(first + (last - first) * i as f64 / 8.0)) <= tolerance::LINEAR.max(self.model[e].tolerance))
     }
 
     fn product(&mut self, faces: &[Shape], sides: &[Vec<Side>]) -> Result<Shape> {
@@ -554,6 +689,9 @@ impl<'m> Builder<'m> {
         for k in 0..n {
             // What the boundary of W sweeps over the stage.
             for (e, along) in boundary_edges(self.model, faces, &sides[k])? {
+                if self.along_axis(e) {
+                    continue;
+                }
                 let face = self.side_face(e, along, k)?;
                 self.model.add(shell, face)?;
             }
@@ -582,7 +720,7 @@ impl<'m> Builder<'m> {
 
     /// A vertex's copy at junction `k` (itself at the start).
     fn vertex_copy(&mut self, v: VertexId, k: usize) -> VertexId {
-        if k == 0 {
+        if k == 0 || self.whole || self.stands_still(v) {
             return v;
         }
         if let Some(&c) = self.vertex_copies.get(&(v, k)) {
@@ -596,7 +734,7 @@ impl<'m> Builder<'m> {
 
     /// An edge's copy at junction `k` (itself at the start).
     fn edge_copy(&mut self, e: EdgeId, k: usize) -> Result<EdgeId> {
-        if k == 0 {
+        if k == 0 || self.whole || self.along_axis(e) {
             return Ok(e);
         }
         if let Some(&c) = self.edge_copies.get(&(e, k)) {
@@ -617,6 +755,9 @@ impl<'m> Builder<'m> {
     /// The copy at junction `j` of a face, used as the body uses it (its edges the copies of
     /// its edges, its pcurves the same on the moved surface).
     fn face_copy(&mut self, face: Shape, j: usize) -> Result<Shape> {
+        if self.whole {
+            return Ok(face);
+        }
         let id = FaceId::from_index(face.node.index);
         let tol = self.model[id].tolerance;
         let end = self.junctions[j];
@@ -645,12 +786,16 @@ impl<'m> Builder<'m> {
     /// The edge a vertex's path makes over stage `k`, from its copy at junction `k` to that at
     /// the next.
     fn vertex_path(&mut self, v: VertexId, k: usize) -> Result<EdgeId> {
+        let tol = self.model[v].tolerance.max(tolerance::LINEAR);
+        // (A vertex standing still on a turn's axis: a degenerate edge, each face its own.)
+        if self.stands_still(v) {
+            return self.model.add_edge(v, v, tol);
+        }
         if let Some(&e) = self.paths.get(&(v, k)) {
             return Ok(e);
         }
         let (start, end) = (self.vertex_copy(v, k), self.vertex_copy(v, k + 1));
         let p = self.model[start].point;
-        let tol = self.model[v].tolerance.max(tolerance::LINEAR);
         let edge = self.model.add_edge(start, end, tol)?;
         let (curve, first, last) = match self.stages[k] {
             Steady::Slide { by } => (Curve::Line(Line::new(p, Direction::from_vector(by))), 0.0, by.length()),
@@ -843,6 +988,57 @@ impl<'m> Builder<'m> {
         self.model.add(face, wire.into())?;
         Ok(Shape { orientation, ..face })
     }
+
+    /// A side face of a turn on a plane (square to the axis), bounded by `loops`, each put
+    /// counter-clockwise (the outer) or clockwise (a hole) in the plane's parameters; facing
+    /// as [`Builder::side_face`] faces it.
+    #[allow(clippy::too_many_arguments)]
+    fn planar_loops_face(&mut self, surface: Surface, mut loops: Vec<Vec<(EdgeId, Orientation, Curve2, f64, f64)>>, uv: Box<dyn Fn(f64, f64) -> Point2 + '_>, curve: &Curve, along: bool, k: usize, a: f64, b: f64) -> Result<Shape> {
+        // Each loop's signed area in the parameters, from points along its pcurves.
+        let area = |uses: &[(EdgeId, Orientation, Curve2, f64, f64)]| {
+            let mut points = Vec::new();
+            for (_, o, pc, first, last) in uses {
+                for i in 0..32 {
+                    let f = i as f64 / 32.0;
+                    let t = if *o == Orientation::Forward { first + (last - first) * f } else { last - (last - first) * f };
+                    points.push(pc.point(t));
+                }
+            }
+            let n = points.len();
+            (0..n).map(|i| points[i].x * points[(i + 1) % n].y - points[(i + 1) % n].x * points[i].y).sum::<f64>() * 0.5
+        };
+        let areas: Vec<f64> = loops.iter().map(|l| area(l)).collect();
+        let outer = (0..loops.len()).max_by(|&i, &j| areas[i].abs().total_cmp(&areas[j].abs())).ok_or_else(|| Error::Failed("a planar side face without a boundary".into()))?;
+        for (i, uses) in loops.iter_mut().enumerate() {
+            if (areas[i] > 0.0) != (i == outer) {
+                uses.reverse();
+                for u in uses.iter_mut() {
+                    u.1 = u.1.reversed();
+                }
+            }
+        }
+        let (sm, tm) = (0.5 * (a + b), 0.5);
+        let ds = 1e-6 * (b - a);
+        let moved = |s: f64, t: f64| curve.point(s).transformed(&self.stages[k].at(t));
+        let along_s = (moved(sm + ds, tm) - moved(sm - ds, tm)) * if along { 1.0 } else { -1.0 };
+        let along_t = moved(sm, tm + 1e-6) - moved(sm, tm - 1e-6);
+        let q = uv(sm, tm);
+        let (_, su, sv) = surface.d1(q.x, q.y);
+        let orientation = if su.cross(sv).dot(along_s.cross(along_t)) >= 0.0 { Orientation::Forward } else { Orientation::Reversed };
+        let face = self.model.new_empty(NodeKind::Face);
+        self.model.set_face_surface(face, surface, tolerance::LINEAR)?;
+        for uses in loops {
+            let mut coedges = Vec::with_capacity(uses.len());
+            for (edge, o, pcurve, first, last) in uses {
+                let coedge = self.model.add_coedge(edge, o)?;
+                self.model.set_pcurve_with_range(coedge, pcurve, first, last)?;
+                coedges.push(coedge);
+            }
+            let wire = self.model.add_wire(&coedges)?;
+            self.model.add(face, wire.into())?;
+        }
+        Ok(Shape { orientation, ..face })
+    }
 }
 
 impl Builder<'_> {
@@ -878,12 +1074,30 @@ impl Builder<'_> {
             return Ok(None);
         }
         let plane = Plane::from_frame(Frame::from_z(samples[0], n));
-        let surface = Surface::Plane(plane);
-        // Counter-clockwise in (s, t): the edge, the end's path, the copy back, the start's
-        // path back.
+        let surface = Surface::Plane(plane.clone());
         let (f, r) = (Orientation::Forward, Orientation::Reversed);
+        // (A whole turn: the annulus, or the disc, between the circles its ends' paths are.)
+        if self.whole {
+            let mut loops = Vec::new();
+            for edge in [start_path, end_path] {
+                let Some((c, first, last)) = self.model.edge_curve(Shape::from(edge)) else { continue };
+                let Some(pcurve) = crate::geometry::project::analytic_pcurve(&c, &surface) else { return Ok(None) };
+                loops.push(vec![(edge, f, pcurve, first, last)]);
+            }
+            let moving = curve.clone();
+            let uv = move |s: f64, t: f64| {
+                let (u, v) = plane.parameters(moving.point(s).transformed(&stage.at(t)));
+                Point2::new(u, v)
+            };
+            return self.planar_loops_face(surface, loops, Box::new(uv), &curve, along, k, a, b).map(Some);
+        }
+        // Counter-clockwise in (s, t): the edge, the end's path, the copy back, the start's
+        // path back (but the path of an end standing still on a turn's axis: a point).
         let mut uses = Vec::with_capacity(4);
         for (edge, o) in [(e, f), (end_path, f), (top, r), (start_path, r)] {
+            if self.model.is_degenerate(Shape::from(edge)) {
+                continue;
+            }
             let Some((c, first, last)) = self.model.edge_curve(Shape::from(edge)) else { return Ok(None) };
             let Some(pcurve) = crate::geometry::project::analytic_pcurve(&c, &surface) else { return Ok(None) };
             uses.push((edge, o, pcurve, first, last));
