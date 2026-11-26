@@ -226,16 +226,18 @@ pub(super) fn foot_on(surface: &Surface, p: Point) -> crate::geometry::extrema::
         (best, (grid.samples[best.1].0, grid.samples[best.1].1))
     });
     let mut foot = crate::geometry::extrema::newton_foot_from_sample(p, surface, start);
-    // (A patch sampled in cells much longer one way than the other, as a ruled strip whose
-    // rulings turn: the nearest sample may lie far from the foot, and the steps from it settle
-    // on another, farther one (off a point lying on the surface). Where the foot found is
-    // nearer than such a cell is long, from the nearest of a grid as close both ways too:
-    // the nearer foot.)
+    // (A strip ruled one way (a B-spline of one span of degree 1 that way, of several spans
+    // the other), whose rulings turn along it, as a straight edge carried along a screw
+    // sweeps: its few samples across the rulings may lie far from the foot, and the steps
+    // from the nearest settle on another, farther one, off a point lying on the strip. Where
+    // the foot found is nearer than a ruling is long, from the point of the rulings, taken
+    // closely along the strip, nearest it (each ruling's exactly, a segment's): the nearer
+    // foot.)
     if foot.point.distance(p) > on_tol() {
-        if let Some((grid, cell)) = balanced_grid(surface) {
+        if let Some(rulings) = rulings(surface) {
             let d = foot.point.distance(p);
-            if d < *cell {
-                let nearest = grid.iter().map(|&(u, v, q)| (q.distance(p), (u, v))).fold((f64::INFINITY, start), |a, b| if b.0 < a.0 { b } else { a });
+            if d < rulings.length {
+                let nearest = rulings.nearest(p);
                 if nearest.0 < d {
                     let second = crate::geometry::extrema::newton_foot_from_sample(p, surface, nearest.1);
                     if second.point.distance(p) < d {
@@ -646,63 +648,42 @@ fn grid_steps(surface: &Surface) -> (usize, usize) {
 }
 
 
-/// For a B-spline patch whose sample grid ([`grid_steps`]) has cells more than twice as long
-/// one way as the other, with several spans the other way (a patch with few spans one way, as
-/// a ruled strip whose rulings turn: a straight edge carried along a screw), a grid as close
-/// that way as the other (up to 32), and the longer side of the sample grid's cells; `None`
-/// for others. Kept with the surface.
-fn balanced_grid(surface: &Surface) -> Option<&(Vec<(f64, f64, Point)>, f64)> {
+/// The rulings of a B-spline strip ruled one way (one span of degree 1 that way, several spans
+/// the other way), taken closely along it (a single patch, as a bilinear one, may fold over
+/// itself, and a foot found on the far fold is not the one its sections follow); `None` for
+/// other surfaces. Kept with the surface.
+fn rulings(surface: &Surface) -> Option<&crate::geometry::Rulings> {
     let Surface::BSpline(b) = surface else { return None };
     b.shared()
-        .balanced_grid
+        .rulings
         .get_or_init(|| {
-            let (nu, nv) = grid_steps(surface);
-            let ((bu, bv), cell) = balanced(surface, (nu, nv))?;
-            // (Only along a patch of several spans the other way, which its rulings turn
-            // along: a single patch (a bilinear one, as a loft between two segments) may fold
-            // over itself, and a foot found on the far fold is not the one its sections
-            // follow.)
             let spans = |knots: &[f64]| knots.len().saturating_sub(1);
-            if (bu != nu && spans(b.v_knots()) < 2) || (bv != nv && spans(b.u_knots()) < 2) {
+            let (u0, u1, v0, v1) = surface.bounds();
+            if ![u0, u1, v0, v1].iter().all(|x| x.is_finite()) {
                 return None;
             }
-            let (u0, u1, v0, v1) = surface.bounds();
-            let grid = (0..=bu).flat_map(|i| (0..=bv).map(move |j| (u0 + (u1 - u0) * i as f64 / bu as f64, v0 + (v1 - v0) * j as f64 / bv as f64))).map(|(u, v)| (u, v, surface.point(u, v))).collect();
-            Some((grid, cell))
+            let along_u = b.u_degree() == 1 && spans(b.u_knots()) == 1 && spans(b.v_knots()) >= 2;
+            let along_v = b.v_degree() == 1 && spans(b.v_knots()) == 1 && spans(b.u_knots()) >= 2;
+            if along_u == along_v {
+                return None;
+            }
+            // (Eight to each span and degree of the other way, at most 1024.)
+            let n = if along_u { 8 * spans(b.v_knots()) * b.v_degree().max(1) } else { 8 * spans(b.u_knots()) * b.u_degree().max(1) }.clamp(16, 1024);
+            let lines: Vec<(f64, Point, Point)> = (0..=n)
+                .map(|k| {
+                    if along_u {
+                        let v = v0 + (v1 - v0) * k as f64 / n as f64;
+                        (v, surface.point(u0, v), surface.point(u1, v))
+                    } else {
+                        let u = u0 + (u1 - u0) * k as f64 / n as f64;
+                        (u, surface.point(u, v0), surface.point(u, v1))
+                    }
+                })
+                .collect();
+            let length = lines.iter().map(|l| l.1.distance(l.2)).fold(0.0, f64::max);
+            Some(crate::geometry::Rulings { along_u, range: if along_u { (u0, u1) } else { (v0, v1) }, lines, length })
         })
         .as_ref()
-}
-
-/// Steps `(nu, nv)` with the coarser way made finer (up to 32) where the cells are more than
-/// twice as long that way as across, and the longer side of the cells before; `None` where
-/// they are not.
-fn balanced(surface: &Surface, (nu, nv): (usize, usize)) -> Option<((usize, usize), f64)> {
-    let (u0, u1, v0, v1) = surface.bounds();
-    if ![u0, u1, v0, v1].iter().all(|x| x.is_finite()) {
-        return None;
-    }
-    const N: usize = 16;
-    // The longest of three iso-lines each way.
-    let length = |along_u: bool| {
-        [0.0, 0.5, 1.0]
-            .iter()
-            .map(|&f| {
-                let at = |k: usize| {
-                    let t = k as f64 / N as f64;
-                    if along_u { surface.point(u0 + (u1 - u0) * t, v0 + (v1 - v0) * f) } else { surface.point(u0 + (u1 - u0) * f, v0 + (v1 - v0) * t) }
-                };
-                (0..N).map(|k| at(k).distance(at(k + 1))).sum::<f64>()
-            })
-            .fold(0.0, f64::max)
-    };
-    let (lu, lv) = (length(true), length(false));
-    if !(lu > 0.0 && lv > 0.0) {
-        return None;
-    }
-    let (cell_u, cell_v) = (lu / nu as f64, lv / nv as f64);
-    let finer = |n: usize, cell: f64, other: f64, length: f64| if cell > 2.0 * other { ((length / other).ceil() as usize).clamp(n, 32.max(n)) } else { n };
-    let steps = (finer(nu, cell_u, cell_v, lu), finer(nv, cell_v, cell_u, lv));
-    (steps != (nu, nv)).then_some((steps, cell_u.max(cell_v)))
 }
 
 /// The samples of a surface winding round twice or more, its turns close together
@@ -2096,3 +2077,4 @@ mod tests {
         assert!(inside_polylines(&outline(sample_pcurve_closely(&arch, 0.0, 1.0).to_vec()), q));
     }
 }
+

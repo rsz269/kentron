@@ -14,6 +14,38 @@ use crate::math::{Point, Vector};
 /// way and agrees with the others to the last bit.)
 pub(super) struct Shared<T>(Arc<OnceLock<Option<T>>>);
 
+/// A B-spline strip's rulings (straight one way: one span of degree 1), at parameters taken
+/// closely the other way.
+pub(crate) struct Rulings {
+    /// Straight along u (else along v).
+    pub(crate) along_u: bool,
+    /// The parameter range along the rulings.
+    pub(crate) range: (f64, f64),
+    /// Each ruling's parameter the other way and its ends.
+    pub(crate) lines: Vec<(f64, Point, Point)>,
+    /// The longest ruling's length.
+    pub(crate) length: f64,
+}
+
+impl Rulings {
+    /// The point of the rulings nearest `p`: its distance and its parameters `(u, v)`.
+    pub(crate) fn nearest(&self, p: Point) -> (f64, (f64, f64)) {
+        let (a, b) = self.range;
+        let mut best = (f64::INFINITY, (a, a));
+        for &(w, s, e) in &self.lines {
+            let d = e - s;
+            let length2 = d.dot(d);
+            let t = if length2 > 0.0 { ((p - s).dot(d) / length2).clamp(0.0, 1.0) } else { 0.0 };
+            let distance = (s + d * t).distance(p);
+            if distance < best.0 {
+                let along = a + (b - a) * t;
+                best = (distance, if self.along_u { (along, w) } else { (w, along) });
+            }
+        }
+        best
+    }
+}
+
 /// The Bézier patches of a surface, with what else is found from it once: clones share
 /// them (until changed).
 #[derive(Clone, Default)]
@@ -26,9 +58,8 @@ pub(crate) struct SurfaceShared {
     patches: OnceLock<Option<Patches>>,
     pub(crate) turning: OnceLock<((f64, bool), (f64, bool))>,
     pub(crate) close_samples: OnceLock<(usize, usize)>,
-    /// A grid of points balanced across a patch whose sample grid's cells are much longer one
-    /// way than the other, with that longer side (see `boolean::geom`); `None` for others.
-    pub(crate) balanced_grid: OnceLock<Option<(Vec<(f64, f64, Point)>, f64)>>,
+    /// The rulings of a strip ruled one way (see `boolean::geom`); `None` for others.
+    pub(crate) rulings: OnceLock<Option<Rulings>>,
 }
 
 impl PartialEq for PatchCache {
