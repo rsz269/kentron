@@ -4065,4 +4065,29 @@ mod tests {
         }
         const REFERENCE: f64 = 369.1756;
     }
+
+    /// A cylinder whose side is the surface of revolution of an unbounded line (as a sweep
+    /// or a file may give it), quartered by a box with faces through its axis: the planes
+    /// through the axis meet it along its lines, sought over the face's stretch of the line
+    /// (not over the whole unbounded line).
+    #[test]
+    fn a_side_of_revolution_of_a_line_meets_planes_through_its_axis() {
+        use crate::geometry::curve::{Curve, Line};
+        use crate::geometry::surface::{RevolutionSurface, Surface};
+        let mut model = Model::new();
+        let rod = Cylinder::new(2.0, 3.0).build(&mut model).unwrap();
+        for face in model.unique_subshapes(rod, NodeKind::Face) {
+            let Some(Surface::Cylinder(c)) = model.surface(face).cloned() else { continue };
+            let f = c.frame();
+            let line = Line::new(f.origin() + Vector::from(f.x()) * c.radius(), f.z());
+            let side = Surface::Revolution(RevolutionSurface::new(Curve::Line(line), crate::math::Axis::new(f.origin(), f.z())));
+            model.set_face_surface(face, side, crate::tolerance::LINEAR).unwrap();
+        }
+        assert!(validity::check(&model, rod).is_valid());
+        let block = Cuboid::new(5.0, 5.0, 5.0).with_frame(Frame::from_z(Point::new(0.0, 0.0, -1.0), Direction::Z)).build(&mut model).unwrap();
+        let quarter = PI * 4.0 * 3.0 / 4.0;
+        let common = intersection(&mut model, rod, block).unwrap();
+        let volume = properties::volume(&model, common).mass;
+        assert!((volume - quarter).abs() < 1e-9 * quarter, "volume {volume}, quarter {quarter}");
+    }
 }

@@ -2109,7 +2109,7 @@ fn sections(fa: &Face, fb: &Face, crossings: &[Point]) -> Vec<Section> {
     if let Some(sections) = extrusions_along(fa, fb) {
         return sections;
     }
-    if let Some(sections) = meridians(a, b).or_else(|| meridians(b, a)) {
+    if let Some(sections) = meridians(fa, b).or_else(|| meridians(fb, a)) {
         return sections;
     }
     match (a, b) {
@@ -2259,10 +2259,11 @@ fn coaxial(r: &RevolutionSurface, other: &Surface) -> bool {
 
 /// Where a surface of revolution whose meridian lies in a plane through its axis (as a
 /// torus's) meets a plane through that axis: its meridian turned into the plane, on either
-/// side of the axis. `None` for other pairs.
-fn meridians(revolution: &Surface, plane: &Surface) -> Option<Vec<Section>> {
+/// side of the axis. `None` for other pairs. (A meridian running on without end, as a line,
+/// is taken over a margin about the face's range along it.)
+fn meridians(face: &Face, plane: &Surface) -> Option<Vec<Section>> {
     use crate::math::{Axis, Transform, Transformable};
-    let (Surface::Revolution(r), Surface::Plane(plane)) = (revolution, plane) else { return None };
+    let (Surface::Revolution(r), Surface::Plane(plane)) = (&face.surface, plane) else { return None };
     let axis = r.axis();
     let z = Vector::from(axis.direction);
     let n = Vector::from(plane.normal());
@@ -2270,8 +2271,14 @@ fn meridians(revolution: &Surface, plane: &Surface) -> Option<Vec<Section>> {
         return None;
     }
     let basis = r.basis();
-    let (first, last) = (basis.first_parameter(), basis.last_parameter());
-    if !(first.is_finite() && last.is_finite()) {
+    let (mut first, mut last) = (basis.first_parameter(), basis.last_parameter());
+    let unbounded = first <= -crate::tolerance::INFINITE || last >= crate::tolerance::INFINITE;
+    if unbounded && face.v_period.is_none() {
+        let margin = 0.1 * (face.v_range.1 - face.v_range.0);
+        first = first.max(face.v_range.0 - margin);
+        last = last.min(face.v_range.1 + margin);
+    }
+    if !(first.is_finite() && last.is_finite() && first < last) || first <= -crate::tolerance::INFINITE || last >= crate::tolerance::INFINITE {
         return None;
     }
     // The meridian's side of the axis: all its points off the axis there.
