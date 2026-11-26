@@ -680,8 +680,7 @@ fn rulings(surface: &Surface) -> Option<&crate::geometry::Rulings> {
                     }
                 })
                 .collect();
-            let length = lines.iter().map(|l| l.1.distance(l.2)).fold(0.0, f64::max);
-            Some(crate::geometry::Rulings { along_u, range: if along_u { (u0, u1) } else { (v0, v1) }, lines, length })
+            Some(crate::geometry::Rulings::new(along_u, if along_u { (u0, u1) } else { (v0, v1) }, lines))
         })
         .as_ref()
 }

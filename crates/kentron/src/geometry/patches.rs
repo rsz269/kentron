@@ -25,24 +25,76 @@ pub(crate) struct Rulings {
     pub(crate) lines: Vec<(f64, Point, Point)>,
     /// The longest ruling's length.
     pub(crate) length: f64,
+    /// The boxes of the rulings in blocks of [`RULING_BLOCK`], in order (each holding its
+    /// rulings' ends, so the segments between them).
+    boxes: Vec<(Point, Point)>,
+    /// The block the last search found the nearest ruling in, searched first.
+    last: AtomicUsize,
 }
 
+/// The rulings in a block of [`Rulings::boxes`].
+const RULING_BLOCK: usize = 16;
+
 impl Rulings {
-    /// The point of the rulings nearest `p`: its distance and its parameters `(u, v)`.
+    pub(crate) fn new(along_u: bool, range: (f64, f64), lines: Vec<(f64, Point, Point)>) -> Rulings {
+        let length = lines.iter().map(|l| l.1.distance(l.2)).fold(0.0, f64::max);
+        let boxes = lines
+            .chunks(RULING_BLOCK)
+            .map(|block| {
+                let mut lo = Point::new(f64::INFINITY, f64::INFINITY, f64::INFINITY);
+                let mut hi = Point::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+                for &(_, s, e) in block {
+                    for q in [s, e] {
+                        lo = Point::new(lo.x.min(q.x), lo.y.min(q.y), lo.z.min(q.z));
+                        hi = Point::new(hi.x.max(q.x), hi.y.max(q.y), hi.z.max(q.z));
+                    }
+                }
+                (lo, hi)
+            })
+            .collect();
+        Rulings { along_u, range, lines, length, boxes, last: AtomicUsize::new(0) }
+    }
+
+    /// The point of the rulings nearest `p`: its distance and its parameters `(u, v)` (the
+    /// first of equally near ones). (The block found last searched first, then the others
+    /// whose boxes come as near: no ruling in a block lies nearer than its box.)
     pub(crate) fn nearest(&self, p: Point) -> (f64, (f64, f64)) {
         let (a, b) = self.range;
-        let mut best = (f64::INFINITY, (a, a));
-        for &(w, s, e) in &self.lines {
-            let d = e - s;
-            let length2 = d.dot(d);
-            let t = if length2 > 0.0 { ((p - s).dot(d) / length2).clamp(0.0, 1.0) } else { 0.0 };
-            let distance = (s + d * t).distance(p);
-            if distance < best.0 {
-                let along = a + (b - a) * t;
-                best = (distance, if self.along_u { (along, w) } else { (w, along) });
+        let blocks = self.boxes.len();
+        // (Distance, ruling index, parameter along.)
+        let scan = |block: usize, best: &mut (f64, usize, f64)| {
+            let from = block * RULING_BLOCK;
+            for (i, &(_, s, e)) in self.lines[from..(from + RULING_BLOCK).min(self.lines.len())].iter().enumerate() {
+                let d = e - s;
+                let length2 = d.dot(d);
+                let t = if length2 > 0.0 { ((p - s).dot(d) / length2).clamp(0.0, 1.0) } else { 0.0 };
+                let distance = (s + d * t).distance(p);
+                if distance < best.0 || (distance == best.0 && from + i < best.1) {
+                    *best = (distance, from + i, t);
+                }
             }
+        };
+        let mut best = (f64::INFINITY, usize::MAX, 0.0);
+        if blocks == 0 {
+            return (f64::INFINITY, (a, a));
         }
-        best
+        let first = self.last.load(Ordering::Relaxed).min(blocks - 1);
+        scan(first, &mut best);
+        for block in (0..blocks).filter(|&k| k != first) {
+            let (lo, hi) = self.boxes[block];
+            let gap = |x: f64, l: f64, h: f64| if x < l { l - x } else if x > h { x - h } else { 0.0 };
+            let (gx, gy, gz) = (gap(p.x, lo.x, hi.x), gap(p.y, lo.y, hi.y), gap(p.z, lo.z, hi.z));
+            if (gx * gx + gy * gy + gz * gz).sqrt() * (1.0 - 1e-12) > best.0 {
+                continue;
+            }
+            scan(block, &mut best);
+        }
+        if best.1 == usize::MAX {
+            return (f64::INFINITY, (a, a));
+        }
+        self.last.store(best.1 / RULING_BLOCK, Ordering::Relaxed);
+        let (w, along) = (self.lines[best.1].0, a + (b - a) * best.2);
+        (best.0, if self.along_u { (along, w) } else { (w, along) })
     }
 }
 
