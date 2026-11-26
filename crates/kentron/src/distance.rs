@@ -333,8 +333,8 @@ fn nearest_by_search(curve: &Curve, first: f64, last: f64, p: Point) -> Option<P
 /// circle round the axis (the whole sphere about its centre), and one point of it stands for
 /// it, in the plane through the axis and the frame's x direction. (A face holds such a
 /// connected set wholly, or not at all, or meets it on its boundary, whose nearest point is
-/// then as near: so one point of it tells, for [`vertex_to_faces`].) `None` for other
-/// surfaces, and for a point on a torus's core circle.
+/// then as near: so one point of it tells, for [`vertex_to_faces`].) So too for a point on a
+/// torus's core circle, the meridian circle about it. `None` for other surfaces.
 fn surface_extrema(surface: &Surface, p: Point) -> Option<Vec<Point>> {
     let tiny = |d: Vector| d.length() <= 1e-12 * (1.0 + (p - Point::ORIGIN).length());
     // `p` from the axis through `origin` along `z`: the unit direction away from it in the
@@ -381,10 +381,8 @@ fn surface_extrema(surface: &Surface, p: Point) -> Option<Vec<Point>> {
             let mut found = Vec::with_capacity(4);
             for centre in [o + e * t.major_radius(), o - e * t.major_radius()] {
                 let d = p - centre;
-                if tiny(d) {
-                    return None;
-                }
-                let d = d * (1.0 / d.length());
+                // (On the core circle: the meridian circle about it, by its point along z.)
+                let d = if tiny(d) { z } else { d * (1.0 / d.length()) };
                 found.extend([centre + d * t.minor_radius(), centre - d * t.minor_radius()]);
             }
             found
@@ -1426,6 +1424,15 @@ mod tests {
         for (p, want) in [(Point::new(0.0, 0.0, 0.0), 2.0), (Point::new(3.0, 0.0, 0.0), 1.0), (Point::new(0.0, 4.0, -3.0), (4.0f64 - 2.0).hypot(3.0))] {
             let v = crate::make::vertex(&mut model, p);
             let exact = vertex_to_faces(&model, v, dome).expect("found exactly").0;
+            assert!((exact - want).abs() < 1e-9, "{p:?}: {exact}");
+        }
+        // A torus's face from a point on its core circle: its minor radius, every point of
+        // the meridian circle about it as near; from its centre, on its axis.
+        let torus = crate::primitives::Torus::new(5.0, 1.5).build(&mut model).unwrap();
+        let tube = model.explore(torus, NodeKind::Face).next().unwrap();
+        for (p, want) in [(Point::new(0.0, 5.0, 0.0), 1.5), (Point::new(0.0, 0.0, 0.0), 3.5)] {
+            let v = crate::make::vertex(&mut model, p);
+            let exact = vertex_to_faces(&model, v, tube).expect("found exactly").0;
             assert!((exact - want).abs() < 1e-9, "{p:?}: {exact}");
         }
         // A B-spline edge (a circle as one).
