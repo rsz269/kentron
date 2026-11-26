@@ -2269,6 +2269,31 @@ mod tests {
         assert!((read - expected).abs() < 1e-9 * expected, "{read} through STEP, not {expected}");
     }
 
+    /// A drilled plate (20 × 20 × 4, a hole of radius 3) grown by the hole's radius, and the
+    /// same ten times larger: the hole closes onto its axis, which the cell inside the grown
+    /// plate has its centre on, exactly as far from the hole's wall as the distance grown, so
+    /// that rounding alone decided whether it was kept (it was not, ten times larger, and only
+    /// the balls at the corners were left).
+    #[test]
+    fn a_drilled_plate_grown_by_its_hole_closes_it_at_any_size() {
+        for k in [1.0, 10.0] {
+            let mut model = Model::new();
+            let plate = crate::primitives::Cuboid::from_corners(Point::new(-10.0 * k, -10.0 * k, 0.0), Point::new(10.0 * k, 10.0 * k, 4.0 * k)).build(&mut model).unwrap();
+            let drill = Cylinder::new(3.0 * k, 6.0 * k).with_frame(crate::math::Frame::from_z(Point::new(0.0, 0.0, -k), crate::math::Direction::Z)).build(&mut model).unwrap();
+            let drilled = crate::boolean::difference(&mut model, plate, drill).unwrap();
+            let grown = shape(&mut model, drilled, 3.0 * k, Join::Arc).unwrap();
+            valid(&model, grown);
+            let (a, b, c, d) = (20.0 * k, 20.0 * k, 4.0 * k, 3.0 * k);
+            let pi = std::f64::consts::PI;
+            let v0 = a * b * c + 2.0 * (a * b + b * c + c * a) * d + pi * (a + b + c) * d * d + 4.0 * pi * d.powi(3) / 3.0;
+            // (The dip over each end of the hole, its radius ρ the distance d.)
+            let dimple = 2.0 * pi * (d.powi(3) / 2.0 - d.powi(3) * pi / 4.0 + d.powi(3) / 3.0);
+            let v = volume(&model, grown).mass;
+            let expected = v0 - 2.0 * dimple;
+            assert!((v - expected).abs() < 1e-9 * expected, "{k}: {v}, not {expected}");
+        }
+    }
+
     /// A torus (tube 2 about a circle of radius 4) grown by 3: the grown tube, of radius 5,
     /// crosses the axis, and the solid is the apple within 5 of the middle circle (not the
     /// self-crossing torus, which would be inside out where it crosses).

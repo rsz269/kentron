@@ -400,11 +400,17 @@ fn split_by_faces(model: &mut Model, shape: Shape, cutter: Shape) -> Result<(Vec
 
 /// A point inside `solid`: its centre of mass if inside, else one just inside a face.
 pub(crate) fn point_inside(model: &Model, solid: Shape) -> Result<Option<crate::math::Point>> {
+    point_inside_where(model, solid, &|_| true)
+}
+
+/// [`point_inside`], the first of those points that `accept` takes (where a point found by
+/// symmetry, as a centre of mass on an axis, may be too special a point to judge the solid by).
+pub(crate) fn point_inside_where(model: &Model, solid: Shape, accept: &dyn Fn(crate::math::Point) -> bool) -> Result<Option<crate::math::Point>> {
     use crate::geometry::ParametricSurface;
     let classifier = super::PointClassifier::new(model, solid)?;
     // (From the faces' volume terms, kept with them.)
     let centre = crate::properties::solid_volume(model, solid).map_or_else(|| crate::properties::volume(model, solid).center_of_mass, |v| v.1);
-    if classifier.locate(centre) == super::PointLocation::Inside {
+    if classifier.locate(centre) == super::PointLocation::Inside && accept(centre) {
         return Ok(Some(centre));
     }
     let b = crate::properties::bounding_box(model, solid);
@@ -421,7 +427,7 @@ pub(crate) fn point_inside(model: &Model, solid: Shape) -> Result<Option<crate::
         let n = n.normalized() * if face.orientation == crate::topology::Orientation::Reversed { -1.0 } else { 1.0 };
         use crate::math::Transformable;
         let q = p.transformed(&face.placement) - n.transformed(&face.placement) * step;
-        if classifier.locate(q) == super::PointLocation::Inside {
+        if classifier.locate(q) == super::PointLocation::Inside && accept(q) {
             return Ok(Some(q));
         }
     }

@@ -385,7 +385,13 @@ pub(super) fn offset(model: &mut Model, solid: Shape, distance: f64, made: Made)
     let cells = model.unique_subshapes(cells, NodeKind::Solid);
     let mut chosen = Vec::new();
     for &cell in &cells {
-        let Some(p) = crate::boolean::point_inside(model, cell)? else { return Ok(None) };
+        // (A cell is all within the distance or all beyond it, its faces the sheets between;
+        // judged at a point clearly one or the other. Its centre may lie where the distance
+        // is exactly reached though no sheet is there: on the axis a hole's wall closes onto,
+        // its moved cylinder left out, having no radius.)
+        let nearest = |p: Point| kept.iter().map(|&i| faces[i].distance(p)).fold(f64::INFINITY, f64::min);
+        let clear = |p: Point| (nearest(p) - d).abs() > 1e-9 * size;
+        let Some(p) = crate::boolean::point_inside_where(model, cell, &clear)? else { return Ok(None) };
         // (Over a removed face met tangentially all round, within the distance on the side the
         // walls grow: the opening, as far as the strips round it (points there may be within
         // the distance of the edges ending at its corners).)
