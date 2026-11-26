@@ -26,6 +26,7 @@ pub(crate) struct SurfaceShared {
     patches: OnceLock<Option<Patches>>,
     pub(crate) turning: OnceLock<((f64, bool), (f64, bool))>,
     pub(crate) close_samples: OnceLock<(usize, usize)>,
+    pub(crate) balanced_samples: OnceLock<(usize, usize)>,
 }
 
 impl PartialEq for PatchCache {

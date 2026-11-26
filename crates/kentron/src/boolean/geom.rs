@@ -619,13 +619,47 @@ fn grid_steps(surface: &Surface) -> (usize, usize) {
         Surface::BSpline(b) => {
             let (wu, wv) = crate::geometry::extrema::windings_from(surface, 2.0);
             let (cu, cv) = crate::geometry::extrema::close_samples(surface);
-            (by(b.u_knots().len() - 1, b.u_degree()).max(wu).max(cu), by(b.v_knots().len() - 1, b.v_degree()).max(wv).max(cv))
+            let (bu, bv) = *b.shared().balanced_samples.get_or_init(|| balanced(surface, (by(b.u_knots().len() - 1, b.u_degree()), by(b.v_knots().len() - 1, b.v_degree()))));
+            (bu.max(wu).max(cu), bv.max(wv).max(cv))
         }
         Surface::Bezier(b) => (by(1, b.u_degree()), by(1, b.v_degree())),
         _ => (32, 32),
     }
 }
 
+
+/// Steps `(nu, nv)` for a surface's sample grid, the coarser way made finer (up to 32) where
+/// its cells are much longer that way than across: a patch with few spans one way, as a
+/// ruled strip whose rulings turn (a straight edge carried along a screw), is sampled across
+/// its rulings as closely as along them, so that the sample nearest a point lies near its
+/// foot (from a far sample the steps may settle on another, farther foot).
+fn balanced(surface: &Surface, (nu, nv): (usize, usize)) -> (usize, usize) {
+    let (u0, u1, v0, v1) = surface.bounds();
+    if ![u0, u1, v0, v1].iter().all(|x| x.is_finite()) {
+        return (nu, nv);
+    }
+    const N: usize = 16;
+    // The longest of three iso-lines each way.
+    let length = |along_u: bool| {
+        [0.0, 0.5, 1.0]
+            .iter()
+            .map(|&f| {
+                let at = |k: usize| {
+                    let t = k as f64 / N as f64;
+                    if along_u { surface.point(u0 + (u1 - u0) * t, v0 + (v1 - v0) * f) } else { surface.point(u0 + (u1 - u0) * f, v0 + (v1 - v0) * t) }
+                };
+                (0..N).map(|k| at(k).distance(at(k + 1))).sum::<f64>()
+            })
+            .fold(0.0, f64::max)
+    };
+    let (lu, lv) = (length(true), length(false));
+    if !(lu > 0.0 && lv > 0.0) {
+        return (nu, nv);
+    }
+    let (cell_u, cell_v) = (lu / nu as f64, lv / nv as f64);
+    let finer = |n: usize, cell: f64, other: f64, length: f64| if cell > 2.0 * other { ((length / other).ceil() as usize).clamp(n, 32.max(n)) } else { n };
+    (finer(nu, cell_u, cell_v, lu), finer(nv, cell_v, cell_u, lv))
+}
 
 /// The samples of a surface winding round twice or more, its turns close together
 /// ([`crate::geometry::extrema::windings_from`]), or coming back near itself
