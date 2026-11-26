@@ -465,6 +465,43 @@ been dropped.
   inside it (its points near the rim lie within a few hundredths of the other solid's top
   plane), and why the B-spline surface of the same shape is classified right.
 
+## Pipes
+
+### Pipes framed by the discrete trihedron are not rotation-minimizing
+
+*Found 2026-11-27.*
+
+![A sketch of an off-centre profile carried along a spline spine by the rotation-minimizing frame and by kentron's discrete frame](known-gaps/frames.svg)
+
+`sweep::Guide::Discrete` carries the frame from sample to sample (ten samples a smooth
+stretch of the spine) by the least rotation taking each sample's tangent onto the next, as
+OCCT's `GeomFill_DiscreteTrihedron` does (its laws match OCCT 8.1's to 1e-9 in
+`trihedra_match_occts`). That is an approximation of the rotation-minimizing frame (parallel
+transport along the spine), not the frame itself: along a spline spine it strays from it,
+about the tangent, by an angle growing along the way. A profile centred on the spine does
+not notice (its volume and area do not change as it turns about its centre), but an
+off-centre one does: its centre moves round the spine, and the pipe's volume and area change
+with the spine's curvature times the offset times the angle.
+
+- **Repro:** the conformance suite's `sweeps-spline` family, which asks for the
+  rotation-minimizing frame (the kentron adapter passes `Guide::Discrete`):
+  `sweeps-spline-f2d6165ee5ac4de8`, `-ccbaf688c6919a89`, `-f9c64ebd735e4a5a`, `-3a5dbf72e3e87953`
+  (a circle profile off the spine, along a clamped cubic of 5 to 7 poles rising 1.5 to 3 a
+  pole), `--family sweeps-spline`.
+- **Evidence:** all four failures are the family's off-centre circles (of five; the one that
+  passes has the smallest offset, 0.23); its 19 centred profiles (circles, rounded squares,
+  twisted or not) pass. Area off by 5.5e-5 to 3.1e-4 against allowances of 1.9e-5 to
+  3.9e-5, volume by 1.8e-5 to 2.1e-4. Along the first two spines the discrete frame's
+  normal strays from a rotation-minimizing one (least rotations over 200 000 steps) by up
+  to 2.3e-4 and 9.0e-4 rad.
+- **Tried:** nothing in the sweep: the pipe's surface and its measurement are not at fault
+  (the centred profiles' volumes and areas pass to within their allowances), and changing
+  `Discrete` would part it from the OCCT laws it is defined by.
+- **Needed:** a guide that is the rotation-minimizing frame to a tolerance (for instance
+  double reflection between samples, Wang, Jüttler, Zheng and Liu 2008, with the samples
+  placed to bound the error), and the adapter asking for it. The adapter is pass-through
+  and pinned to a kentron release, so the new guide comes first.
+
 ## Sweeps of solids
 
 ### Turns whose copies of the tool touch on the axis

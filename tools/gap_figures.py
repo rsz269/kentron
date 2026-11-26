@@ -1357,6 +1357,42 @@ def figure_outlet(rebuild):
     return figure
 
 
+def figure_frames(rebuild):
+    """A sketch, not a model: an off-centre profile carried along a spine by two frames."""
+    import numpy as np
+
+    width, height = WIDTH - 2 * MARGIN, 210
+    figure = Figure(WIDTH, TOP + height + 40, "A sketch of a pipe's off-centre profile carried along a spline spine: by the rotation-minimizing frame, and by kentron's discrete frame, turned from sample to sample, which strays from it about the tangent by a growing angle.")
+    x0, y0 = MARGIN, TOP
+    # The spine, a gentle S across the panel.
+    t = np.linspace(0, 1, 401)
+    spine = np.stack([60 + (width - 120) * t, 120 - 55 * np.sin(2 * math.pi * t) * (0.6 + 0.4 * t)], axis=1)
+    drawing = '<path class="ink" d="%s"/>\n' % path_data(simplify(spine, 0.1))
+    stations = np.linspace(0.08, 0.92, 6)
+    offset, radius, exaggerated = 30, 16, 0.55
+    for k, s in enumerate(stations):
+        i = int(round(s * 400))
+        tangent = spine[min(i + 1, 400)] - spine[max(i - 1, 0)]
+        tangent /= np.linalg.norm(tangent)
+        normal = np.array([-tangent[1], tangent[0]])
+        # (The profile seen along the spine's normal plane, flattened: its centre off the
+        # spine along the frame's normal; the discrete frame's turned by a growing angle.)
+        for frame, cls in ((0.0, "one"), (exaggerated * s, "two")):
+            direction = normal * math.cos(frame) + tangent * math.sin(frame) * 0.35
+            direction /= np.linalg.norm(direction)
+            centre = spine[i] + offset * direction
+            ring = [(centre[0] + radius * math.cos(a), centre[1] + 0.45 * radius * math.sin(a)) for a in np.linspace(0, 2 * math.pi, 49)]
+            drawing += '<path class="%s" d="%s"/>\n' % (cls, path_data(ring, True))
+            drawing += '<path class="thin" d="%s"/>\n' % path_data([spine[i], centre])
+        drawing += '<circle class="dot" cx="%s" cy="%s" r="2.6"/>\n' % (number(spine[i][0]), number(spine[i][1]))
+    figure.panel(x0, y0, width, height, drawing, "An off-centre profile carried along a spline spine by two frames", "a sketch: the angle between the frames drawn some thousand times larger than the 2e-4 to 9e-4 rad measured",
+                 ("bad", "the profile's centre moves round the spine: the pipe's volume and area change with the curvature times the offset times the angle"))
+    last = spine[int(round(stations[-1] * 400))]
+    figure.callout((x0 + spine[200][0], y0 + spine[200][1]), "the spine", (x0 + spine[200][0] + 40, y0 + 30), "start")
+    figure.text(x0 + 16, y0 + 24, "blue: the profile placed by the rotation-minimizing frame\norange: placed by kentron's discrete frame (ten samples a span)", "note small")
+    return figure
+
+
 FIGURES = {name[7:]: f for name, f in list(globals().items()) if name.startswith("figure_")}
 
 
