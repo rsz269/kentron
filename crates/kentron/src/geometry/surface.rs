@@ -1292,23 +1292,9 @@ impl OffsetSurface {
     /// stays within 1e-10 (relative) of the iso-curve between them.
     fn iso(&self, at: &dyn Fn(f64) -> Point, lo: f64, hi: f64) -> Curve {
         let (lo, hi) = (lo.max(-1e3), hi.min(1e3));
-        let mut n = 64;
-        loop {
-            let params: Vec<f64> = (0..=n).map(|i| lo + (hi - lo) * i as f64 / n as f64).collect();
-            let points: Vec<Point> = params.iter().map(|&t| at(t)).collect();
-            let Ok(curve) = super::fit::interpolate_with_parameters(&points, &params) else {
-                return Curve::Line(super::curve::Line::new(points[0], Direction::X));
-            };
-            let size = points.iter().fold(1.0f64, |m, p| m.max((*p - Point::ORIGIN).length()));
-            let error = params.windows(2).map(|w| {
-                let t = 0.5 * (w[0] + w[1]);
-                use super::ParametricCurve;
-                curve.point(t).distance(at(t))
-            }).fold(0.0, f64::max);
-            if error <= 1e-10 * size || n >= 4096 {
-                return Curve::BSpline(curve);
-            }
-            n *= 2;
+        match super::fit::interpolate_function(at, lo, hi, 1e-10) {
+            Ok(curve) => Curve::BSpline(curve),
+            Err(_) => Curve::Line(super::curve::Line::new(at(lo), Direction::X)),
         }
     }
 

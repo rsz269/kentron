@@ -802,11 +802,10 @@ impl<'a> Writer<'a> {
             }
             Curve::Trimmed(t) => self.curve(t.basis(), first, last)?,
             // Others (degenerate parabolas, offsets, periodic B-splines over more than a
-            // period): interpolated through points of the edge.
+            // period): interpolated through points of the edge, at their own parameters,
+            // until within 1e-10 (relative) of it.
             other => {
-                let n = 64;
-                let points: Vec<Point> = (0..=n).map(|i| other.point(first + (last - first) * i as f64 / n as f64)).collect();
-                let b = crate::geometry::fit::interpolate(&points, false, 0.0)
+                let b = crate::geometry::fit::interpolate_function(&|t| other.point(t), first, last, 1e-10)
                     .map_err(|e| Error::InvalidInput(format!("writing STEP: approximating a curve: {e}")))?;
                 self.bspline_curve(b.degree(), b.poles(), b.weights(), b.knots(), b.multiplicities())
             }
@@ -882,7 +881,14 @@ impl<'a> Writer<'a> {
                 (self.bspline_surface(u.degree, v.degree, b.poles(), b.weights(), (&u.knots, &u.multiplicities), (&v.knots, &v.multiplicities)), false)
             }
             Surface::Revolution(r) => {
-                let (lo, hi) = (r.basis().first_parameter(), r.basis().last_parameter());
+                // (A meridian written as an approximation, over the face's range alone: an
+                // offset meridian may be the face's only there.)
+                let approximated = |c: &Curve| matches!(c, Curve::Offset(_));
+                let approximated = approximated(r.basis()) || matches!(r.basis(), Curve::Trimmed(t) if approximated(t.basis()));
+                let (lo, hi) = match bounds {
+                    Some((_, _, v0, v1)) if approximated && v0.is_finite() && v1.is_finite() => (v0, v1),
+                    _ => (r.basis().first_parameter(), r.basis().last_parameter()),
+                };
                 let c = self.curve(r.basis(), lo, hi)?;
                 let axis = r.axis();
                 let (o, d) = (self.point(axis.origin), self.direction(axis.direction));
@@ -1180,6 +1186,40 @@ mod tests {
         assert!(report.problems.is_empty(), "{report:?}");
         let after = crate::properties::volume(&read_model, read).mass;
         assert!((after - before).abs() < 1e-10 * before, "{after} against {before}");
+    }
+
+    /// The elliptic cylinder x²/100 + y²/4 ≤ 1 (10 high) grown by 1, its faces meeting
+    /// sharply: its side the extrusion of the ellipse's parallel curve (no conic), written as a
+    /// B-spline through points of it, near enough that the volume read back is the one kept
+    /// and the exact one (the parallel region's area, πab + p + π for the perimeter p, times
+    /// the height 12), to far better than a part in a million.
+    #[test]
+    fn an_extrusion_of_an_offset_curve_is_written_closely() {
+        use crate::geometry::curve::Ellipse;
+        let mut model = Model::new();
+        let rim = crate::make::edge_from_curve(&mut model, Curve::Ellipse(Ellipse::new(crate::math::Frame::WORLD, 10.0, 2.0))).unwrap();
+        let rim = crate::make::wire(&mut model, &[rim]).unwrap();
+        let end = crate::make::planar_face(&mut model, rim).unwrap();
+        let cylinder = crate::sweep::extrude(&mut model, end, crate::math::Vector::new(0.0, 0.0, 10.0)).unwrap().shape;
+        let grown = crate::offset::shape(&mut model, cylinder, 1.0, crate::offset::Join::Intersection).unwrap();
+        // The perimeter, by the trapezoidal rule (exponentially accurate for a periodic integrand).
+        let n = 4096;
+        let perimeter: f64 = (0..n).map(|i| {
+            let t = std::f64::consts::TAU * i as f64 / n as f64;
+            (100.0 * t.sin().powi(2) + 4.0 * t.cos().powi(2)).sqrt()
+        }).sum::<f64>() * std::f64::consts::TAU / n as f64;
+        let pi = std::f64::consts::PI;
+        let expected = (20.0 * pi + perimeter + pi) * 12.0;
+        let mut bytes = Vec::new();
+        write(&model, grown, "grown", None, &mut bytes).unwrap();
+        let mut read_model = Model::new();
+        let read = super::super::read(&mut read_model, &mut bytes.as_slice()).unwrap();
+        assert!(crate::validity::check(&read_model, read).is_valid());
+        let volume = crate::properties::volume(&read_model, read).mass;
+        // (Both to the integration's accuracy, a few parts in a thousand million.)
+        let kept = crate::properties::volume(&model, grown).mass;
+        assert!((volume - kept).abs() < 1e-11 * expected, "{volume} read back against {kept}");
+        assert!((volume - expected).abs() < 1e-8 * expected, "{volume} against {expected}");
     }
 
     /// A paraboloid of revolution (a parabola turned about its axis, the basis trimmed to the

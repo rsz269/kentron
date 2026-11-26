@@ -343,6 +343,28 @@ fn solve_cyclic_tridiagonal(below: &[f64], diagonal: &[f64], above: &[f64], rhs:
     )
 }
 
+/// A cubic B-spline through points of `at` (a curve given by its points) over `[lo, hi]`,
+/// at their own parameters, the points (64 at first, evenly spaced) doubled until the
+/// spline stays within `relative` of the size of the points (their largest distance from
+/// the origin, at least 1) of `at` halfway between them, or 4096 are reached.
+pub fn interpolate_function(at: &dyn Fn(f64) -> crate::math::Point, lo: f64, hi: f64, relative: f64) -> Result<BSplineCurve<crate::math::Point>> {
+    let mut n = 64;
+    loop {
+        let params: Vec<f64> = (0..=n).map(|i| lo + (hi - lo) * i as f64 / n as f64).collect();
+        let points: Vec<crate::math::Point> = params.iter().map(|&t| at(t)).collect();
+        let curve = interpolate_with_parameters(&points, &params)?;
+        let size = points.iter().fold(1.0f64, |m, p| m.max((*p - crate::math::Point::ORIGIN).length()));
+        let error = params.windows(2).map(|w| {
+            let t = 0.5 * (w[0] + w[1]);
+            curve.point(t).distance(at(t))
+        }).fold(0.0, f64::max);
+        if error <= relative * size || n >= 4096 {
+            return Ok(curve);
+        }
+        n *= 2;
+    }
+}
+
 /// The cubic (lower degree for fewer than four points) B-spline curve passing through
 /// `points[i]` at parameter `params[i]`; parameters must increase. Knots are placed by
 /// averaging the parameters, so the curve is C2.
