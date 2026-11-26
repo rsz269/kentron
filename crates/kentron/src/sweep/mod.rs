@@ -764,9 +764,110 @@ struct Revolver<'m> {
 /// How a swept edge's face is parametrized: an elementary surface with `u` the rotation
 /// angle and `v = v0 + sigma·t` along the edge's curve, or a plane (perpendicular to the
 /// axis) whose pcurves are computed from the 3D curves.
-enum SweptSurface {
+pub(crate) enum SweptSurface {
     Ruled { surface: Surface, v0: f64, sigma: f64 },
     Planar(Surface),
+}
+
+/// The surface `curve` sweeps turned about `axis`, parametrized as described at [`SweptSurface`].
+pub(crate) fn turned_surface(axis: Axis, curve: &Curve, first: f64, last: f64) -> SweptSurface {
+    let radial = |p: Point| {
+        let z = Vector::from(axis.direction);
+        let foot = axis.origin + z * (p - axis.origin).dot(z);
+        (foot, p - foot)
+    };
+    let z = Vector::from(axis.direction);
+    let tol = tolerance::LINEAR;
+    // (An unbounded basis (a parabola, a hyperbola, a line askew of the axis) trimmed to
+    // the edge's range, as OCCT's BRepSweep_Rotation trims the basis it turns: a curve
+    // running on across the axis, as a parabola turned about its own axis does past its
+    // vertex, turned half a turn passes through the same points again, and the surface's
+    // parameters (and so the side its normal points to) would be found on either half.)
+    let unbounded = curve.first_parameter() <= -tolerance::INFINITE || curve.last_parameter() >= tolerance::INFINITE;
+    let general = || SweptSurface::Ruled {
+        surface: Surface::Revolution(RevolutionSurface::new(
+            if unbounded { Curve::Trimmed(TrimmedCurve::new(curve.clone(), first, last)) } else { curve.clone() },
+            axis,
+        )),
+        v0: 0.0,
+        sigma: 1.0,
+    };
+    match curve {
+        Curve::Line(line) => {
+            let d = Vector::from(line.direction);
+            let (foot, radial) = radial(line.origin);
+            if d.cross(z).length() <= ANGULAR {
+                // Parallel to the axis: a cylinder, with v the height above `foot`.
+                let Some(x) = Direction::try_from_vector(radial) else { return general() };
+                let cylinder = Cylinder::new(Frame::new(foot, axis.direction, x), radial.length());
+                return SweptSurface::Ruled { surface: Surface::Cylinder(cylinder), v0: 0.0, sigma: d.dot(z) };
+            }
+            if d.dot(z).abs() <= ANGULAR {
+                return SweptSurface::Planar(Surface::Plane(Plane::from_frame(Frame::from_z(foot, axis.direction))));
+            }
+            if (line.origin - axis.origin).dot(d.cross(z)).abs() > tol {
+                return general(); // skew: a hyperboloid
+            }
+            // Coplanar with the axis: a cone around it, with v along the line (pointing
+            // away from the axis direction's negative side). Its first axis runs the way
+            // the line crosses the axis, toward the line's origin (its radius there not
+            // negative): from the line, not from the origin's own offset from the axis,
+            // whose direction is noise where the origin lies next to the axis.
+            let across = d - z * d.dot(z);
+            let Some(mut x) = Direction::try_from_vector(across) else { return general() };
+            if radial.dot(Vector::from(x)) < 0.0 {
+                x = -x;
+            }
+            let sigma = d.dot(z).signum();
+            let g = d * sigma;
+            let semi_angle = g.dot(Vector::from(x)).atan2(g.dot(z));
+            let cone = Cone::new(Frame::new(foot, axis.direction, x), semi_angle, radial.dot(Vector::from(x)));
+            SweptSurface::Ruled { surface: Surface::Cone(cone), v0: 0.0, sigma }
+        }
+        Curve::Circle(circle) => {
+            let f = circle.frame();
+            let (c, n) = (f.origin(), Vector::from(f.z()));
+            let coplanar = n.dot(z).abs() <= ANGULAR && (c - axis.origin).dot(n).abs() <= tol;
+            if !coplanar {
+                return general();
+            }
+            // The circle lies in a plane through the axis: a sphere if centered on it,
+            // otherwise a torus. `v` is the angle in the meridian plane from the radial
+            // direction `e`.
+            let (center_foot, center_radial) = radial(c);
+            let on_axis = center_radial.length() <= tol;
+            let mid = circle.point(0.5 * (first + last));
+            let e = if on_axis { radial(mid).1 } else { center_radial };
+            let Some(e) = Direction::try_from_vector(e) else { return general() };
+            let (ev, x, y) = (Vector::from(e), Vector::from(f.x()), Vector::from(f.y()));
+            let sigma = (x.dot(ev) * y.dot(z) - x.dot(z) * y.dot(ev)).signum();
+            let phase = x.dot(z).atan2(x.dot(ev));
+            let frame = Frame::new(center_foot, axis.direction, e);
+            if on_axis {
+                // Latitudes must stay within [-π/2, π/2] (one side of the axis).
+                let latitude = |t: f64| phase + sigma * t;
+                let shift = (latitude(0.5 * (first + last)) / TAU).round() * TAU;
+                let (lo, hi) = {
+                    let (a, b) = (latitude(first) - shift, latitude(last) - shift);
+                    (a.min(b), a.max(b))
+                };
+                if lo < -FRAC_PI_2 - tolerance::PARAMETRIC || hi > FRAC_PI_2 + tolerance::PARAMETRIC {
+                    return general();
+                }
+                let sphere = Sphere::new(frame, circle.radius());
+                SweptSurface::Ruled { surface: Surface::Sphere(sphere), v0: phase - shift, sigma }
+            } else if circle.radius() <= center_radial.length() + tol {
+                // (A horn torus, its centre as far from the axis as its radius, made a
+                // hair short of it by rounding as a corner's frame turned off the
+                // coordinate axes leaves it: a horn torus still.)
+                let torus = Torus::new(frame, center_radial.length().max(circle.radius()), circle.radius());
+                SweptSurface::Ruled { surface: Surface::Torus(torus), v0: phase, sigma }
+            } else {
+                general()
+            }
+        }
+        _ => general(),
+    }
 }
 
 impl Revolver<'_> {
@@ -875,98 +976,7 @@ impl Revolver<'_> {
 
     /// The surface swept by `curve`, parametrized as described at [`SweptSurface`].
     fn swept_surface(&self, curve: &Curve, first: f64, last: f64) -> SweptSurface {
-        let z = Vector::from(self.axis.direction);
-        let tol = self.tolerance();
-        // (An unbounded basis (a parabola, a hyperbola, a line askew of the axis) trimmed to
-        // the edge's range, as OCCT's BRepSweep_Rotation trims the basis it turns: a curve
-        // running on across the axis, as a parabola turned about its own axis does past its
-        // vertex, turned half a turn passes through the same points again, and the surface's
-        // parameters (and so the side its normal points to) would be found on either half.)
-        let unbounded = curve.first_parameter() <= -tolerance::INFINITE || curve.last_parameter() >= tolerance::INFINITE;
-        let general = || SweptSurface::Ruled {
-            surface: Surface::Revolution(RevolutionSurface::new(
-                if unbounded { Curve::Trimmed(TrimmedCurve::new(curve.clone(), first, last)) } else { curve.clone() },
-                self.axis,
-            )),
-            v0: 0.0,
-            sigma: 1.0,
-        };
-        match curve {
-            Curve::Line(line) => {
-                let d = Vector::from(line.direction);
-                let (foot, radial) = self.radial(line.origin);
-                if d.cross(z).length() <= ANGULAR {
-                    // Parallel to the axis: a cylinder, with v the height above `foot`.
-                    let Some(x) = Direction::try_from_vector(radial) else { return general() };
-                    let cylinder = Cylinder::new(Frame::new(foot, self.axis.direction, x), radial.length());
-                    return SweptSurface::Ruled { surface: Surface::Cylinder(cylinder), v0: 0.0, sigma: d.dot(z) };
-                }
-                if d.dot(z).abs() <= ANGULAR {
-                    return SweptSurface::Planar(Surface::Plane(Plane::from_frame(Frame::from_z(foot, self.axis.direction))));
-                }
-                if (line.origin - self.axis.origin).dot(d.cross(z)).abs() > tol {
-                    return general(); // skew: a hyperboloid
-                }
-                // Coplanar with the axis: a cone around it, with v along the line (pointing
-                // away from the axis direction's negative side). Its first axis runs the way
-                // the line crosses the axis, toward the line's origin (its radius there not
-                // negative): from the line, not from the origin's own offset from the axis,
-                // whose direction is noise where the origin lies next to the axis.
-                let across = d - z * d.dot(z);
-                let Some(mut x) = Direction::try_from_vector(across) else { return general() };
-                if radial.dot(Vector::from(x)) < 0.0 {
-                    x = -x;
-                }
-                let sigma = d.dot(z).signum();
-                let g = d * sigma;
-                let semi_angle = g.dot(Vector::from(x)).atan2(g.dot(z));
-                let cone = Cone::new(Frame::new(foot, self.axis.direction, x), semi_angle, radial.dot(Vector::from(x)));
-                SweptSurface::Ruled { surface: Surface::Cone(cone), v0: 0.0, sigma }
-            }
-            Curve::Circle(circle) => {
-                let f = circle.frame();
-                let (c, n) = (f.origin(), Vector::from(f.z()));
-                let coplanar = n.dot(z).abs() <= ANGULAR && (c - self.axis.origin).dot(n).abs() <= tol;
-                if !coplanar {
-                    return general();
-                }
-                // The circle lies in a plane through the axis: a sphere if centered on it,
-                // otherwise a torus. `v` is the angle in the meridian plane from the radial
-                // direction `e`.
-                let (center_foot, center_radial) = self.radial(c);
-                let on_axis = center_radial.length() <= tol;
-                let mid = circle.point(0.5 * (first + last));
-                let e = if on_axis { self.radial(mid).1 } else { center_radial };
-                let Some(e) = Direction::try_from_vector(e) else { return general() };
-                let (ev, x, y) = (Vector::from(e), Vector::from(f.x()), Vector::from(f.y()));
-                let sigma = (x.dot(ev) * y.dot(z) - x.dot(z) * y.dot(ev)).signum();
-                let phase = x.dot(z).atan2(x.dot(ev));
-                let frame = Frame::new(center_foot, self.axis.direction, e);
-                if on_axis {
-                    // Latitudes must stay within [-π/2, π/2] (one side of the axis).
-                    let latitude = |t: f64| phase + sigma * t;
-                    let shift = (latitude(0.5 * (first + last)) / TAU).round() * TAU;
-                    let (lo, hi) = {
-                        let (a, b) = (latitude(first) - shift, latitude(last) - shift);
-                        (a.min(b), a.max(b))
-                    };
-                    if lo < -FRAC_PI_2 - tolerance::PARAMETRIC || hi > FRAC_PI_2 + tolerance::PARAMETRIC {
-                        return general();
-                    }
-                    let sphere = Sphere::new(frame, circle.radius());
-                    SweptSurface::Ruled { surface: Surface::Sphere(sphere), v0: phase - shift, sigma }
-                } else if circle.radius() <= center_radial.length() + tol {
-                    // (A horn torus, its centre as far from the axis as its radius, made a
-                    // hair short of it by rounding as a corner's frame turned off the
-                    // coordinate axes leaves it: a horn torus still.)
-                    let torus = Torus::new(frame, center_radial.length().max(circle.radius()), circle.radius());
-                    SweptSurface::Ruled { surface: Surface::Torus(torus), v0: phase, sigma }
-                } else {
-                    general()
-                }
-            }
-            _ => general(),
-        }
+        turned_surface(self.axis, curve, first, last)
     }
 
     /// The face swept by an edge, with the orientation that makes its normal the sweep's

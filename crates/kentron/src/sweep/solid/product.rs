@@ -51,7 +51,11 @@ pub(super) fn sweep(model: &mut Model, solid: Shape, steady: &Steady) -> Result<
 /// about an axis passes its chords' points), and the product is resolved. (Under stages of
 /// one steady motion the body's place at the start alone: one stage after another is the
 /// same motion.) Found at points on a grid of each face's parameters (inside it, 16 a side),
-/// each at 32 places along the whole motion: an overlap thinner than those steps may go
+/// each at places along the whole motion as close as the grid's points: at least 32, and
+/// more where the fastest point of the body moves farther than a sixteenth of its size
+/// between them (an overlap may be as thin as the window over which a point is back inside
+/// the body: a pin's end turned about a far axis covers the bulge of its rim twice, each
+/// point of it for a few degrees of a long turn). An overlap thinner than those steps may go
 /// unnoticed. (Where a point is found outside the body, the ball round it clear of the
 /// body's surfaces is kept, and points carried into one are outside without asking again:
 /// see [`Clearance`].)
@@ -60,7 +64,12 @@ fn passes_back_into(model: &Model, solid: Shape, faces: &[Shape], sides: &[Vec<S
     const STEPS: usize = 32;
     let n = stages.len();
     let one_motion = !matches!(stages[0], Steady::Carried(_)) && stages.iter().all(|s| same(s, &stages[0]));
-    let per_stage = STEPS.div_ceil(n).max(1);
+    // (As far apart along the motion as the grid's points are on the body.)
+    let bounds = crate::properties::bounding_box(model, solid);
+    let size = (bounds.max - bounds.min).length();
+    let travel: f64 = stages.iter().map(|s| speed_bound(model, solid, s)).sum();
+    let steps = if size > 0.0 && travel.is_finite() { STEPS.max((travel * N as f64 / size).ceil() as usize) } else { STEPS };
+    let per_stage = steps.div_ceil(n).max(1);
     let classifier = crate::boolean::PointClassifier::new(model, solid)?;
     let mut clear = Clearance::new(model, solid);
     let starts: Vec<Transform> = junctions.iter().take(n).map(|j| j.inverse()).collect();
@@ -663,6 +672,9 @@ impl<'m> Builder<'m> {
         let e = self.edge_copy(e, k)?;
         let (curve, a, b) = self.model.edge_curve(Shape::from(e)).ok_or_else(|| Error::Failed("an edge without a curve".into()))?;
         let line = |x: f64, y: f64, dx: f64, dy: f64| Curve2::Line(Line2::new(Point2::new(x, y), Direction2::new(dx, dy)));
+        if let Some(face) = self.planar_side_face(e, along, k, top, start_path, end_path)? {
+            return Ok(face);
+        }
         // The surface; the (u, v) of the curve's point at s and moved to t; and the uses
         // round the face, counter-clockwise in (u, v).
         type Uses = Vec<(EdgeId, Orientation, Curve2, f64, f64)>;
@@ -706,10 +718,98 @@ impl<'m> Builder<'m> {
                     }
                 }
             }
-            Steady::Turn { axis, angle } => {
-                let revolution = RevolutionSurface::new(curve.clone(), axis);
-                let uses = rectangle_uses(e, top, start_path, end_path, a, b, angle, false);
-                (Surface::Revolution(revolution), Box::new(move |s, t| Point2::new(angle * t, s)), uses)
+            Steady::Turn { axis, angle } if turned_on_sphere(&curve, a, b, axis, self.size).is_some() => {
+                // A circle whose axis meets the turn's lies on the sphere about where they meet
+                // through it, and turns on it (a pin's end turned about a far axis square to it:
+                // as a surface of revolution of the circle, its two halves would sweep the same
+                // points, and its parameters not be had from a point). u the angle turned and
+                // v the latitude: the curve's pcurve, moved along u as it turns; its ends'
+                // paths are parallels.
+                let (sphere, pcurve) = turned_on_sphere(&curve, a, b, axis, self.size).expect("checked");
+                let (p0, p1) = (pcurve.point(a), pcurve.point(b));
+                let shifted = crate::math::Transformable2::transformed(&pcurve, &crate::math::Transform2::translation(crate::math::Vector2::new(angle, 0.0)));
+                let (f, r) = (Orientation::Forward, Orientation::Reversed);
+                let mut uses = vec![
+                    (e, f, Curve2::BSpline(pcurve.clone()), a, b),
+                    (end_path, f, line(p1.x, p1.y, 1.0, 0.0), 0.0, angle),
+                    (top, r, Curve2::BSpline(shifted), a, b),
+                    (start_path, r, line(p0.x, p0.y, 1.0, 0.0), 0.0, angle),
+                ];
+                // (Counter-clockwise in (s, t); the map to (u, v) turns it where the latitude
+                // grows along the curve.)
+                let (_, d) = pcurve.d1(0.5 * (a + b));
+                if d.y > 0.0 {
+                    uses.reverse();
+                    for u in &mut uses {
+                        u.1 = u.1.reversed();
+                    }
+                }
+                let at = pcurve.clone();
+                (Surface::Sphere(sphere), Box::new(move |s, t| {
+                    let q = at.point(s);
+                    Point2::new(q.x + angle * t, q.y)
+                }), uses)
+            }
+            Steady::Turn { axis, angle } => match crate::sweep::turned_surface(axis, &curve, a, b) {
+                // The elementary surface the curve turns into where it is one (a cylinder,
+                // cone, sphere or torus about the axis), else its surface of revolution (an
+                // unbounded curve, as a line, trimmed to the edge): u the angle turned from
+                // the curve and v = v0 + sigma·s.
+                crate::sweep::SweptSurface::Ruled { surface, v0, sigma } => {
+                    let (f, r) = (Orientation::Forward, Orientation::Reversed);
+                    let v = move |s: f64| v0 + sigma * s;
+                    let mut uses = vec![
+                        (e, f, line(0.0, v0, 0.0, sigma), a, b),
+                        (end_path, f, line(0.0, v(b), 1.0, 0.0), 0.0, angle),
+                        (top, r, line(angle, v0, 0.0, sigma), a, b),
+                        (start_path, r, line(0.0, v(a), 1.0, 0.0), 0.0, angle),
+                    ];
+                    // (Clockwise in (u, v) where v grows along the curve.)
+                    if sigma > 0.0 {
+                        uses.reverse();
+                        for u in &mut uses {
+                            u.1 = u.1.reversed();
+                        }
+                    }
+                    (surface, Box::new(move |s, t| Point2::new(angle * t, v(s))), uses)
+                }
+                _ => {
+                    let revolution = RevolutionSurface::new(curve.clone(), axis);
+                    let uses = rectangle_uses(e, top, start_path, end_path, a, b, angle, false);
+                    (Surface::Revolution(revolution), Box::new(move |s, t| Point2::new(angle * t, s)), uses)
+                }
+            },
+            Steady::Screw { axis, angle, rise } if screwed_along_itself(&curve, axis) => {
+                // A line along the axis screwed slides along itself as it turns: the cylinder
+                // about the axis through it, u the angle turned from the line and v the height
+                // above the line's origin. The paths of its ends are helices, straight there:
+                // (angle·t, v + rise·t).
+                let Curve::Line(l) = &curve else { unreachable!() };
+                let z = Vector::from(axis.direction);
+                let foot = axis.origin + z * (l.origin - axis.origin).dot(z);
+                let radial = l.origin - foot;
+                let cylinder = Cylinder::new(Frame::new(foot, axis.direction, Direction::from_vector(radial)), radial.length());
+                let sigma = Vector::from(l.direction).dot(z).signum();
+                let path = |s: f64| {
+                    let from = Point2::new(0.0, sigma * s);
+                    Curve2::BSpline(crate::geometry::curve2::BSplineCurve2::try_new(vec![from, Point2::new(angle, sigma * s + rise)], vec![0.0, 1.0], vec![2, 2], 1).expect("a segment"))
+                };
+                let (f, r) = (Orientation::Forward, Orientation::Reversed);
+                let mut uses = vec![
+                    (e, f, line(0.0, 0.0, 0.0, sigma), a, b),
+                    (end_path, f, path(b), 0.0, 1.0),
+                    (top, r, line(angle, rise, 0.0, sigma), a, b),
+                    (start_path, r, path(a), 0.0, 1.0),
+                ];
+                // (Counter-clockwise in (s, t); the map to (u, v) turns it where -sigma·angle
+                // is negative.)
+                if sigma > 0.0 {
+                    uses.reverse();
+                    for u in &mut uses {
+                        u.1 = u.1.reversed();
+                    }
+                }
+                (Surface::Cylinder(cylinder), Box::new(move |s, t| Point2::new(angle * t, sigma * s + rise * t)), uses)
             }
             Steady::Screw { .. } | Steady::Carried(_) => {
                 let profile = Profile::of(&curve, a, b, self.size)?;
@@ -743,6 +843,134 @@ impl<'m> Builder<'m> {
         self.model.add(face, wire.into())?;
         Ok(Shape { orientation, ..face })
     }
+}
+
+impl Builder<'_> {
+    /// The face edge `e` (its copy at junction `k`) sweeps over stage `k` where that is a
+    /// plane: the edge's curve lies in a plane the motion keeps to (square to a turn's axis, or
+    /// along a slide). Such a sweep as a surface of revolution or an extrusion is singular
+    /// where the curve runs along the motion (as it does at the ends of an edge bounding `W`),
+    /// and a plane is what it is. `None` where the sweep is not planar.
+    fn planar_side_face(&mut self, e: EdgeId, along: bool, k: usize, top: EdgeId, start_path: EdgeId, end_path: EdgeId) -> Result<Option<Shape>> {
+        let (curve, a, b) = self.model.edge_curve(Shape::from(e)).ok_or_else(|| Error::Failed("an edge without a curve".into()))?;
+        let stage = self.stages[k].clone();
+        let tol = 1e-9 * self.size.max(1.0);
+        let samples: Vec<Point> = (0..=16).map(|i| curve.point(a + (b - a) * i as f64 / 16.0)).collect();
+        let normal = match stage {
+            Steady::Turn { axis, .. } => Vector::from(axis.direction),
+            Steady::Slide { by } => {
+                if matches!(curve, Curve::Line(_)) {
+                    return Ok(None);
+                }
+                // Square to the slide and to the chord reaching farthest across it.
+                let d = by / by.length();
+                let across = samples.iter().map(|&p| (p - samples[0]) - d * (p - samples[0]).dot(d)).fold(Vector::ZERO, |m, v| if v.length() > m.length() { v } else { m });
+                if across.length() <= tol {
+                    return Ok(None);
+                }
+                d.cross(across)
+            }
+            Steady::Screw { .. } | Steady::Carried(_) => return Ok(None),
+        };
+        let Some(n) = Direction::try_from_vector(normal) else { return Ok(None) };
+        let nv = Vector::from(n);
+        if samples.iter().any(|&p| (p - samples[0]).dot(nv).abs() > tol) {
+            return Ok(None);
+        }
+        let plane = Plane::from_frame(Frame::from_z(samples[0], n));
+        let surface = Surface::Plane(plane);
+        // Counter-clockwise in (s, t): the edge, the end's path, the copy back, the start's
+        // path back.
+        let (f, r) = (Orientation::Forward, Orientation::Reversed);
+        let mut uses = Vec::with_capacity(4);
+        for (edge, o) in [(e, f), (end_path, f), (top, r), (start_path, r)] {
+            let Some((c, first, last)) = self.model.edge_curve(Shape::from(edge)) else { return Ok(None) };
+            let Some(pcurve) = crate::geometry::project::analytic_pcurve(&c, &surface) else { return Ok(None) };
+            uses.push((edge, o, pcurve, first, last));
+        }
+        // Counter-clockwise about the plane's normal: (s, t) maps to the plane keeping its
+        // turn where ∂s × ∂t runs along the normal (it does not change sign within an edge
+        // bounding W: the curve runs along the motion only at its ends).
+        let (sm, tm) = (0.5 * (a + b), 0.5);
+        let ds = 1e-6 * (b - a);
+        let moved = |s: f64, t: f64| curve.point(s).transformed(&stage.at(t));
+        let along_s = moved(sm + ds, tm) - moved(sm - ds, tm);
+        let along_t = moved(sm, tm + 1e-6) - moved(sm, tm - 1e-6);
+        let turning = along_s.cross(along_t).dot(nv);
+        if turning == 0.0 {
+            return Ok(None);
+        }
+        if turning < 0.0 {
+            uses.reverse();
+            for u in &mut uses {
+                u.1 = u.1.reversed();
+            }
+        }
+        // Facing as the boundary of the sweep of the face beside it (see `side_face`).
+        let facing = turning * if along { 1.0 } else { -1.0 };
+        let orientation = if facing >= 0.0 { Orientation::Forward } else { Orientation::Reversed };
+        let face = self.model.new_empty(NodeKind::Face);
+        self.model.set_face_surface(face, surface, tolerance::LINEAR)?;
+        let mut coedges = Vec::with_capacity(uses.len());
+        for (edge, o, pcurve, first, last) in uses {
+            let coedge = self.model.add_coedge(edge, o)?;
+            self.model.set_pcurve_with_range(coedge, pcurve, first, last)?;
+            coedges.push(coedge);
+        }
+        let wire = self.model.add_wire(&coedges)?;
+        self.model.add(face, wire.into())?;
+        Ok(Some(Shape { orientation, ..face }))
+    }
+}
+
+/// The sphere a circle turned about `axis` stays on where the circle's own axis meets it (not
+/// along it: a circle square to the axis turns within its plane), with the circle's pcurve on
+/// it over `[a, b]`; `None` otherwise.
+fn turned_on_sphere(curve: &Curve, a: f64, b: f64, axis: crate::math::Axis, size: f64) -> Option<(crate::geometry::surface::Sphere, crate::geometry::curve2::BSplineCurve2)> {
+    let Curve::Circle(circle) = curve else { return None };
+    let tol = 1e-9 * size.max(1.0);
+    let z = Vector::from(axis.direction);
+    let (c, n) = (circle.center(), Vector::from(circle.frame().z()));
+    // The circle's axis, c + λn, against the turn's, o + μz: where they meet.
+    let across = n.cross(z);
+    if across.length() <= 1e-9 {
+        return None;
+    }
+    let w = c - axis.origin;
+    if w.dot(across).abs() > tol * across.length() {
+        return None;
+    }
+    // (c + λn - o - μz ⊥ n and ⊥ z.)
+    let nz = n.dot(z);
+    let det = nz * nz - 1.0;
+    let lambda = (w.dot(n) - nz * w.dot(z)) / det;
+    let o = c + n * lambda;
+    let radius = ((o - c).length().powi(2) + circle.radius().powi(2)).sqrt();
+    let samples = (0..=8).map(|i| circle.point(a + (b - a) * i as f64 / 8.0));
+    let first = circle.point(a) - o;
+    let radial = first - z * first.dot(z);
+    if radial.length() <= tol {
+        return None;
+    }
+    let mut ok = true;
+    for p in samples {
+        let d = p - o;
+        ok &= ((d.length() - radius).abs() <= tol) && (d - z * d.dot(z)).length() > tol;
+    }
+    if !ok {
+        return None;
+    }
+    let sphere = crate::geometry::surface::Sphere::new(Frame::new(o, axis.direction, Direction::from_vector(radial)), radius);
+    let pcurve = crate::geometry::project::pcurve_on_range(curve, &Surface::Sphere(sphere), a, b, tol)?;
+    Some((sphere, pcurve))
+}
+
+/// Whether `curve` is a line along a screw's `axis`, off it (screwed, it slides along itself).
+fn screwed_along_itself(curve: &Curve, axis: crate::math::Axis) -> bool {
+    let Curve::Line(l) = curve else { return false };
+    let z = Vector::from(axis.direction);
+    let d = l.origin - axis.origin;
+    Vector::from(l.direction).cross(z).length() <= 1e-12 && (d - z * d.dot(z)).length() > tolerance::LINEAR
 }
 
 /// The surface through the paths of `profile`'s poles (each pole's path's poles over `knots`,

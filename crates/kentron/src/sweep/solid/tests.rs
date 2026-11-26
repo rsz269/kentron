@@ -334,3 +334,99 @@ fn a_bar_screwed_at_a_growing_lead_over_its_own_start() {
     assert_close("volume", volume, total, 1e-6);
     assert_close("area", area, 6356.9864, 1e-6);
 }
+
+/// A drum turned partway about a parallel axis it does not meet, then cut by a box holding
+/// part of its path: the faces its rims sweep are planes and its sides' sweeps cylinders (not
+/// surfaces of revolution, a rim's singular where it runs along the turn), and the boolean
+/// takes the sector of the annulus inside the box and the half drum at the end.
+#[test]
+fn a_drum_turned_partway_is_cut_by_a_box() {
+    use crate::geometry::surface::Surface;
+    use crate::topology::NodeKind;
+    let mut model = Model::new();
+    let drum = Cylinder::new(1.0, 1.0).with_frame(Frame::from_z(Point::new(10.0, 0.0, -0.5), Direction::Z)).build(&mut model).unwrap();
+    let turn = RigidMotion::Turn { axis: crate::math::Axis::Z, from: (-140f64).to_radians(), to: 30f64.to_radians() };
+    let swept = solid(&mut model, drum, &turn).unwrap();
+    for face in model.unique_subshapes(swept, NodeKind::Face) {
+        assert!(matches!(model.surface(face), Some(Surface::Plane(_) | Surface::Cylinder(_))), "{:?}", model.surface(face));
+    }
+    let sector = |degrees: f64| PI * (11.0f64.powi(2) - 9.0f64.powi(2)) * degrees / 360.0;
+    let (volume, _) = measure(&model, swept);
+    assert_close("swept volume", volume, sector(170.0) + PI, 1e-9);
+    check(&model, swept);
+    let block = Cuboid::new(12.0, 12.0, 2.0).with_frame(Frame::from_z(Point::new(0.0, 0.0, -1.0), Direction::Z)).build(&mut model).unwrap();
+    let inside = sector(30.0) + 0.5 * PI;
+    let common = crate::boolean::intersection(&mut model, block, swept).unwrap();
+    assert_close("common", measure(&model, common).0, inside, 1e-9);
+    let cut = crate::boolean::difference(&mut model, block, swept).unwrap();
+    assert_close("cut", measure(&model, cut).0, 288.0 - inside, 1e-9);
+    check(&model, cut);
+}
+
+/// The sector of the ring about the z axis between radii 8 and 12, |z| ≤ 1, polar angle 0°
+/// to 60°.
+fn ring_sector(model: &mut Model) -> Shape {
+    let q = [Point::new(8.0, 0.0, -1.0), Point::new(12.0, 0.0, -1.0), Point::new(12.0, 0.0, 1.0), Point::new(8.0, 0.0, 1.0)];
+    let edges: Vec<Shape> = (0..4).map(|i| crate::make::edge_between(model, q[i], q[(i + 1) % 4]).unwrap()).collect();
+    let wire = crate::make::wire(model, &edges).unwrap();
+    let face = crate::make::planar_face(model, wire).unwrap();
+    crate::sweep::revolve(model, face, crate::math::Axis::Z, PI / 3.0).unwrap().shape
+}
+
+/// A pin (radius 0.5 along x from 6 to 11) turned about z through the whole of a ring
+/// sector: the rim of its far end turns on the sphere about the origin through it, and both
+/// halves of the rim sweep that sphere (each its own points: as surfaces of revolution of the
+/// circle they would sweep the same points twice, the product not split there). In each
+/// meridian half-plane the cut is r from 8 out to √(121.25 − z²), |z| ≤ 1/2: the sector less
+/// π/3 · (57 + 1/6) / 2.
+#[test]
+fn a_pin_turned_through_a_ring_sector() {
+    let mut model = Model::new();
+    let pin = Cylinder::new(0.5, 5.0).with_frame(Frame::from_z(Point::new(6.0, 0.0, 0.0), Direction::X)).build(&mut model).unwrap();
+    let turn = RigidMotion::Turn { axis: crate::math::Axis::Z, from: (-140f64).to_radians(), to: 140f64.to_radians() };
+    let swept = solid(&mut model, pin, &turn).unwrap();
+    check(&model, swept);
+    let block = ring_sector(&mut model);
+    let cut = crate::boolean::difference(&mut model, block, swept).unwrap();
+    check(&model, cut);
+    let sector = PI * (144.0 - 64.0) / 6.0 * 2.0;
+    assert_close("cut", measure(&model, cut).0, sector - PI / 3.0 * (57.0 + 1.0 / 6.0) / 2.0, 1e-9);
+}
+
+/// A bar (10 ≤ x ≤ 11, |y| ≤ 1/2, |z| ≤ 0.6) turned about z from −140° to 30°, partway into a
+/// ring sector: its two far corners sweep one cylinder, the product running into itself
+/// between it and the bar's far face (an overlap a few degrees wide at each point, found by
+/// stepping along the turn as finely as the body is sampled) and resolved. The reference: in
+/// the sector, at radius r, the turn covers 30° and the bar's reach past it,
+/// min(asin(1/2r), acos(10/r)), over |z| ≤ 0.6 (by quadrature).
+#[test]
+fn a_bar_turned_partway_into_a_ring_sector() {
+    let mut model = Model::new();
+    let bar = Cuboid::new(1.0, 1.0, 1.2).with_frame(Frame::from_z(Point::new(10.0, -0.5, -0.6), Direction::Z)).build(&mut model).unwrap();
+    let turn = RigidMotion::Turn { axis: crate::math::Axis::Z, from: (-140f64).to_radians(), to: 30f64.to_radians() };
+    let swept = solid(&mut model, bar, &turn).unwrap();
+    check(&model, swept);
+    let block = ring_sector(&mut model);
+    let cut = crate::boolean::difference(&mut model, block, swept).unwrap();
+    check(&model, cut);
+    assert_close("cut", measure(&model, cut).0, 76.49537612378384, 1e-9);
+}
+
+/// A box (2.5 ≤ x ≤ 3.5, |y| ≤ 1/2, 2 ≤ z ≤ 3) screwed about z through two turns of lead 4:
+/// its outer upright edges slide along themselves, each sweeping (exactly) the cylinder of
+/// radius √12.5, and the product, running into itself between it and the box's outer face,
+/// is resolved. The volume against tools/brute.py's `turned` (48.48010, its quadrature
+/// converged to 1e-6).
+#[test]
+fn a_box_screwed_two_turns() {
+    use crate::geometry::surface::Surface;
+    use crate::topology::NodeKind;
+    let mut model = Model::new();
+    let block = Cuboid::new(1.0, 1.0, 1.0).with_frame(Frame::from_z(Point::new(2.5, -0.5, 2.0), Direction::Z)).build(&mut model).unwrap();
+    let screw = RigidMotion::Screw { axis: crate::math::Axis::Z, lead: 4.0, from: 0.0, to: 4.0 * PI };
+    let swept = solid(&mut model, block, &screw).unwrap();
+    check(&model, swept);
+    let corners = model.unique_subshapes(swept, NodeKind::Face).into_iter().filter(|&f| matches!(model.surface(f), Some(Surface::Cylinder(c)) if (c.radius() - 12.5f64.sqrt()).abs() < 1e-12)).count();
+    assert!(corners > 0, "no cylinder swept by the outer edges");
+    assert_close("volume", measure(&model, swept).0, 48.48010, 1e-6);
+}
