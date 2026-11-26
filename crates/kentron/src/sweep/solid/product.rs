@@ -80,7 +80,8 @@ fn staged(model: &mut Model, solid: Shape, steady: &Steady, resolution: Resoluti
 /// stretch's product is resolved on its own, its faces against one another's, and the
 /// stretches' unions meet only their neighbours, where the whole product split all at once
 /// would put every turn's faces against every other's that its boxes meet, many more and
-/// slower to find. An error where a stretch's product is not resolved.
+/// slower to find. The stretches are united by doubling ([`doubled`]). An error where a
+/// stretch's product is not resolved.
 fn by_turns(model: &mut Model, solid: Shape, steady: &Steady) -> Result<Shape> {
     let Steady::Screw { axis, angle, rise } = *steady else { return Err(Error::Failed("by turns: not a screw".into())) };
     // (A turn at most each: 21 turns' angle in radians may come out a hair past them.)
@@ -88,8 +89,40 @@ fn by_turns(model: &mut Model, solid: Shape, steady: &Steady) -> Result<Shape> {
     let stretch = Steady::Screw { axis, angle: angle / k, rise: rise / k };
     let tool = crate::modify::copy(model, solid, false)?;
     let swept = staged(model, tool, &stretch, Resolution::Strict)?.expect("not deferred");
-    let pieces: Vec<Shape> = (0..k as usize).map(|i| swept.moved(&steady.at(i as f64 / k))).collect();
-    crate::boolean::union_all(model, &pieces)
+    doubled(model, swept, k as usize, &|i| steady.at(i as f64 / k))
+}
+
+/// The union of `n` copies of `piece`, the `i`th placed by `at(i)` (`at(i + j)` being `at(i)`
+/// then `at(j)`, as a screw's stretches are), by doubling: the first two copies united, that
+/// union and its copy moved two along, and so on, then those unions of the binary digits of
+/// `n` put end to end. About log₂ n unions where uniting the copies one by one takes n - 1:
+/// each union's work is where its two operands meet, and what lies elsewhere in them comes
+/// from the unions before (a copy's faces against its neighbours' met once, then moved).
+fn doubled(model: &mut Model, piece: Shape, n: usize, at: &dyn Fn(usize) -> Transform) -> Result<Shape> {
+    let unite = |model: &mut Model, a: Shape, b: Shape| crate::boolean::union_all(model, &[a, b]);
+    // The unions of 1, 2, 4, ... copies from the first.
+    let mut powers = vec![piece];
+    while 2usize << (powers.len() - 1) <= n {
+        let last = *powers.last().expect("one");
+        let count = 1usize << (powers.len() - 1);
+        let next = unite(model, last, last.moved(&at(count)))?;
+        powers.push(next);
+    }
+    // Those of the binary digits of n, from the largest, each moved past the ones before.
+    let mut united: Option<Shape> = None;
+    let mut placed = 0;
+    for j in (0..powers.len()).rev() {
+        if n & (1 << j) == 0 {
+            continue;
+        }
+        let part = if placed == 0 { powers[j] } else { powers[j].moved(&at(placed)) };
+        united = Some(match united {
+            None => part,
+            Some(u) => unite(model, u, part)?,
+        });
+        placed += 1 << j;
+    }
+    Ok(united.expect("n > 0"))
 }
 
 /// Whether `W` passes back into the body: a point inside one of a stage's faces in `W`,
