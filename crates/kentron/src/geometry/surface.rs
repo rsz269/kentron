@@ -1155,6 +1155,15 @@ impl OffsetSurface {
     /// `None` otherwise, or when the result would degenerate (e.g. zero radius).
     #[doc(alias = "Geom_OffsetSurface::Surface")]
     pub fn equivalent_surface(&self) -> Option<Surface> {
+        self.equivalent_surface_over(None)
+    }
+
+    /// [`Self::equivalent_surface`] over the part of the basis within `bounds` (its `(u1, u2,
+    /// v1, v2)`; the whole basis for `None`): a surface that is the offset there, though not
+    /// necessarily beyond. (A surface of revolution whose meridian crosses its axis outside a
+    /// face, as a whole ellipse turned about its minor axis does, is the revolution of the
+    /// offset meridian only on the face's side of the axis: across it, the normal turns.)
+    pub fn equivalent_surface_over(&self, bounds: Option<(f64, f64, f64, f64)>) -> Option<Surface> {
         use super::ParametricSurface;
         let d = self.offset;
         let basis = &*self.basis;
@@ -1229,7 +1238,7 @@ impl OffsetSurface {
             }
             Surface::Trimmed(t) => {
                 let (u1, u2, v1, v2) = t.bounds();
-                let offset = OffsetSurface::new(t.basis().clone(), d).equivalent_surface()?;
+                let offset = OffsetSurface::new(t.basis().clone(), d).equivalent_surface_over(Some(bounds.unwrap_or((u1, u2, v1, v2))))?;
                 Surface::Trimmed(TrimmedSurface::new(offset, u1, u2, v1, v2))
             }
             // The normal of an extrusion is the basis's tangent across the direction: the
@@ -1237,7 +1246,7 @@ impl OffsetSurface {
             Surface::Extrusion(e) => {
                 let direction = e.direction();
                 let candidate = Surface::Extrusion(ExtrusionSurface::new(offset_across(e.basis(), d, direction)?, direction));
-                return self.reproduced_by(candidate);
+                return self.reproduced_by(candidate, bounds);
             }
             // The normal of a surface of revolution lies in the meridian plane: the revolution
             // of the meridian offset within its plane.
@@ -1248,7 +1257,11 @@ impl OffsetSurface {
                 let meridian = r.basis();
                 // (A window of unbounded parameters where points stay finite: hyperbolas grow
                 // exponentially.)
-                let (lo, hi) = (meridian.first_parameter().max(-10.0), meridian.last_parameter().min(10.0));
+                let (lo, hi) = match bounds {
+                    Some((_, _, v1, v2)) => (v1, v2),
+                    None => (meridian.first_parameter(), meridian.last_parameter()),
+                };
+                let (lo, hi) = (lo.max(-10.0), hi.min(10.0));
                 let samples: Vec<Point> = (0..=16).map(|i| meridian.point(lo + (hi - lo) * i as f64 / 16.0)).collect();
                 let plane_normal = samples.iter().filter(|p| (**p - Point::ORIGIN).length().is_finite()).find_map(|&p| {
                     let radial = (p - o) - a * (p - o).dot(a);
@@ -1256,7 +1269,7 @@ impl OffsetSurface {
                 })?;
                 // ∂u × ∂v = (a × r) × C' = -(C' × m) |a × r|.
                 let offset_meridian = offset_across(meridian, -d, plane_normal)?;
-                return self.reproduced_by(Surface::Revolution(RevolutionSurface::new(offset_meridian, axis)));
+                return self.reproduced_by(Surface::Revolution(RevolutionSurface::new(offset_meridian, axis)), bounds);
             }
             _ => return None,
         })
@@ -1264,9 +1277,9 @@ impl OffsetSurface {
 
     /// `candidate` if it matches this offset surface at sample points (a check for
     /// equivalents derived under assumptions, such as a planar meridian).
-    fn reproduced_by(&self, candidate: Surface) -> Option<Surface> {
+    fn reproduced_by(&self, candidate: Surface, bounds: Option<(f64, f64, f64, f64)>) -> Option<Surface> {
         use super::ParametricSurface;
-        let (u1, u2, v1, v2) = self.basis.bounds();
+        let (u1, u2, v1, v2) = bounds.unwrap_or_else(|| self.basis.bounds());
         let clip = |x: f64| x.clamp(-10.0, 10.0);
         let (u1, u2, v1, v2) = (clip(u1), clip(u2), clip(v1), clip(v2));
         let scale = self.offset.abs().max(1.0);

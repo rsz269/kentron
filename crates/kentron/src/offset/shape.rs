@@ -620,6 +620,8 @@ struct OldFace {
     offset: Surface,
     /// For a cone, the side of its apex the face is on (the sign of the radius over it).
     nappe: f64,
+    /// The face's parameter bounds.
+    bounds: (f64, f64, f64, f64),
 }
 
 /// The offset of every face of `shape` (by `distance`, or by its own in `own`) but those in
@@ -637,8 +639,11 @@ fn offset_faces(model: &mut Model, shape: Shape, distance: f64, own: &[(NodeId, 
     // (Faces of tori whose tubes, moved, reach their axis within the faces' bounds: the
     // moved face would close on the axis there and pass through itself.)
     let mut across_axis: Vec<NodeId> = Vec::new();
+    // (Each face's parameter bounds: an offset may be a simpler surface over the face alone.)
+    let mut bounds_of: Vec<(NodeId, (f64, f64, f64, f64))> = Vec::new();
     for face in model.unique_subshapes(shape, NodeKind::Face) {
         let Some(surface) = model.surface(face) else { continue };
+        bounds_of.push((face.node, model.face_uv_bounds(Shape { orientation: Orientation::Forward, ..face })));
         let d = distance_of(face.node);
         let along = if face.orientation == Orientation::Reversed { -d } else { d };
         if let Some((minor, major)) = moved_tube(surface, along) {
@@ -654,7 +659,8 @@ fn offset_faces(model: &mut Model, shape: Shape, distance: f64, own: &[(NodeId, 
         if across_axis.contains(&face.node) {
             return Err(Error::InvalidInput("an offset carrying a face of a torus across its axis".into()));
         }
-        if d == 0.0 { Ok(surface.clone()) } else { offset_surface(surface, along) }
+        let bounds = bounds_of.iter().find(|(n, _)| *n == face.node).map(|&(_, b)| b);
+        if d == 0.0 { Ok(surface.clone()) } else { offset_surface(surface, along, bounds) }
     };
     // Joined by arcs, faces whose offsets part (at convex edges going out, concave ones going
     // in) are joined by rolling-ball faces; elsewhere arcs and intersections agree. The
@@ -766,7 +772,8 @@ fn replace_surfaces(
             }
             _ => 0.0,
         };
-        faces.push(OldFace { shape: face, surface, offset, nappe });
+        let bounds = model.face_uv_bounds(Shape { orientation: Orientation::Forward, ..face });
+        faces.push(OldFace { shape: face, surface, offset, nappe, bounds });
     }
     // Edges, with their uses by the faces; vertices.
     let mut vertices: Vec<(Shape, Point)> = Vec::new();
@@ -848,7 +855,7 @@ fn replace_surfaces(
             // where the offset's meridian meets the axis, short of the old pole where the
             // offset passes it.
             if let [f] = on[..] {
-                if let Some(p) = axis_crossing(&faces[f].offset, vertices[v].1, around[v][0].1, scale) {
+                if let Some(p) = axis_crossing(&faces[f].offset, faces[f].bounds, vertices[v].1, around[v][0].1, scale) {
                     return Ok(p);
                 }
             }
@@ -1047,7 +1054,8 @@ fn rebuild(model: &mut Model, shape: Shape, faces: &[OldFace], new_faces: &[Shap
 /// The surface `distance` away along its normal `∂u × ∂v`, parametrized like it (each point
 /// of the offset at the parameters of the point it comes from): a plane, quadric or torus
 /// where the offset is one, a general offset surface otherwise.
-fn offset_surface(surface: &Surface, distance: f64) -> Result<Surface> {
+/// (`bounds`, where given, are the face's parameter bounds: the offset over them alone.)
+fn offset_surface(surface: &Surface, distance: f64, bounds: Option<(f64, f64, f64, f64)>) -> Result<Surface> {
     let offset = OffsetSurface::new(surface.clone(), distance);
     let analytic = |s: &Surface| matches!(s, Surface::Plane(_) | Surface::Cylinder(_) | Surface::Cone(_) | Surface::Sphere(_) | Surface::Torus(_));
     let elementary = match surface {
@@ -1060,7 +1068,7 @@ fn offset_surface(surface: &Surface, distance: f64) -> Result<Surface> {
     if tube_turned_inside_out(surface, distance) {
         return Ok(Surface::Offset(offset));
     }
-    match offset.equivalent_surface() {
+    match offset.equivalent_surface().or_else(|| bounds.and_then(|b| offset.equivalent_surface_over(Some(b)))) {
         Some(s) => Ok(s),
         None if spindle(surface, distance).is_some() => Ok(spindle(surface, distance).expect("a spindle torus")),
         None if elementary => Err(Error::InvalidInput("an offset collapsing a face to its axis".into())),
@@ -1187,9 +1195,9 @@ fn foot_on(surface: &Surface, p: Point, mut uv: Point2, nappe: f64) -> (Point2, 
 
 /// Where the meridian of `surface` (a surface of revolution, as offset) meets its axis
 /// short of `uv` (its parameters at `old`, a point on the axis), if it passes the axis
-/// there: the meridian on the far side of the axis at `uv`, back towards the middle of its
-/// range it comes back to its own side.
-fn axis_crossing(surface: &Surface, old: Point, uv: Point2, scale: f64) -> Option<Point> {
+/// there: the meridian on the far side of the axis at `uv`, back towards the middle of the
+/// face's range (`bounds`, its parameter bounds) it comes back to its own side.
+fn axis_crossing(surface: &Surface, bounds: (f64, f64, f64, f64), old: Point, uv: Point2, scale: f64) -> Option<Point> {
     let Surface::Revolution(r) = surface else { return None };
     let axis = r.axis();
     let (o, z) = (axis.origin, Vector::from(axis.direction));
@@ -1197,15 +1205,17 @@ fn axis_crossing(surface: &Surface, old: Point, uv: Point2, scale: f64) -> Optio
     if radial(old).length() > 1e-9 * scale.max(1.0) {
         return None;
     }
-    let (_, _, v0, v1) = surface.bounds();
+    let (_, _, v0, v1) = bounds;
     if !(v0.is_finite() && v1.is_finite()) {
         return None;
     }
-    // (The middle of the meridian's range: its own side of the axis.)
+    // (The middle of the face's range: its own side of the axis.)
     let middle = 0.5 * (v0 + v1);
     let side = radial(surface.point(uv.x, middle));
-    let signed = |v: f64| radial(surface.point(uv.x, v)).dot(side);
-    if side.length() <= 1e-9 * scale.max(1.0) || signed(uv.y) >= 0.0 {
+    let signed = |v: f64| radial(surface.point(uv.x, v)).dot(side) / side.length();
+    // (Where the offset's meridian ends on the axis, as one moved along the normal at a
+    // smooth pole does, it does not pass it.)
+    if side.length() <= 1e-9 * scale.max(1.0) || signed(uv.y) >= -1e-9 * scale.max(1.0) {
         return None;
     }
     // From the pole back towards the middle, the first point on its own side.
@@ -2195,6 +2205,68 @@ mod tests {
         let dimple = 2.0 * pi * (d * rho * rho / 2.0 - rho / 2.0 * (rho * q + d * d * (rho / d).asin()) + (d.powi(3) - q.powi(3)) / 3.0);
         let v = volume(&model, grown).mass;
         assert!((v - (v0 - 2.0 * dimple)).abs() < 1e-6 * v, "{v}");
+    }
+
+    /// The solid oblate spheroid (x² + y²)/36 + z²/9 ≤ 1: the half ellipse x ≥ 0 (its
+    /// parameters from −π/2 to π/2, across the ellipse's origin) closed by the axis and
+    /// turned a whole turn about z.
+    fn oblate_spheroid(model: &mut Model) -> Shape {
+        use crate::geometry::curve::Ellipse;
+        let frame = crate::math::Frame::new(Point::ORIGIN, -crate::math::Direction::Y, crate::math::Direction::X);
+        let half = crate::make::edge_from_curve_range(model, Curve::Ellipse(Ellipse::new(frame, 6.0, 3.0)), -std::f64::consts::FRAC_PI_2, std::f64::consts::FRAC_PI_2).unwrap();
+        let axis = crate::make::edge_between(model, Point::new(0.0, 0.0, 3.0), Point::new(0.0, 0.0, -3.0)).unwrap();
+        let wire = crate::make::wire(model, &[half, axis]).unwrap();
+        let section = crate::make::planar_face(model, wire).unwrap();
+        crate::sweep::revolve(model, section, crate::math::Axis::Z, std::f64::consts::TAU).unwrap().shape
+    }
+
+    /// The volume of `shape` written to STEP and read back.
+    fn volume_through_step(model: &Model, shape: Shape) -> f64 {
+        let mut text = Vec::new();
+        crate::io::step::write(model, shape, "offset", None, &mut text).unwrap();
+        let mut read = Model::new();
+        let back = crate::io::step::read(&mut read, &mut &text[..]).unwrap();
+        valid(&read, back);
+        volume(&read, back).mass
+    }
+
+    /// The spheroid's volume, area and integral of mean curvature (a = 6, c = 3).
+    fn oblate_spheroid_measures() -> (f64, f64, f64) {
+        let pi = std::f64::consts::PI;
+        let r3 = 3.0f64.sqrt();
+        (144.0 * pi, 72.0 * pi + 12.0 * r3 * pi * (2.0 + r3).ln(), 6.0 * pi + 8.0 * r3 * pi * pi / 3.0)
+    }
+
+    /// An oblate spheroid grown by 1: one smooth face, the spheroid's surface moved along its
+    /// normals (the revolution of the ellipse's parallel curve, which ends on the axis at the
+    /// poles), its volume Steiner's polynomial; and the same written to STEP and read back.
+    #[test]
+    fn an_oblate_spheroid_grown_is_its_parallel_body() {
+        let mut model = Model::new();
+        let spheroid = oblate_spheroid(&mut model);
+        let grown = shape(&mut model, spheroid, 1.0, Join::Arc).unwrap();
+        valid(&model, grown);
+        let (v, s, m) = oblate_spheroid_measures();
+        let expected = v + s + m + 4.0 * std::f64::consts::PI / 3.0;
+        let got = volume(&model, grown).mass;
+        assert!((got - expected).abs() < 1e-9 * expected, "{got}, not {expected}");
+        let read = volume_through_step(&model, grown);
+        assert!((read - expected).abs() < 1e-9 * expected, "{read} through STEP, not {expected}");
+    }
+
+    /// An oblate spheroid hollowed to a wall 1 thick: the cavity its inner parallel body.
+    #[test]
+    fn an_oblate_spheroid_hollowed_keeps_its_inner_parallel_body() {
+        let mut model = Model::new();
+        let spheroid = oblate_spheroid(&mut model);
+        let hollow = thick_solid(&mut model, spheroid, &[], -1.0, Join::Arc).unwrap();
+        valid(&model, hollow);
+        let (_, s, m) = oblate_spheroid_measures();
+        let expected = s - m + 4.0 * std::f64::consts::PI / 3.0;
+        let got = volume(&model, hollow).mass;
+        assert!((got - expected).abs() < 1e-9 * expected, "{got}, not {expected}");
+        let read = volume_through_step(&model, hollow);
+        assert!((read - expected).abs() < 1e-9 * expected, "{read} through STEP, not {expected}");
     }
 
     /// A torus (tube 2 about a circle of radius 4) grown by 3: the grown tube, of radius 5,
