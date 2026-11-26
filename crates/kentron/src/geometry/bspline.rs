@@ -1422,8 +1422,10 @@ impl KnotVector {
 #[doc(alias = "Geom_BSplineSurface")]
 #[derive(Debug, Clone, PartialEq)]
 pub struct BSplineSurface {
-    poles: Vec<Vec<Point>>,
-    weights: Option<Vec<Vec<f64>>>,
+    /// (Shared by the surface's clones until one changes them: a long sweep's surfaces hold
+    /// millions of poles, and a boolean operation clones its operands' surfaces many times.)
+    poles: std::sync::Arc<Vec<Vec<Point>>>,
+    weights: Option<std::sync::Arc<Vec<Vec<f64>>>>,
     u: KnotVector,
     v: KnotVector,
     /// The surface as Bézier patches, for evaluating it (reset when it changes).
@@ -1502,7 +1504,7 @@ impl BSplineSurface {
         if poles.len() != count(&u) || poles.iter().any(|row| row.len() != count(&v)) {
             return invalid(format!("a B-spline surface with these knots needs {} x {} poles", count(&u), count(&v)));
         }
-        Ok(Self { poles, weights: None, u, v, patches: Default::default(), unrolled: Default::default(), flat_knots: Default::default() })
+        Ok(Self { poles: std::sync::Arc::new(poles), weights: None, u, v, patches: Default::default(), unrolled: Default::default(), flat_knots: Default::default() })
     }
 
     /// What identifies this surface and its unchanged clones (for caches keyed by surface).
@@ -1826,7 +1828,7 @@ impl BSplineSurface {
                 && weights.iter().flatten().all(|&w| w > 0.0),
             "invalid B-spline surface weights"
         );
-        self.weights = Some(weights);
+        self.weights = Some(std::sync::Arc::new(weights));
         self.patches = Default::default();
         self.flat_knots = Default::default();
         self.unrolled = Default::default();
@@ -1938,7 +1940,7 @@ impl BSplineSurface {
     }
 
     pub fn weights(&self) -> Option<&[Vec<f64>]> {
-        self.weights.as_deref()
+        self.weights.as_deref().map(|w| w.as_slice())
     }
 
     pub fn weight(&self, i: usize, j: usize) -> f64 {
@@ -1957,7 +1959,7 @@ impl BSplineSurface {
     }
 
     pub fn set_pole(&mut self, i: usize, j: usize, p: Point) {
-        self.poles[i][j] = p;
+        std::sync::Arc::make_mut(&mut self.poles)[i][j] = p;
         self.patches = Default::default();
         self.flat_knots = Default::default();
         self.unrolled = Default::default();
@@ -1967,7 +1969,7 @@ impl BSplineSurface {
     pub fn set_weight(&mut self, i: usize, j: usize, weight: f64) {
         assert!(weight > 0.0, "non-positive weight {weight}");
         let (nu, nv) = (self.u_pole_count(), self.v_pole_count());
-        self.weights.get_or_insert_with(|| vec![vec![1.0; nv]; nu])[i][j] = weight;
+        std::sync::Arc::make_mut(self.weights.get_or_insert_with(|| std::sync::Arc::new(vec![vec![1.0; nv]; nu])))[i][j] = weight;
         self.patches = Default::default();
         self.flat_knots = Default::default();
         self.unrolled = Default::default();
@@ -2200,9 +2202,10 @@ impl BSplineSurface {
         }
         let d = target - self.point(u, v);
         let moves: Vec<(usize, usize, f64)> = (ilo..=ihi).flat_map(|i| (jlo..=jhi).map(move |j| (i, j))).map(|(i, j)| (i, j, r(i, j) / sum)).collect();
+        let poles = std::sync::Arc::make_mut(&mut self.poles);
         for (i, j, f) in moves {
             if f != 0.0 {
-                self.poles[i][j] = self.poles[i][j] + d * f;
+                poles[i][j] = poles[i][j] + d * f;
             }
         }
         self.patches = Default::default();
@@ -2283,8 +2286,8 @@ impl BSplineSurface {
         let rational = self.weights.is_some();
         let poles: Vec<Vec<Point>> = rows.iter().map(|r| r.chunks(4).map(|c| Point::new(c[0] / c[3], c[1] / c[3], c[2] / c[3])).collect()).collect();
         let weights: Vec<Vec<f64>> = rows.iter().map(|r| r.chunks(4).map(|c| c[3]).collect()).collect();
-        self.poles = poles;
-        self.weights = rational.then_some(weights);
+        self.poles = std::sync::Arc::new(poles);
+        self.weights = rational.then(|| std::sync::Arc::new(weights));
         self.u = u;
         self.patches = Default::default();
         self.flat_knots = Default::default();
@@ -2581,14 +2584,14 @@ impl crate::geometry::ParametricSurface for BSplineSurface {
         self.u.multiplicities.reverse();
         if self.u.periodic {
             let old = reversed_pole(n, p, m0);
-            self.poles = (0..n).map(|j| self.poles[old(j)].clone()).collect();
+            self.poles = std::sync::Arc::new((0..n).map(|j| self.poles[old(j)].clone()).collect());
             if let Some(w) = &mut self.weights {
-                *w = (0..n).map(|j| w[old(j)].clone()).collect();
+                *w = std::sync::Arc::new((0..n).map(|j| w[old(j)].clone()).collect());
             }
         } else {
-            self.poles.reverse();
+            std::sync::Arc::make_mut(&mut self.poles).reverse();
             if let Some(w) = &mut self.weights {
-                w.reverse();
+                std::sync::Arc::make_mut(w).reverse();
             }
         }
         self.patches = Default::default();
@@ -2609,11 +2612,11 @@ impl crate::geometry::ParametricSurface for BSplineSurface {
                 row.reverse();
             }
         };
-        for row in &mut self.poles {
+        for row in std::sync::Arc::make_mut(&mut self.poles) {
             flip(row);
         }
         if let Some(w) = &mut self.weights {
-            for row in w {
+            for row in std::sync::Arc::make_mut(w) {
                 if periodic {
                     *row = (0..n).map(|j| row[old(j)]).collect();
                 } else {
@@ -2637,8 +2640,8 @@ impl BSplineSurface {
     /// The same surface with u and v exchanged.
     fn swapped(&self) -> BSplineSurface {
         let (n, m) = (self.poles.len(), self.poles[0].len());
-        let poles = (0..m).map(|j| (0..n).map(|i| self.poles[i][j]).collect()).collect();
-        let weights = self.weights.as_ref().map(|w| (0..m).map(|j| (0..n).map(|i| w[i][j]).collect()).collect());
+        let poles = std::sync::Arc::new((0..m).map(|j| (0..n).map(|i| self.poles[i][j]).collect()).collect());
+        let weights = self.weights.as_ref().map(|w| std::sync::Arc::new((0..m).map(|j| (0..n).map(|i| w[i][j]).collect()).collect()));
         BSplineSurface { poles, weights, u: self.v.clone(), v: self.u.clone(), patches: Default::default(), unrolled: Default::default(), flat_knots: Default::default() }
     }
 }
@@ -2649,7 +2652,7 @@ impl Transformable for BSplineSurface {
         if *t == Transform::IDENTITY {
             return self.clone();
         }
-        let poles = self.poles.iter().map(|row| row.iter().map(|p| p.transformed(t)).collect()).collect();
+        let poles = std::sync::Arc::new(self.poles.iter().map(|row| row.iter().map(|p| p.transformed(t)).collect()).collect());
         BSplineSurface { poles, weights: self.weights.clone(), u: self.u.clone(), v: self.v.clone(), patches: Default::default(), unrolled: Default::default(), flat_knots: Default::default() }
     }
 }
@@ -2657,7 +2660,7 @@ impl Transformable for BSplineSurface {
 impl AffineTransformable for BSplineSurface {
     fn affine_transformed(&self, t: &AffineTransform) -> Self {
         // Affine maps commute with (rational) B-spline evaluation: map the poles.
-        let poles = self.poles.iter().map(|row| row.iter().map(|p| p.affine_transformed(t)).collect()).collect();
+        let poles = std::sync::Arc::new(self.poles.iter().map(|row| row.iter().map(|p| p.affine_transformed(t)).collect()).collect());
         BSplineSurface { poles, weights: self.weights.clone(), u: self.u.clone(), v: self.v.clone(), patches: Default::default(), unrolled: Default::default(), flat_knots: Default::default() }
     }
 }
