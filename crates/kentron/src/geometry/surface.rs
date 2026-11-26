@@ -1269,6 +1269,13 @@ impl OffsetSurface {
                 })?;
                 // ∂u × ∂v = (a × r) × C' = -(C' × m) |a × r|.
                 let offset_meridian = offset_across(meridian, -d, plane_normal)?;
+                // (Over a face's range alone, the meridian trimmed to it: its offset beyond,
+                // across the axis, would turn round the same surface again, a second time
+                // over the face's points.)
+                let offset_meridian = match bounds {
+                    Some((_, _, v1, v2)) if v1.is_finite() && v2.is_finite() && v2 > v1 => Curve::Trimmed(super::curve::TrimmedCurve::new(offset_meridian, v1, v2)),
+                    _ => offset_meridian,
+                };
                 return self.reproduced_by(Surface::Revolution(RevolutionSurface::new(offset_meridian, axis)), bounds);
             }
             _ => return None,

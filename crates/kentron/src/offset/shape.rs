@@ -2208,6 +2208,38 @@ mod tests {
         assert!((v - (v0 - 2.0 * dimple)).abs() < 1e-6 * v, "{v}");
     }
 
+    /// A quarter ellipse (15 along x, 10 along z) from (15, 0, 0) up to the axis at (0, 0, 10),
+    /// closed by a polyline down the axis, out along z = −10 and back, turned 270° about z,
+    /// shelled outwards by 1, open at its two side planes, joined by intersection (OCCT's
+    /// offset faces_type_i F4): the ellipsoidal face's offset, the revolution of the ellipse's
+    /// parallel curve, ends on the axis at z = 11, where the side planes meet it.
+    #[test]
+    fn a_revolved_quarter_ellipse_shelled_open_at_its_sides() {
+        use crate::geometry::curve::Ellipse;
+        let mut model = Model::new();
+        let frame = crate::math::Frame::new(Point::ORIGIN, -crate::math::Direction::Y, crate::math::Direction::X);
+        let quarter = crate::make::edge_from_curve_range(&mut model, Curve::Ellipse(Ellipse::new(frame, 15.0, 10.0)), 0.0, std::f64::consts::FRAC_PI_2).unwrap();
+        let points = [(0.0, 10.0), (0.0, -10.0), (25.0, -10.0), (15.0, 0.0)].map(|(x, z)| Point::new(x, 0.0, z));
+        let mut edges = vec![quarter];
+        edges.extend((0..3).map(|i| crate::make::edge_between(&mut model, points[i], points[i + 1]).unwrap()));
+        let wire = crate::make::wire(&mut model, &edges).unwrap();
+        let section = crate::make::planar_face(&mut model, wire).unwrap();
+        let solid = crate::sweep::revolve(&mut model, section, crate::math::Axis::Z, 1.5 * std::f64::consts::PI).unwrap().shape;
+        let sides: Vec<Shape> = model
+            .unique_subshapes(solid, NodeKind::Face)
+            .into_iter()
+            .filter(|&f| {
+                let b = crate::properties::bounding_box(&model, f);
+                matches!(model.surface(f), Some(Surface::Plane(_))) && (b.max.z - b.min.z) > 15.0
+            })
+            .collect();
+        assert_eq!(sides.len(), 2);
+        let walls = thick_solid(&mut model, solid, &sides, 1.0, Join::Intersection).unwrap();
+        valid(&model, walls);
+        let v = volume(&model, walls).mass;
+        assert!((v - 3992.995).abs() < 1e-3, "{v}");
+    }
+
     /// The solid oblate spheroid (x² + y²)/36 + z²/9 ≤ 1: the half ellipse x ≥ 0 (its
     /// parameters from −π/2 to π/2, across the ellipse's origin) closed by the axis and
     /// turned a whole turn about z.
