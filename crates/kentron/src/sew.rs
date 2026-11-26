@@ -11,7 +11,8 @@
 //! 3. The faces are rebuilt: a pair becomes one edge, with the curve of one piece and, on
 //!    the other piece's face, that face's own boundary reparametrized along the curve. The
 //!    vertices met at the pair's ends become one, and tolerances grow to cover the gaps.
-//! 4. Faces connected by shared edges make shells, their orientations made to agree.
+//! 4. Faces connected by shared edges make shells, their orientations made to agree, and
+//!    facing out of the solid a shell bounds where it closes.
 //!
 //! The result is a shell, a face (a face sewn to nothing), or a compound of those.
 
@@ -698,9 +699,18 @@ fn assemble(model: &mut Model, faces: &[Shape], shells: Vec<Vec<(usize, bool)>>)
             parts.push(oriented(f, reversed));
             continue;
         }
-        let shell = model.new_empty(NodeKind::Shell);
-        for (f, reversed) in members {
+        let mut shell = model.new_empty(NodeKind::Shell);
+        for &(f, reversed) in &members {
             model.add(shell, oriented(f, reversed))?;
+        }
+        // The orientations agree with the first face's, which may face into the solid a
+        // closed shell bounds: then all are turned to face out of it.
+        if crate::validity::shell_closed(model, shell) && crate::properties::closed_shell_volume(model, shell) < 0.0 {
+            model.remove_node(shell.node);
+            shell = model.new_empty(NodeKind::Shell);
+            for &(f, reversed) in &members {
+                model.add(shell, oriented(f, !reversed))?;
+            }
         }
         parts.push(shell);
     }
@@ -789,6 +799,40 @@ mod tests {
         let volume = crate::properties::volume(&model, shell).mass;
         assert!((volume.abs() - 1.0).abs() < 1e-2, "volume {volume}");
         assert!(crate::validity::check(&model, shell).errors().next().is_none());
+    }
+
+    /// A closed shell faces out of the solid it bounds, whichever way its first face is given.
+    #[test]
+    fn a_closed_shell_faces_out_whichever_way_its_first_face_faces() {
+        let c = |x: f64, y: f64, z: f64| [x, y, z];
+        let faces = [
+            [c(0., 0., 0.), c(0., 1., 0.), c(1., 1., 0.), c(1., 0., 0.)],
+            [c(0., 0., 1.), c(1., 0., 1.), c(1., 1., 1.), c(0., 1., 1.)],
+            [c(0., 0., 0.), c(1., 0., 0.), c(1., 0., 1.), c(0., 0., 1.)],
+            [c(0., 1., 0.), c(0., 1., 1.), c(1., 1., 1.), c(1., 1., 0.)],
+            [c(0., 0., 0.), c(0., 0., 1.), c(0., 1., 1.), c(0., 1., 0.)],
+            [c(1., 0., 0.), c(1., 1., 0.), c(1., 1., 1.), c(1., 0., 1.)],
+        ];
+        for flipped in [[false; 6], [true, false, true, false, false, true], [true; 6]] {
+            let mut model = Model::new();
+            let shapes: Vec<Shape> = faces
+                .iter()
+                .zip(flipped)
+                .enumerate()
+                .map(|(i, (&f, flip))| {
+                    let face = square(&mut model, f, 1e-4 * i as f64);
+                    if flip { face.reversed() } else { face }
+                })
+                .collect();
+            let shell = sew(&mut model, &shapes, &SewOptions { tolerance: 1e-3, ..Default::default() }).unwrap();
+            assert_eq!(shell.kind(), NodeKind::Shell);
+            assert_eq!(model.unique_subshapes(shell, NodeKind::Face).len(), 6);
+            let solid = model.new_empty(NodeKind::Solid);
+            model.add(solid, shell).unwrap();
+            let volume = crate::properties::volume(&model, solid).mass;
+            assert!((volume - 1.0).abs() < 1e-2, "{flipped:?}: volume {volume}");
+            assert!(crate::validity::check(&model, solid).errors().next().is_none(), "{flipped:?}");
+        }
     }
 
     #[test]

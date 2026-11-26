@@ -145,6 +145,12 @@ pub fn shells_closed(model: &Model, shape: Shape) -> bool {
     })
 }
 
+/// Whether `shell` is closed: each of its (not degenerate) edges used by its faces once each
+/// way.
+pub(crate) fn shell_closed(model: &Model, shell: Shape) -> bool {
+    edge_uses(model, shell).into_iter().all(|(_, (forward, reversed))| forward == reversed)
+}
+
 /// Checks the topology and geometry of `shape` and everything below it: closed wires and
 /// shells, consistent orientations, vertices and pcurves within tolerance of the curves and
 /// surfaces they lie on, ...
