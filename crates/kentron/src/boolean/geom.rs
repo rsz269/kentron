@@ -199,8 +199,13 @@ pub(super) fn uv_within(surface: &Surface, p: Point, reach: f64) -> Option<Uv> {
     (foot.point.distance(p) <= reach).then_some([foot.u, foot.v])
 }
 
-/// The nearest of `foot` and the feet found from the `n` samples nearest `p`.
+/// The nearest of `foot` and the feet found from the `n` samples nearest `p` (on a screw strip,
+/// and its foot found on the helicoid).
 fn foot_from_nearest_samples(surface: &Surface, p: Point, foot: crate::geometry::extrema::SurfaceFoot, n: usize) -> crate::geometry::extrema::SurfaceFoot {
+    // (On a screw strip, the search on its helicoid already took the whole strip.)
+    if let Some(found) = screw_strip_foot(surface, p) {
+        return if found.point.distance(p) < foot.point.distance(p) { found } else { foot };
+    }
     let starts: Vec<(f64, f64)> = with_samples(surface, |grid| {
         let mut ranked: Vec<(f64, usize)> = grid.samples.iter().enumerate().map(|(i, s)| (s.2.distance(p), i)).collect();
         ranked.sort_by(|a, b| a.0.total_cmp(&b.0));
