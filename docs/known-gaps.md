@@ -425,6 +425,46 @@ is not.
   `split_face`, the regions' interior points (outside every hole) and the faces built from
   them.
 
+### A plane meeting a surface of linear extrusion nearly tangent along an edge
+
+*Found 2026-11-26.*
+
+No figure: the solids are `sweep::solid`'s sweeps of a ball-end mill, built with a
+test-only variant of its face-by-face construction that pykentron does not reach, and the
+same configuration rebuilt from CadQuery primitives (a box and a disc extruded aslant) unites
+correctly, so a figure of it would not show the failure.
+
+Two moves of a ball-end mill (radius 3, its cylinder up to 30 above its tip) from
+neighbouring passes of a raster: the first slid level, its top swept into a plane stadium at
+z = 25; the second starting with its top disc in that same plane and slid down aslant by
+about 2.2°, so the half of its top's rim that the slide carries under the top sweeps a
+surface of linear extrusion (lines along the slide through the half circle) meeting the
+plane z = 25 at about 2° along the rim, which is an edge of both the disc and that face and
+lies on the first solid's top face. `boolean::union` of the two leaves the shell open: the
+rim's arc outside the first solid (from (0, 5, 25) to (−2.83, 3, 25)) is used by the
+second's top disc only, the extrusion face beyond the first solid's side plane y = 3 having
+been dropped.
+
+- **Repro:** `a_plane_meeting_an_extrusion_nearly_tangent_united` in
+  `sweep/solid/tests.rs` (ignored; run with `--ignored`): with f(x, y) = −5 + 4 sin(πx/50)
+  sin(πy/40), the mill's tip slid from (−5, 0, f) to (0, 0, f) and from (0, 2, f) to
+  (−5, 2, f), each built by `exact::ball_end_slid_extruded` (the top's rim slid as a
+  `Surface::Extrusion`), then `boolean::union` and `validity::check`.
+- **Evidence:** the union is not closed ("used 1 times forward and 0 times reversed" at the
+  rim arc above), with 14 faces and volume 1800.46; with the rim slid as the exact B-spline
+  surface (its rational arc times the slide) the union is valid, with 17 faces and volume
+  2347.948. In brep-bench's cnc/ball-end-surface-raster, built with the extrusion, every
+  pass united alone but 32 pairs of passes one or two apart did not; between passes 0 and
+  1 the failing pairs of moves are the five that meet near x = 0, 50 and 100, where the
+  surface's value is −5 at every y, so that both moves' tops reach the plane z = 25. A box with its top at z = 25
+  united with the second sweep alone is valid, as is a box united with a disc extruded aslant
+  through its top's plane: the failure needs the first sweep's stadium top and side planes.
+- **Tried:** the B-spline surface for the slid rim (now what `sweep::solid` builds, so the
+  bench case passes); nothing in the boolean.
+- **Needed:** find where the extrusion face's piece outside the other solid is classified
+  inside it (its points near the rim lie within a few hundredths of the other solid's top
+  plane), and why the B-spline surface of the same shape is classified right.
+
 ## Sweeps of solids
 
 ### Turns whose copies of the tool touch on the axis

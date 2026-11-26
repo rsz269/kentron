@@ -159,7 +159,7 @@ pub(super) fn sweep(model: &mut Model, tool: Tool, motion: &RigidMotion) -> Opti
     match tool {
         Tool::Ball { centre, radius } => ball(model, centre, radius, motion),
         Tool::BallEnd { centre, axis, radius, height } => match *motion {
-            RigidMotion::Slide { by } if by.length() > 0.0 && by.length().is_finite() => Some(ball_end_slid(model, centre, Vector::from(axis), radius, height, by)),
+            RigidMotion::Slide { by } if by.length() > 0.0 && by.length().is_finite() => Some(ball_end_slid(model, centre, Vector::from(axis), radius, height, by, false)),
             _ => None,
         },
     }
@@ -803,7 +803,15 @@ fn tube_with_ends(model: &mut Model, size: f64, c: Point, r: f64, tangent: Vecto
 
 /// A ball-end mill (the ball about `c` of radius `r`, the cylinder up `a` to `h` above `c`)
 /// slid by `d` (see the module's notes).
-fn ball_end_slid(model: &mut Model, c: Point, a: Vector, r: f64, h: f64, d: Vector) -> Result<Shape> {
+/// The same with the top's rim slid as a surface of linear extrusion (`Surface::Extrusion`)
+/// rather than a B-spline: what docs/known-gaps.md's entry on a plane meeting an extrusion
+/// nearly tangent along an edge unites.
+#[cfg(test)]
+pub(super) fn ball_end_slid_extruded(model: &mut Model, c: Point, a: Vector, r: f64, h: f64, d: Vector) -> Result<Shape> {
+    ball_end_slid(model, c, a, r, h, d, true)
+}
+
+fn ball_end_slid(model: &mut Model, c: Point, a: Vector, r: f64, h: f64, d: Vector, extruded_top: bool) -> Result<Shape> {
     let length = d.length();
     let size = r + h + length + (c - Point::ORIGIN).length();
     let rise = d.dot(a);
@@ -863,11 +871,21 @@ fn ball_end_slid(model: &mut Model, c: Point, a: Vector, r: f64, h: f64, d: Vect
         let (u1, u2) = if up { (0.0, PI) } else { (PI, TAU) };
         if up {
             let rim_behind_end = b.circle(level(end + top), r, 0.0, PI)?;
-            slid_arc(&mut b, &rim, (u1, u2), d, [rim_behind_start, top_minus, rim_behind_end, top_plus], mid, size)?;
+            if extruded_top {
+                let carried = crate::geometry::surface::ExtrusionSurface::new(rim.clone(), dir(ahead));
+                b.rectangle(Surface::Extrusion(carried), (u1, u2, 0.0, length), [Side::Edge(rim_behind_start), Side::Edge(top_minus), Side::Edge(rim_behind_end), Side::Edge(top_plus)], mid)?;
+            } else {
+                slid_arc(&mut b, &rim, (u1, u2), d, [rim_behind_start, top_minus, rim_behind_end, top_plus], mid, size)?;
+            }
             b.planar(end + top, a, &[rim_behind_end, rim_ahead_end])?;
         } else {
             let rim_ahead_start = b.circle(level(c + top), r, PI, TAU)?;
-            slid_arc(&mut b, &rim, (u1, u2), d, [rim_ahead_start, top_plus, rim_ahead_end, top_minus], mid, size)?;
+            if extruded_top {
+                let carried = crate::geometry::surface::ExtrusionSurface::new(rim.clone(), dir(ahead));
+                b.rectangle(Surface::Extrusion(carried), (u1, u2, 0.0, length), [Side::Edge(rim_ahead_start), Side::Edge(top_plus), Side::Edge(rim_ahead_end), Side::Edge(top_minus)], mid)?;
+            } else {
+                slid_arc(&mut b, &rim, (u1, u2), d, [rim_ahead_start, top_plus, rim_ahead_end, top_minus], mid, size)?;
+            }
             b.planar(c + top, a, &[rim_behind_start, rim_ahead_start])?;
         }
     }

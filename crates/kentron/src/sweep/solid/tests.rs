@@ -1041,3 +1041,27 @@ fn a_ball_carried_along_a_curve_is_a_tube() {
     let swept = exact_sweep(&mut model, ball, &RigidMotion::Carried(Carriage(std::sync::Arc::new(still)))).unwrap();
     assert_close("volume", measure(&model, swept).0, 4.0 / 3.0 * PI, 1e-10);
 }
+
+
+
+/// docs/known-gaps.md, "A plane meeting a surface of linear extrusion nearly tangent along an
+/// edge": two moves of a ball-end mill from neighbouring raster passes, the first level, the
+/// second from where its top lies in the first's top plane down aslant by about 2°, its top's
+/// rim slid as a `Surface::Extrusion`. Their union leaves edges open and loses about 550 of
+/// its volume; with the rim slid as the B-spline surface `sweep::solid` builds, it is valid.
+/// Fails (ignored) until the boolean takes it.
+#[test]
+#[ignore]
+fn a_plane_meeting_an_extrusion_nearly_tangent_united() {
+    let f = |x: f64, y: f64| -5.0 + 4.0 * (PI * x / 50.0).sin() * (PI * y / 40.0).sin();
+    let up = Vector::new(0.0, 0.0, 1.0);
+    let tip = |x: f64, y: f64| Point::new(x, y, f(x, y));
+    let mut model = Model::new();
+    // (Ball centres 3 above the tips; cylinders up to 27 above them, z = 25 at f = -5.)
+    let first = exact::ball_end_slid_extruded(&mut model, tip(-5.0, 0.0) + up * 3.0, up, 3.0, 27.0, tip(0.0, 0.0) - tip(-5.0, 0.0)).unwrap();
+    let second = exact::ball_end_slid_extruded(&mut model, tip(0.0, 2.0) + up * 3.0, up, 3.0, 27.0, tip(-5.0, 2.0) - tip(0.0, 2.0)).unwrap();
+    let union = crate::boolean::union(&mut model, first, second).unwrap();
+    check(&model, union);
+    // (The same moves as sweep::solid builds them.)
+    assert_close("volume", measure(&model, union).0, 2347.9481197552, 1e-9);
+}
