@@ -892,12 +892,109 @@ pub(super) fn ray_hits(surface: &Surface, origin: Point, direction: Vector, bbox
                 quadratic(a, b, cc)?
             }
         }
-        Surface::BSpline(_) | Surface::Bezier(_) => patch_ray_hits(surface, origin, direction)?,
+        Surface::BSpline(_) | Surface::Bezier(_) => match screw_strip_ray_hits(surface, origin, direction) {
+            Some(hits) => hits?,
+            None => patch_ray_hits(surface, origin, direction)?,
+        },
         Surface::Revolution(_) | Surface::Extrusion(_) => numeric_ray_hits(surface, origin, direction, bbox)?,
         other if freeform(other) => numeric_ray_hits(surface, origin, direction, bbox)?,
         other => unsupported(other),
     };
     Some(hits.into_iter().filter(|&t| t > on_tol()).collect())
+}
+
+/// [`ray_hits`] on a B-spline strip kept with the segment and screw it is swept from
+/// ([`crate::geometry::screw_strip`]), on the exact helicoid: the line meets the segment
+/// screwed by `ψ` where, screwed back by `ψ`, it meets the segment, which needs the two lines
+/// in one plane (a function of `ψ` alone, sampled over the strip's turns and its changes of
+/// sign bisected), and then where they cross within the segment. `None` for other surfaces;
+/// `Some(None)` where the line grazes the strip (the function touching nought, or the line
+/// meeting it at a shallow angle, or along a ruling).
+fn screw_strip_ray_hits(surface: &Surface, origin: Point, direction: Vector) -> Option<Option<Vec<f64>>> {
+    use crate::math::Transformable;
+    let Surface::BSpline(b) = surface else { return None };
+    let strip = b.screw_strip()?;
+    let (u0, u1, v0, v1) = surface.bounds();
+    let (sa, sb) = ((u0 - strip.u0) / (strip.u1 - strip.u0), (u1 - strip.u0) / (strip.u1 - strip.u0));
+    let (sa, sb) = (sa.min(sb), sa.max(sb));
+    let (va, vb) = (v0.min(v1), v0.max(v1));
+    let e = strip.end - strip.start;
+    let scale = 1.0 + strip.start.distance(strip.axis.origin) + strip.end.distance(strip.axis.origin) + origin.distance(strip.axis.origin);
+    if !(e.length() > 0.0 && direction.length() > 0.0) {
+        return None;
+    }
+    // The line screwed back by the strip's place at v: A + t·B.
+    let back = |v: f64| {
+        let m = strip.place(v).inverse();
+        (origin.transformed(&m), direction.transformed(&m))
+    };
+    let g = |v: f64| {
+        let (a, bv) = back(v);
+        (a - strip.start).dot(bv.cross(e)) / (direction.length() * e.length())
+    };
+    let span = (strip.turn * (vb - va)).abs();
+    let n = 64usize.max((span / (std::f64::consts::TAU / 256.0)).ceil() as usize).min(8192);
+    let step = (vb - va) / n as f64;
+    let values: Vec<f64> = (0..=n).map(|i| g(va + step * i as f64)).collect();
+    let near = 1e-9 * scale;
+    let mut roots = Vec::new();
+    for i in 0..n {
+        let (x, y) = (values[i], values[i + 1]);
+        if x == 0.0 {
+            roots.push(va + step * i as f64);
+        } else if (x > 0.0) != (y > 0.0) && y != 0.0 {
+            let (mut lo, mut hi, mut glo) = (va + step * i as f64, va + step * (i + 1) as f64, x);
+            for _ in 0..80 {
+                let mid = 0.5 * (lo + hi);
+                let gm = g(mid);
+                if (gm > 0.0) == (glo > 0.0) {
+                    (lo, glo) = (mid, gm);
+                } else {
+                    hi = mid;
+                }
+            }
+            roots.push(0.5 * (lo + hi));
+        }
+        // (Touching nought without crossing: a graze.)
+        if i > 0 {
+            let w = values[i - 1];
+            if x.abs() < w.abs() && x.abs() < y.abs() && (w > 0.0) == (y > 0.0) && x.abs() <= 1e3 * near {
+                return Some(None);
+            }
+        }
+    }
+    if values[n] == 0.0 {
+        roots.push(vb);
+    }
+    let mut hits: Vec<f64> = Vec::new();
+    for v in roots {
+        let (a, bv) = back(v);
+        // The two lines' nearest points: a + t·bv and start + s·e.
+        let w = a - strip.start;
+        let (bb, be, ee, bw, ew) = (bv.dot(bv), bv.dot(e), e.dot(e), bv.dot(w), e.dot(w));
+        let den = bb * ee - be * be;
+        if den <= 1e-12 * bb * ee {
+            return Some(None);
+        }
+        let t = (be * ew - ee * bw) / den;
+        let s = (bb * ew - be * bw) / den;
+        if s < sa - 1e-12 || s > sb + 1e-12 {
+            continue;
+        }
+        if (a + bv * t).distance(strip.start + e * s) > 1e-6 * scale {
+            return Some(None);
+        }
+        // (At a shallow angle, as patch_ray_hits takes it: a graze.)
+        let u = strip.u0 + s * (strip.u1 - strip.u0);
+        let normal = normal_at(surface, [u.clamp(u0.min(u1), u0.max(u1)), v]);
+        if normal.dot(direction.normalized()).abs() <= 1e-3 {
+            return Some(None);
+        }
+        if !hits.iter().any(|&h| (h - t).abs() <= 1e-7 * (1.0 + t.abs())) {
+            hits.push(t);
+        }
+    }
+    Some(Some(hits))
 }
 
 /// Ray hits on a B-spline or Bezier patch: Newton steps on S(u, v) = origin + t·direction
