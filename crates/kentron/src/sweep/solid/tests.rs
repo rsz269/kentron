@@ -989,3 +989,55 @@ fn consecutive_moves_of_a_ball_end_mill_united() {
     let union = crate::boolean::union_all(&mut model, &sweeps).unwrap();
     check(&model, union);
 }
+
+/// A ball slid along a bent path, a move at a time, the moves' sweeps united: the points
+/// within its radius of the path. (The reference: tools/brute.py's `line_volume` of the balls
+/// at the path's corners and the tubes between them, exact along each line, 2400 × 2400
+/// lines.)
+#[test]
+fn a_ball_slid_along_a_bent_path_united() {
+    let mut model = Model::new();
+    let points = [(0.0, 0.0, 0.0), (3.0, 0.5, 0.2), (5.0, 2.5, -0.4), (4.0, 5.0, 0.3), (1.0, 5.5, 1.0), (-1.0, 3.0, 0.6), (0.5, 1.2, 2.0)].map(|(x, y, z)| Point::new(x, y, z));
+    let sweeps: Vec<Shape> = points
+        .windows(2)
+        .map(|w| {
+            let ball = Sphere::new(1.0).with_frame(Frame::from_z(w[0], Direction::Z)).build(&mut model).unwrap();
+            exact_sweep(&mut model, ball, &RigidMotion::Slide { by: w[1] - w[0] }).unwrap()
+        })
+        .collect();
+    let union = crate::boolean::union_all(&mut model, &sweeps).unwrap();
+    check(&model, union);
+    assert_close("volume", measure(&model, union).0, BRUTE_BENT_PATH, 1e-5);
+}
+
+/// tools/brute.py: `line_volume(any, [Ball(p, 1) for p in points] + [Tube(a, b, 1) for a, b in
+/// zip(points, points[1:])], box, n=(2400, 2400))` (59.58970 at 1200 × 1200).
+const BRUTE_BENT_PATH: f64 = 59.589719;
+
+/// A ball turned about an upright line while slid along x (its places given): only its
+/// centre's path matters, a curve; the tube about it and two half balls, its volume the disc's
+/// area times the path's length and one ball. A ball turned about its centre while slid
+/// straight: a capsule; turned only: itself.
+#[test]
+fn a_ball_carried_along_a_curve_is_a_tube() {
+    let mut model = Model::new();
+    let ball = Sphere::new(1.0).with_frame(Frame::from_z(Point::new(5.0, 0.0, 0.0), Direction::Z)).build(&mut model).unwrap();
+    let place = |t: f64| Transform::translation(Vector::new(25.0 * t, 0.0, 0.0)) * Transform::rotation(Axis::new(Point::ORIGIN, Direction::Z), PI * t);
+    let swept = exact_sweep(&mut model, ball, &RigidMotion::Carried(Carriage(std::sync::Arc::new(place)))).unwrap();
+    check(&model, swept);
+    // (The path (5 cos πt + 25t, 5 sin πt, 0): its length by Gauss-Legendre in pieces.)
+    let speed = |t: f64| (625.0 - 250.0 * PI * (PI * t).sin() + 25.0 * PI * PI).sqrt();
+    let (g, w) = ([-0.906179845938664, -0.538469310105683, 0.0, 0.538469310105683, 0.906179845938664], [0.236926885056189, 0.478628670499366, 0.568888888888889, 0.478628670499366, 0.236926885056189]);
+    let pieces = 200;
+    let length: f64 = (0..pieces).map(|k| (0..5).map(|i| w[i] * speed((k as f64 + 0.5 + 0.5 * g[i]) / pieces as f64)).sum::<f64>() * 0.5 / pieces as f64).sum();
+    let (volume, area) = measure(&model, swept);
+    assert_close("volume", volume, PI * length + 4.0 / 3.0 * PI, 1e-7);
+    assert_close("area", area, 2.0 * PI * length + 4.0 * PI, 1e-7);
+    let spun = move |t: f64| Transform::translation(Vector::new(3.0 * t, -t, 2.0 * t)) * Transform::rotation(Axis::new(Point::new(5.0, 0.0, 0.0), Direction::new(1.0, 1.0, 0.0)), 4.0 * t);
+    let swept = exact_sweep(&mut model, ball, &RigidMotion::Carried(Carriage(std::sync::Arc::new(spun)))).unwrap();
+    assert_eq!(face_count(&model, swept), 3);
+    assert_close("volume", measure(&model, swept).0, PI * 14f64.sqrt() + 4.0 / 3.0 * PI, 1e-9);
+    let still = |t: f64| Transform::rotation(Axis::new(Point::new(5.0, 0.0, 0.0), Direction::Y), 3.0 * t);
+    let swept = exact_sweep(&mut model, ball, &RigidMotion::Carried(Carriage(std::sync::Arc::new(still)))).unwrap();
+    assert_close("volume", measure(&model, swept).0, 4.0 / 3.0 * PI, 1e-10);
+}

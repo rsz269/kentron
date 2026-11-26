@@ -22,7 +22,10 @@
 //!   (`c` the rise per radian) beyond `r`, and centres on it that are `2r` apart staying at
 //!   least that far apart as they part further (no turn of the tube running into the next).
 //!   A screw about an axis through the centre is a slide along it; one that does not rise, a
-//!   turn.
+//!   turn;
+//! * carried (by its places): the ball where its centre stays still, the capsule over the
+//!   stretch of a line its centre runs along (however it turns, or goes back); other paths are
+//!   left to the general sweep.
 //!
 //! # A ball-end mill
 //!
@@ -32,8 +35,9 @@
 //! below its equator, the two lines of the cylinder square to `d`'s part across the axis, and
 //! the half of the top's rim the slide carries in under the top (none where `d` lies in the
 //! top's plane: the whole top is then swept along itself). The boundary is that outline slid
-//! (a half cylinder about the centre's path, two planes, and a cylinder of lines along `d`
-//! through the rim's half circle), the mill behind the slide at the start and ahead of it at
+//! (a half cylinder about the centre's path, two planes, and the rim's half circle slid: the
+//! B-spline surface of its exact rational arc and the slide, as [`super::product`] slides a
+//! curve), the mill behind the slide at the start and ahead of it at
 //! the end (each a lune of the half ball, between its equator and the outline's half circle,
 //! and a half of the cylinder), and the top where the slide leaves it. Slid along its axis, the
 //! mill is the mill lengthened.
@@ -46,7 +50,7 @@ use std::f64::consts::{FRAC_PI_2, PI, TAU};
 use crate::error::{Error, Result};
 use crate::geometry::curve::{Circle, Curve, Line};
 use crate::geometry::curve2::{BSplineCurve2, Circle2, Curve2, Line2};
-use crate::geometry::surface::{Cylinder, ExtrusionSurface, KnotVector, Plane, Sphere, Surface, Torus};
+use crate::geometry::surface::{Cylinder, KnotVector, Plane, Sphere, Surface, Torus};
 use crate::geometry::{ParametricCurve, ParametricSurface};
 use crate::math::{Axis, Direction, Direction2, Frame, Frame2, Point, Point2, Transform, Transformable, Vector};
 use crate::sweep::pipe::path;
@@ -163,8 +167,8 @@ pub(super) fn sweep(model: &mut Model, tool: Tool, motion: &RigidMotion) -> Opti
 
 /// A ball's sweep (see the module's notes).
 fn ball(model: &mut Model, centre: Point, r: f64, motion: &RigidMotion) -> Option<Result<Shape>> {
-    if let RigidMotion::Carried(_) = motion {
-        return None;
+    if let RigidMotion::Carried(carriage) = motion {
+        return carried_ball(model, centre, r, &*carriage.0);
     }
     let (start, steady) = motion.steady().ok()?;
     let c0 = centre.transformed(&start);
@@ -184,6 +188,190 @@ fn ball(model: &mut Model, centre: Point, r: f64, motion: &RigidMotion) -> Optio
         }
         Steady::Carried(_) => None,
     }
+}
+
+/// A ball whose centre a carried motion keeps still, or moves along a line (whichever way it
+/// turns the ball): the ball, or the capsule over the stretch of the line the centre covers.
+/// Told from the centre's places at 1024 steps of the motion (within 1e-10 of the reach);
+/// other paths a tube ([`carried_tube`]).
+fn carried_ball(model: &mut Model, centre: Point, r: f64, place: &(dyn Fn(f64) -> Transform + Send + Sync)) -> Option<Result<Shape>> {
+    let n = 1024;
+    let path: Vec<Point> = (0..=n).map(|i| centre.transformed(&place(i as f64 / n as f64))).collect();
+    let start = path[0];
+    let far = path.iter().copied().max_by(|a, b| a.distance(start).total_cmp(&b.distance(start)))?;
+    let reach = far.distance(start);
+    let tol = 1e-10 * (r + reach + (start - Point::ORIGIN).length());
+    if reach <= tol {
+        return Some(whole_ball(model, start, r));
+    }
+    let along = unit(far - start);
+    if path.iter().any(|&p| (p - start).cross(along).length() > tol) {
+        return carried_tube(model, centre, r, place);
+    }
+    let (lo, hi) = path.iter().map(|&p| (p - start).dot(along)).fold((0.0f64, 0.0f64), |(lo, hi), x| (lo.min(x), hi.max(x)));
+    Some(capsule(model, start + along * lo, along * (hi - lo), r))
+}
+
+/// The tube about a carried centre's curved path, and the half balls at its ends: the circle
+/// square to the path carried along it in the frame that does not twist about it (the
+/// rotation-minimizing frame, by double reflection between the path's points), its poles'
+/// paths cubics through their places, in stages over which the path turns by at most an
+/// eighth of a turn. Taken where, at points along the path no farther apart than an eighth of
+/// `r`: the centre keeps moving; the path curves less tightly than `r` (by a thousandth); and
+/// centres that have parted by `2r` along it do not come back within `2r` (and the points
+/// between, the spacing) of each other. The surfaces are checked to lie within 1e-8 of the size
+/// of `r` from the path (the points refined until they do, up to 16384); `None` where any of
+/// that fails.
+fn carried_tube(model: &mut Model, centre: Point, r: f64, place: &(dyn Fn(f64) -> Transform + Send + Sync)) -> Option<Result<Shape>> {
+    let at = |t: f64| centre.transformed(&place(t.clamp(0.0, 1.0)));
+    let velocity = |t: f64| {
+        let h = 1e-6;
+        let (a, b) = ((t - h).max(0.0), (t + h).min(1.0));
+        (at(b) - at(a)) * (1.0 / (b - a))
+    };
+    let mut n = 512usize;
+    loop {
+        let points: Vec<Point> = (0..=n).map(|i| at(i as f64 / n as f64)).collect();
+        let length: f64 = points.windows(2).map(|w| w[0].distance(w[1])).sum();
+        if length / n as f64 > r / 8.0 && n < 16384 {
+            n *= 2;
+            continue;
+        }
+        if length / n as f64 > r / 8.0 {
+            return None;
+        }
+        match carried_tube_at(model, r, &at, &velocity, n) {
+            Tube::Built(swept) => return Some(swept),
+            Tube::Refused => return None,
+            Tube::Finer if n < 16384 => n *= 2,
+            Tube::Finer => return None,
+        }
+    }
+}
+
+enum Tube {
+    Built(Result<Shape>),
+    Refused,
+    /// Its surfaces stray from the tube: the points too far apart.
+    Finer,
+}
+
+/// [`carried_tube`] at `n` steps of the motion.
+fn carried_tube_at(model: &mut Model, r: f64, at: &dyn Fn(f64) -> Point, velocity: &dyn Fn(f64) -> Vector, n: usize) -> Tube {
+    let ts: Vec<f64> = (0..=n).map(|i| i as f64 / n as f64).collect();
+    let points: Vec<Point> = ts.iter().map(|&t| at(t)).collect();
+    let speeds: Vec<Vector> = ts.iter().map(|&t| velocity(t)).collect();
+    let fastest = speeds.iter().map(|v| v.length()).fold(0.0, f64::max);
+    if !(fastest > 0.0) || speeds.iter().any(|v| !(v.length() > 1e-6 * fastest)) {
+        return Tube::Refused;
+    }
+    let tangents: Vec<Vector> = speeds.iter().map(|&v| unit(v)).collect();
+    let steps: Vec<f64> = points.windows(2).map(|w| w[0].distance(w[1])).collect();
+    let spacing = steps.iter().copied().fold(0.0, f64::max);
+    // Curving less tightly than r.
+    for i in 0..n {
+        let turn = tangents[i].cross(tangents[i + 1]).length().atan2(tangents[i].dot(tangents[i + 1]));
+        if steps[i] > 0.0 && r * turn / steps[i] >= 1.0 - 1e-3 {
+            return Tube::Refused;
+        }
+    }
+    // Centres parted by 2r staying parted (the distance growing until they part).
+    let reach = 2.0 * r;
+    for i in 0..=n {
+        let mut parted = false;
+        let mut last = 0.0;
+        for j in i + 1..=n {
+            let d = points[i].distance(points[j]);
+            if parted {
+                if d < reach + spacing {
+                    return Tube::Refused;
+                }
+            } else if d >= reach + spacing {
+                parted = true;
+            } else if d < last {
+                return Tube::Refused;
+            }
+            last = d;
+        }
+    }
+    // The frames not twisting about the path (double reflection), and the motion carrying the
+    // start's frame to each.
+    let mut across = vec![square_to(tangents[0])];
+    for i in 0..n {
+        let v1 = points[i + 1] - points[i];
+        let c1 = v1.dot(v1);
+        let (u, t) = (across[i], tangents[i]);
+        let (reflected, tr) = if c1 > 0.0 { (u - v1 * (2.0 / c1 * v1.dot(u)), t - v1 * (2.0 / c1 * v1.dot(t))) } else { (u, t) };
+        let v2 = tangents[i + 1] - tr;
+        let c2 = v2.dot(v2);
+        let next = if c2 > 1e-300 { reflected - v2 * (2.0 / c2 * v2.dot(reflected)) } else { reflected };
+        let next = next - tangents[i + 1] * next.dot(tangents[i + 1]);
+        across.push(unit(next));
+    }
+    let frame = |i: usize| Frame::new(points[i], Direction::from_vector(tangents[i]), Direction::from_vector(across[i]));
+    let start = frame(0);
+    let transforms: Vec<Transform> = (0..=n).map(|i| Transform::frame_to_frame(&start, &frame(i))).collect();
+    // Stages: the tangent turning at most an eighth of a turn over each.
+    let mut breaks = vec![0usize];
+    let mut turned = 0.0;
+    for i in 0..n {
+        turned += tangents[i].cross(tangents[i + 1]).length().atan2(tangents[i].dot(tangents[i + 1]));
+        if (turned > std::f64::consts::FRAC_PI_4 && i + 1 - breaks.last().unwrap() >= 4) || i + 1 == n {
+            breaks.push(i + 1);
+            turned = 0.0;
+        }
+    }
+    let low = points.iter().fold(points[0], |a, p| Point::new(a.x.min(p.x), a.y.min(p.y), a.z.min(p.z)));
+    let high = points.iter().fold(points[0], |a, p| Point::new(a.x.max(p.x), a.y.max(p.y), a.z.max(p.z)));
+    let size = (high - low).length() + r + (low - Point::ORIGIN).length().max((high - Point::ORIGIN).length());
+    let circle = Curve::Circle(Circle::new(start, r));
+    let profile = match product::Profile::of(&circle, 0.0, TAU, size) {
+        Ok(p) => p,
+        Err(e) => return Tube::Built(Err(e)),
+    };
+    let mut surfaces = Vec::new();
+    for w in breaks.windows(2) {
+        let (a, b) = (w[0], w[1]);
+        let params: Vec<f64> = (a..=b).map(|i| (ts[i] - ts[a]) / (ts[b] - ts[a])).collect();
+        let motion = crate::sweep::pipe::PieceMotion { params, transforms: transforms[a..=b].to_vec(), rates: None };
+        let built = (|| -> Result<Surface> {
+            let knots = path(&motion, Point::ORIGIN)?;
+            let knots = KnotVector::new(knots.knots().to_vec(), knots.multiplicities().to_vec(), knots.degree());
+            product::profiled_surface(&profile.spline, &|q| Ok(path(&motion, q)?.poles().to_vec()), knots)
+        })();
+        let surface = match built {
+            Ok(s) => s,
+            Err(e) => return Tube::Built(Err(e)),
+        };
+        // Within 1e-8 of the size of r from the path, between the points.
+        let (u0, u1) = (profile.spline.first_parameter(), profile.spline.last_parameter());
+        for k in 0..2 * (b - a) {
+            let f = (k as f64 + 0.5) / (2 * (b - a)) as f64;
+            for j in 0..8 {
+                let mut t = ts[a] + (ts[b] - ts[a]) * f;
+                let q = surface.point(u0 + (u1 - u0) * (j as f64 + 0.5) / 8.0, f);
+                // (The path's point square to q: Newton on (q - c(t))·c'(t), from t.)
+                for _ in 0..8 {
+                    let (c, v) = (at(t), velocity(t));
+                    let h = 1e-5;
+                    let dv = (velocity((t + h).min(1.0)) - velocity((t - h).max(0.0))) * (1.0 / (2.0 * h));
+                    let g = (q - c).dot(v);
+                    let dg = (q - c).dot(dv) - v.dot(v);
+                    if dg.abs() < 1e-300 {
+                        break;
+                    }
+                    t = (t - g / dg).clamp(ts[a], ts[b]);
+                }
+                if ((q - at(t)).length() - r).abs() > 1e-8 * size {
+                    return Tube::Finer;
+                }
+            }
+        }
+        surfaces.push(surface);
+    }
+    let places: Vec<Transform> = breaks.iter().map(|&i| transforms[i]).collect();
+    let insides = breaks.windows(2).map(|w| points[(w[0] + w[1]) / 2]).collect();
+    Tube::Built(tube_with_ends(model, size, points[0], r, tangents[0], across[0], &profile, surfaces, &places, insides))
 }
 
 /// A ball at `c` turned by `angle` (positive) about `axis`: the ball itself where its centre
@@ -557,6 +745,25 @@ fn screwed_ball(model: &mut Model, c: Point, r: f64, axis: Axis, angle: f64, ris
     let knots = path(&motion, Point::ORIGIN)?;
     let knots = KnotVector::new(knots.knots().to_vec(), knots.multiplicities().to_vec(), knots.degree());
     let surface = product::profiled_surface(&profile.spline, &|q| Ok(path(&motion, q)?.poles().to_vec()), knots)?;
+    let mut places = vec![Transform::IDENTITY];
+    for k in 0..stages {
+        places.push(step * places[k]);
+    }
+    let half = Transform::translation(z * (0.5 * step_rise)) * Transform::rotation(axis, 0.5 * step_angle);
+    let surfaces = places[..stages].iter().map(|m| surface.transformed(m)).collect();
+    let insides = places[..stages].iter().map(|m| c.transformed(&(half * *m))).collect();
+    tube_with_ends(model, size, c, r, tangent, x, &profile, surfaces, &places, insides)
+}
+
+/// The tube of radius `r` about a centre's path from `c`, in stages: the circle square to the
+/// path at the start (about `c`, square to `tangent`, its angle from `x`) placed by `places` at
+/// the stages' ends (the first the identity), each stage's surface (its circle's B-spline,
+/// `profile`, along u, the stage along v from 0 to 1) and a point on the path within it; and the
+/// half balls at its ends.
+#[allow(clippy::too_many_arguments)]
+fn tube_with_ends(model: &mut Model, size: f64, c: Point, r: f64, tangent: Vector, x: Vector, profile: &product::Profile, surfaces: Vec<Surface>, places: &[Transform], insides: Vec<Point>) -> Result<Shape> {
+    let circle = Curve::Circle(Circle::new(Frame::new(c, Direction::from_vector(tangent), Direction::from_vector(x)), r));
+    let stages = surfaces.len();
     let (u0, u1) = (profile.spline.first_parameter(), profile.spline.last_parameter());
     // The circle's pcurve on a stage's surface at v: its angle mapped to the B-spline's
     // parameter.
@@ -570,16 +777,9 @@ fn screwed_ball(model: &mut Model, c: Point, r: f64, axis: Axis, angle: f64, ris
         }
     };
     let mut b = Build::new(model, size);
-    let mut places = vec![Transform::IDENTITY];
-    for k in 0..stages {
-        places.push(step * places[k]);
-    }
     let circles: Vec<EdgeId> = places.iter().map(|m| b.edge(circle.transformed(m), 0.0, TAU)).collect::<Result<_>>()?;
-    let seam_curve = surface.u_iso(u0);
-    for k in 0..stages {
-        let stage = surface.transformed(&places[k]);
-        let seam = b.edge(seam_curve.transformed(&places[k]), 0.0, 1.0)?;
-        let inside = c.transformed(&(Transform::translation(z * (0.5 * step_rise)) * Transform::rotation(axis, 0.5 * step_angle) * places[k]));
+    for (k, (stage, inside)) in surfaces.into_iter().zip(insides).enumerate() {
+        let seam = b.edge(stage.u_iso(u0), 0.0, 1.0)?;
         let sides = [
             Side::Given(circles[k], Orientation::Forward, on_tube(0.0), 0.0, TAU),
             Side::Edge(seam),
@@ -661,14 +861,13 @@ fn ball_end_slid(model: &mut Model, c: Point, a: Vector, r: f64, h: f64, d: Vect
         let up = rise > 0.0;
         let rim = Curve::Circle(Circle::new(level(c + top), r));
         let (u1, u2) = if up { (0.0, PI) } else { (PI, TAU) };
-        let carried = ExtrusionSurface::new(rim, dir(ahead));
         if up {
             let rim_behind_end = b.circle(level(end + top), r, 0.0, PI)?;
-            b.rectangle(Surface::Extrusion(carried), (u1, u2, 0.0, length), [Side::Edge(rim_behind_start), Side::Edge(top_minus), Side::Edge(rim_behind_end), Side::Edge(top_plus)], mid)?;
+            slid_arc(&mut b, &rim, (u1, u2), d, [rim_behind_start, top_minus, rim_behind_end, top_plus], mid, size)?;
             b.planar(end + top, a, &[rim_behind_end, rim_ahead_end])?;
         } else {
             let rim_ahead_start = b.circle(level(c + top), r, PI, TAU)?;
-            b.rectangle(Surface::Extrusion(carried), (u1, u2, 0.0, length), [Side::Edge(rim_ahead_start), Side::Edge(top_plus), Side::Edge(rim_ahead_end), Side::Edge(top_minus)], mid)?;
+            slid_arc(&mut b, &rim, (u1, u2), d, [rim_ahead_start, top_plus, rim_ahead_end, top_minus], mid, size)?;
             b.planar(c + top, a, &[rim_behind_start, rim_ahead_start])?;
         }
     }
@@ -676,6 +875,32 @@ fn ball_end_slid(model: &mut Model, c: Point, a: Vector, r: f64, h: f64, d: Vect
     b.planar(c + s * r, s, &[side_plus, up_plus_end, wall_plus_top, up_plus_start])?;
     b.planar(c - s * r, -s, &[side_minus, up_minus_end, wall_minus_top, up_minus_start])?;
     b.solid()
+}
+
+/// The face `arc` (a circle's, over `range`) sweeps slid by `d`: the B-spline surface of the arc's
+/// exact rational B-spline (u) and the slide (v, its length), bounded by `edges`: the arc at the
+/// start, the slid line from its end, the arc at the end, the slid line from its start.
+fn slid_arc(b: &mut Build, arc: &Curve, range: (f64, f64), d: Vector, edges: [EdgeId; 4], inside: Point, size: f64) -> Result<()> {
+    let length = d.length();
+    let profile = product::Profile::of(arc, range.0, range.1, size)?;
+    let surface = product::profiled_surface(&profile.spline, &|q| Ok(vec![q, q + d]), KnotVector::new(vec![0.0, length], vec![2, 2], 1))?;
+    let on = |v: f64| -> Curve2 {
+        match &profile.sigma {
+            Some(sigma) => {
+                let poles = sigma.poles().iter().map(|q| Point2::new(q.x, q.y + v)).collect();
+                Curve2::BSpline(BSplineCurve2::new(poles, sigma.knots().to_vec(), sigma.multiplicities().to_vec(), sigma.degree()))
+            }
+            None => Curve2::Line(Line2::new(Point2::new(0.0, v), Direction2::new(1.0, 0.0))),
+        }
+    };
+    let (s0, s1) = (profile.spline.first_parameter(), profile.spline.last_parameter());
+    let sides = [
+        Side::Given(edges[0], Orientation::Forward, on(0.0), range.0, range.1),
+        Side::Edge(edges[1]),
+        Side::Given(edges[2], Orientation::Reversed, on(length), range.0, range.1),
+        Side::Edge(edges[3]),
+    ];
+    b.rectangle(surface, (s0, s1, 0.0, length), sides, inside)
 }
 
 /// The ball-end mill about `c`: the half ball below, the cylinder up `a` to `h` above `c`.

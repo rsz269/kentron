@@ -74,6 +74,14 @@
 //! union, as a ball on a stem, can instead be swept a piece at a time: the sweep of a union is
 //! the union of the sweeps.)
 //!
+//! # Known in closed form
+//!
+//! Some tools' sweeps are built directly, face by face ([`exact`]): a ball under any of these
+//! motions (the points within its radius of its centre's path: a capsule, a torus piece, a
+//! tube about a helix or a carried centre's curve, half balls at the ends), and a ball-end mill
+//! slid (the hull of its two places). They are taken where the tube about the path is embedded;
+//! anything else is swept as above.
+//!
 //! Nothing is tuned: the characteristic curves are followed within a tolerance taken from the
 //! body's size, and refusals are stated geometric conditions.
 
