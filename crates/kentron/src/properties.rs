@@ -843,22 +843,27 @@ fn rule_suffices(pcurve: &Curve2, ends: &[f64]) -> bool {
     let origin = pcurve.point(a);
     let terms = |t: f64| {
         let (p, d) = pcurve.d1(t);
-        ((p.x - origin.x) * d.y, (p.y - origin.y) * d.x, p)
+        let (x, y) = (p.x - origin.x, p.y - origin.y);
+        ([x * d.y, y * d.x, x * d.x, y * d.y], p)
     };
-    let mut whole = (0.0, 0.0);
+    let mut whole = [0.0; 4];
     for &(node, w) in &GAUSS_LEGENDRE {
-        let (x, y, _) = terms(a + (b - a) * (node + 1.0) / 2.0);
-        whole = (whole.0 + x * w * (b - a) / 2.0, whole.1 + y * w * (b - a) / 2.0);
+        let (x, _) = terms(a + (b - a) * (node + 1.0) / 2.0);
+        for k in 0..4 {
+            whole[k] += x[k] * w * (b - a) / 2.0;
+        }
     }
-    let (mut spans, mut extent) = ((0.0, 0.0), 0.0f64);
+    let (mut spans, mut extent) = ([0.0; 4], 0.0f64);
     for e in ends.windows(2) {
         for &(node, w) in &GAUSS_LEGENDRE_3 {
-            let (x, y, p) = terms(e[0] + (e[1] - e[0]) * (node + 1.0) / 2.0);
-            spans = (spans.0 + x * w * (e[1] - e[0]) / 2.0, spans.1 + y * w * (e[1] - e[0]) / 2.0);
+            let (x, p) = terms(e[0] + (e[1] - e[0]) * (node + 1.0) / 2.0);
+            for k in 0..4 {
+                spans[k] += x[k] * w * (e[1] - e[0]) / 2.0;
+            }
             extent = extent.max((p.x - origin.x).abs()).max((p.y - origin.y).abs());
         }
     }
-    let error = (whole.0 - spans.0).abs().max((whole.1 - spans.1).abs());
+    let error = (0..4).map(|k| (whole[k] - spans[k]).abs()).fold(0.0, f64::max);
     error <= 1e-8 * extent * extent
 }
 

@@ -2295,6 +2295,34 @@ mod tests {
         }
     }
 
+    /// The elliptic cylinder x²/100 + y²/4 ≤ 1, 10 high, grown by 1 (more than the ellipse's
+    /// least radius of curvature, 0.4): its volume Steiner's polynomial, V + Sd + Md² + 4πd³/3,
+    /// to a part in 1e8. (The side's edges with the rims' tubes have fitted pcurves along its
+    /// lines of constant height, over which the Gauss rules once ran across many knots: the
+    /// volume was 8e-6 short.)
+    #[test]
+    fn a_flat_elliptic_cylinder_grown_is_its_parallel_body() {
+        let mut model = Model::new();
+        let rim = crate::make::edge_from_curve(&mut model, Curve::Ellipse(crate::geometry::curve::Ellipse::new(crate::math::Frame::WORLD, 10.0, 2.0))).unwrap();
+        let rim = crate::make::wire(&mut model, &[rim]).unwrap();
+        let end = crate::make::planar_face(&mut model, rim).unwrap();
+        let cylinder = crate::sweep::extrude(&mut model, end, Vector::new(0.0, 0.0, 10.0)).unwrap().shape;
+        let grown = shape(&mut model, cylinder, 1.0, Join::Arc).unwrap();
+        valid(&model, grown);
+        // The perimeter, by the trapezoidal rule (exponentially accurate for a periodic integrand).
+        let n = 4096;
+        let tau = std::f64::consts::TAU;
+        let p = (0..n).map(|i| {
+            let t = tau * i as f64 / n as f64;
+            (100.0 * t.sin().powi(2) + 4.0 * t.cos().powi(2)).sqrt()
+        }).sum::<f64>() * tau / n as f64;
+        let (pi, h) = (std::f64::consts::PI, 10.0);
+        let (v, s, m) = (20.0 * pi * h, 40.0 * pi + p * h, pi * h + pi * p / 2.0);
+        let expected = v + s + m + 4.0 * pi / 3.0;
+        let got = volume(&model, grown).mass;
+        assert!((got - expected).abs() < 1e-8 * expected, "{got}, not {expected}");
+    }
+
     /// A torus (tube 2 about a circle of radius 4) grown by 2: the grown tube, of radius 4,
     /// just reaches the axis, at the origin, without passing it: the horn torus, one face as
     /// the torus's (not refused as a tube carried across its axis).
