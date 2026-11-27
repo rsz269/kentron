@@ -819,6 +819,21 @@ impl Tracer<'_> {
     /// The other surface's point and derivatives at `(s, t)`; past its bounds, carried on
     /// across its edge in its tangent plane, square to the edge.
     fn other_d1(&self, s: f64, t: f64) -> (Point, Vector, Vector) {
+        self.carried_on(s, t, false)
+    }
+
+    /// [`Self::other_d1`] with, past one of the other surface's bounds, the derivatives of the
+    /// carried-on surface itself: there the point moves along the edge with the parameter
+    /// within its range, and so does the direction carried across the edge (the edge's
+    /// tangent plane turning along it). (For Newton steps onto it, which with the edge's own
+    /// derivatives close in only slowly the farther past it, the steps along a section there
+    /// failing and shortening until they crawl.)
+    fn other_d1_moving(&self, s: f64, t: f64) -> (Point, Vector, Vector) {
+        self.carried_on(s, t, true)
+    }
+
+    /// [`Self::other_d1`], or [`Self::other_d1_moving`] where `moving`.
+    fn carried_on(&self, s: f64, t: f64, moving: bool) -> (Point, Vector, Vector) {
         let (s0, s1, t0, t1) = self.own;
         let clamp = |x: f64, lo: f64, hi: f64, periodic: bool| if periodic { x } else { x.clamp(lo, hi) };
         let (sc, tc) = (clamp(s, s0, s1, self.bounds.u_period.is_some()), clamp(t, t0, t1, self.bounds.v_period.is_some()));
@@ -832,7 +847,27 @@ impl Tracer<'_> {
             if bb > 0.0 { a - b * (a.dot(b) / bb) } else { a }
         };
         let (es, et) = (if ds != 0.0 { across(qs, qt) } else { qs }, if dt != 0.0 { across(qt, qs) } else { qt });
-        (q + es * ds + et * dt, es, et)
+        let point = q + es * ds + et * dt;
+        // (Past a corner, the plane there: its derivatives are exact.)
+        if !moving || (ds != 0.0 && dt != 0.0) {
+            return (point, es, et);
+        }
+        let d2 = self.other.d2(sc, tc);
+        // (How `across(a, b)` changes as `a` and `b` change by `da` and `db`.)
+        let across_moved = |a: Vector, b: Vector, da: Vector, db: Vector| {
+            let bb = b.dot(b);
+            if !(bb > 0.0) {
+                return da;
+            }
+            let k = a.dot(b) / bb;
+            let dk = (da.dot(b) + a.dot(db)) / bb - k * 2.0 * b.dot(db) / bb;
+            da - db * k - b * dk
+        };
+        if dt != 0.0 {
+            (point, qs + across_moved(qt, qs, d2.duv, d2.duu) * dt, et)
+        } else {
+            (point, es, qt + across_moved(qs, qt, d2.duv, d2.dvv) * ds)
+        }
     }
 
     /// Whether `(s, t)` lies past the other surface's own bounds (across a bound that is
@@ -988,7 +1023,7 @@ impl Tracer<'_> {
         let mut last = f64::INFINITY;
         for _ in 0..20 {
             let (p, pu, pv) = self.base.d1(u, v);
-            let (q, qs, qt) = self.other_d1(s, t);
+            let (q, qs, qt) = self.other_d1_moving(s, t);
             let f = p - q;
             let g = (p - from.p).dot(dir) - h;
             let scale = 1e-12 * (1.0 + (p - Point::ORIGIN).length());
@@ -1061,7 +1096,14 @@ impl Tracer<'_> {
                 h *= 0.5;
                 continue;
             };
-            let Some(next_dir) = self.direction(&next).map(|d| if d.dot(dir) < 0.0 { d * -1.0 } else { d }) else {
+            let next_dir = self.direction(&next).map(|d| if d.dot(dir) < 0.0 { d * -1.0 } else { d });
+            // (Where the surfaces meet nearly tangent already at the point stepped from, their
+            // shared direction found there, as along a seam where two faces meet smoothly, the
+            // direction lost to rounding at the next point is no end: the branch goes on the way
+            // it went. Shorter steps would find it lost at one point and found at the next, and
+            // crawl along.)
+            let next_dir = next_dir.or_else(|| (self.sine(&at) < TANGENT && self.direction(&at).is_some()).then_some(dir));
+            let Some(next_dir) = next_dir else {
                 // Tangent there: the branch stops (at the last point found).
                 if h <= smallest {
                     failed(&at);
