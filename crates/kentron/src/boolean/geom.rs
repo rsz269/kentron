@@ -118,6 +118,12 @@ pub(super) fn signed_distance(surface: &Surface, p: Point) -> f64 {
             if beyond.abs() < near.abs() { beyond } else { near }
         }
         Surface::Revolution(_) | Surface::Extrusion(_) => {
+            if let Some(d) = match surface {
+                Surface::Revolution(r) => revolved_circle_distance(r, p),
+                _ => None,
+            } {
+                return d;
+            }
             // Along the normal at the foot point; or, on an extrusion where there is no normal
             // (the foot at an end of its curve where that has no tangent, as font outlines'
             // curves start), the whole way to it: along nothing, the point would seem on the
@@ -134,6 +140,47 @@ pub(super) fn signed_distance(surface: &Surface, p: Point) -> f64 {
         }
         other => unsupported(other),
     }
+}
+
+/// [`signed_distance`] to a surface of revolution of a circle in a plane through its axis,
+/// clear of it (a torus, however its circle runs), in closed form: in the point's meridian
+/// half-plane, its distance from the circle's centre less the radius, signed as the
+/// surface's normal points (out of the tube, or into it, as the circle turns about the
+/// axis). The same as along the normal at the foot that [`RevolutionSurface::parameters`]
+/// finds there, which is that of the circle in the point's own half-plane; `None` (the
+/// foot then sought as there) for other bases and where the point is about as near the
+/// circle mirrored across the axis, whose foot that may prefer.
+///
+/// [`RevolutionSurface::parameters`]: crate::geometry::surface::RevolutionSurface::parameters
+fn revolved_circle_distance(r: &crate::geometry::surface::RevolutionSurface, p: Point) -> Option<f64> {
+    let Curve::Circle(circle) = r.basis() else { return None };
+    let axis = r.axis();
+    let (o, z) = (axis.origin, Vector::from(axis.direction));
+    let f = circle.frame();
+    let normal = Vector::from(f.x()).cross(Vector::from(f.y()));
+    let center = circle.center() - o;
+    let hc = center.dot(z);
+    let radial = center - z * hc;
+    let (rc, radius) = (radial.length(), circle.radius());
+    // (As RevolutionSurface::parameters tells a circle in a meridian plane.)
+    let in_meridian = normal.dot(z).abs() <= 1e-12 && normal.dot(center).abs() <= 1e-12 * (1.0 + center.length());
+    if !(in_meridian && rc > radius && rc > 1e-12) {
+        return None;
+    }
+    let d = p - o;
+    let hp = d.dot(z);
+    let rp = (d - z * hp).length();
+    let (near, mirrored) = ((rp - rc).hypot(hp - hc), (rp + rc).hypot(hp - hc));
+    // (Where the mirrored circle is about as near, within the tie the parameters allow
+    // (twice it, for rounding): the foot found as there.)
+    if (mirrored - radius).abs() - (near - radius).abs() <= 2e-9 * (1.0 + radius) {
+        return None;
+    }
+    // The normal ∂u × ∂v: ∂u, along z × the radial direction, is the circle's plane normal
+    // one way or the other, and that crossed with the circle's tangent points into the tube
+    // for the plane normal itself.
+    let turning = z.cross(radial).dot(normal);
+    Some(if turning > 0.0 { radius - near } else { near - radius })
 }
 
 /// How far the magnitude of [`signed_distance`] to `surface` may stray from a function
@@ -2087,6 +2134,56 @@ mod tests {
         let t = 0.5 * (x + y);
         let d = curve.point(t).distance(p);
         if d < best.1 { (t, d) } else { best }
+    }
+
+    /// The closed form of the signed distance to a surface of revolution of a circle in a
+    /// plane through its axis, clear of it, agrees with the distance along the normal at the
+    /// foot its parameters give, for circles turning either way about axes of either sense,
+    /// fat and thin, at points about them (inside the tube, across the axis, on it).
+    #[test]
+    fn revolved_circle_distance_is_that_along_the_normal_at_the_foot() {
+        use crate::geometry::curve::Circle;
+        use crate::geometry::surface::RevolutionSurface;
+        use crate::math::{Axis, Direction, Frame};
+        let mut seed = 4242u64;
+        let mut next = || {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (seed >> 11) as f64 / (1u64 << 53) as f64
+        };
+        let mut checked = 0;
+        for (axis_direction, z_sign) in [(Direction::new(0.2, -0.3, 1.0), 1.0), (Direction::new(-0.2, 0.3, -1.0), -1.0)] {
+            let axis = Axis::new(Point::new(1.0, 2.0, -0.5), axis_direction);
+            let z = Vector::from(axis.direction);
+            let x = Vector::from(Frame::from_z(axis.origin, axis.direction).x());
+            for (distance, radius) in [(5.0, 1.5), (3.0, 2.9), (1.0, 0.2)] {
+                // The circle's plane holds the axis: its normal across both, either way round.
+                for flip in [false, true] {
+                    let normal = z.cross(x) * if flip { -1.0 } else { 1.0 } * z_sign;
+                    let center = axis.origin + x * distance + z * 0.7;
+                    let circle = Circle::new(Frame::new(center, Direction::from_vector(normal), Direction::from_vector(x)), radius);
+                    let r = RevolutionSurface::new(Curve::Circle(circle), axis);
+                    let surface = Surface::Revolution(r.clone());
+                    for _ in 0..200 {
+                        let p = axis.origin + Vector::new(next() - 0.5, next() - 0.5, next() - 0.5) * (4.0 * (distance + radius));
+                        let Some(closed) = revolved_circle_distance(&r, p) else { continue };
+                        let uv = uv_of(&surface, p);
+                        let (foot, su, sv) = surface.d1(uv[0], uv[1]);
+                        let along = (p - foot).dot(unit_normal(su, sv));
+                        assert!((closed - along).abs() <= 1e-9 * (1.0 + along.abs()), "{closed} against {along} at {p:?}");
+                        checked += 1;
+                    }
+                    // On the axis, and at the circle's centre.
+                    for p in [axis.origin + z * 3.0, center] {
+                        if let Some(closed) = revolved_circle_distance(&r, p) {
+                            let uv = uv_of(&surface, p);
+                            let (foot, su, sv) = surface.d1(uv[0], uv[1]);
+                            assert!((closed - (p - foot).dot(unit_normal(su, sv))).abs() <= 1e-9);
+                        }
+                    }
+                }
+            }
+        }
+        assert!(checked > 2000);
     }
 
     /// Circles and ellipses (round, slender, flat to a sliver) projected onto in closed form
