@@ -466,10 +466,11 @@ impl Patches {
                 }
             };
         }
-        exact!((1, 1), (1, 2), (1, 3), (2, 1), (2, 2), (2, 3), (3, 1), (3, 2), (3, 3), (1, 4), (1, 7));
+        exact!((1, 1), (1, 2), (1, 3), (2, 1), (2, 2), (2, 3), (3, 1), (3, 2), (3, 3), (1, 4), (1, 7), (1, 5), (2, 5), (3, 5), (5, 1), (5, 2), (5, 3));
         match self.u_degree.max(self.v_degree) {
             0..=3 => sized!(4, 4, false),
-            4..=8 => sized!(9, 9, false),
+            4..=5 => sized!(6, 6, false),
+            6..=8 => sized!(9, 9, false),
             _ => sized!(26, 26, false),
         }
         true
@@ -567,9 +568,11 @@ impl Patches {
                 }
             };
         }
-        exact!((1, 1), (1, 2), (1, 3), (2, 1), (2, 2), (2, 3), (3, 1), (3, 2), (3, 3), (1, 4), (1, 7), (1, 8), (3, 4), (4, 3), (4, 4), (3, 8), (6, 6), (8, 6), (6, 8));
+        // (Degree 5 one way: a sweep under a screw, its surfaces fitted along the turn.)
+        exact!((1, 1), (1, 2), (1, 3), (2, 1), (2, 2), (2, 3), (3, 1), (3, 2), (3, 3), (1, 4), (1, 7), (1, 8), (3, 4), (4, 3), (4, 4), (3, 8), (6, 6), (8, 6), (6, 8), (1, 5), (2, 5), (3, 5), (5, 1), (5, 2), (5, 3), (5, 5));
         match self.u_degree.max(self.v_degree) {
-            0..=8 => Some(self.sums::<9, 9, ORDER, false, C>(u, v)),
+            0..=5 => Some(self.sums::<6, 6, ORDER, false, C>(u, v)),
+            6..=8 => Some(self.sums::<9, 9, ORDER, false, C>(u, v)),
             9..=25 => Some(self.sums::<26, 26, ORDER, false, C>(u, v)),
             _ => None,
         }
@@ -693,6 +696,7 @@ impl Segments {
             1 => self.sums::<2, ORDER, true, C>(t),
             2 => self.sums::<3, ORDER, true, C>(t),
             3 => self.sums::<4, ORDER, true, C>(t),
+            5 => self.sums::<6, ORDER, true, C>(t),
             0..=8 => self.sums::<9, ORDER, false, C>(t),
             9..=25 => self.sums::<26, ORDER, false, C>(t),
             _ => return None,
