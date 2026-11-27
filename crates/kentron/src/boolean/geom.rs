@@ -1182,10 +1182,17 @@ fn numeric_ray_hits(surface: &Surface, origin: Point, direction: Vector, bbox: &
     }
     let n = ts.len() - 1;
     let mut hits = Vec::new();
+    // (Bisected until the bracket is a thousandth of the tolerance long in space: nearer, a
+    // hit is no better placed for being on the face or not, and each halving searches for a
+    // point's place on the surface afresh.)
+    let fine = 1e-3 * on_tol() / direction.length();
     for i in 0..n {
         if fs[i] * fs[i + 1] < 0.0 {
             let (mut lo, mut hi, mut flo) = (ts[i], ts[i + 1], fs[i]);
             for _ in 0..80 {
+                if hi - lo <= fine {
+                    break;
+                }
                 let mid = 0.5 * (lo + hi);
                 let fm = f(mid);
                 if (fm < 0.0) == (flo < 0.0) {
