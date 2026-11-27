@@ -76,9 +76,17 @@ pub fn union(model: &mut Model, a: Shape, b: Shape) -> Result<Shape> {
     // gathered too, and any shapes apart: each as it was, placed where it was, as OCCT's
     // fuse keeps what it does not change.)
     let apart = {
-        let boxed = |s: Shape| crate::properties::tight_bounding_box(model, s).enlarged(geom::on_tol());
-        let (ba, bb) = (boxed(a), boxed(b));
-        !ba.is_empty() && !bb.is_empty() && !ba.overlaps(&bb)
+        // (Not where the boxes of their vertices overlap, which the tight boxes hold: those
+        // then need not be found. Widened by half as much, for rounding.)
+        let corners = |s: Shape| BoundingBox::from_points(model.explore(s, crate::topology::NodeKind::Vertex).map(|v| model.point(v))).enlarged(0.5 * geom::on_tol());
+        let (ca, cb) = (corners(a), corners(b));
+        if !ca.is_empty() && !cb.is_empty() && ca.overlaps(&cb) {
+            false
+        } else {
+            let boxed = |s: Shape| crate::properties::tight_bounding_box(model, s).enlarged(geom::on_tol());
+            let (ba, bb) = (boxed(a), boxed(b));
+            !ba.is_empty() && !bb.is_empty() && !ba.overlaps(&bb)
+        }
     };
     // (Other shapes apart, faces as solids: gathered as they are.)
     if apart && (only_solids(model, a).is_none() || only_solids(model, b).is_none()) {
@@ -320,6 +328,18 @@ pub fn intersection(model: &mut Model, a: Shape, b: Shape) -> Result<Shape> {
 /// leave the arithmetic of surfaces' intersections fewer digits than the absolute
 /// tolerances need; the copies' translation, by whole units, rounds nothing.
 fn near_origin(model: &mut Model, a: Shape, b: Shape, operation: fn(&mut Model, Shape, Shape) -> Result<Shape>) -> Result<Option<Shape>> {
+    // (Not where the operands' vertices are already too far apart for their nearest to the
+    // origin to be far from it as the test below asks: the box holds them, so its centre
+    // lies within half its diagonal of each, and that diagonal is at least theirs. Twice
+    // that, for rounding. The box then need not be found.)
+    let vertices: Vec<crate::math::Point> = [a, b].iter().flat_map(|&s| model.explore(s, crate::topology::NodeKind::Vertex)).map(|v| model.point(v)).collect();
+    if !vertices.is_empty() {
+        let corners = BoundingBox::from_points(vertices.iter().copied());
+        let nearest = vertices.iter().map(|p| (*p - crate::math::Point::ORIGIN).length()).fold(f64::INFINITY, f64::min);
+        if (corners.max - corners.min).length() * 99.5 >= 2.0 * nearest {
+            return Ok(None);
+        }
+    }
     let mut bounds = crate::properties::bounding_box(model, a);
     bounds.add_box(&crate::properties::bounding_box(model, b));
     if bounds.is_empty() {
