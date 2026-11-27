@@ -573,6 +573,29 @@ edges are not straight, its strips the general B-splines.
   the screw, the profile's nearest point a curve projection), or the winding check in
   `boolean/classify.rs` made to take a sheet it now loses.
 
+## STEP
+
+### A B-spline face closed but not periodic, its rims crossing the closing
+
+*Found 2026-11-27.*
+
+![A sketch: a rim's pcurve on a surface closed in v should run past the closing, but runs back down the square](known-gaps/closing-seam.svg)
+
+A face on a B-spline surface closed in v (its first and last rows of poles the same) but
+not periodic, bounded by two circles that start away from the closing and so cross it. The
+file gives no pcurves, and projecting a circle onto the surface does not carry v on across
+the closing: the pcurve runs from the vertex down to v = 0 and back up. The face reads
+inside out and its neighbours' edges do not pair.
+
+- **Repro:** NIST's `nist_ctc_02_asme1_ap203.stp` (brep-conformance's `step/read-nist`);
+  faces 63 and 369 as read.
+- **Evidence:** `InvertedFace` on face 63, `NotClosed` on two edges; volume 42,051,797
+  as read.
+- **Needed:** closed surfaces parameterized across their closing while reading (the
+  surface made periodic where its ends join smoothly, or the face split there).
+- **Why left:** it changes how pcurves are fitted and evaluated on every closed B-spline
+  surface, not the STEP reader alone.
+
 ## pykentron
 
 ### Solids from placed shells keep copies of their faces

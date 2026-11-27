@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 348" width="860" height="348" role="img" aria-label="A sketch of the parameter square of a surface closed in v, with a circular rim that crosses the closing: wanted, a pcurve running on past v = 1 round to its start; read, one running back down the square.">
+<style>.card{fill:#fcfcfb;stroke:#e3e2dd}.panel{fill:#f3f2ee}text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans",Helvetica,Arial,sans-serif;font-size:13px;fill:#0b0b0b}.title{font-size:14px;font-weight:600}.note{fill:#52514e}.small{font-size:12px}.body{fill:#8f8e86}.lit{fill:#fff;fill-opacity:.13}.tint{fill-opacity:.6}.wrong{fill:#d03b3b}.first{fill:#2a78d6}.second{fill:#eb6834}.third{fill:#1baf7a}.fourth{fill:#eda100}.sharp,.smooth,.outline,.leader,.rule,.mark,.frame,.glyph,.ink,.thin,.dash,.sketch,.ghost,.one,.two{fill:none;stroke-linecap:round;stroke-linejoin:round}.sharp{stroke:#1d1d1b;stroke-width:1}.smooth{stroke:#1d1d1b;stroke-width:.6;stroke-opacity:.38}.outline{stroke:#1d1d1b;stroke-width:1.7}.leader{stroke:#52514e;stroke-width:.9}.rule{stroke:#e3e2dd}.mark{stroke:#d03b3b;stroke-width:1.8}.frame{stroke:#0b0b0b;stroke-width:1.2}.ink{stroke:#1d1d1b;stroke-width:1.5}.thin{stroke:#52514e;stroke-width:.9}.dash{stroke:#52514e;stroke-width:.9;stroke-dasharray:4 3}.sketch,.one{stroke:#2a78d6;stroke-width:1.6}.two{stroke:#eb6834;stroke-width:1.6}.wash{fill-opacity:.22}.cut{fill:#8f8e86;fill-opacity:.4}.node{fill:#fcfcfb;stroke:#52514e}.group{fill:#e9e8e2;stroke:#52514e}.off{stroke:#d03b3b;stroke-width:1.8}.halo{paint-order:stroke;stroke:#f3f2ee;stroke-opacity:.85;stroke-width:3.5px;stroke-linejoin:round}.ghost{stroke:#8f8e86;stroke-width:1.1;stroke-dasharray:5 4}.dot{fill:#52514e}.bad{fill:#d03b3b}.good{fill:#0c8f0c}.glyph{stroke:#fff;stroke-width:1.7}@media (prefers-color-scheme:dark){.card{fill:#1a1a19;stroke:#383835}.panel{fill:#232321}text{fill:#f0efec}.note{fill:#c3c2b7}.body{fill:#4b4a45}.lit{fill-opacity:.07}.tint{fill-opacity:.55}.wrong{fill:#e04a4a}.first{fill:#3987e5}.second{fill:#d95926}.third{fill:#199e70}.fourth{fill:#c98500}.sharp,.smooth,.outline,.ink{stroke:#f0efec}.leader,.thin,.dash{stroke:#c3c2b7}.rule{stroke:#383835}.mark{stroke:#ff6b6b}.frame{stroke:#f0efec}.sketch,.one{stroke:#3987e5}.two{stroke:#d95926}.halo{stroke:#232321}.cut{fill:#4b4a45;fill-opacity:.9}.node{fill:#1a1a19;stroke:#c3c2b7}.group{fill:#2e2e2b;stroke:#c3c2b7}.off{stroke:#ff6b6b}.ghost{stroke:#77766f}.dot{fill:#c3c2b7}.bad{fill:#e04a4a}.good{fill:#22a722}.glyph{stroke:#1a1a19}}</style>
+<rect class="card" x=".5" y=".5" width="859" height="347" rx="10"/>
+<clipPath id="c1"><rect x="18" y="58" width="405" height="250" rx="6"/></clipPath>
+<rect class="panel" x="18" y="58" width="405" height="250" rx="6"/>
+<g clip-path="url(#c1)"><g transform="translate(18 58)">
+<path class="thin" d="M70 210L365 210L365 30L70 30Z"/>
+<path class="one" d="M264.7 120L264.7 30"/>
+<path class="one" d="M264.7 210L264.7 120"/>
+<circle class="dot" cx="264.7" cy="120" r="3.4"/>
+</g></g>
+<text x="20" y="31" class="title">wanted: once round the closing</text>
+<text x="20" y="49" class="note small">up to v = 1, on from v = 0</text>
+<g transform="translate(27 323.5)"><circle class="good" r="7"/><path class="glyph" d="M-3.2 .2L-1 2.5L3.2 -2.4"/></g>
+<text x="40" y="328" class="small">the rim runs once round: the face's side is told</text>
+<text x="82" y="92" class="note small" text-anchor="end">v = 1</text>
+<text x="82" y="272" class="note small" text-anchor="end">v = 0</text>
+<text x="235.5" y="288" class="note small" text-anchor="middle">u</text>
+<path class="leader" d="M227.7 152.4L282.7 178"/><circle class="dot" cx="282.7" cy="178" r="2.2"/>
+<text x="222.7" y="156.4" class="note small halo" text-anchor="end">the rim's</text>
+<text x="222.7" y="172.4" class="note small halo" text-anchor="end">vertex</text>
+<clipPath id="c2"><rect x="437" y="58" width="405" height="250" rx="6"/></clipPath>
+<rect class="panel" x="437" y="58" width="405" height="250" rx="6"/>
+<g clip-path="url(#c2)"><g transform="translate(437 58)">
+<path class="thin" d="M70 210L365 210L365 30L70 30Z"/>
+<path class="mark" d="M264.7 120L272.7 208.2"/>
+<path class="mark" d="M272.7 208.2L264.7 120"/>
+<circle class="dot" cx="264.7" cy="120" r="3.4"/>
+</g></g>
+<text x="439" y="31" class="title">read: back down the square</text>
+<text x="439" y="49" class="note small">the projection jumps at the closing</text>
+<g transform="translate(446 323.5)"><circle class="bad" r="7"/><path class="glyph" d="M-2.7 -2.7L2.7 2.7M2.7 -2.7L-2.7 2.7"/></g>
+<text x="459" y="328" class="small">the rim goes there and back, enclosing nothing: the face turns out</text>
+<text x="501" y="92" class="note small" text-anchor="end">v = 1</text>
+<text x="501" y="272" class="note small" text-anchor="end">v = 0</text>
+<text x="654.5" y="288" class="note small" text-anchor="middle">u</text>
+<path class="leader" d="M646.7 152.4L701.7 178"/><circle class="dot" cx="701.7" cy="178" r="2.2"/>
+<text x="641.7" y="156.4" class="note small halo" text-anchor="end">the rim's</text>
+<text x="641.7" y="172.4" class="note small halo" text-anchor="end">vertex</text>
+</svg>

@@ -1393,6 +1393,34 @@ def figure_frames(rebuild):
     return figure
 
 
+def figure_closing_seam(rebuild):
+    """A sketch, not a model: a rim's pcurve on a face of a surface closed in v."""
+    width, height = (WIDTH - 2 * MARGIN - GAP) / 2, 250
+    figure = Figure(WIDTH, TOP + height + 40, "A sketch of the parameter square of a surface closed in v, with a circular rim that crosses the closing: wanted, a pcurve running on past v = 1 round to its start; read, one running back down the square.")
+    for column, title, note, verdict in (
+            (0, "wanted: once round the closing", "up to v = 1, on from v = 0", ("good", "the rim runs once round: the face's side is told")),
+            (1, "read: back down the square", "the projection jumps at the closing", ("bad", "the rim goes there and back, enclosing nothing: the face turns out"))):
+        x, y = MARGIN + column * (width + GAP), TOP
+        left, right, low, high = 70, width - 40, height - 40, 30
+        u = left + 0.66 * (right - left)
+        at_v = lambda v: low + (high - low) * v
+        drawing = '<path class="thin" d="%s"/>\n' % path_data([(left, low), (right, low), (right, high), (left, high)], True)
+        cls = "one" if column == 0 else "mark"
+        if column == 0:
+            drawing += '<path class="%s" d="%s"/>\n' % (cls, path_data([(u, at_v(0.5)), (u, at_v(1.0))]))
+            drawing += '<path class="%s" d="%s"/>\n' % (cls, path_data([(u, at_v(0.0)), (u, at_v(0.5))]))
+        else:
+            drawing += '<path class="%s" d="%s"/>\n' % (cls, path_data([(u, at_v(0.5)), (u + 8, at_v(0.01))]))
+            drawing += '<path class="%s" d="%s"/>\n' % (cls, path_data([(u + 8, at_v(0.01)), (u, at_v(0.5))]))
+        drawing += '<circle class="dot" cx="%s" cy="%s" r="3.4"/>\n' % (number(u), number(at_v(0.5)))
+        figure.panel(x, y, width, height, drawing, title, note, verdict)
+        figure.text(x + left - 6, y + high + 4, "v = 1", "note small", "end")
+        figure.text(x + left - 6, y + low + 4, "v = 0", "note small", "end")
+        figure.text(x + (left + right) / 2, y + low + 20, "u", "note small", "middle")
+        figure.callout((x + u, y + at_v(0.5)), "the rim's\nvertex", (x + u - 60, y + at_v(0.62)), "end")
+    return figure
+
+
 FIGURES = {name[7:]: f for name, f in list(globals().items()) if name.startswith("figure_")}
 
 
