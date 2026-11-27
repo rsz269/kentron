@@ -99,7 +99,7 @@ fn by_turns(model: &mut Model, solid: Shape, steady: &Steady) -> Result<Shape> {
 /// each union's work is where its two operands meet, and what lies elsewhere in them comes
 /// from the unions before (a copy's faces against its neighbours' met once, then moved).
 fn doubled(model: &mut Model, piece: Shape, n: usize, at: &dyn Fn(usize) -> Transform) -> Result<Shape> {
-    let unite = |model: &mut Model, a: Shape, b: Shape| crate::boolean::union_all(model, &[a, b]);
+    let unite = |model: &mut Model, a: Shape, b: Shape| crate::boolean::united_closed(model, a, b);
     // The unions of 1, 2, 4, ... copies from the first.
     let mut powers = vec![piece];
     while 2usize << (powers.len() - 1) <= n {

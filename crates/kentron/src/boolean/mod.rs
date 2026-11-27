@@ -193,7 +193,7 @@ fn united_in_place(model: &mut Model, shapes: &[Shape]) -> Result<Shape> {
 
 /// [`union`] of `a` and `b` for [`union_all`]: an error where it leaves a shell open that
 /// theirs were not.
-fn united_closed(model: &mut Model, a: Shape, b: Shape) -> Result<Shape> {
+pub(crate) fn united_closed(model: &mut Model, a: Shape, b: Shape) -> Result<Shape> {
     let united = union(model, a, b)?;
     if !closed_shells(model, united) && closed_shells(model, a) && closed_shells(model, b) {
         return Err(Error::Failed("a union of closed shells left a shell open".into()));
