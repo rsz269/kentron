@@ -630,7 +630,7 @@ impl<'a> Writer<'a> {
         for (i, wire) in model.children_local(local).collect::<Vec<_>>().into_iter().enumerate() {
             // The edges in the order they connect (as STEP's loops have them).
             let mut oriented = Vec::new();
-            for e in model.ordered_edges(Shape { placement: Transform::IDENTITY, ..wire }) {
+            for e in loop_edges(model, Shape { placement: Transform::IDENTITY, ..wire }) {
                 // Degenerate edges (at poles) are left out, as OCCT does: readers rebuild
                 // them where the loop's curves on the surface end apart.
                 if model.edge_curve(Shape { orientation: Orientation::Forward, ..e }).is_none() {
@@ -1012,6 +1012,33 @@ fn within_period(b: &crate::geometry::curve::BSplineCurve, first: f64, last: f64
     b.is_periodic() && first.min(last) >= lo - slack && first.max(last) <= hi + slack
 }
 
+
+/// A face's loop's edges in the order they connect: the wire's own where it already runs
+/// round (where several edges go on from one vertex, a torus's seams, its four corners one
+/// vertex, only it tells which comes next on the face), else as their vertices chain them.
+fn loop_edges(model: &Model, wire: Shape) -> Vec<Shape> {
+    let mut own: Vec<Shape> = model
+        .children_local(wire)
+        .filter_map(|c| {
+            let coedge = model.get(crate::topology::CoEdgeId::try_from(c.node).ok()?)?;
+            Some(Shape { node: coedge.edge.into(), orientation: coedge.orientation.compose(wire.orientation), placement: wire.placement })
+        })
+        .collect();
+    if wire.orientation == Orientation::Reversed {
+        own.reverse();
+    }
+    let ends: Vec<_> = own
+        .iter()
+        .map(|&e| {
+            let (a, b) = model.edge_vertices(Shape { orientation: Orientation::Forward, ..e });
+            if e.orientation == Orientation::Reversed { (b.node, a.node) } else { (a.node, b.node) }
+        })
+        .collect();
+    if (0..ends.len()).all(|i| ends[i].1 == ends[(i + 1) % ends.len()].0) {
+        return own;
+    }
+    model.ordered_edges(wire)
+}
 
 #[cfg(test)]
 mod tests {

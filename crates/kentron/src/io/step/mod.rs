@@ -2483,4 +2483,35 @@ mod tests {
             assert!((first - a).abs() < 1e-12 && (last - b).abs() < 1e-12, "{curve:?}: {first} {last}");
         }
     }
+
+    /// A cone bounded by its rim and a vertex loop at its apex (a drill's point, as NIST's
+    /// files write it): the degenerate edge made at the apex.
+    #[test]
+    fn a_cone_to_a_vertex_loop_at_its_apex() {
+        let mut model = Model::new();
+        let solid = read(&mut model, &mut &include_bytes!("tests/drill_point.step")[..]).unwrap();
+        assert!(crate::validity::check(&model, solid).is_valid());
+        let volume = crate::properties::volume(&model, solid).mass;
+        assert!((volume - std::f64::consts::PI * 9.0).abs() < 1e-9, "{volume}");
+    }
+
+    /// A ball with a box taken against its centre read back as written: its face a half
+    /// sphere between meridians, the first read, so that only its face sense tells which.
+    #[test]
+    fn a_half_sphere_between_meridians_read_back_by_its_face_sense() {
+        let mut model = Model::new();
+        let z = Direction::new(0.5723109145666125, -0.7448592985286058, 0.34299393939747835);
+        let x = Direction::new(0.11856197452463091, -0.3387120944205999, -0.9333901516997227);
+        let at = |x_: f64, y: f64, z_: f64| Frame::new(Point::new(x_, y, z_), z, x);
+        let ball = crate::primitives::Sphere::new(1.0073684589419716).with_frame(at(-1.0176027980783209, 4.398436798149458, 1.2855252566465447)).build(&mut model).unwrap();
+        let block = crate::primitives::Cuboid::new(4.014736917883943, 2.0073684589419716, 4.014736917883943).with_frame(at(-2.4044392447781977, 6.57356383536751, 2.470667991500878)).build(&mut model).unwrap();
+        let joined = crate::boolean::union(&mut model, ball, block).unwrap();
+        let mut out = Vec::new();
+        write(&model, joined, "joined", None, &mut out).unwrap();
+        let mut again = Model::new();
+        let back = read(&mut again, &mut &out[..]).unwrap();
+        assert!(crate::validity::check(&again, back).is_valid());
+        let (a, b) = (crate::properties::volume(&model, joined).mass, crate::properties::volume(&again, back).mass);
+        assert!((a - b).abs() < 1e-9 * a, "{a} {b}");
+    }
 }

@@ -145,12 +145,34 @@ pub(crate) fn finish_face(model: &mut Model, gaps: &mut Gaps, face: Shape, surfa
             use crate::math::Transformable2;
             other[k].1[i].2 = other[k].1[i].2.transformed(&crate::math::Transform2::translation(shift));
         }
-        if agreement(model, gaps, &other, &surface, same_sense) > agreement(model, gaps, &sided, &surface, same_sense) {
+        let (theirs, ours) = (agreement(model, gaps, &other, &surface, same_sense), agreement(model, gaps, &sided, &surface, same_sense));
+        if theirs > ours {
             sided = other;
+        } else if theirs == 0 && ours == 0 {
+            // (No face read yet across them: the file's face sense, as above, one use moved:
+            // a sphere's meridian from pole to pole, which may lie either side without
+            // parting from its neighbours.)
+            for &(k, i, shift) in &ties {
+                use crate::math::Transformable2;
+                let c = &sided[k].1[i];
+                let pole = |t: f64| (c.2.point(t).y.abs() - std::f64::consts::FRAC_PI_2).abs() <= 1e-7;
+                if !matches!(surface, Surface::Sphere(_)) || !pole(c.3) || !pole(c.4) {
+                    continue;
+                }
+                let wrong = |c: &[Coedge]| (uv_area(c) > 0.0) != same_sense;
+                if wrong(&sided[k].1) {
+                    let mut moved = sided[k].1.clone();
+                    moved[i].2 = moved[i].2.transformed(&crate::math::Transform2::translation(shift));
+                    if !wrong(&moved) {
+                        sided[k].1 = moved;
+                    }
+                }
+            }
         }
     }
     let mut loops = Vec::with_capacity(sided.len());
-    for (outer, coedges) in sided {
+    for (outer, mut coedges) in sided {
+        seam_sides_by_sense(&mut coedges, same_sense);
         loops.push((outer, close_at_poles(model, coedges, &surface)?));
     }
     // Outer boundaries run counter-clockwise in the surface's parameters.
@@ -198,6 +220,27 @@ pub(crate) fn finish_face(model: &mut Model, gaps: &mut Gaps, face: Shape, surfa
     Ok(if same_sense { face } else { face.reversed() })
 }
 
+
+/// A loop of seams alone, each used both ways (a whole sphere's meridian, a hole elsewhere
+/// in the face): nothing in it tells which use lies on which side of the period, and the
+/// file's face sense does: counter-clockwise in the surface's parameters on a face of the
+/// surface's sense, clockwise on one against it (turned afterwards, with the face's other
+/// loops). Placed the other way round, the uses' pcurves exchanged.
+fn seam_sides_by_sense(coedges: &mut [Coedge], same_sense: bool) {
+    let n = coedges.len();
+    let other = |i: usize| (0..n).find(|&j| j != i && coedges[j].0 == coedges[i].0 && coedges[j].1 != coedges[i].1);
+    let Some(pairs) = (0..n).map(other).collect::<Option<Vec<usize>>>() else { return };
+    let area = uv_area(coedges);
+    if n == 0 || area == 0.0 || (area > 0.0) == same_sense {
+        return;
+    }
+    for (i, &j) in pairs.iter().enumerate() {
+        if i < j {
+            let swapped = coedges[j].2.clone();
+            coedges[j].2 = std::mem::replace(&mut coedges[i].2, swapped);
+        }
+    }
+}
 
 /// On a periodic surface, the pcurves along an iso-line of the period's parameter (a
 /// sphere's meridian) as near their neighbours a period away (across a pole): with the
@@ -1016,19 +1059,33 @@ fn band_area(coedges: &[Coedge], axis: usize) -> f64 {
 fn add_missing_seam(model: &mut Model, gaps: &mut Gaps, loops: &mut Vec<(bool, Vec<Coedge>)>, surface: &Surface, axis: usize) -> Result<Option<usize>> {
     let Some(period) = (if axis == 0 { surface.u_period() } else { surface.v_period() }) else { return Ok(None) };
     let mut open: Vec<usize> = (0..loops.len()).filter(|&i| component(loop_shift(&loops[i].1), axis).abs() > 0.5 * period).collect();
-    // One loop round a sphere's period (a cap with its pole inside): as FixMissingSeam, the
-    // second loop made, a degenerate edge at the pole the loop's way round faces (north for
-    // a loop running u up), running the period back; the two then joined as a band's are.
-    if let ([i], Surface::Sphere(sphere), 0) = (&open[..], surface, axis) {
+    // One loop round a sphere's period (a cap with its pole inside) or a cone's (a drill's
+    // point, its apex inside): the second loop made, a degenerate edge at the pole or apex,
+    // running the period back; the two then joined as a band's are. On a sphere the pole the
+    // loop's way round faces (north for a loop running u up); a cone's one apex only if it
+    // lies on that side of the loop.
+    if let ([i], 0) = (&open[..], axis) {
         let sign = component(loop_shift(&loops[*i].1), 0).signum();
         let start = coedge_ends(&loops[*i].1[0]).0;
-        let after = start.x + sign * period;
-        let v = sign * std::f64::consts::FRAC_PI_2;
-        let vertex = model.add_vertex(sphere.point(after, v), crate::tolerance::LINEAR);
-        let edge = model.add_edge(vertex, vertex, crate::tolerance::LINEAR)?;
-        let pcurve = Curve2::BSpline(BSplineCurve2::new(vec![Point2::new(after, v), Point2::new(after - sign * period, v)], vec![0.0, 1.0], vec![2, 2], 1));
-        loops.push((false, vec![(edge, true, pcurve, 0.0, 1.0)]));
-        open.push(loops.len() - 1);
+        let singular = match surface {
+            Surface::Sphere(sphere) => {
+                let v = sign * std::f64::consts::FRAC_PI_2;
+                Some((v, sphere.point(start.x, v)))
+            }
+            Surface::Cone(cone) => {
+                let v = -cone.radius() / cone.semi_angle().sin();
+                (sign * (v - start.y) > 0.0).then(|| (v, surface.point(start.x, v)))
+            }
+            _ => None,
+        };
+        if let Some((v, point)) = singular {
+            let after = start.x + sign * period;
+            let vertex = model.add_vertex(point, crate::tolerance::LINEAR);
+            let edge = model.add_edge(vertex, vertex, crate::tolerance::LINEAR)?;
+            let pcurve = Curve2::BSpline(BSplineCurve2::new(vec![Point2::new(after, v), Point2::new(after - sign * period, v)], vec![0.0, 1.0], vec![2, 2], 1));
+            loops.push((false, vec![(edge, true, pcurve, 0.0, 1.0)]));
+            open.push(loops.len() - 1);
+        }
     }
     let [i, j] = open[..] else { return Ok(None) };
     let (sa, sb) = (loop_shift(&loops[i].1), loop_shift(&loops[j].1));
