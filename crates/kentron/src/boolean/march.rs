@@ -612,14 +612,16 @@ fn unwrapped(points: impl Iterator<Item = (f64, f64)>, range: Range) -> Vec<(f64
 /// to that one's.)
 struct Filed {
     reach: f64,
-    cells: crate::hashing::FastMap<(i64, i64, i64), Vec<(Point, Point)>>,
+    /// The segments filed, in order, and those in each cell (their indices).
+    segments: Vec<(Point, Point)>,
+    cells: crate::hashing::FastMap<(i64, i64, i64), Vec<u32>>,
     /// How many of the branches and of the touching ones are filed.
     filed: (usize, usize),
 }
 
 impl Filed {
     fn new(reach: f64) -> Filed {
-        Filed { reach, cells: Default::default(), filed: (0, 0) }
+        Filed { reach, segments: Vec::new(), cells: Default::default(), filed: (0, 0) }
     }
 
     fn cell(&self, x: f64) -> i64 {
@@ -628,21 +630,33 @@ impl Filed {
 
     /// Files the branches traced since last time.
     fn file(&mut self, chains: &[(Vec<Both>, bool)], touching: &[(Vec<Both>, bool)]) {
-        let new: Vec<(Vec<Both>, bool)> = chains[self.filed.0..].iter().chain(&touching[self.filed.1..]).cloned().collect();
+        let (chains_filed, touching_filed) = self.filed;
         self.filed = (chains.len(), touching.len());
-        for (points, closed) in new {
+        // (A segment's cells, gathered in one buffer from segment to segment.)
+        let mut cells: Vec<(i64, i64, i64)> = Vec::new();
+        for (points, closed) in chains[chains_filed..].iter().chain(&touching[touching_filed..]) {
             let n = points.len();
-            let segments: Vec<(Point, Point)> = match n {
-                0 => Vec::new(),
-                1 => vec![(points[0].p, points[0].p)],
-                _ => (0..if closed { n } else { n - 1 }).map(|i| (points[i].p, points[(i + 1) % n].p)).collect(),
+            let segments = match n {
+                0 => 0,
+                1 => 1,
+                _ if *closed => n,
+                _ => n - 1,
             };
-            for (a, b) in segments {
+            for i in 0..segments {
+                let (a, b) = (points[i].p, points[(i + 1) % n].p);
                 let steps = (a.distance(b) / self.reach).ceil().max(1.0) as usize;
-                let mut cells: Vec<(i64, i64, i64)> = Vec::new();
+                // (The cells round each point along it: round each cell once where the next
+                // points lie in the same cell, their neighbours the same.)
+                cells.clear();
+                let (mut last, mut centres) = (None, 0);
                 for step in 0..=steps {
                     let q = a + (b - a) * (step as f64 / steps as f64);
-                    let (i, j, k) = (self.cell(q.x), self.cell(q.y), self.cell(q.z));
+                    let centre = (self.cell(q.x), self.cell(q.y), self.cell(q.z));
+                    if last == Some(centre) {
+                        continue;
+                    }
+                    (last, centres) = (Some(centre), centres + 1);
+                    let (i, j, k) = centre;
                     for di in -1..=1 {
                         for dj in -1..=1 {
                             for dk in -1..=1 {
@@ -651,10 +665,15 @@ impl Filed {
                         }
                     }
                 }
-                cells.sort_unstable();
-                cells.dedup();
-                for cell in cells {
-                    self.cells.entry(cell).or_default().push((a, b));
+                // (Round one cell only, they are apart already.)
+                if centres > 1 {
+                    cells.sort_unstable();
+                    cells.dedup();
+                }
+                let index = self.segments.len() as u32;
+                self.segments.push((a, b));
+                for &cell in &cells {
+                    self.cells.entry(cell).or_default().push(index);
                 }
             }
         }
@@ -663,7 +682,8 @@ impl Filed {
     /// Whether `p` lies within the reach of a filed segment.
     fn near(&self, p: Point) -> bool {
         let Some(segments) = self.cells.get(&(self.cell(p.x), self.cell(p.y), self.cell(p.z))) else { return false };
-        segments.iter().any(|&(a, b)| {
+        segments.iter().any(|&i| {
+            let (a, b) = self.segments[i as usize];
             let d = b - a;
             let len2 = d.dot(d);
             let s = if len2 > 0.0 { ((p - a).dot(d) / len2).clamp(0.0, 1.0) } else { 0.0 };
