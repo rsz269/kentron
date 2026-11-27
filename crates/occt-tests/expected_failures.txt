@@ -297,7 +297,6 @@ tests/bugs/modalg_4/bug6334
 tests/bugs/modalg_4/bug745_11
 tests/bugs/modalg_4/bug745_5
 tests/bugs/modalg_4/bug8842_1
-tests/bugs/modalg_4/bug8842_10
 tests/bugs/modalg_4/bug8842_13
 tests/bugs/modalg_4/bug8842_14
 tests/bugs/modalg_4/bug8842_15

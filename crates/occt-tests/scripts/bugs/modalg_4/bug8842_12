@@ -32,7 +32,8 @@ if [catch { myoffset result cyl1 -5 1 } catch_result] {
   puts "${BugNumber}: Faulty (1)"
 } else {
 
-checkprops result -s 57019.9 
+# kentron deviation (draw_deviations.json): kentron's sewing turns a closed shell to face out of the solid it bounds; OCCT's keeps the first face's orientation, and OCC8842_cylinder_CATIA.igs sews into a cylinder (radius 50, length 100, two half-cylinders and two discs) facing in, so OCCT's +5 shrinks it and -5 grows it. Expected values for the outward shell, in closed form: grown by 5 with arcs 2π·55·100 + 2π·50² + 2·2π·5·(50·π/2 + 5) = 55514.4 (the side, the discs moved out, the rims' quarter tori); grown by 5 with intersections 2π·55·110 + 2π·55² = 57019.9; shrunk by 5 either way 2π·45·90 + 2π·45² = 38170.4.
+checkprops result -s 38170.4 
 checkshape result
 checknbshapes result -vertex 4 -edge 6 -wire 4 -face 4 -shell 1 -solid 0 -compsolid 0 -compound 0 -shape 19
 }
