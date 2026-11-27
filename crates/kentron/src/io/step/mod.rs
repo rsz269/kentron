@@ -802,6 +802,15 @@ impl<'a> Reader<'a> {
         let edge = self.model.add_edge(start, end, crate::tolerance::LINEAR)?;
         self.model.set_edge_curve(edge.into(), curve.clone(), crate::tolerance::LINEAR)?;
         self.model.set_edge_range(edge.into(), first, last)?;
+        // (A vertex off its curve's end by no more than the file's uncertainty: its
+        // tolerance covering the gap.)
+        for (v, t) in [(start, first), (end, last)] {
+            use crate::geometry::ParametricCurve;
+            let gap = self.model.point(Shape::from(v)).distance(curve.point(t));
+            if gap > self.model.tolerance(Shape::from(v)) && gap <= self.precision {
+                self.model.set_vertex_tolerance(v, 1.000_000_1 * gap)?;
+            }
+        }
         let made = EdgeMade { id: edge, flipped, curve, first, last, scale, pcurves };
         self.edges.insert(id, made.clone());
         self.edge_instances.insert(edge.into(), id);
@@ -937,6 +946,13 @@ impl<'a> Reader<'a> {
         let edge = self.model.add_edge(start, end, crate::tolerance::LINEAR)?;
         self.model.set_edge_curve(edge.into(), curve.clone(), crate::tolerance::LINEAR)?;
         self.model.set_edge_range(edge.into(), first, last)?;
+        // (Segments sharing a vertex a little apart: its tolerance covering the gap.)
+        for (v, p) in [(start, ps), (end, pe)] {
+            let gap = self.model.point(Shape::from(v)).distance(p);
+            if gap > self.model.tolerance(Shape::from(v)) {
+                self.model.set_vertex_tolerance(v, 1.000_000_1 * gap)?;
+            }
+        }
         let made = EdgeMade { id: edge, flipped: false, curve, first, last, scale, pcurves };
         self.edges.insert(id, made.clone());
         Ok(made)
@@ -1131,6 +1147,25 @@ impl<'a> Reader<'a> {
                 m if m == at.len() && m > 0 => Some(d),
                 _ => None,
             });
+        // (The file's normals say which way its faces face: triangles wound against most of
+        // theirs are turned over.)
+        let mut triangles = triangles;
+        if let Some(normals) = &normals {
+            let against = triangles
+                .iter()
+                .filter_map(|t| {
+                    let [a, b, c] = t.map(|i| points[at[i as usize]]);
+                    let mean = t.iter().fold(Vector::ZERO, |sum, &i| sum + Vector::from(normals[i as usize]));
+                    let facing = (b - a).cross(c - a).dot(mean);
+                    (facing != 0.0).then_some(facing < 0.0)
+                })
+                .fold(0i64, |n, against| n + if against { 1 } else { -1 });
+            if against > 0 {
+                for t in &mut triangles {
+                    t.swap(1, 2);
+                }
+            }
+        }
         let link = if linked { p[4].as_reference() } else { None };
         Ok(Some(Triangulation { list, nodes: at.iter().map(|&i| points[i]).collect(), at, triangles, normals, link }))
     }
@@ -2513,5 +2548,49 @@ mod tests {
         assert!(crate::validity::check(&again, back).is_valid());
         let (a, b) = (crate::properties::volume(&model, joined).mass, crate::properties::volume(&again, back).mass);
         assert!((a - b).abs() < 1e-9 * a, "{a} {b}");
+    }
+
+    /// A plate's face naming its hole the outer boundary, as NIST's files do: read by what
+    /// each loop encloses, not turned inside out.
+    #[test]
+    fn a_hole_named_the_outer_boundary() {
+        let mut model = Model::new();
+        let plate = crate::primitives::Cuboid::new(10.0, 8.0, 2.0).build(&mut model).unwrap();
+        let drill = crate::primitives::Cylinder::new(1.0, 4.0).with_frame(Frame::new(Point::new(5.0, 4.0, -1.0), Direction::Z, Direction::X)).build(&mut model).unwrap();
+        let drilled = crate::boolean::difference(&mut model, plate, drill).unwrap();
+        let mut out = Vec::new();
+        write(&model, drilled, "drilled", None, &mut out).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        let swapped = text.replace("FACE_OUTER_BOUND(", "FACE_WAS_OUTER(").replace("FACE_BOUND(", "FACE_OUTER_BOUND(").replace("FACE_WAS_OUTER(", "FACE_BOUND(");
+        assert_ne!(text, swapped);
+        let mut again = Model::new();
+        let back = read(&mut again, &mut swapped.as_bytes()).unwrap();
+        assert!(crate::validity::check(&again, back).is_valid());
+        let volume = crate::properties::volume(&again, back).mass;
+        assert!((volume - (160.0 - 2.0 * std::f64::consts::PI)).abs() < 1e-9, "{volume}");
+    }
+
+    /// Triangles wound against the file's normals, as NIST's tessellated file has them:
+    /// turned to face as the normals do.
+    #[test]
+    fn triangles_wound_against_their_normals() {
+        let faces: Vec<String> = BOX_SIDES
+            .iter()
+            .enumerate()
+            .map(|(k, side)| {
+                // (Each side's outward normal, and its triangles the other way round.)
+                let normal = ["(0.,0.,-1.)", "(0.,0.,1.)", "(0.,-1.,0.)", "(0.,1.,0.)", "(-1.,0.,0.)", "(1.,0.,0.)"][k];
+                let [a, b, c, d] = *side;
+                format!("TRIANGULATED_FACE('',#20,8,({normal}),$,(),(({a},{c},{b}),({a},{d},{c})))")
+            })
+            .collect();
+        let mut items = vec![box_corners()];
+        items.extend(faces);
+        items.push("TESSELLATED_SOLID('',(#21,#22,#23,#24,#25,#26),$)".into());
+        let mut model = Model::new();
+        let solid = read(&mut model, &mut tessellated_file(&items).as_bytes()).unwrap();
+        assert!(crate::validity::check(&model, solid).is_valid());
+        let volume = crate::properties::volume(&model, solid).mass;
+        assert!((volume - 24.0).abs() < 1e-9, "{volume}");
     }
 }

@@ -175,6 +175,7 @@ pub(crate) fn finish_face(model: &mut Model, gaps: &mut Gaps, face: Shape, surfa
         seam_sides_by_sense(&mut coedges, same_sense);
         loops.push((outer, close_at_poles(model, coedges, &surface)?));
     }
+    band_side_by_sense(&mut loops, &surface, same_sense);
     // Outer boundaries run counter-clockwise in the surface's parameters.
     let (outer, open, clockwise) = orientation(&loops, &surface, same_sense);
     if clockwise {
@@ -220,6 +221,32 @@ pub(crate) fn finish_face(model: &mut Model, gaps: &mut Gaps, face: Shape, surfa
     Ok(if same_sense { face } else { face.reversed() })
 }
 
+
+/// A band between two loops going round one period of a surface periodic both ways (a
+/// torus's face between two circles): either side of the one circle may reach the other, and
+/// the loops' ways round with the file's face sense say which. The second loop moved a period
+/// across where the band between them as placed is the other one.
+fn band_side_by_sense(loops: &mut [(bool, Vec<Coedge>)], surface: &Surface, same_sense: bool) {
+    let Some(axis) = round_period(loops, surface) else { return };
+    let across = if axis == 0 { surface.v_period() } else { surface.u_period() };
+    let (Some(period), 2, true) = (across, loops.len(), paired(loops, surface, axis)) else { return };
+    let area = |loops: &[(bool, Vec<Coedge>)]| loops.iter().map(|(_, c)| band_area(c, axis)).sum::<f64>();
+    if (area(loops) > 0.0) == same_sense {
+        return;
+    }
+    for shift in [period, -period] {
+        use crate::math::Transformable2;
+        let t = crate::math::Transform2::translation(if axis == 0 { crate::math::Vector2::new(0.0, shift) } else { crate::math::Vector2::new(shift, 0.0) });
+        let mut moved = loops.to_vec();
+        for c in &mut moved[1].1 {
+            c.2 = c.2.transformed(&t);
+        }
+        if (area(&moved) > 0.0) == same_sense {
+            loops[1] = moved.swap_remove(1);
+            return;
+        }
+    }
+}
 
 /// A loop of seams alone, each used both ways (a whole sphere's meridian, a hole elsewhere
 /// in the face): nothing in it tells which use lies on which side of the period, and the
@@ -288,7 +315,14 @@ fn period_ties(coedges: &[Coedge], surface: &Surface) -> Vec<(usize, crate::math
 fn orientation(loops: &[(bool, Vec<Coedge>)], surface: &Surface, same_sense: bool) -> (Option<usize>, Option<usize>, bool) {
     let areas: Vec<f64> = loops.iter().map(|(_, c)| uv_area(c)).collect();
     let open = round_period(loops, surface);
-    let outer = loops.iter().position(|(o, _)| *o).or_else(|| (0..areas.len()).max_by(|&i, &j| areas[i].abs().total_cmp(&areas[j].abs())));
+    let largest = || (0..areas.len()).max_by(|&i, &j| areas[i].abs().total_cmp(&areas[j].abs()));
+    // (On a plane the outer boundary encloses the most, whatever the file calls it: NIST's
+    // files name a hole the outer one.)
+    let named = loops.iter().position(|(o, _)| *o);
+    let outer = match surface {
+        Surface::Plane(_) => largest(),
+        _ => named.or_else(largest),
+    };
     let clockwise = outer.is_some_and(|i| {
         let scale = areas.iter().map(|a| a.abs()).fold(0.0, f64::max);
         match open {
