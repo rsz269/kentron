@@ -211,11 +211,12 @@ fn vertex_to_faces(model: &Model, vertex: Shape, faces: Shape) -> Option<(f64, P
     if vertex.kind() != NodeKind::Vertex {
         return None;
     }
-    // (Faces only, under shells and compounds.)
+    // (Faces only, under shells, solids and compounds: a point inside a solid has been
+    // told apart already.)
     fn faces_only(model: &Model, s: Shape) -> bool {
         match s.kind() {
             NodeKind::Face => true,
-            NodeKind::Shell | NodeKind::Compound => model.children(s).all(|c| faces_only(model, c)),
+            NodeKind::Shell | NodeKind::Solid | NodeKind::Compound => model.children(s).all(|c| faces_only(model, c)),
             _ => false,
         }
     }
@@ -1621,5 +1622,18 @@ mod tests {
             let got = distance(&mut model, a, b).unwrap().value;
             assert!((got - 0.35380730268266536).abs() < 1e-9, "{got}");
         }
+    }
+
+    /// A point beside a frustum, nearest a point inside its side: found on the side, not at
+    /// a rim's point where a search from the meshes' nearest settles.
+    #[test]
+    fn a_point_nearest_the_side_of_a_frustum() {
+        use crate::math::{Direction, Frame};
+        let mut model = Model::new();
+        let frame = Frame::new(Point::new(2.154216661498615, 3.651547011394845, 2.8823583191673094), Direction::new(0.007607158229156349, 0.7945945523602879, 0.607092767625369), Direction::new(0.9530241007432179, -0.18959867051170995, 0.23621474878333276));
+        let frustum = crate::primitives::Cone::new(2.3655060983127187, 0.5608647717354613, 3.03782853251051).with_frame(frame).build(&mut model).unwrap();
+        let vertex = crate::make::vertex(&mut model, Point::new(-0.2974488304726184, 4.606847966239151, 8.499004907089782));
+        let got = distance(&mut model, vertex, frustum).unwrap().value;
+        assert!((got - 4.048726052699623).abs() < 1e-9, "{got}");
     }
 }
