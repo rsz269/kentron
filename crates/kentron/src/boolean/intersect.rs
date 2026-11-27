@@ -3981,9 +3981,11 @@ impl Graph {
                 c.sample_chain();
             }
             // Each curve's box (from samples, grown by their spacing): curves whose boxes are
-            // apart do not cross (nearly tangent surfaces can give many short curves).
+            // apart do not cross (nearly tangent surfaces can give many short curves). (Only
+            // where there are two curves at least to cross.)
             let boxes: Vec<crate::math::BoundingBox> = curves
                 .iter()
+                .take(if curves.len() < 2 { 0 } else { curves.len() })
                 .map(|c| {
                     let (lo, hi) = c.range();
                     let points: Vec<Point> = (0..=64).map(|i| c.point(lo + (hi - lo) * i as f64 / 64.0)).collect();
@@ -4341,14 +4343,28 @@ impl Graph {
                     if !both_freeform && gap(a) <= tangent_reach && gap(0.5 * (a + b)) <= tangent_reach && gap(b) <= tangent_reach {
                         continue;
                     }
-                    // (Its nearest approach over the stretch: sampled, then narrowed.)
+                    // (Its nearest approach over the stretch: sampled, then narrowed by golden
+                    // sections, each keeping one of the last two points and its gap. Fifty of
+                    // them narrow the bracket, two samples wide, to some 1e-10 of itself: the
+                    // section's parameter to far below its points' accuracy.)
                     let n = 32;
-                    let best = (0..=n).map(|i| a + (b - a) * i as f64 / n as f64).min_by(|x, y| gap(*x).total_cmp(&gap(*y))).unwrap_or(end);
+                    let samples: Vec<(f64, f64)> = (0..=n).map(|i| a + (b - a) * i as f64 / n as f64).map(|t| (t, gap(t))).collect();
+                    let best = samples.iter().min_by(|x, y| x.1.total_cmp(&y.1)).map_or(end, |x| x.0);
                     let step = (b - a) / n as f64;
                     let (mut x, mut y) = ((best - step).max(a), (best + step).min(b));
-                    for _ in 0..60 {
-                        let (p, q) = (x + (y - x) / 3.0, y - (y - x) / 3.0);
-                        if gap(p) < gap(q) { y = q } else { x = p }
+                    let ratio = 0.618_033_988_749_895;
+                    let (mut p, mut q) = (y - ratio * (y - x), x + ratio * (y - x));
+                    let (mut gap_p, mut gap_q) = (gap(p), gap(q));
+                    for _ in 0..50 {
+                        if gap_p < gap_q {
+                            (y, q, gap_q) = (q, p, gap_p);
+                            p = y - ratio * (y - x);
+                            gap_p = gap(p);
+                        } else {
+                            (x, p, gap_p) = (p, q, gap_q);
+                            q = x + ratio * (y - x);
+                            gap_q = gap(q);
+                        }
                     }
                     let t = 0.5 * (x + y);
                     if gap(t) > tangent_reach {
