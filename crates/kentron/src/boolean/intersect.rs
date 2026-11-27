@@ -1751,17 +1751,7 @@ impl Section {
                     }
                 }
                 let step = len / n as f64;
-                let (mut lo, mut hi) = (best.0 - step, best.0 + step);
-                let ratio = 0.618_033_988_749_895;
-                for _ in 0..80 {
-                    let (x1, x2) = (hi - ratio * (hi - lo), lo + ratio * (hi - lo));
-                    if self.point(x1).distance(p) < self.point(x2).distance(p) {
-                        hi = x2;
-                    } else {
-                        lo = x1;
-                    }
-                }
-                let t = 0.5 * (lo + hi);
+                let t = golden_minimum(&|t| self.point(t).distance(p), best.0 - step, best.0 + step, 80);
                 let t = if self.closed() { t.rem_euclid(len) } else { t.clamp(0.0, len) };
                 let d = self.point(t).distance(p);
                 if d < best.1 { (t, d) } else { best }
@@ -1872,17 +1862,7 @@ impl Section {
             if b > a || b > c || b > spacing + tolerance {
                 continue;
             }
-            let (mut lo, mut hi) = (step * (i as f64 - 1.0), step * (i as f64 + 1.0));
-            let ratio = 0.618_033_988_749_895;
-            for _ in 0..80 {
-                let (x1, x2) = (hi - ratio * (hi - lo), lo + ratio * (hi - lo));
-                if self.point(x1).distance(p) < self.point(x2).distance(p) {
-                    hi = x2;
-                } else {
-                    lo = x1;
-                }
-            }
-            let t = 0.5 * (lo + hi);
+            let t = golden_minimum(&|t| self.point(t).distance(p), step * (i as f64 - 1.0), step * (i as f64 + 1.0), 80);
             let t = if *closed { t.rem_euclid(len) } else { t.clamp(0.0, len) };
             if self.point(t).distance(p) <= tolerance && !out.iter().any(|&u| (u - t).abs() <= 2.0 * step) {
                 out.push(t);
@@ -3377,6 +3357,34 @@ fn touching_across(a: &Surface, b: &Surface, p: Point) -> bool {
     size.sqrt() > 1e-9 && h11 * h22 - h12 * h12 < -1e-3 * size
 }
 
+/// Where `f` is least between `lo` and `hi` (about one minimum there), by `steps` golden
+/// sections: each narrows the bracket to 0.618 of itself, keeping one of its two points
+/// inside the bracket and the value there, so that it takes one new value of `f`. The
+/// bracket's middle.
+fn golden_minimum(f: &dyn Fn(f64) -> f64, mut lo: f64, mut hi: f64, steps: usize) -> f64 {
+    let ratio = 0.618_033_988_749_895;
+    let (mut x1, mut x2) = (hi - ratio * (hi - lo), lo + ratio * (hi - lo));
+    let (mut f1, mut f2) = (f(x1), f(x2));
+    for step in 0..steps {
+        let lower = f1 < f2;
+        if lower {
+            (hi, x2, f2) = (x2, x1, f1);
+            x1 = hi - ratio * (hi - lo);
+        } else {
+            (lo, x1, f1) = (x1, x2, f2);
+            x2 = lo + ratio * (hi - lo);
+        }
+        if step + 1 < steps {
+            if lower {
+                f1 = f(x1);
+            } else {
+                f2 = f(x2);
+            }
+        }
+    }
+    0.5 * (lo + hi)
+}
+
 /// The distance from `p` to the segment `ab`, and the parameter of the closest point.
 fn segment_gap(a: Point, b: Point, p: Point) -> (f64, f64) {
     let ab = b - a;
@@ -4346,29 +4354,14 @@ impl Graph {
                         continue;
                     }
                     // (Its nearest approach over the stretch: sampled, then narrowed by golden
-                    // sections, each keeping one of the last two points and its gap. Fifty of
-                    // them narrow the bracket, two samples wide, to some 1e-10 of itself: the
-                    // section's parameter to far below its points' accuracy.)
+                    // sections. Fifty of them narrow the bracket, two samples wide, to some
+                    // 1e-10 of itself: the section's parameter to far below its points'
+                    // accuracy.)
                     let n = 32;
                     let samples: Vec<(f64, f64)> = (0..=n).map(|i| a + (b - a) * i as f64 / n as f64).map(|t| (t, gap(t))).collect();
                     let best = samples.iter().min_by(|x, y| x.1.total_cmp(&y.1)).map_or(end, |x| x.0);
                     let step = (b - a) / n as f64;
-                    let (mut x, mut y) = ((best - step).max(a), (best + step).min(b));
-                    let ratio = 0.618_033_988_749_895;
-                    let (mut p, mut q) = (y - ratio * (y - x), x + ratio * (y - x));
-                    let (mut gap_p, mut gap_q) = (gap(p), gap(q));
-                    for _ in 0..50 {
-                        if gap_p < gap_q {
-                            (y, q, gap_q) = (q, p, gap_p);
-                            p = y - ratio * (y - x);
-                            gap_p = gap(p);
-                        } else {
-                            (x, p, gap_p) = (p, q, gap_q);
-                            q = x + ratio * (y - x);
-                            gap_q = gap(q);
-                        }
-                    }
-                    let t = 0.5 * (x + y);
+                    let t = golden_minimum(&gap, (best - step).max(a), (best + step).min(b), 50);
                     if gap(t) > tangent_reach {
                         continue;
                     }
@@ -4987,17 +4980,7 @@ fn scanned_crossings(a: &Section, b: &Section) -> Vec<Point> {
         let (t, seed, _) = samples[i];
         // The distance to `b` near the sample's foot (Newton from it).
         let gap = |x: f64| b.project_seeded(a.point(x), seed).1;
-        let (mut x, mut y) = (t - step, t + step);
-        let ratio = 0.618_033_988_749_895;
-        for _ in 0..80 {
-            let (x1, x2) = (y - ratio * (y - x), x + ratio * (y - x));
-            if gap(x1) < gap(x2) {
-                y = x2;
-            } else {
-                x = x1;
-            }
-        }
-        let p = a.point(0.5 * (x + y));
+        let p = a.point(golden_minimum(&gap, t - step, t + step, 80));
         if b.project(p).1 <= on_tol() && !out.iter().any(|q| q.distance(p) <= on_tol()) {
             out.push(p);
         }
