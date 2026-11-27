@@ -1289,7 +1289,9 @@ enum Section {
 
 /// A chain's points at even steps of its parameter, found once (slow to find, and looked for
 /// near each point the section may pass): 512 a branch, as [`Section::passes`] steps, and
-/// 256, as [`Section::project`] does.
+/// 256, as [`Section::project`] does. (Those every other one of the first: a step of a 256th
+/// of a branch is two of a 512th exactly, both powers of two, so the same parameters to the
+/// bit.)
 #[derive(Default)]
 struct ChainSamples {
     passes: std::sync::OnceLock<Vec<Point>>,
@@ -1705,14 +1707,24 @@ impl Section {
     /// A chain's samples ([`ChainSamples`]), found now (where it is cheaper: on a thread of
     /// their own, the same points as found when first needed).
     fn sample_chain(&self) {
-        if let Section::Chain(branches, _, samples) = self {
-            let len = self.range().1;
-            let n = (len as usize) * 256;
-            samples.project.get_or_init(|| (0..n).map(|i| self.point(len * i as f64 / n as f64)).collect());
-            let n = branches.len() * 512;
-            let step = len / n as f64;
-            samples.passes.get_or_init(|| (0..n).map(|i| self.point(step * i as f64)).collect());
-        }
+        self.chain_projection_samples();
+    }
+
+    /// A chain's samples for [`Self::passes`] ([`ChainSamples`]), found when first needed;
+    /// `None` for other sections.
+    fn chain_passes_samples(&self) -> Option<&[Point]> {
+        let Section::Chain(branches, _, samples) = self else { return None };
+        let n = branches.len() * 512;
+        let step = self.range().1 / n as f64;
+        Some(samples.passes.get_or_init(|| (0..n).map(|i| self.point(step * i as f64)).collect()))
+    }
+
+    /// A chain's samples for [`Self::project`] ([`ChainSamples`]), found when first needed;
+    /// `None` for other sections.
+    fn chain_projection_samples(&self) -> Option<&[Point]> {
+        let Section::Chain(_, _, samples) = self else { return None };
+        let passes = self.chain_passes_samples()?;
+        Some(samples.project.get_or_init(|| passes.iter().step_by(2).copied().collect()))
     }
 
     /// The parameter of the point closest to `p`, and the distance.
@@ -1738,10 +1750,10 @@ impl Section {
                 }
                 self.project_near(p, best.0)
             }
-            Section::Chain(_, _, samples) => {
+            Section::Chain(..) => {
                 let len = self.range().1;
                 let n = (len as usize) * 256;
-                let points = samples.project.get_or_init(|| (0..n).map(|i| self.point(len * i as f64 / n as f64)).collect());
+                let points = self.chain_projection_samples().expect("a chain");
                 let mut best = (0.0, f64::INFINITY);
                 for (i, q) in points.iter().enumerate() {
                     let t = len * i as f64 / n as f64;
@@ -1838,8 +1850,8 @@ impl Section {
             return out;
         }
         let closed = &self.closed();
-        let (n, cached) = match self {
-            Section::Chain(branches, _, samples) => (branches.len() * 512, samples),
+        let n = match self {
+            Section::Chain(branches, ..) => branches.len() * 512,
             _ => {
                 let (t, d) = self.project(p);
                 return if d <= tolerance { vec![(t, false)] } else { Vec::new() };
@@ -1847,7 +1859,7 @@ impl Section {
         };
         let len = self.range().1;
         let step = len / n as f64;
-        let samples = cached.passes.get_or_init(|| (0..n).map(|i| self.point(step * i as f64)).collect());
+        let samples = self.chain_passes_samples().expect("a chain");
         let d: Vec<f64> = samples.iter().map(|q| q.distance(p)).collect();
         let mut out: Vec<f64> = Vec::new();
         for i in 0..n {
@@ -4439,10 +4451,9 @@ impl Graph {
         });
         // On a chain of quadric branches (slow to find points on), only points near a
         // polyline of it, sampled once, can be on it.
-        if let Section::Chain(_, _, samples) = section {
+        if let Some(samples) = section.chain_projection_samples() {
             // (The points projections start from, and the end.)
-            section.sample_chain();
-            let mut polyline: Vec<Point> = samples.project.get().expect("sampled").clone();
+            let mut polyline: Vec<Point> = samples.to_vec();
             polyline.push(section.point(hi));
             let spacing = polyline.windows(2).map(|w| w[0].distance(w[1])).fold(0.0, f64::max) + on_tol();
             candidates.retain(|&v| {
