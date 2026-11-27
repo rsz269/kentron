@@ -67,6 +67,9 @@ use graph::Graph;
 #[doc(alias = "BRepAlgoAPI_Fuse")]
 #[doc(alias = "fuse")]
 pub fn union(model: &mut Model, a: Shape, b: Shape) -> Result<Shape> {
+    if let Some(result) = near_origin(model, a, b, union)? {
+        return Ok(result);
+    }
     // An operand may be a compound of solids that overlap one another: like OCCT's general
     // fuse, every solid is fused with those it meets (boxes overlapping or touching), one
     // after another; groups apart from each other are only gathered. (Two solids apart are
@@ -229,6 +232,9 @@ fn only_solids(model: &Model, shape: Shape) -> Option<Vec<Shape>> {
 #[doc(alias = "BRepAlgoAPI_Cut")]
 #[doc(alias = "cut")]
 pub fn difference(model: &mut Model, a: Shape, b: Shape) -> Result<Shape> {
+    if let Some(result) = near_origin(model, a, b, difference)? {
+        return Ok(result);
+    }
     if let Some(each) = each_solid_apart(model, a, b, Operation::Difference)? {
         return Ok(each);
     }
@@ -300,10 +306,46 @@ pub(crate) fn difference_after(model: &mut Model, a: Shape, b: Shape, first: Sha
 #[doc(alias = "BRepAlgoAPI_Common")]
 #[doc(alias = "common")]
 pub fn intersection(model: &mut Model, a: Shape, b: Shape) -> Result<Shape> {
+    if let Some(result) = near_origin(model, a, b, intersection)? {
+        return Ok(result);
+    }
     if let Some(each) = each_solid_apart(model, a, b, Operation::Intersection)? {
         return Ok(each);
     }
     run(model, a, b, Operation::Intersection)
+}
+
+/// `operation` on `a` and `b` where they lie far from the origin for their size: on copies
+/// moved there, its result moved back (`None` for other operands). Coordinates far out
+/// leave the arithmetic of surfaces' intersections fewer digits than the absolute
+/// tolerances need; the copies' translation, by whole units, rounds nothing.
+fn near_origin(model: &mut Model, a: Shape, b: Shape, operation: fn(&mut Model, Shape, Shape) -> Result<Shape>) -> Result<Option<Shape>> {
+    let mut bounds = crate::properties::bounding_box(model, a);
+    bounds.add_box(&crate::properties::bounding_box(model, b));
+    if bounds.is_empty() {
+        return Ok(None);
+    }
+    let centre = bounds.min + (bounds.max - bounds.min) * 0.5;
+    let out = (centre - crate::math::Point::ORIGIN).length();
+    if !(out > 1000.0 && out > 100.0 * (bounds.max - bounds.min).length()) {
+        return Ok(None);
+    }
+    let shift = crate::math::Vector::new(centre.x.round(), centre.y.round(), centre.z.round());
+    let moved = |model: &mut Model, shape: Shape, by: crate::math::Vector| -> Result<Shape> {
+        let (copy, _) = crate::modify::copy_unplaced(model, shape.moved(&crate::math::Transform::translation(by)), &[])?;
+        for kind in [crate::topology::NodeKind::Face, crate::topology::NodeKind::Edge] {
+            let (from, to) = (model.unique_subshapes(shape, kind), model.unique_subshapes(copy, kind));
+            if from.len() == to.len() {
+                for (from, to) in from.iter().zip(&to) {
+                    record(model.uid(), from.node, to.node);
+                }
+            }
+        }
+        Ok(copy)
+    };
+    let (near_a, near_b) = (moved(model, a, shift * -1.0)?, moved(model, b, shift * -1.0)?);
+    let result = operation(model, near_a, near_b)?;
+    moved(model, result, shift).map(Some)
 }
 
 /// The recordings under way ([`record_begin`] to [`record_end`]), one per model: each operand
@@ -4132,5 +4174,27 @@ mod tests {
         let common = intersection(&mut model, rod, block).unwrap();
         let volume = properties::volume(&model, common).mass;
         assert!((volume - quarter).abs() < 1e-9 * quarter, "volume {volume}, quarter {quarter}");
+    }
+
+    /// Crossing cylinders tens of thousands of units from the origin: the four operations
+    /// valid and their volumes adding up, as near it.
+    #[test]
+    fn crossing_cylinders_far_from_the_origin() {
+        use crate::math::{Direction, Frame, Point};
+        let mut model = Model::new();
+        let at = |p: [f64; 3], z: [f64; 3], x: [f64; 3]| Frame::new(Point::new(p[0], p[1], p[2]), Direction::new(z[0], z[1], z[2]), Direction::new(x[0], x[1], x[2]));
+        let a = at([-63868.66818207711, 70732.7787070891, 61606.780037401426], [0.19274928484483386, -0.9809975736198241, -0.022169207108577504], [-0.8413814154726187, -0.1536075517839337, -0.5181525197586505]);
+        let b = at([-63855.01824007371, 70708.48598285535, 61601.00370351842], [-0.8571168145692261, 0.345106543445181, 0.38242939198500747], [-0.49683527461573596, -0.3577848219946745, -0.7906609456952742]);
+        let a = crate::primitives::Cylinder::new(3.571726634960248, 30.0).with_frame(a).build(&mut model).unwrap();
+        let b = crate::primitives::Cylinder::new(5.9518346676986384, 30.0).with_frame(b).build(&mut model).unwrap();
+        let mut volumes = Vec::new();
+        for operation in [union, intersection, difference] {
+            let result = operation(&mut model, a, b).unwrap();
+            assert!(crate::validity::check(&model, result).is_valid());
+            volumes.push(crate::properties::volume(&model, result).mass);
+        }
+        let (va, vb) = (crate::properties::volume(&model, a).mass, crate::properties::volume(&model, b).mass);
+        assert!((volumes[0] + volumes[1] - va - vb).abs() < 1e-6 * va, "{volumes:?}");
+        assert!((volumes[2] + volumes[1] - va).abs() < 1e-6 * va, "{volumes:?}");
     }
 }
