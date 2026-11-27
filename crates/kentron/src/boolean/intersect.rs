@@ -231,7 +231,9 @@ fn contact_from(curve: &Curve, first: f64, last: f64, surface: &Surface, toleran
     // than the way along the curve, its chords' lengths doubled for the arcs. Those stand
     // in with the sign of the last found and less than its size by that way: farther than
     // the tolerances, with no root beside them nor a point touching the surface. The
-    // neighbours of each sample found are found too, for the touching points sought there.)
+    // neighbours of each sample found are found too, for the touching points sought there:
+    // where the sample is nearer the surface than the way to them by that margin, as by the
+    // same bound a sample farther cannot have a root or a touching point beside it.)
     let points: Vec<Point> = ts.iter().map(|&t| curve.point(t)).collect();
     let mut values: Vec<f64> = Vec::with_capacity(ts.len());
     let mut found: Vec<bool> = Vec::with_capacity(ts.len());
@@ -254,8 +256,14 @@ fn contact_from(curve: &Curve, first: f64, last: f64, surface: &Surface, toleran
         i = j;
     }
     let first_found = found.clone();
+    let clear: Vec<bool> = (0..ts.len())
+        .map(|i| {
+            let way = [i.wrapping_sub(1), i + 1].into_iter().filter(|&k| k < ts.len()).map(|k| 2.0 * points[i].distance(points[k])).fold(0.0, f64::max);
+            first_found[i] && values[i].abs() - way > 2.0 * TOL.max(tolerance)
+        })
+        .collect();
     for i in 0..ts.len() {
-        if first_found[i] {
+        if first_found[i] && !clear[i] {
             for k in [i.wrapping_sub(1), i + 1] {
                 if k < ts.len() && !found[k] {
                     values[k] = g(ts[k]);
@@ -327,7 +335,9 @@ fn contact_from(curve: &Curve, first: f64, last: f64, surface: &Surface, toleran
         // A touching point: |g| has a small local minimum without a sign change. It is
         // where g's derivative along the curve vanishes, found precisely by bisection
         // (minimizing |g| itself is imprecise there, g being quadratic).
-        if i > 0 && i < n && found[i] {
+        // (Not beside a sample clear of the surface by more than the way to its neighbours:
+        // the distance there stays above the tolerance, of one sign.)
+        if i > 0 && i < n && found[i] && !clear[i] {
             let (a, b, c) = (values[i - 1], values[i], values[i + 1]);
             // (A strict extremum: where g is flat, as along a circle about a cylinder's axis,
             // there is none to find.)
