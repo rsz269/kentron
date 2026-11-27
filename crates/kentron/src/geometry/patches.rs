@@ -245,6 +245,9 @@ pub(super) struct Patches {
     points: Vec<f64>,
     /// Weights other than 1 (else the sums skip them and the quotient rule).
     rational: bool,
+    /// Each patch's box of its control points (`[x0, y0, z0, x1, y1, z1]`, in patch order),
+    /// where all weights are positive: the patch lies in their convex hull, so in the box.
+    boxes: Option<Vec<[f64; 6]>>,
     /// The patches along u and v found last, tried first.
     hints: Hint<2>,
 }
@@ -309,7 +312,43 @@ impl Patches {
         let lanes = if rational { 4 } else { 3 };
         let mut points = Vec::with_capacity(npu * npv * (pu + 1) * (pv + 1) * lanes);
         each(&mut |k| points.extend_from_slice(&grid[k..k + lanes]));
-        Some(Patches { u_breaks, v_breaks, u_degree: pu, v_degree: pv, points, rational, hints: Hint::default() })
+        let n = (pu + 1) * (pv + 1);
+        let boxes = points
+            .chunks(n * lanes)
+            .map(|patch| {
+                let mut b = [f64::INFINITY, f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
+                for q in patch.chunks(lanes) {
+                    let w = if rational { q[3] } else { 1.0 };
+                    if !(w > 0.0) {
+                        return None;
+                    }
+                    for c in 0..3 {
+                        let x = q[c] / w;
+                        b[c] = b[c].min(x);
+                        b[3 + c] = b[3 + c].max(x);
+                    }
+                }
+                Some(b)
+            })
+            .collect();
+        Some(Patches { u_breaks, v_breaks, u_degree: pu, v_degree: pv, points, rational, boxes, hints: Hint::default() })
+    }
+
+    /// A lower bound on the distance from `p` to the surface: its distance to the nearest of
+    /// the patches' boxes; `None` where a weight is not positive.
+    pub(super) fn distance_at_least(&self, p: Point) -> Option<f64> {
+        let boxes = self.boxes.as_ref()?;
+        let q = [p.x, p.y, p.z];
+        let squared = boxes
+            .iter()
+            .map(|b| (0..3).map(|c| (b[c] - q[c]).max(q[c] - b[3 + c]).max(0.0).powi(2)).sum::<f64>())
+            .fold(f64::INFINITY, f64::min);
+        Some(squared.sqrt())
+    }
+
+    /// How many patches there are.
+    pub(super) fn count(&self) -> usize {
+        (self.u_breaks.len() - 1) * (self.v_breaks.len() - 1)
     }
 
     /// Patch `k`'s points, of `C` numbers each (`C` 4 on a rational surface, else 3).

@@ -398,8 +398,14 @@ pub(super) fn foot_on(surface: &Surface, p: Point) -> crate::geometry::extrema::
     }
     // (From a sample far off compared with the foot found, as on a long narrow strip
     // sampled only by its spans, the steps may settle off the true foot: the general search
-    // too, kept where it finds the point on the surface.)
-    if foot.point.distance(p) > on_tol() && best.0.sqrt() > 2.0 * foot.point.distance(p) {
+    // too, kept where it finds the point on the surface. (Not where the point lies farther
+    // from the surface than that, as the boxes of a B-spline's patches tell: their scan, no
+    // longer than the search's grid, spares the search.)
+    let beyond_patches = || match surface {
+        Surface::BSpline(b) => b.distance_at_least(p, 65 * 65).is_some_and(|d| d > on_tol()),
+        _ => false,
+    };
+    if foot.point.distance(p) > on_tol() && best.0.sqrt() > 2.0 * foot.point.distance(p) && !beyond_patches() {
         let (u, v, d) = crate::geometry::extrema::nearest_on_surface(p, surface, Some(start));
         if d <= on_tol() {
             let (point, du, dv) = surface.d1(u, v);

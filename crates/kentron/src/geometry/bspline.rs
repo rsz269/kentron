@@ -1550,6 +1550,22 @@ impl BSplineSurface {
         self
     }
 
+    /// A lower bound on the distance from `p` to the surface, by the boxes of its Bézier
+    /// patches' control points (with positive weights, each patch lies in their convex hull);
+    /// `None` where the weights are not all positive, on a periodic surface, and where the
+    /// patches are more than `most` (their boxes scanned costing more than the bound spares).
+    pub(crate) fn distance_at_least(&self, p: Point, most: usize) -> Option<f64> {
+        use super::parametric::ParametricSurface;
+        if self.is_u_periodic() || self.is_v_periodic() {
+            return None;
+        }
+        let patches = self.patches()?;
+        if patches.count() > most {
+            return None;
+        }
+        patches.distance_at_least(p)
+    }
+
     /// The surface as Bézier patches (made on first use); `None` for one with too many.
     fn patches(&self) -> Option<&super::patches::Patches> {
         self.patches.get(|| {
