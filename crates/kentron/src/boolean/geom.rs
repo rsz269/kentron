@@ -882,6 +882,19 @@ pub(super) fn uv_and_normal_at_point(surface: &Surface, p: Point) -> (Uv, Vector
     (uv, n)
 }
 
+/// [`uv_and_normal_at_point`] at the next of points of the surface close together (as along
+/// a curve on it): on a free-form surface from the foot of the one before (`last`, kept up
+/// to date), as [`signed_distance_from`] finds it.
+pub(super) fn uv_and_normal_near(surface: &Surface, p: Point, last: &std::cell::Cell<Option<Foot>>) -> (Uv, Vector) {
+    if !freeform(surface) || surface.parameters(p).is_some() {
+        return uv_and_normal_at_point(surface, p);
+    }
+    let (_, foot) = signed_distance_from(surface, p, last.get());
+    let foot = foot.expect("a free-form surface's foot");
+    last.set(Some(foot));
+    (foot.uv, foot.normal)
+}
+
 /// [`normal_at_point`] at a point of the surface found by other means (a ray's hit on it):
 /// on a free-form surface whose foot of the point is found off it (on another turn of a
 /// surface winding round, the steps from the nearest of its samples led astray), the foot

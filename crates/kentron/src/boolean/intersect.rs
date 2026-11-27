@@ -4205,12 +4205,14 @@ impl Graph {
             // off the line along which they touch, as a cylinder's end a little short of the
             // torus's meridian plane, is crossed by the other branches about where that line
             // is, nearer than the hair.)
+            // (Each surface's parameters of the point found once, for its normal and
+            // curvature; on a free-form surface from the foot of the point before, along the
+            // edge.)
+            let last: [std::cell::Cell<Option<geom::Foot>>; 2] = Default::default();
             let difference = |t: f64| -> Option<(f64, f64)> {
                 let (p, tangent) = c.d1(t);
-                // (Each surface's parameters of the point found once, for its normal and
-                // curvature.)
-                let (uv_a, n) = geom::uv_and_normal_at_point(a, p);
-                let (uv_b, nb) = geom::uv_and_normal_at_point(b, p);
+                let (uv_a, n) = geom::uv_and_normal_near(a, p, &last[0]);
+                let (uv_b, nb) = geom::uv_and_normal_near(b, p, &last[1]);
                 if n.cross(nb).length() > 1e-3 {
                     return None;
                 }
