@@ -260,7 +260,7 @@ fn foot_from_nearest_samples(surface: &Surface, p: Point, foot: crate::geometry:
     });
     let mut nearest = foot;
     for start in starts {
-        let other = crate::geometry::extrema::newton_foot_from_sample(p, surface, start);
+        let other = crate::geometry::extrema::newton_foot_to_the_last(p, surface, start);
         if other.point.distance(p) < nearest.point.distance(p) {
             nearest = other;
         }
@@ -314,7 +314,7 @@ pub(super) fn foot_on(surface: &Surface, p: Point) -> crate::geometry::extrema::
         let best = grid.nearest_of_all(p);
         (best, (grid.samples[best.1].0, grid.samples[best.1].1))
     });
-    let mut foot = crate::geometry::extrema::newton_foot_from_sample(p, surface, start);
+    let mut foot = crate::geometry::extrema::newton_foot_to_the_last(p, surface, start);
     // (A strip ruled one way (a B-spline of one span of degree 1 that way, of several spans
     // the other), whose rulings turn along it, as a straight edge carried along a screw
     // sweeps: its few samples across the rulings may lie far from the foot, and the steps
@@ -328,7 +328,7 @@ pub(super) fn foot_on(surface: &Surface, p: Point) -> crate::geometry::extrema::
             if d < rulings.length {
                 let nearest = rulings.nearest(p);
                 if nearest.0 < d {
-                    let second = crate::geometry::extrema::newton_foot_from_sample(p, surface, nearest.1);
+                    let second = crate::geometry::extrema::newton_foot_to_the_last(p, surface, nearest.1);
                     if second.point.distance(p) < d {
                         foot = second;
                     }
@@ -455,7 +455,7 @@ pub(super) fn foot_on(surface: &Surface, p: Point) -> crate::geometry::extrema::
     });
     let nearer = match other {
         Some(other) => {
-            let second = crate::geometry::extrema::newton_foot_from_sample(p, surface, other);
+            let second = crate::geometry::extrema::newton_foot_to_the_last(p, surface, other);
             if second.point.distance(p) < distance { second } else { foot }
         }
         None => foot,
@@ -493,7 +493,7 @@ fn narrowed(surface: &Surface, p: Point, start: (f64, f64), steps: (f64, f64)) -
     let (u, v) = nearest.1;
     let (point, su, sv) = surface.d1(u, v);
     let found = crate::geometry::extrema::SurfaceFoot { u, v, point, du: su, dv: sv };
-    let polished = crate::geometry::extrema::newton_foot_from_sample(p, surface, nearest.1);
+    let polished = crate::geometry::extrema::newton_foot_to_the_last(p, surface, nearest.1);
     if polished.point.distance(p) < found.point.distance(p) { polished } else { found }
 }
 

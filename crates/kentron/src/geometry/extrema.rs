@@ -1196,15 +1196,11 @@ pub(crate) fn newton_foot(p: Point, surface: &Surface, start: (f64, f64)) -> Sur
 }
 
 /// [`newton_foot`] with every step taken to the rounding noise (none spared as converged):
-/// for distances whose signs decide where surfaces cross, as booleans' do.
+/// for distances whose signs decide where surfaces cross, as booleans' do. From a sample of a
+/// grid over the surface or a nearby point's foot: where the steps circle the foot without
+/// closing in, they stop at the nearest point met (else they run to the step limit, and stop
+/// anywhere on the circle).
 pub(crate) fn newton_foot_to_the_last(p: Point, surface: &Surface, start: (f64, f64)) -> SurfaceFoot {
-    newton_foot_to(p, surface, start, false, false)
-}
-
-/// [`newton_foot_to_the_last`] from a sample of a grid over the surface (a fresh search, no
-/// earlier foot to stay near): where the steps circle the foot without closing in, they stop
-/// at the nearest point met.
-pub(crate) fn newton_foot_from_sample(p: Point, surface: &Surface, start: (f64, f64)) -> SurfaceFoot {
     newton_foot_to(p, surface, start, false, true)
 }
 
