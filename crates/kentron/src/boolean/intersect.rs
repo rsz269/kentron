@@ -3053,6 +3053,9 @@ fn sliced(base: &Face, other: &Face, crossings: &[Point]) -> Vec<Section> {
     // foot points chain.
     let us: Vec<f64> = (0..columns).map(u_at).collect();
     let grid = s.points_on_grid(&us, &(0..rows).map(v_at).collect::<Vec<f64>>());
+    // (And kept column by column, as the distances are found: node (i, j) at i·rows + j.)
+    let nodes: Vec<Point> = (0..columns).flat_map(|i| grid.iter().map(move |row| row[i])).collect();
+    let node = |i: usize, j: usize| nodes[i * rows + j];
     // (Only the signs matter, and a distance moves by no more than the point does: a point
     // farther from the other surface than from a neighbour has the neighbour's sign, a
     // distance at least as far as it less the gap kept for it. Not on a free-form other,
@@ -3071,10 +3074,10 @@ fn sliced(base: &Face, other: &Face, crossings: &[Point]) -> Vec<Section> {
                 let mut b = crate::math::BoundingBox::EMPTY;
                 for i in bi.saturating_sub(1)..(ie + 1).min(columns) {
                     for j in bj.saturating_sub(1)..(je + 1).min(rows) {
-                        b.add_point(grid[j][i]);
+                        b.add_point(node(i, j));
                     }
                 }
-                let c = grid[(bj + je) / 2][(bi + ie) / 2];
+                let c = node((bi + ie) / 2, (bj + je) / 2);
                 let (d, _) = geom::signed_distance_from(q, c, None);
                 let corner = |k: usize| Point::new(if k & 1 == 0 { b.min.x } else { b.max.x }, if k & 2 == 0 { b.min.y } else { b.max.y }, if k & 4 == 0 { b.min.z } else { b.max.z });
                 let reach = d.abs() - (0..8).map(|k| c.distance(corner(k))).fold(0.0, f64::max);
@@ -3099,10 +3102,10 @@ fn sliced(base: &Face, other: &Face, crossings: &[Point]) -> Vec<Section> {
                 column.push(value);
                 continue;
             }
-            let p = grid[j][i];
+            let p = node(i, j);
             if lipschitz {
-                let below = (j > 0).then(|| (column[j - 1], grid[j - 1][i]));
-                let left = (i > 0).then(|| (values[i - 1][j], grid[j][i - 1]));
+                let below = (j > 0).then(|| (column[j - 1], node(i, j - 1)));
+                let left = (i > 0).then(|| (values[i - 1][j], node(i - 1, j)));
                 let (reach, d) = [below, left].into_iter().flatten().map(|(d, q): (f64, Point)| (d.abs() - p.distance(q), d)).fold((0.0, 0.0), |a, b| if b.0 > a.0 { b } else { a });
                 if reach > margin {
                     column.push(reach.copysign(d));
@@ -3115,7 +3118,6 @@ fn sliced(base: &Face, other: &Face, crossings: &[Point]) -> Vec<Section> {
         }
         values.push(column);
     }
-    let sign = |i: usize, j: usize| values[i % columns][j % rows] >= 0.0;
     // Whether the distance crosses zero between two neighbouring nodes: of different signs,
     // and near enough the other surface for that. (A distance moves by no more than the
     // point does, here along the base between them, at most a few times their chord: where
@@ -3124,7 +3126,7 @@ fn sliced(base: &Face, other: &Face, crossings: &[Point]) -> Vec<Section> {
     let near = 10.0 * (base.drift.max(other.drift) + on_tol());
     let crosses = |a: (usize, usize), b: (usize, usize)| {
         let (da, db) = (values[a.0 % columns][a.1 % rows], values[b.0 % columns][b.1 % rows]);
-        (da >= 0.0) != (db >= 0.0) && da.abs() + db.abs() <= 2.0 * grid[a.1 % rows][a.0 % columns].distance(grid[b.1 % rows][b.0 % columns]) + near
+        (da >= 0.0) != (db >= 0.0) && da.abs() + db.abs() <= 2.0 * node(a.0 % columns, a.1 % rows).distance(node(b.0 % columns, b.1 % rows)) + near
     };
     // A root of g on [a, b] (g(a) and g(b) of different signs, zero counting as positive).
     // (Done once a and b are neighbouring numbers, where the steps would not move them,
@@ -3212,7 +3214,8 @@ fn sliced(base: &Face, other: &Face, crossings: &[Point]) -> Vec<Section> {
     for i in 0..cells_u {
         let (here, next) = (&values[i], &values[(i + 1) % columns]);
         for j in 0..nv {
-            let s00 = sign(i, j);
+            // (i and j within the nodes' columns and rows.)
+            let s00 = here[j] >= 0.0;
             // (No edge crossed where the corners' signs are all the same.)
             let up = if j + 1 == rows { 0 } else { j + 1 };
             if (next[j] >= 0.0) == s00 && (here[up] >= 0.0) == s00 && (next[up] >= 0.0) == s00 {
