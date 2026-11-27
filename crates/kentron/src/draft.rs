@@ -14,8 +14,8 @@ use std::collections::HashMap;
 
 use crate::error::{Error, Result};
 use crate::geometry::surface::{Cone, Cylinder, Plane, Surface};
-use crate::geometry::ParametricSurface;
-use crate::math::{Axis, Direction, Point, Transform, Transformable, Vector};
+use crate::geometry::{ParametricCurve, ParametricSurface};
+use crate::math::{Axis, Direction, Point, Point2, Transform, Transformable, Vector};
 use crate::tolerance::{ANGULAR, LINEAR};
 use crate::topology::{Model, NodeId, NodeKind, Orientation, Shape};
 
@@ -165,6 +165,9 @@ pub fn move_faces(model: &mut Model, shape: Shape, faces: &[Shape], motion: &Tra
         return Err(Error::InvalidInput("a face move is rigid: a rotation and a translation".into()));
     }
     let moved: Vec<NodeId> = faces.iter().map(|f| f.node).collect();
+    if let Some(result) = slid(model, shape, &moved, motion)? {
+        return Ok(result);
+    }
     let new_surface = |face: Shape, surface: &Surface| -> Result<Surface> {
         if !moved.contains(&face.node) {
             return Ok(surface.clone());
@@ -204,6 +207,165 @@ pub fn move_faces(model: &mut Model, shape: Shape, faces: &[Shape], motion: &Tra
     })?;
     crate::heal::move_crossed_seams(model, moved)?;
     Ok(moved)
+}
+
+/// `shape` with a feature slid over planes: where the faces `moved` meet the others only
+/// along whole loops of planar faces, planes the motion maps onto themselves (a hole through
+/// a plate moved across it, a boss moved over the face it stands on), their surfaces, edges
+/// and vertices are all carried by the motion, exactly, however far. `None` for other moves,
+/// and where the feature would not stay clear of the solid's other loops and faces.
+fn slid(model: &mut Model, shape: Shape, moved: &[NodeId], motion: &Transform) -> Result<Option<Shape>> {
+    let faces = model.unique_subshapes(shape, NodeKind::Face);
+    let is_moved: Vec<bool> = faces.iter().map(|f| moved.contains(&f.node)).collect();
+    let mut edges: std::collections::HashSet<NodeId> = Default::default();
+    let mut vertices: std::collections::HashSet<NodeId> = Default::default();
+    for (&face, _) in faces.iter().zip(&is_moved).filter(|(_, &m)| m) {
+        edges.extend(model.unique_subshapes(face, NodeKind::Edge).iter().map(|e| e.node));
+        vertices.extend(model.unique_subshapes(face, NodeKind::Vertex).iter().map(|v| v.node));
+    }
+    // (No other edge at the feature's vertices: nothing to extend or cut back.)
+    for edge in model.unique_subshapes(shape, NodeKind::Edge) {
+        if !edges.contains(&edge.node) && model.unique_subshapes(edge, NodeKind::Vertex).iter().any(|v| vertices.contains(&v.node)) {
+            return Ok(None);
+        }
+    }
+    let mut around = Vec::new();
+    let mut others = Vec::new();
+    for (k, &face) in faces.iter().enumerate().filter(|(k, _)| !is_moved[*k]) {
+        if !model.unique_subshapes(face, NodeKind::Edge).iter().any(|e| edges.contains(&e.node)) {
+            others.push(face);
+            continue;
+        }
+        let Some(Surface::Plane(plane)) = model.surface(face).map(|s| s.transformed(&face.placement)) else { return Ok(None) };
+        let (normal, carried) = (Vector::from(plane.normal()), Surface::Plane(plane.clone()).transformed(motion));
+        let Surface::Plane(carried) = carried else { return Ok(None) };
+        if Vector::from(carried.normal()).dot(normal) < 1.0 - ANGULAR || (carried.origin() - plane.origin()).dot(normal).abs() > LINEAR {
+            return Ok(None);
+        }
+        around.push(k);
+    }
+    // The moved feature stays clear of the faces it did not meet.
+    for (&face, _) in faces.iter().zip(&is_moved).filter(|(_, &m)| m) {
+        let there = face.moved(motion);
+        for &other in &others {
+            if crate::distance::distance(model, there, other)?.value <= LINEAR {
+                return Ok(None);
+            }
+        }
+    }
+    // On each plane round it, the moved loops stay where the face has room: inside its
+    // outer loop, clear of its other loops.
+    for &k in &around {
+        let face = faces[k];
+        let Some(Surface::Plane(plane)) = model.surface(face).map(|s| s.transformed(&face.placement)) else { return Ok(None) };
+        let mut moving = Vec::new();
+        let mut staying = Vec::new();
+        for wire in model.explore(face, NodeKind::Wire).collect::<Vec<_>>() {
+            let uses = model.ordered_edges(wire);
+            let carried = uses.iter().filter(|e| edges.contains(&e.node)).count();
+            if carried != 0 && carried != uses.len() {
+                return Ok(None);
+            }
+            let mut polygon = Vec::new();
+            for e in uses {
+                let Some((curve, first, last)) = model.edge_curve(e) else { continue };
+                for i in 0..64 {
+                    let s = i as f64 / 64.0;
+                    let t = if e.orientation == Orientation::Reversed { last - (last - first) * s } else { first + (last - first) * s };
+                    let mut p = curve.point(t);
+                    if carried != 0 {
+                        p = p.transformed(motion);
+                    }
+                    let (u, v) = plane.parameters(p);
+                    polygon.push(Point2::new(u, v));
+                }
+            }
+            if carried != 0 { moving.push(polygon) } else { staying.push(polygon) }
+        }
+        let area = |p: &[Point2]| (0..p.len()).map(|i| p[i].x * p[(i + 1) % p.len()].y - p[(i + 1) % p.len()].x * p[i].y).sum::<f64>().abs();
+        let Some(outer) = (0..staying.len()).max_by(|&a, &b| area(&staying[a]).total_cmp(&area(&staying[b]))) else { return Ok(None) };
+        for m in &moving {
+            if area(m) >= area(&staying[outer]) {
+                return Ok(None);
+            }
+            for (i, other) in staying.iter().enumerate() {
+                let inside = point_in_polygon(m[0], other);
+                if polygons_cross(m, other) || inside != (i == outer) || (i != outer && point_in_polygon(other[0], m)) {
+                    return Ok(None);
+                }
+            }
+        }
+    }
+    let copy = crate::modify::copy_unplaced(model, shape, &[])?.0;
+    let copies = model.unique_subshapes(copy, NodeKind::Face);
+    if copies.len() != faces.len() {
+        return Ok(None);
+    }
+    let mut carried_edges: Vec<Shape> = Vec::new();
+    let mut carried_vertices: Vec<Shape> = Vec::new();
+    for (&face, _) in copies.iter().zip(&is_moved).filter(|(_, &m)| m) {
+        for e in model.unique_subshapes(face, NodeKind::Edge) {
+            if !carried_edges.iter().any(|f| f.node == e.node) {
+                carried_edges.push(e);
+            }
+        }
+        for v in model.unique_subshapes(face, NodeKind::Vertex) {
+            if !carried_vertices.iter().any(|f| f.node == v.node) {
+                carried_vertices.push(v);
+            }
+        }
+    }
+    for (&face, _) in copies.iter().zip(&is_moved).filter(|(_, &m)| m) {
+        let local = Shape { orientation: Orientation::Forward, placement: Transform::IDENTITY, ..face };
+        let surface = model.surface(local).ok_or_else(|| Error::InvalidInput("a face without a surface".into()))?.transformed(motion);
+        let tolerance = model.tolerance(local);
+        model.set_face_surface(local, surface, tolerance)?;
+    }
+    for &e in &carried_edges {
+        let e = Shape { orientation: Orientation::Forward, placement: Transform::IDENTITY, ..e };
+        if let Some((curve, first, last)) = model.edge_curve(e) {
+            let tolerance = model.tolerance(e);
+            model.set_edge_curve(e, curve.transformed(motion), tolerance)?;
+            model.set_edge_range(e, first, last)?;
+        }
+    }
+    for &v in &carried_vertices {
+        let v = Shape { orientation: Orientation::Forward, placement: Transform::IDENTITY, ..v };
+        let (point, tolerance) = (model.point(v), model.tolerance(v));
+        model.set_vertex_point(v, point.transformed(motion), tolerance)?;
+    }
+    // (The planes' pcurves of the carried edges, made again from the curves.)
+    for &k in &around {
+        let Ok(id) = crate::topology::FaceId::try_from(copies[k].node) else { return Ok(None) };
+        for c in model.face_coedges(id) {
+            if model.get(c).is_some_and(|c| carried_edges.iter().any(|e| crate::topology::EdgeId::try_from(e.node).is_ok_and(|id| id == c.edge))) {
+                model.clear_pcurve(c)?;
+            }
+        }
+    }
+    Ok(Some(copy))
+}
+
+fn point_in_polygon(p: Point2, polygon: &[Point2]) -> bool {
+    let mut inside = false;
+    for i in 0..polygon.len() {
+        let (a, b) = (polygon[i], polygon[(i + 1) % polygon.len()]);
+        if (a.y > p.y) != (b.y > p.y) && p.x < a.x + (p.y - a.y) / (b.y - a.y) * (b.x - a.x) {
+            inside = !inside;
+        }
+    }
+    inside
+}
+
+fn polygons_cross(a: &[Point2], b: &[Point2]) -> bool {
+    let side = |p: Point2, q: Point2, r: Point2| (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x);
+    (0..a.len()).any(|i| {
+        let (p, q) = (a[i], a[(i + 1) % a.len()]);
+        (0..b.len()).any(|j| {
+            let (r, s) = (b[j], b[(j + 1) % b.len()]);
+            side(p, q, r) * side(p, q, s) <= 0.0 && side(r, s, p) * side(r, s, q) <= 0.0 && side(p, q, r) != side(p, q, s)
+        })
+    })
 }
 
 /// Whether `t` moves rigidly: no scale, no reflection, and its matrix a rotation (`RᵀR = I`
@@ -704,5 +866,32 @@ mod tests {
         let bottom = Plane::new(Point::ORIGIN, Direction::Z);
         let drafted = draft(&mut model, b, Direction::Z, &[DraftedFace { face: side, angle: 1e-5, neutral: bottom }]).unwrap();
         assert!((volume(&model, drafted).mass - 6000.0).abs() < 1e-6);
+    }
+
+    /// A hole slid across a plate by more than its width, past where it was: moved exactly,
+    /// its edges the old ones carried (traced from where they were, they came out wrong).
+    /// The same in a plate turned in space.
+    #[test]
+    fn a_hole_slid_far_across_a_plate() {
+        let turned = Transform::rotation(crate::math::Axis::new(Point::new(1.0, 2.0, 3.0), Direction::new(1.0, 1.0, 1.0)), 1.1);
+        for motion in [Transform::IDENTITY, turned] {
+            let mut model = Model::new();
+            let plate = Cuboid::new(12.0, 6.0, 2.0).build(&mut model).unwrap();
+            let frame = crate::math::Frame::new(Point::new(8.0, 3.0, -1.0), Direction::Z, Direction::X);
+            let drill = CylinderPrimitive::new(1.0, 4.0).with_frame(frame).build(&mut model).unwrap();
+            let drilled = crate::boolean::difference(&mut model, plate, drill).unwrap();
+            let drilled = crate::modify::copy_unplaced(&mut model, drilled.moved(&motion), &[]).unwrap().0;
+            let walls: Vec<Shape> = model.unique_subshapes(drilled, NodeKind::Face).into_iter().filter(|&f| matches!(model.surface(f), Some(Surface::Cylinder(_)))).collect();
+            // (From x = 8 to x = 2, in the plate's own directions.)
+            let slide = Point::new(-6.0, 0.0, 0.0).transformed(&motion) - Point::ORIGIN.transformed(&motion);
+            let slid = move_faces(&mut model, drilled, &walls, &Transform::translation(slide)).unwrap();
+            valid(&model, slid);
+            let v = volume(&model, slid);
+            let pi = std::f64::consts::PI;
+            assert!((v.mass - (144.0 - 2.0 * pi)).abs() < 1e-9, "{}", v.mass);
+            let x = (144.0 * 6.0 - 2.0 * pi * 2.0) / (144.0 - 2.0 * pi);
+            let centre = Point::new(x, 3.0, 1.0).transformed(&motion);
+            assert!(v.center_of_mass.distance(centre) < 1e-9, "{:?} {centre:?}", v.center_of_mass);
+        }
     }
 }
