@@ -83,14 +83,14 @@ A complex five-part CadQuery model, median of 5 runs:
 
 | | wall time | CPU time | peak memory |
 |---|---|---|---|
-| pykentron, `fast` profile (default) | 3.3 s | 3.6 s | 384 MB |
-| pykentron, `low-memory` profile | 3.9 s | 4.2 s | 279 MB |
-| CadQuery 2.8 / OCCT | 37.5 s | 118.9 s | 1,077 MB |
+| pykentron, `fast` profile (default) | 3.4 s | 3.9 s | 355 MB |
+| pykentron, `low-memory` profile | 3.9 s | 4.3 s | 263 MB |
+| CadQuery 2.8 / OCCT | 38.5 s | 120.5 s | 1,076 MB |
 
-- The 728 public CadQuery scripts that build as on CadQuery (2026-11-18): 296 s in all
-  against CadQuery's 1,243 s, faster on 698.
-- Assembly and sketch constraints: 11–34× faster than CadQuery's solvers, with the
-  same solutions.
+- The 723 public CadQuery scripts that build as on CadQuery (2026-11-27): 311 s in all
+  against CadQuery's 1,354 s, faster on 690.
+- Assembly and sketch constraints: 4–80× faster than CadQuery's solvers (15× typical, 58× on
+  CadQuery's own sketch solver test), with the same solutions.
 - `PYKENTRON_PROFILE` picks the allocator: `fast` (mimalloc, the default) or `low-memory`
   (the system's).
 
@@ -117,8 +117,8 @@ An existing CadQuery script runs unchanged with `pykentron-run script.py`, or af
   `RUSTFLAGS=`.
 - `cargo test` runs everything. Most of OCCT's converted tests need its test dataset, a
   separate download: [`crates/occt-tests/README.md`](crates/occt-tests/README.md).
-- [`tools/run_tests.py`](tools/run_tests.py) runs the test binaries in parallel (about 31 s
-  on 16 threads). `--quick` skips the expected failures (about 17 s).
+- [`tools/run_tests.py`](tools/run_tests.py) runs the test binaries in parallel (about 44 s
+  on 16 threads). `--quick` skips the expected failures (about 31 s).
 - pykentron from source: `python3 crates/pykentron/build.py`
   ([`crates/pykentron/README.md`](crates/pykentron/README.md)).
 
