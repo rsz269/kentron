@@ -3334,12 +3334,11 @@ pub(super) fn closest_points(a: &Curve, (a0, a1): (f64, f64), b: &Curve, (b0, b1
     (u, s)
 }
 
-/// The normal curvature of surface `s` at its point `p` along the tangent direction `w`, as
-/// seen along `n` (positive where the surface turns towards `n`); `None` where its
-/// parametrization is singular there.
-fn normal_curvature(s: &Surface, p: Point, n: Vector, w: Vector) -> Option<f64> {
+/// The normal curvature of surface `s` at its point of parameters `[u, v]` along the tangent
+/// direction `w`, as seen along `n` (positive where the surface turns towards `n`); `None`
+/// where its parametrization is singular there.
+fn normal_curvature(s: &Surface, [u, v]: geom::Uv, n: Vector, w: Vector) -> Option<f64> {
     use crate::geometry::ParametricSurface;
-    let [u, v] = geom::uv_of(s, p);
     let d = s.d2(u, v);
     let (e, f, g) = (d.du.dot(d.du), d.du.dot(d.dv), d.dv.dot(d.dv));
     let det = e * g - f * f;
@@ -3355,18 +3354,19 @@ fn normal_curvature(s: &Surface, p: Point, n: Vector, w: Vector) -> Option<f64> 
 }
 
 fn touching_across(a: &Surface, b: &Surface, p: Point) -> bool {
-    let n = geom::normal_at_point(a, p);
-    if n.cross(geom::normal_at_point(b, p)).length() > 1e-3 {
+    // (Each surface's parameters of the point found once, for its normal and curvatures.)
+    let (uv_a, n) = geom::uv_and_normal_at_point(a, p);
+    let (uv_b, nb) = geom::uv_and_normal_at_point(b, p);
+    if n.cross(nb).length() > 1e-3 {
         return false;
     }
-    let curvature = |s: &Surface, w: Vector| normal_curvature(s, p, n, w);
     let e1 = {
         let x = if n.x.abs() < 0.9 { Vector::new(1.0, 0.0, 0.0) } else { Vector::new(0.0, 1.0, 0.0) };
         let x = x - n * x.dot(n);
         x * (1.0 / x.length())
     };
     let e2 = n.cross(e1);
-    let diff = |w: Vector| -> Option<f64> { Some(curvature(a, w)? - curvature(b, w)?) };
+    let diff = |w: Vector| -> Option<f64> { Some(normal_curvature(a, uv_a, n, w)? - normal_curvature(b, uv_b, n, w)?) };
     let (Some(h11), Some(h22), Some(hd)) = (diff(e1), diff(e2), diff((e1 + e2) * std::f64::consts::FRAC_1_SQRT_2)) else {
         return false;
     };
@@ -4205,8 +4205,11 @@ impl Graph {
             // is, nearer than the hair.)
             let difference = |t: f64| -> Option<(f64, f64)> {
                 let (p, tangent) = c.d1(t);
-                let n = geom::normal_at_point(a, p);
-                if n.cross(geom::normal_at_point(b, p)).length() > 1e-3 {
+                // (Each surface's parameters of the point found once, for its normal and
+                // curvature.)
+                let (uv_a, n) = geom::uv_and_normal_at_point(a, p);
+                let (uv_b, nb) = geom::uv_and_normal_at_point(b, p);
+                if n.cross(nb).length() > 1e-3 {
                     return None;
                 }
                 let w = n.cross(tangent);
@@ -4215,7 +4218,7 @@ impl Graph {
                     return None;
                 }
                 let w = w * (1.0 / length);
-                let (ka, kb) = (normal_curvature(a, p, n, w)?, normal_curvature(b, p, n, w)?);
+                let (ka, kb) = (normal_curvature(a, uv_a, n, w)?, normal_curvature(b, uv_b, n, w)?);
                 Some((ka - kb, ka.abs().max(kb.abs())))
             };
             const N: usize = 64;

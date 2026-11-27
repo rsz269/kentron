@@ -871,6 +871,17 @@ pub(super) fn normal_at_point(surface: &Surface, p: Point) -> Vector {
     }
 }
 
+/// The parameters of a point of the surface ([`uv_of`]) and the unit normal there
+/// ([`normal_at_point`]), the parameters found once for both.
+pub(super) fn uv_and_normal_at_point(surface: &Surface, p: Point) -> (Uv, Vector) {
+    let uv = uv_of(surface, p);
+    let n = match surface {
+        Surface::Plane(plane) => plane_normal(plane),
+        _ => normal_at(surface, uv),
+    };
+    (uv, n)
+}
+
 /// [`normal_at_point`] at a point of the surface found by other means (a ray's hit on it):
 /// on a free-form surface whose foot of the point is found off it (on another turn of a
 /// surface winding round, the steps from the nearest of its samples led astray), the foot
