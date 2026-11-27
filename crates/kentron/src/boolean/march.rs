@@ -605,11 +605,11 @@ fn unwrapped(points: impl Iterator<Item = (f64, f64)>, range: Range) -> Vec<(f64
 }
 
 /// The segments of the branches traced so far (which only grow while seeds are tested),
-/// filed by the cells of a grid in space (cells twice `reach` across) they pass: whether a
+/// filed by the cells of a grid in space (cells twice `reach` across) near them: whether a
 /// point lies within `reach` of one of them, as [`near_polyline`] tells, by those filed in its
-/// own cell and the cells next to it only. (Each segment is filed in the cells of points along
-/// it at most `reach` apart: a point within `reach` of it is within 1.5 `reach` of one of
-/// those, so in a cell next to that one's.)
+/// own cell only. (Each segment is filed in the cells round points along it at most `reach`
+/// apart: a point within `reach` of it is within 1.5 `reach` of one of those, so in a cell next
+/// to that one's.)
 struct Filed {
     reach: f64,
     /// The segments filed, in order, and those in each cell (their indices).
@@ -645,16 +645,28 @@ impl Filed {
             for i in 0..segments {
                 let (a, b) = (points[i].p, points[(i + 1) % n].p);
                 let steps = (a.distance(b) / self.reach).ceil().max(1.0) as usize;
-                // (The cells of the points along it, each once.)
+                // (The cells round each point along it: round each cell once where the next
+                // points lie in the same cell, their neighbours the same.)
                 cells.clear();
+                let (mut last, mut centres) = (None, 0);
                 for step in 0..=steps {
                     let q = a + (b - a) * (step as f64 / steps as f64);
-                    let cell = (self.cell(q.x), self.cell(q.y), self.cell(q.z));
-                    if cells.last() != Some(&cell) {
-                        cells.push(cell);
+                    let centre = (self.cell(q.x), self.cell(q.y), self.cell(q.z));
+                    if last == Some(centre) {
+                        continue;
+                    }
+                    (last, centres) = (Some(centre), centres + 1);
+                    let (i, j, k) = centre;
+                    for di in -1..=1 {
+                        for dj in -1..=1 {
+                            for dk in -1..=1 {
+                                cells.push((i + di, j + dj, k + dk));
+                            }
+                        }
                     }
                 }
-                if cells.len() > 2 {
+                // (Round one cell only, they are apart already.)
+                if centres > 1 {
                     cells.sort_unstable();
                     cells.dedup();
                 }
@@ -669,15 +681,14 @@ impl Filed {
 
     /// Whether `p` lies within the reach of a filed segment.
     fn near(&self, p: Point) -> bool {
-        let (i, j, k) = (self.cell(p.x), self.cell(p.y), self.cell(p.z));
-        let within = |&s: &u32| {
-            let (a, b) = self.segments[s as usize];
+        let Some(segments) = self.cells.get(&(self.cell(p.x), self.cell(p.y), self.cell(p.z))) else { return false };
+        segments.iter().any(|&i| {
+            let (a, b) = self.segments[i as usize];
             let d = b - a;
             let len2 = d.dot(d);
             let s = if len2 > 0.0 { ((p - a).dot(d) / len2).clamp(0.0, 1.0) } else { 0.0 };
             (a + d * s).distance(p) <= self.reach
-        };
-        (-1..=1).any(|di| (-1..=1).any(|dj| (-1..=1).any(|dk| self.cells.get(&(i + di, j + dj, k + dk)).is_some_and(|segments| segments.iter().any(within)))))
+        })
     }
 }
 
