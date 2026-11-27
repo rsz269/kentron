@@ -4339,24 +4339,21 @@ fn bug28626_2() -> DrawResult<()> {
 
 /// `tests/bugs/modalg_6/bug28626_3`
 #[test]
-#[should_panic]
-fn bug28626_3() {
-    expected_failure(|| {
-        let mut d = Draw::new();
-        d.cone(&["c1", "0", "0", "0", "0", "-1", "0", "45", "0"])?;
-        d.cone(&["c2", "-22", "-20", "10", "1", "0", "0", "45", "0"])?;
-        d.trimv(&["tc1", "c1", "0", "42.4264068711929"])?;
-        d.trimv(&["tc2", "c2", "0", "42.4264068711929"])?;
-        d.mkface(&["f1", "tc1"])?;
-        d.mkface(&["f2", "tc2"])?;
-        d.bop(&["f1", "f2"])?;
-        d.bopsection(&["result"])?;
-        d.checkshape(&["result"])?;
-        d.checknbshapes(&["result", "-edge", "4", "-vertex", "5"])?;
-        d.checkmaxtol(&["result", "-ref", "6.02982e-007"])?;
-        d.checkprops(&["result", "-l", "94.3164"])?;
-        Ok(())
-    })
+fn bug28626_3() -> DrawResult<()> {
+    let mut d = Draw::new();
+    d.cone(&["c1", "0", "0", "0", "0", "-1", "0", "45", "0"])?;
+    d.cone(&["c2", "-22", "-20", "10", "1", "0", "0", "45", "0"])?;
+    d.trimv(&["tc1", "c1", "0", "42.4264068711929"])?;
+    d.trimv(&["tc2", "c2", "0", "42.4264068711929"])?;
+    d.mkface(&["f1", "tc1"])?;
+    d.mkface(&["f2", "tc2"])?;
+    d.bop(&["f1", "f2"])?;
+    d.bopsection(&["result"])?;
+    d.checkshape(&["result"])?;
+    d.checknbshapes(&["result", "-edge", "4", "-vertex", "5"])?;
+    d.checkmaxtol(&["result", "-ref", "6.02982e-007"])?;
+    d.checkprops(&["result", "-l", "94.3164"])?;
+    Ok(())
 }
 
 /// `tests/bugs/modalg_6/bug28637`

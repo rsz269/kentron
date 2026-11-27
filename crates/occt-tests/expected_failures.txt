@@ -467,7 +467,6 @@ tests/bugs/modalg_6/bug28394_2
 tests/bugs/modalg_6/bug28468_2
 tests/bugs/modalg_6/bug28486_4
 tests/bugs/modalg_6/bug28492_3
-tests/bugs/modalg_6/bug28626_3
 tests/bugs/modalg_6/bug28661_2
 tests/bugs/modalg_6/bug28690_1
 tests/bugs/modalg_6/bug28795
