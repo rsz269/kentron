@@ -1605,14 +1605,25 @@ fn face_extremes(model: &Model, face: Shape, surface: &Surface) -> Vec<Point> {
     if lo[0] > hi[0] {
         return Vec::new();
     }
+    // The loops' segments filed by the bands of v they span, so that a point is tested
+    // against those its v can lie across or near only: a face of many edges has long loops,
+    // and the tests below ask about many points. (A segment with no v, in every band.)
+    const BANDS: usize = 64;
+    let segments: Vec<([f64; 2], [f64; 2])> = loops.iter().flat_map(|points| (0..points.len()).map(move |i| (points[i], points[(i + 1) % points.len()]))).collect();
+    let band = |v: f64| (((v - lo[1]) / (hi[1] - lo[1]) * BANDS as f64).floor().max(0.0) as usize).min(BANDS - 1);
+    let mut bands: Vec<Vec<usize>> = vec![Vec::new(); BANDS];
+    for (k, (a, b)) in segments.iter().enumerate() {
+        let (first, last) = if a[1].is_nan() || b[1].is_nan() { (0, BANDS - 1) } else { (band(a[1].min(b[1])), band(a[1].max(b[1]))) };
+        for kept in &mut bands[first..=last] {
+            kept.push(k);
+        }
+    }
     let inside = |uv: [f64; 2]| {
         let mut crossings = 0;
-        for points in &loops {
-            for i in 0..points.len() {
-                let (a, b) = (points[i], points[(i + 1) % points.len()]);
-                if (a[1] > uv[1]) != (b[1] > uv[1]) && uv[0] < a[0] + (uv[1] - a[1]) / (b[1] - a[1]) * (b[0] - a[0]) {
-                    crossings += 1;
-                }
+        for &k in &bands[band(uv[1])] {
+            let (a, b) = segments[k];
+            if (a[1] > uv[1]) != (b[1] > uv[1]) && uv[0] < a[0] + (uv[1] - a[1]) / (b[1] - a[1]) * (b[0] - a[0]) {
+                crossings += 1;
             }
         }
         crossings % 2 == 1
@@ -1666,14 +1677,18 @@ fn face_extremes(model: &Model, face: Shape, surface: &Surface) -> Vec<Point> {
         }
     }
     let near_border = |uv: [f64; 2]| {
-        loops.iter().any(|points| {
-            (0..points.len()).any(|i| {
-                let (a, b) = (points[i], points[(i + 1) % points.len()]);
-                let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
-                let len2 = dx * dx + dy * dy;
-                let t = if len2 > 0.0 { (((uv[0] - a[0]) * dx + (uv[1] - a[1]) * dy) / len2).clamp(0.0, 1.0) } else { 0.0 };
-                (uv[0] - a[0] - t * dx).hypot(uv[1] - a[1] - t * dy) <= 1e-9
-            })
+        // (Within the bands of v twice as near, for rounding.)
+        bands[band(uv[1] - 2e-9)..=band(uv[1] + 2e-9)].iter().flatten().any(|&k| {
+            let (a, b) = segments[k];
+            // (Not near a segment whose box, widened twice as far, the point is out of.)
+            let out = |x: f64, p: f64, q: f64| x < p.min(q) - 2e-9 || x > p.max(q) + 2e-9;
+            if out(uv[0], a[0], b[0]) || out(uv[1], a[1], b[1]) {
+                return false;
+            }
+            let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+            let len2 = dx * dx + dy * dy;
+            let t = if len2 > 0.0 { (((uv[0] - a[0]) * dx + (uv[1] - a[1]) * dy) / len2).clamp(0.0, 1.0) } else { 0.0 };
+            (uv[0] - a[0] - t * dx).hypot(uv[1] - a[1] - t * dy) <= 1e-9
         })
     };
     // A sphere's extremes in closed form (often on the border of its parameters, at a
