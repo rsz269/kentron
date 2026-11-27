@@ -20,7 +20,7 @@ use crate::geometry::extrema::nearest_on_curve;
 use crate::geometry::fit;
 use crate::geometry::surface::{OffsetSurface, Surface};
 use crate::geometry::{ParametricCurve, ParametricSurface};
-use crate::math::{Direction, Point, Point2, Transformable, Vector};
+use crate::math::{Direction, Frame, Point, Point2, Transformable, Vector};
 use crate::topology::{ByOccurrence, CoEdgeId, EdgeId, Model, NodeId, NodeKind, Orientation, Shape, VertexId};
 
 use super::within::Made;
@@ -63,7 +63,11 @@ pub fn shape_with_faces(model: &mut Model, shape: Shape, distance: f64, faces: &
     // (Joined by intersection, as by arcs where no edge is sharp: no faces' offsets part; and
     // inwards, a prism by its profile's offset, either way.)
     if own.is_empty() && (join == Join::Arc || distance < 0.0 || smooth_everywhere(model, shape)) {
-        return or_fallbacks(model, rounded, shape, distance, Made::Offset, join);
+        let result = or_fallbacks(model, rounded, shape, distance, Made::Offset, join)?;
+        if join == Join::Arc && own.is_empty() && distance > 0.0 {
+            return round_apexes(model, shape, result, distance);
+        }
+        return Ok(result);
     }
     let rounded = rounded.and_then(|r| r.finished(model));
     // Outwards by intersection, a solid of planar faces with concave edges: also as the
@@ -82,6 +86,56 @@ pub fn shape_with_faces(model: &mut Model, shape: Shape, distance: f64, faces: &
         }
     }
     rounded.map(|(r, _)| r)
+}
+
+/// `grown` (the faces of `original` moved out by `distance`) with the tips left sharp at
+/// `original`'s apexes rounded: a cone's convex apex belongs to no edge to round, and the
+/// points within `distance` of it are a ball about it, meeting the moved cone tangentially.
+/// The moved cone's tip past that circle is cut away and the ball united.
+fn round_apexes(model: &mut Model, original: Shape, grown: Shape, distance: f64) -> Result<Shape> {
+    let mut apexes: Vec<(Point, Direction, f64, f64)> = Vec::new();
+    for face in model.unique_subshapes(original, NodeKind::Face) {
+        let Some(Surface::Cone(cone)) = model.surface(face).map(|s| s.transformed(&face.placement)) else { continue };
+        let axis = Vector::from(cone.frame().z());
+        let apex = cone.frame().origin() + axis * (-cone.radius() / cone.semi_angle().tan());
+        let tolerance = 1e-7 * (1.0 + (apex - Point::ORIGIN).length());
+        if !model.unique_subshapes(face, NodeKind::Vertex).iter().any(|&v| model.point(v).distance(apex) <= tolerance) {
+            continue;
+        }
+        let (u0, u1, v0, v1) = model.face_uv_bounds(Shape { orientation: Orientation::Forward, ..face });
+        let (point, du, dv) = Surface::Cone(cone).d1(0.5 * (u0 + u1), 0.5 * (v0 + v1));
+        let mut normal = du.cross(dv).normalized();
+        if face.orientation == Orientation::Reversed {
+            normal = normal * -1.0;
+        }
+        let along = if (apex - point).dot(axis) > 0.0 { axis } else { axis * -1.0 };
+        let radial = point - apex - axis * (point - apex).dot(axis);
+        // (Convex: the face looks away from its axis, and so past its tip.)
+        let (height, rise) = (distance * normal.dot(along), normal.dot(radial.normalized()));
+        if height > 1e-6 * distance && rise > 1e-6 && !apexes.iter().any(|a| a.0.distance(apex) <= tolerance) {
+            apexes.push((apex, Direction::new(along.x, along.y, along.z), height, rise));
+        }
+    }
+    let mut result = grown;
+    for (apex, along, height, rise) in apexes {
+        // The sharp tip: from the tangent circle (`height` past the old apex, of radius
+        // `distance * rise`) to the moved cone's apex, `distance / rise'` past the old one.
+        let frame = Frame::new(apex + Vector::from(along) * height, along, perpendicular(along));
+        let tip = distance * distance / height;
+        let cut = crate::primitives::Cylinder::new(1.5 * distance * rise, 1.5 * (tip - height)).with_frame(frame).build(model)?;
+        let flat = crate::boolean::difference(model, result, cut)?;
+        let ball = crate::primitives::Sphere::new(distance).with_frame(Frame::new(apex, along, perpendicular(along))).build(model)?;
+        let joined = crate::boolean::union(model, flat, ball)?;
+        result = crate::unify::unify_same_domain(model, joined)?;
+    }
+    Ok(result)
+}
+
+fn perpendicular(d: Direction) -> Direction {
+    let v = Vector::from(d);
+    let other = if v.x.abs() < 0.9 { Vector::new(1.0, 0.0, 0.0) } else { Vector::new(0.0, 1.0, 0.0) };
+    let p = v.cross(other).normalized();
+    Direction::new(p.x, p.y, p.z)
 }
 
 /// Why moving the faces `own` (by their distances, the others by `distance`) passes a planar
@@ -2544,5 +2598,29 @@ mod tests {
         let a = crate::properties::area(&model, widened).mass;
         let expected = 3520.0 + 48.0 * (pi - alpha) - 20.0 * 11f64.sqrt();
         assert!((a - expected).abs() < 1e-6 * a, "{a}");
+    }
+
+    /// A cone grown with rounded joins: a ball about its apex, meeting the moved cone along
+    /// the circle where it is tangent.
+    #[test]
+    fn a_cone_grown_is_rounded_at_its_apex() {
+        let (r, h, d) = (3.0f64, 4.0f64, 1.0f64);
+        let mut model = Model::new();
+        let cone = crate::primitives::Cone::new(r, 0.0, h).build(&mut model).unwrap();
+        let grown = shape(&mut model, cone, d, Join::Arc).unwrap();
+        valid(&model, grown);
+        // (Revolved: the ball's cap past the tangent circle, the frustum between that circle
+        // and the base rim's round, and the base moved down with the round below it.)
+        let pi = std::f64::consts::PI;
+        let (sin, cos) = (r / 5.0, h / 5.0);
+        let k = d * (1.0 - sin);
+        let cap = pi * k * k * (3.0 * d - k) / 3.0;
+        let (wide, narrow) = (r + d * cos, d * cos);
+        let frustum = pi * h / 3.0 * (wide * wide + wide * narrow + narrow * narrow);
+        // (π(r + √(d² − z²))² from −d up to d·sin.)
+        let integral = |z: f64| pi * ((r * r + d * d) * z - z * z * z / 3.0 + r * (z * (d * d - z * z).sqrt() + d * d * (z / d).asin()));
+        let expected = cap + frustum + integral(d * sin) - integral(-d);
+        let v = volume(&model, grown).mass;
+        assert!((v - expected).abs() < 1e-6 * expected, "{v} {expected}");
     }
 }
