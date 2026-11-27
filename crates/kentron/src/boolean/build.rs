@@ -407,6 +407,26 @@ fn fitted_pcurve(graph: &Graph, pieces: &[Piece], face_data: &super::graph::Face
             _ => surface,
         }
     };
+    // (A piece coincident with its representative, its own edge's curve the
+    // representative's point for point at the same parameters, as where both
+    // operands have one edge made alike: the arc's own pcurve is the
+    // representative's too, exact where a fit only approaches it. So where it
+    // holds the curve as closely as the fits below are first asked to, 1e-8,
+    // and the edge's curve is the representative's as closely, over the piece's
+    // own parameters (not another turn of a closed curve, a period on).)
+    if let (Some(own), Some(own_curve)) = (&arc.pcurve, graph.edges[piece.edge].curve.as_ref()) {
+        let tight = 1e-8;
+        let (lo, hi) = (piece.first.min(piece.last), piece.first.max(piece.last));
+        let within = |t: f64| t >= lo - 1e-9 * (1.0 + lo.abs()) && t <= hi + 1e-9 * (1.0 + hi.abs());
+        let same = within(first) && within(last) && (0..=16).all(|k| {
+            let t = first + (last - first) * k as f64 / 16.0;
+            let (p, uv) = (curve.point(t), own.point(t));
+            own_curve.point(t).distance(p) <= tight && geom::surface_point(near, [uv.x, uv.y]).distance(p) <= tight
+        });
+        if same {
+            return Ok(own.clone());
+        }
+    }
     // (Across a seam where the surface closes without a period, its two
     // uses taken to their sides by the bounds' width, as by a period.)
     let closed = |k: usize| face_data.closed_bounds[k].map(|(lo, hi)| hi - lo);
