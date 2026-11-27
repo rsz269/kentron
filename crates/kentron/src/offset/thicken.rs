@@ -853,4 +853,16 @@ mod tests {
         }
     }
 
+    /// A whole torus thickened, closed with no free edges: the solid between it and its
+    /// offset, a cavity inside for an inward thickness.
+    #[test]
+    fn a_whole_torus_thickened() {
+        let (big, small, t) = (3.0, 1.8, 1.3);
+        let mut model = Model::new();
+        let torus = crate::primitives::Torus::new(big, small).build(&mut model).unwrap();
+        let face = model.unique_subshapes(torus, NodeKind::Face)[0];
+        let solid = thicken(&mut model, face, -t, Join::Arc).unwrap();
+        let inner = small - t;
+        assert_measures(&model, solid, 2.0 * PI * PI * big * (small * small - inner * inner), 4.0 * PI * PI * big * (small + inner));
+    }
 }

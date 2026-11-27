@@ -260,7 +260,7 @@ fn distinct_faces(model: &Model, faces: Vec<Shape>) -> Vec<Shape> {
 }
 
 /// `face` without its slits (loops running along edges and back), as a new face if it had
-/// any.
+/// any beside its other loops.
 fn without_slits(model: &mut Model, face: Shape) -> Result<Shape> {
     let wires: Vec<Shape> = model.children(face).collect();
     let slit = |model: &Model, wire: Shape| {
@@ -272,7 +272,9 @@ fn without_slits(model: &mut Model, face: Shape) -> Result<Shape> {
         }
         !uses.is_empty() && uses.values().all(|&n| n == 0)
     };
-    if !wires.iter().any(|&w| slit(model, w)) {
+    // (A face whose every loop runs so keeps them: a whole torus or sphere, bounded by its
+    // seams alone.)
+    if !wires.iter().any(|&w| slit(model, w)) || wires.iter().all(|&w| slit(model, w)) {
         return Ok(face);
     }
     let surface = model.surface(face).ok_or_else(|| Error::InvalidInput("a face without a surface".into()))?.clone();
