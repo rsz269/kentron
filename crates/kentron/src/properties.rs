@@ -460,6 +460,29 @@ fn integrate_face_refined(model: &Model, face: Shape, refine: usize, mut sample:
         }
     }
     let (u_density, v_density) = densities(surface, angular, &along);
+    // How far a stretch of parameters runs, as far as the densities count it: on a free-form
+    // surface, across its own parameters only (its knot spans, along which the densities
+    // place pieces; beyond them it runs on as its end span's polynomial, and a face out
+    // there, as a failed construction can leave, would otherwise get pieces for all the way
+    // out: up to 256 for each piece across it).
+    fn free_form(s: &Surface) -> bool {
+        match s {
+            Surface::BSpline(_) | Surface::Bezier(_) => true,
+            Surface::Trimmed(t) => free_form(t.basis()),
+            Surface::Offset(o) => free_form(o.basis()),
+            _ => false,
+        }
+    }
+    let ranges = {
+        let (u0, u1, v0, v1) = surface.bounds();
+        let finite = |lo: f64, hi: f64, period: Option<f64>| (free_form(surface) && period.is_none() && lo.is_finite() && hi.is_finite() && hi > lo).then_some((lo, hi));
+        (finite(u0, u1, surface.u_period()), finite(v0, v1, surface.v_period()))
+    };
+    let across = |range: Option<(f64, f64)>, a: f64, b: f64| match range {
+        Some((lo, hi)) => (a.max(b).min(hi) - a.min(b).max(lo)).max(0.0),
+        None => (b - a).abs(),
+    };
+    let (across_u, across_v) = (|a: f64, b: f64| across(ranges.0, a, b), |a: f64, b: f64| across(ranges.1, a, b));
     // (Along a pcurve, v counts too where the surface is straight across it (a ruled face's
     // single span), a few pieces across its range: the integrand along u changes with v all
     // the same, and a pcurve turning sharply across it (where a face narrows to nothing) is
@@ -488,7 +511,7 @@ fn integrate_face_refined(model: &Model, face: Shape, refine: usize, mut sample:
             scratch.clear();
             turning_breaks(c, a, b, &mut scratch)
         }
-        None => (b - a).abs() * u_density * MAX_ANGLE_STEP,
+        None => across_u(a, b) * u_density * MAX_ANGLE_STEP,
     };
     // Knots of a B-spline surface no Gauss rule may span: where it is at most C1 (as at the
     // joins of a piecewise Bézier surface), and every knot across up to 8 spans, as many as
@@ -711,7 +734,7 @@ fn integrate_face_refined(model: &Model, face: Shape, refine: usize, mut sample:
                 let (a, b) = (pcurve.point(s0), pcurve.point(s1));
                 let span = match pcurve {
                     Curve2::Circle(_) => (s1 - s0).abs(),
-                    Curve2::Line(_) => u_span(a.x, b.x) + (b.y - a.y).abs() * v_density * MAX_ANGLE_STEP,
+                    Curve2::Line(_) => u_span(a.x, b.x) + across_v(a.y, b.y) * v_density * MAX_ANGLE_STEP,
                     _ => {
                         // The angle travelled, from a few samples; where it is travelled
                         // unevenly (most of it in one part, as round a sharp turn), halved
@@ -721,7 +744,7 @@ fn integrate_face_refined(model: &Model, face: Shape, refine: usize, mut sample:
                             let parts: Vec<f64> = (0..8)
                                 .map(|i| {
                                     let (p, q) = (pcurve.point(a + (b - a) * i as f64 / 8.0), pcurve.point(a + (b - a) * (i + 1) as f64 / 8.0));
-                                    u_span(p.x, q.x) + (q.y - p.y).abs() * v_weight * MAX_ANGLE_STEP
+                                    u_span(p.x, q.x) + across_v(p.y, q.y) * v_weight * MAX_ANGLE_STEP
                                 })
                                 .collect();
                             let span: f64 = parts.iter().sum();
@@ -818,7 +841,7 @@ fn integrate_face_refined(model: &Model, face: Shape, refine: usize, mut sample:
                             }
                             continue;
                         }
-                        let inner = if straight_u { refine } else { pieces((e[1] - e[0]).abs() * u_density * MAX_ANGLE_STEP) };
+                        let inner = if straight_u { refine } else { pieces(across_u(e[0], e[1]) * u_density * MAX_ANGLE_STEP) };
                         let inner_step = (e[1] - e[0]) / inner as f64;
                         for inner_piece in 0..inner {
                             let s0 = e[0] + inner_step * inner_piece as f64;
@@ -1970,6 +1993,24 @@ mod tests {
             let got = area(&model, top).mass;
             assert!((got - want).abs() < 1e-9 * want, "{got} against {want}: off by {:.3e}", got - want);
         }
+    }
+
+    /// A face reaching far beyond its free-form surface's parameters (as a failed
+    /// construction can leave one): integrated with pieces for the surface's own span only,
+    /// not for all the way out (a chamfer's trial face, its boundary 5e5 out, took 9e7
+    /// samples and 22 s).
+    #[test]
+    fn a_face_far_beyond_its_surface_integrated_quickly() {
+        let mut model = Model::new();
+        let knots = vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0];
+        let heights = vec![vec![1.0, 6.0, 1.0, 6.0], vec![6.0, 1.0, 6.0, 1.0], vec![1.0, 6.0, 1.0, 6.0], vec![6.0, 1.0, 6.0, 1.0]];
+        let slab = crate::primitives::Slab::new(4.0, 4.0, knots.clone(), knots, heights).build(&mut model).unwrap();
+        let top = model.explore(slab, NodeKind::Face).find(|&f| !matches!(model.surface(f), Some(Surface::Plane(_)))).unwrap();
+        let surface = model.surface(top).unwrap().clone();
+        let far = crate::make::face_on_domain(&mut model, surface, -1e5, 1.0, 0.0, 1.0).unwrap();
+        let mut samples = 0usize;
+        integrate_face(&model, far, |_, _, _| samples += 1);
+        assert!(samples < 20_000, "{samples} samples");
     }
 
     #[test]
