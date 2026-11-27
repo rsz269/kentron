@@ -85,6 +85,12 @@ pub fn remove_faces(model: &mut Model, shape: Shape, faces: &[Shape]) -> Result<
                 cut[k].push(cell);
                 found = true;
             } else if locations.iter().all(|&l| l == crate::boolean::PointLocation::Outside) {
+                // (A gap lies outside the solids altogether: a cell reaching into one, as
+                // the space a sphere carried on whole encloses below the base it stood on,
+                // is none, wherever its point came to lie.)
+                if overlaps(model, cell, &solids)? {
+                    continue;
+                }
                 let mine = |k: usize| feature.iter().copied().filter(|f| faces_of[k].iter().any(|g| g.node == f.node)).collect::<Vec<_>>();
                 let k = (0..solids.len()).find(|&k| touches(model, cell, &mine(k))).unwrap_or(0);
                 fill[k].push(cell);
@@ -212,6 +218,18 @@ fn extended(model: &mut Model, face: Shape, near: &BoundingBox) -> Result<Shape>
     };
     let big = crate::make::face_on_domain(model, surface, u0, u1, v0, v1)?;
     Ok(Shape { orientation: face.orientation, ..big })
+}
+
+/// Whether `cell` shares some volume with one of `solids`.
+fn overlaps(model: &mut Model, cell: Shape, solids: &[Shape]) -> Result<bool> {
+    let negligible = 1e-6 * crate::properties::volume(model, cell).mass;
+    for &solid in solids {
+        let common = crate::boolean::intersection(model, cell, solid)?;
+        if !model.unique_subshapes(common, NodeKind::Solid).is_empty() && crate::properties::volume(model, common).mass > negligible {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// Whether `cell` lies against one of `faces`: a point inside one of its faces is on one
@@ -474,5 +492,29 @@ mod tests {
         let feature: Vec<Shape> = sides.into_iter().chain(ledges).collect();
         let removed = remove_faces(&mut model, milled, &feature).unwrap();
         check(&model, removed.shape, PI * 25.0 * 20.0);
+    }
+
+    /// The round under a dome removed: the cylinder and the sphere carried on to meet. (The
+    /// sphere, whole, reaches below the base, a cell there that is no gap of the solid's.)
+    #[test]
+    fn the_round_under_a_dome_removed() {
+        use crate::math::{Direction, Frame};
+        let mut model = Model::new();
+        // (A cylinder of radius 3 to a sphere of radius 5 centred on its axis at the base,
+        // the rim between rounded by 0.5.)
+        let up = Frame::new(Point::ORIGIN, Direction::Z, Direction::X);
+        let shaft = crate::primitives::Cylinder::new(3.0, 10.0).with_frame(up).build(&mut model).unwrap();
+        let ball = crate::primitives::Sphere::new(5.0).with_frame(up).build(&mut model).unwrap();
+        let part = crate::boolean::intersection(&mut model, shaft, ball).unwrap();
+        let rim = model
+            .unique_subshapes(part, NodeKind::Edge)
+            .into_iter()
+            .find(|&e| model.unique_subshapes(e, NodeKind::Vertex).iter().all(|&v| (model.point(v).z - 4.0).abs() < 1e-6))
+            .unwrap();
+        let rounded = crate::blend::fillet_all(&mut model, part, &[rim], 0.5).unwrap();
+        let round: Vec<Shape> = model.unique_subshapes(rounded, NodeKind::Face).into_iter().filter(|&f| matches!(model.surface(f), Some(Surface::Torus(_)))).collect();
+        assert_eq!(round.len(), 1);
+        let removed = remove_faces(&mut model, rounded, &round).unwrap();
+        check(&model, removed.shape, PI * 9.0 * 4.0 + PI * 1.0 * 1.0 * (15.0 - 1.0) / 3.0);
     }
 }
