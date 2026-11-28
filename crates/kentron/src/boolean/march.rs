@@ -740,7 +740,6 @@ fn seeds(base: &Surface, other: &Surface, range: Range, nu: usize, nv: usize) ->
     let at = |i: usize, j: usize| (u0 + (u1 - u0) * i as f64 / nu as f64, v0 + (v1 - v0) * j as f64 / nv as f64);
     // (Each distance with the foot found for it, which starts the next search.)
     let last = std::cell::Cell::new(None);
-    let feet: std::cell::RefCell<crate::hashing::FastMap<(usize, usize), geom::Foot>> = Default::default();
     let mut nodes: crate::hashing::FastMap<(usize, usize), (f64, Point)> = Default::default();
     let mut node = |i: usize, j: usize| -> (f64, Point) {
         *nodes.entry((i, j)).or_insert_with(|| {
@@ -748,9 +747,6 @@ fn seeds(base: &Surface, other: &Surface, range: Range, nu: usize, nv: usize) ->
             let p = base.point(u, v);
             let (d, foot) = geom::signed_distance_from(other, p, last.get());
             last.set(foot);
-            if let Some(foot) = foot {
-                feet.borrow_mut().insert((i, j), foot);
-            }
             (d, p)
         })
     };
@@ -808,14 +804,7 @@ fn seeds(base: &Surface, other: &Surface, range: Range, nu: usize, nv: usize) ->
             let ((ua, va), (ub, vb)) = (at(corners[a].0, corners[a].1), at(corners[b].0, corners[b].1));
             let (u, v) = (ua + (ub - ua) * w, va + (vb - va) * w);
             let p = pa + (pb - pa) * w;
-            // (On a free-form other, from the foot of the nearer node: a search afresh only
-            // where that one leads astray.)
-            let q = base.point(u, v);
-            let nearer = feet.borrow().get(&corners[if w <= 0.5 { a } else { b }]).copied();
-            let [s, t] = match nearer {
-                Some(foot) => geom::signed_distance_from(other, q, Some(foot)).1.map_or_else(|| geom::uv_of(other, q), |f| f.uv),
-                None => geom::uv_of(other, q),
-            };
+            let [s, t] = geom::uv_of(other, base.point(u, v));
             out.push(Both { u, v, s, t, p });
         }
     }

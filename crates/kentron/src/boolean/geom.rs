@@ -562,7 +562,7 @@ fn descended(surface: &Surface, p: Point, start: (f64, f64)) -> crate::geometry:
 /// and its distance, and the unit normal there.
 #[derive(Clone, Copy)]
 pub(super) struct Foot {
-    pub(super) uv: Uv,
+    uv: Uv,
     point: Point,
     distance: f64,
     normal: Vector,
